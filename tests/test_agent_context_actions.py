@@ -1,56 +1,33 @@
 """Pure contracts for bounded provider-neutral agent context actions."""
-
 from __future__ import annotations
-
 import hashlib
 import inspect
 import json
 import unittest
 from dataclasses import FrozenInstanceError, fields, replace
-
 from story_writing_agents.agent_context import actions as actions_module
-from story_writing_agents.agent_context.actions import (
-    CONTEXT_ACTION_POLICY,
-    ContextActionCorrelation,
-    ContextActionError,
-    ContextActionErrorCode,
-    ContextActionKind,
-    ContextActionPolicy,
-    ContextAnswerAction,
-    ContextAnswerAuthorization,
-    ContextEvidenceReceipt,
-    ContextReadAction,
-    ContextReadObservation,
-    ContextSearchAction,
-    ContextSearchHit,
-    ContextSearchObservation,
-    ContextSearchQuery,
-    ContextSourceBoundary,
-    ContextSourceBoundaryKind,
-    ContextSourceEvidence,
-    ContextSourceHandle,
-    ContextSourceStatusKind,
-    ContextSourceStatusReceipt,
-    ContextZeroHitSearchReceipt,
-    serialize_context_action_observation,
-)
-from story_writing_agents.agent_context.manifest import (
-    ContextAuthorityKind,
-    ContextProvenance,
-    ContextScope,
-    ContextSourceKind,
-    ContextSubjectKind,
-)
-from story_writing_agents.agent_context.planning import (
-    MandatoryReferenceReservation,
-)
+from story_writing_agents.agent_context.actions import CONTEXT_ACTION_POLICY, ContextActionCorrelation, ContextActionError, ContextActionErrorCode, ContextActionKind, ContextActionPolicy, ContextAnswerAction, ContextAnswerAuthorization, ContextEvidenceReceipt, ContextReadAction, ContextReadObservation, ContextSearchAction, ContextSearchHit, ContextSearchObservation, ContextSearchQuery, ContextSourceBoundary, ContextSourceBoundaryKind, ContextSourceEvidence, ContextSourceHandle, ContextSourceStatusKind, ContextSourceStatusReceipt, ContextZeroHitSearchReceipt, serialize_context_action_observation
+from story_writing_agents.agent_context.manifest import ContextAuthorityKind, ContextProvenance, ContextScope, ContextSourceKind, ContextSubjectKind
+from story_writing_agents.agent_context.contracts import planning_inputs as ctx_planning_inputs
+
+
 
 
 _PRIVATE_ANSWER = "PRIVATE_ANSWER_한🙂"
+
+
 _PRIVATE_EXCERPT = "PRIVATE_EXCERPT_한🙂"
+
+
 _PRIVATE_HANDLE = "ctxh_v1_" + ("a" * 64)
+
+
 _DIGEST = "sha256:" + ("1" * 64)
+
+
 _REVISION = "sha256:" + ("2" * 64)
+
+
 _SCOPE = ContextScope(
     "workspace",
     "session",
@@ -250,8 +227,8 @@ def _completed_digest(receipts: tuple[ContextEvidenceReceipt, ...]) -> str:
     return _digest(body)
 
 
-def _reference(ordinal: int, locator: str) -> MandatoryReferenceReservation:
-    return MandatoryReferenceReservation(
+def _reference(ordinal: int, locator: str) -> ctx_planning_inputs.MandatoryReferenceReservation:
+    return ctx_planning_inputs.MandatoryReferenceReservation(
         ordinal,
         f"reference-{ordinal}",
         f"artifact-{ordinal}",

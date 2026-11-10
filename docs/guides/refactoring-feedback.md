@@ -83,3 +83,19 @@ controller hash를 확인하고, checkout 준비 시간과 RED/GREEN 명령 시�
 shard별 3,600초, 테스트 소스 151,431행 상한을 유지한다. 이동한 테스트·fixture는
 출처를 추적해 한 번만 계상하고, 하위 패키지 이동으로 비용을 누락시키지 않는다.
 현재 기준 실패와 새 실패를 구분하고 미완료·시간 회귀를 완료로 표시하지 않는다.
+
+## 계약 경계 분리와 사례 이동 — S02
+
+계약·payload·순수 planning을 분리할 때는 승인 기반의 원본 소스와 기존 ID·assertion·부정 입력·fixture 수명·subTest 상한을 먼저 고정한다. 공개 import 경계와 도메인별 테스트 파일을 함께 옮기며, 이전 ID와 실제 새 모듈 ID를 일대일로 대응시킨다. 실제 런타임 상태 전환을 확인하는 기존 host 사례도 유지한다.
+
+ID 이동은 사례 수나 검증 범위를 늘리거나 줄이는 허가가 아니다. 기존 수치 weight와 cap은 같은 사례로 이관하고, 등록되지 않은 새 ID는 계속 거절한다. 옛 Python 경로용 shim이나 `Case.__module__`·`id()` 위장은 사용하지 않는다. 추출 fixture와 support도 기존 소스 상한에서 계상한다.
+
+수정 전 측정은 해당 단계의 승인 기반에 고정한다. 수동 CI가 현재 main과 같은 SHA를 거절하면 런타임·테스트가 동일한 문서 전용 체크포인트에서 실행하고, 두 경로의 diff와 소스 hash를 보존한다. S01에 고정된 `45cf084f` 비교 옵션을 후속 단계의 수정 전 기준선으로 사용하지 않는다. 정상 명령의 환경·로그·timeout 조건을 맞추고 진단 profile과 구분한다.
+
+각 서브이슈는 상세 계획과 브랜치 준비 후 런타임·테스트 코드 편집 전에 DRAFT PR을 만든다. 구현과 검증 결과는 그 PR에 계속 갱신하며, 준비가 끝난 뒤 ready for review로 전환하고 관리 리뷰·같은 head의 전체 CI·수동 squash 종료 절차를 따른다.
+
+helper를 외부 공개 이름으로 옮길 때는 원본 global 참조의 심볼 해석도 비교한다. 같은 이름의 인자·지역 변수·comprehension·closure가 새 이름을 포획하는지 `symtable` 또는 bytecode로 확인한다. 생성 함수에는 `make_scope`, `make_entry`처럼 실제 역할이 드러나고 기존 지역 이름과 겹치지 않는 이름을 쓴다. 함수 내부의 지연 import와 mock patch도 각 실제 소유자에 대응시킨다.
+
+검증 순서는 실제 메서드 수집·원본 대응과 정적 import 점검 뒤, 기존 최소 사례·영향 사례·최종 전체 실행으로 이어진다. 확대 실행에서 발견한 이동 오류는 같은 시나리오·assertion·부정 입력을 유지하며 한 묶음으로 교정한다. 실패로 작업량이 줄어든 실행 시간은 성능 비교에서 제외한다.
+
+선언 이동은 decorator와 module docstring까지 원본 의미를 보존한다. 원본 소스 범위는 decorator의 시작 행을 포함하며, 클래스의 기반 타입·필드·기본값·생성자·frozen/slots와 static/class method·property 형태를 함께 대조한다. 모듈 docstring은 첫 문장으로 유지하고 그 뒤 future import를 둔다.

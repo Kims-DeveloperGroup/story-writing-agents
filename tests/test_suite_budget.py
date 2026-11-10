@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import Mock, call, patch
 
 from tests import suite_budget, suite_policy
+from tests.id_moves import historical_feedback_caps
 from tests.runner import contracts as runner_contracts
 from tests.runner import collection as runner_collection
 from tests.runner import selection as runner_selection
@@ -252,6 +253,7 @@ class SuiteBudgetTests(unittest.TestCase):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
         migrated = suite_budget.load_budget(Path(__file__).with_name("fixtures") / "test_budget_v1.json")
+        migrated["subtest_caps"] = historical_feedback_caps(migrated["subtest_caps"])
         expected_additions = {
             'tests.test_historical_material_workflow.HistoricalMaterialWorkflowTests.test_prior_draft_and_rejected_response_remain_input_only_in_new_task': 0,
             'tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart': 0,

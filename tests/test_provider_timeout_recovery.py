@@ -1,42 +1,22 @@
 """Read-only Lead failures preserve history and admit explicit same-chat retry."""
-
 from __future__ import annotations
-from tests.provider_wire_fixture import (
-    selection_plan, offered_fixture_bindings, indexed_response, lead_fixture_result,
-    finite_fixture_selection)
+from tests.provider_wire_fixture import selection_plan, offered_fixture_bindings, indexed_response, lead_fixture_result, finite_fixture_selection
 from story_writing_agents.lead_schema_groups import LeadGroupPhase
-
 import asyncio
 import json
 from dataclasses import asdict, replace
 from unittest import mock
-
 from story_writing_agents import StoryRuntime
 from story_writing_agents.agent_context.ledger import ContextLedgerKey, ContextLedgerRecordState
 from story_writing_agents.agent_context.manifest import ContextSourceKind
-from story_writing_agents.agent_context.planning import ContextCheckpointState
-from story_writing_agents.agent_context.service import (
-    ContextProviderFailureFacts,
-    record_context_provider_failure,
-)
 from story_writing_agents.agents import LEAD_ORCHESTRATOR
-from story_writing_agents.conversations import (
-    CollaborationConfirmationDecision,
-    CollaborationEventKind,
-    CollaborationInvocationKind,
-    CollaborationLeadOutcomeFailureCode,
-    CollaborationLeadOutcomeFailurePayload,
-    CollaborationMessagePayload,
-    CollaborationNextAction,
-    CollaborationProviderCallPayload,
-    CollaborationProviderCallState,
-    CollaborationStepState,
-    LeadOutcomeKind,
-    project_collaboration_history,
-)
-
+from story_writing_agents.conversations import CollaborationConfirmationDecision, CollaborationEventKind, CollaborationInvocationKind, CollaborationLeadOutcomeFailureCode, CollaborationLeadOutcomeFailurePayload, CollaborationMessagePayload, CollaborationNextAction, CollaborationProviderCallPayload, CollaborationProviderCallState, CollaborationStepState, LeadOutcomeKind, project_collaboration_history
 from tests import test_lead_orchestration as lead
 from tests.collaboration_contract_fixture import LEAD, USER, make_draft, provider_call_drafts
+from story_writing_agents.agent_context.contracts import planning_inputs as ctx_planning_inputs
+from story_writing_agents.agent_context.invocation import provider as ctx_provider
+
+
 
 
 class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
@@ -97,7 +77,7 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
                                                        call_kind=call.call_kind,
                                                        component_paths=call.component_paths,
                                                        mandatory_reference_paths=call.mandatory_reference_paths)
-                        record_context_provider_failure(failure, ContextProviderFailureFacts(
+                        ctx_provider.record_context_provider_failure(failure, ctx_provider.ContextProviderFailureFacts(
                             accounting, timed_out=True, taint_existing_thread=True))
                         return failure
 
@@ -182,7 +162,7 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
         _, checkpoint = self.checkpoint()
         retained_thread = checkpoint.checkpoint_view.provider_thread_id
         self.assertIsNotNone(retained_thread)
-        self.assertIs(checkpoint.checkpoint_view.state, ContextCheckpointState.READY)
+        self.assertIs(checkpoint.checkpoint_view.state, ctx_planning_inputs.ContextCheckpointState.READY)
         successful_history = self.history(successful_conversation)
         before_taints = list(self.backend.tainted_thread_ids)
         restarted = StoryRuntime(self.workspace, self.backend)

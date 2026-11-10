@@ -1,7 +1,7 @@
 """Issue 631 authentication evidence; all providers and login processes are synthetic."""
-
 from __future__ import annotations
-
+from story_writing_agents.agent_context.contracts import call_offers as owner_call_offers
+from story_writing_agents.agent_context.invocation import session_execution as owner_session_execution
 from tests.provider_wire_fixture import selection_plan
 from story_writing_agents.lead_schema_groups import LeadGroupPhase
 import asyncio
@@ -17,38 +17,23 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from types import CoroutineType, GeneratorType
 from unittest import mock
-
 from story_writing_agents import AgentBackend, StoryRuntime
 from story_writing_agents.agent_context import ProviderCallState, canonical_provider_json
 from story_writing_agents.agent_context.manifest import ContextScope, ContextSubjectKind
-from story_writing_agents.agent_context.service import (
-    ContextProviderCallRequest, ContextProviderFailureFacts,
-    context_provider_failure_facts, record_context_provider_failure, )
 from story_writing_agents.agents import LEAD_ORCHESTRATOR, PLOT_ARCHITECT, CHARACTER_CUSTODIAN
 from story_writing_agents.antigravity_adapter import AntigravityAdapter
 from story_writing_agents.codex_adapter import CodexAdapter
 from story_writing_agents.config import ConfigManager
-from story_writing_agents.conversations import (
-    CollaborationConfirmationDecision, CollaborationEventKind,
-    CollaborationExecutionResult, CollaborationSpecialistReplyPayload,
-    CollaborationLeadOutcomeFailureCode, CollaborationLeadOutcomeFailurePayload,
-    CollaborationNextAction, CollaborationStepState, )
+from story_writing_agents.conversations import CollaborationConfirmationDecision, CollaborationEventKind, CollaborationExecutionResult, CollaborationSpecialistReplyPayload, CollaborationLeadOutcomeFailureCode, CollaborationLeadOutcomeFailurePayload, CollaborationNextAction, CollaborationStepState
 from story_writing_agents.errors import ProviderAuthenticationRequiredError
 from story_writing_agents.interactive_controller._lead_policy import InteractiveLeadAdapter
 from story_writing_agents.orchestrator import RuntimeSession
 from story_writing_agents.prompts import PromptAssembler
-from story_writing_agents.provider_adapter import (
-    ProviderInvocation, ProviderInvocationError, ProviderResponseDiagnostic,
-    ProviderResult, provider_failure_accounting, record_provider_failure_accounting, )
-from story_writing_agents.provider_auth import (
-    ProviderAuthService, ProviderAuthState, ProviderLoginResult, )
-from story_writing_agents.provider_auth_recovery import (
-    ProviderAuthRecovery, authentication_replay, provider_activity,
-    request_authentication, validate_provider_replay, )
+from story_writing_agents.provider_adapter import ProviderInvocation, ProviderInvocationError, ProviderResponseDiagnostic, ProviderResult, provider_failure_accounting, record_provider_failure_accounting
+from story_writing_agents.provider_auth import ProviderAuthService, ProviderAuthState, ProviderLoginResult
+from story_writing_agents.provider_auth_recovery import ProviderAuthRecovery, authentication_replay, provider_activity, request_authentication, validate_provider_replay
 from story_writing_agents.provider_process import ProcessResult
-from story_writing_agents.workspace.initialization import (
-    compose_session_artifact_binding,
-    provision_session_resources, )
+from story_writing_agents.workspace.initialization import compose_session_artifact_binding, provision_session_resources
 from tests import test_agent_context_execution as context
 from tests import test_interactive_controller as interactive_controller_tests
 from tests import test_lead_orchestration as lead
@@ -56,6 +41,9 @@ from tests.test_specialist_orchestration import _assignments
 from tests.helpers import initialized_workspace, live_provider_execution_workspace, pristine_initialized_workspace
 from tests.test_interactive_auth import ScriptedAuthService, TerminalHarness, snapshot, status
 from tests.test_provider_auth import ScriptedProcess, ScriptedProcessFactory
+from story_writing_agents.agent_context.invocation import provider as ctx_provider
+
+
 
 
 def incident_bytes(**changes):
@@ -296,7 +284,7 @@ class AuthContextProvider(context._ScriptedProvider):
                 return await super().invoke_context(request)
             except ProviderAuthenticationRequiredError as failure:
                 failure.auth_generation = generation
-                record_context_provider_failure(failure, ContextProviderFailureFacts(
+                ctx_provider.record_context_provider_failure(failure, ctx_provider.ContextProviderFailureFacts(
                     self._accounting(request), taint_existing_thread=not failure.replay_safe,
                     submission_uncertain=not failure.replay_safe))
                 raise
@@ -310,7 +298,7 @@ class AuthContextProvider(context._ScriptedProvider):
 
 class ContextRecoveryTests(context.ContextExecutionTestCase):
     async def _bound_replay(self, responses, *, seed, before_script_response, action_policy=None):
-        from story_writing_agents.agent_context.service import AgentContextService
+        from story_writing_agents.agent_context.invocation.session_execution import AgentContextService
         case = lead._task_fixture(self)
         if action_policy is not None:
             case.runtime._agent_context_service = AgentContextService(
@@ -331,7 +319,7 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
                     accounting = provider._account(request.schema, request.payload,
                         call_kind=request.call_kind, component_paths=request.component_paths,
                         mandatory_reference_paths=request.mandatory_reference_paths)
-                    record_context_provider_failure(response, ContextProviderFailureFacts(
+                    ctx_provider.record_context_provider_failure(response, ctx_provider.ContextProviderFailureFacts(
                         accounting, taint_existing_thread=False, submission_uncertain=False))
                     failed.append(request.call_id)
                     return response
@@ -366,7 +354,7 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
         return case.backend.calls[start:], captured[0], failed
 
     def _require_bound_replay(self, calls, result, failed, *, count, failure_index):
-        from story_writing_agents.agent_context.service import BoundContextProviderCallRequest
+        from story_writing_agents.agent_context.invocation.provider import BoundContextProviderCallRequest
         self.assertEqual(len(calls), count)
         self.assertTrue(all(type(call) is BoundContextProviderCallRequest for call in calls))
         self.assertEqual([call.call_id for call in result.provider_calls], [call.call_id for call in calls])
@@ -408,12 +396,12 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
         self.assertEqual(calls[0].contract.eligibility_offers.delivery_read_facts, ())
 
         from story_writing_agents.lead_schema_groups import LeadGroupPhase
-        from story_writing_agents.agent_context.service import context_provider_failure_facts
+        from story_writing_agents.agent_context.invocation.provider import context_provider_failure_facts
         for cap, succeeds in ((4, True), (3, False)):
             label = f"group-auth-select-{cap}"
             plain_request = self.request(
                 operation_id=label, result_correlation_id=label + "-result",
-                invocation_kind=context.ContextInvocationKind.LEAD, result_contract=context._LEAD_CALL_FACTORY,
+                invocation_kind=owner_call_offers.ContextInvocationKind.LEAD, result_contract=context._LEAD_CALL_FACTORY,
                 agent_id=context.LEAD_ORCHESTRATOR, physical_call_limit=cap)
             grouped_request = context._group_request(plain_request)
             pending = () if succeeds else (context._group_control("answer.workflow"),)
@@ -476,7 +464,7 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
             phases = (LeadGroupPhase.SELECT, LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE) if succeeds else (LeadGroupPhase.SELECT,)
             for call, phase in zip(grouped_provider.calls, phases, strict=True):
                 context.assert_phase_guide(self, call, phase)
-        no_context_service = context.AgentContextService(
+        no_context_service = owner_session_execution.AgentContextService(
             self.workspace, action_policy=replace(context.CONTEXT_ACTION_POLICY, max_search_actions=1))
         def zero_hit_search(call, provider):
             packet = json.loads(context._search(call, provider))
@@ -490,7 +478,7 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
             label = f"group-auth-generate-{cap}"
             grouped_request = context._group_request(self.request(
                 operation_id=label, result_correlation_id=label + "-result",
-                invocation_kind=context.ContextInvocationKind.LEAD, result_contract=context._LEAD_CALL_FACTORY,
+                invocation_kind=owner_call_offers.ContextInvocationKind.LEAD, result_contract=context._LEAD_CALL_FACTORY,
                 agent_id=context.LEAD_ORCHESTRATOR, physical_call_limit=cap))
             grouped_provider = AuthContextProvider((zero_hit_search, auth_failure(), context._group_answer),
                 control_plan=(*selection_plan("answer.workflow", before_script_response=1)[:-1],
@@ -636,7 +624,7 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
 
         grouped_request = context._group_request(self.request(
             operation_id="group-auth-source", result_correlation_id="group-auth-source-result",
-            invocation_kind=context.ContextInvocationKind.LEAD, result_contract=context._LEAD_CALL_FACTORY,
+            invocation_kind=owner_call_offers.ContextInvocationKind.LEAD, result_contract=context._LEAD_CALL_FACTORY,
             agent_id=context.LEAD_ORCHESTRATOR, physical_call_limit=4))
         grouped_provider = AuthContextProvider((context._group_control("answer.workflow"), context._group_answer),
             control_plan=((0, LeadGroupPhase.SELECT, auth_failure()),))
@@ -664,7 +652,7 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
         bound = await backend.bind(definition)
         provider = bound._context_provider()
         scope = ContextScope("auth-workspace", "replay", ContextSubjectKind.CONVERSATION, "conversation", PLOT_ARCHITECT)
-        request = ContextProviderCallRequest(scope, "sha256:" + "1" * 64, "call-original",
+        request = ctx_provider.ContextProviderCallRequest(scope, "sha256:" + "1" * 64, "call-original",
             context.ProviderCallKind.COLLABORATION_INITIAL, {"type": "object"}, {"synthetic": "held bytes"})
         calls = []
         async def rejected(_binding, invocation):
@@ -718,7 +706,7 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
                     await provider.invoke_context(request)
                 failure = caught.exception
                 before = {p: p.read_bytes() for p in workspace.path("debug_logs/agent_exchanges").rglob("*.jsonl")}
-                facts = context_provider_failure_facts(failure)
+                facts = ctx_provider.context_provider_failure_facts(failure)
                 source_is_valid = True
                 @asynccontextmanager
                 async def delayed_admission(_provider):
@@ -731,7 +719,7 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
                         await provider.invoke_context(replace(request, call_id="call-replay"))
                 self.assertIs(aborted.exception, failure)
                 self.assertTrue(failure.replay_aborted)
-                self.assertIs(context_provider_failure_facts(failure), facts)
+                self.assertIs(ctx_provider.context_provider_failure_facts(failure), facts)
                 self.assertEqual(len(calls), 1)
                 self.assertEqual({p: p.read_bytes() for p in before}, before)
                 self.assertEqual(len(list(workspace.path("debug_logs/agent_exchanges").rglob("*.jsonl"))), len(before))
@@ -744,7 +732,7 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
         self.assertIs(caught.exception, failure)
         self.assertFalse(failure.validate_replay())
         self.assertEqual(len(provider.calls), 1)
-        context.AgentContextService(self.workspace)
+        owner_session_execution.AgentContextService(self.workspace)
         self.assertEqual(len(provider.calls), 1)
 
     async def test_auth_cancel_cleans_validator_and_retains_prior_call_facts(self):
@@ -755,7 +743,7 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
             await drive_recovery(self.invoke(provider), interrupted)
         self.assertFalse(failure.validate_replay())
         self.assertEqual(len(provider.calls), 1)
-        self.assertIs(context_provider_failure_facts(failure).accounting.state, ProviderCallState.SUBMITTED)
+        self.assertIs(ctx_provider.context_provider_failure_facts(failure).accounting.state, ProviderCallState.SUBMITTED)
 
 
 class RecoveryCoordinationTests(lead.LeadOrchestrationTestCase):
@@ -905,7 +893,7 @@ class RecoveryCoordinationTests(lead.LeadOrchestrationTestCase):
         self.assertIs(caught.exception, failure)
         self.assertEqual(assisted, [("antigravity", 0)])
         self.assertEqual(len(self.backend.calls), before_calls + 1)
-        facts = context_provider_failure_facts(failure)
+        facts = ctx_provider.context_provider_failure_facts(failure)
         self.assertTrue(facts.timed_out)
         self.assertTrue(facts.submission_uncertain)
         self.assertTrue(facts.taint_existing_thread)
@@ -947,7 +935,7 @@ class RecoveryCoordinationTests(lead.LeadOrchestrationTestCase):
                     failure.auth_generation = generation
                     accounting = provider._account(request.schema, request.payload, call_kind=request.call_kind,
                         component_paths=request.component_paths, mandatory_reference_paths=request.mandatory_reference_paths)
-                    record_context_provider_failure(failure, ContextProviderFailureFacts(accounting))
+                    ctx_provider.record_context_provider_failure(failure, ctx_provider.ContextProviderFailureFacts(accounting))
                     raise failure
                 return await original(provider, request)
         self.backend.enqueue_for(PLOT_ARCHITECT, lead._specialist_outcome())

@@ -1,9 +1,6 @@
 """Optional RAG import-direction, pin, and artifact boundary verification."""
-
 from __future__ import annotations
-
 from tests.module_graph_fixture import module_inventory, internal_edges
-
 import ast
 import configparser
 from contextlib import nullcontext
@@ -21,33 +18,49 @@ import tomllib
 import unittest
 import zipfile
 from pathlib import Path
-
 import story_writing_agents
-from story_writing_agents import (
-    conversation_rag,
-    conversation_rag_cli,
-    conversation_rag_composition,
-    conversation_rag_local,
-    conversation_rag_runtime,
-    conversation_rag_store,
-)
+from story_writing_agents import conversation_rag, conversation_rag_cli, conversation_rag_composition, conversation_rag_local, conversation_rag_runtime, conversation_rag_store
+
+
+
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+
+
 _SOURCE_ROOT = _REPOSITORY_ROOT / "src" / "story_writing_agents"
+
+
 _GENERIC_RAG_PIN = "c77456321c614518e420e45c033e3f71dc5363b8"
+
+
 _GENERIC_RAG_REPOSITORY = "https://github.com/Kims-DeveloperGroup/generic-rag.git"
+
+
 _GENERIC_RAG_REQUIREMENT = (
     f"generic-rag @ git+{_GENERIC_RAG_REPOSITORY}@{_GENERIC_RAG_PIN}")
+
+
 _OLD_JSONL_VIEWER_PIN = "a38a975eda4123df11c1fa4f796fd49ab88efcee"
+
+
 _JSONL_VIEWER_PIN = "8b6ac65ad3c85bf8d331f6b94567e607ba0da1e4"
+
+
 _JSONL_VIEWER_VERSION = "0.9.0"
+
+
 _JSONL_VIEWER_REPOSITORY = "https://github.com/Kims-DeveloperGroup/jsonl-viewer.git"
+
+
 _JSONL_VIEWER_REQUIREMENT = (
     f"jsonl-viewer @ git+{_JSONL_VIEWER_REPOSITORY}@{_JSONL_VIEWER_PIN}")
+
+
 _GITLINK_PATHS = {'vendor/generic-rag': _GENERIC_RAG_PIN, 'vendor/jsonl-viewer': _JSONL_VIEWER_PIN}
 
 
 _VIEWER_SOURCE_ASSIGNMENT = '                source = b\'{"timestamp":"2026-08-30T00:00:00Z","request_type":"request","content":"ok"}\\n\'\n'
+
 
 def _viewer_host_source(size, source_line=""):
     return f"""                class Host:
@@ -64,6 +77,7 @@ def _viewer_host_source(size, source_line=""):
                 def owned(source, spec, host=None, *, terminal=None, transient_only=False):
                     assert host is None and transient_only is True and isinstance(terminal, jsonl_viewer.ViewerTerminal); actual_view(source, spec, active_host)
                 jsonl_viewer.view_jsonl = owned; transport = ExternalTerminalIO(io.StringIO(), io.StringIO(), lambda before_read: "", True)"""
+
 
 def _locked_runtime_wheels(directory: Path) -> Path:
     script = textwrap.dedent("""
@@ -94,15 +108,11 @@ def _locked_runtime_wheels(directory: Path) -> Path:
         raise AssertionError(completed.stderr)
     return directory
 
+
 def _extract_wheels(target: Path, wheels) -> None:
     for wheel in wheels:
         with zipfile.ZipFile(wheel) as archive:
             archive.extractall(target)
-
-
-
-
-
 
 
 def _cycle_witness(
@@ -331,11 +341,12 @@ class RagModuleBoundaryTests(unittest.TestCase):
     ) -> None:
         modules = module_inventory(_SOURCE_ROOT)
         edges = internal_edges(modules)
-        self.assertEqual(len(modules), 178)
-        self.assertEqual(len(edges), 800)
-        self.assertIn(("story_writing_agents.agent_context.service", "story_writing_agents.provider_adapter"), edges)
-        self.assertIn(("story_writing_agents.interactive_terminal._advisory_progress", "story_writing_agents.agent_context.service"), edges)
-        self.assertIn(("story_writing_agents.interactive_terminal._core", "story_writing_agents.agent_context.service"), edges)
+        self.assertEqual(len(modules), 203)
+        self.assertEqual(len(edges), 970)
+        self.assertIn(('story_writing_agents.agent_context.invocation.session_execution', 'story_writing_agents.provider_adapter'), edges)
+        self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
+        self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
+        self.assertIn(('story_writing_agents.interactive_terminal._core', 'story_writing_agents.agent_context.contracts.events'), edges)
         self.assertIsNone(_cycle_witness(modules, edges))
         conversation_dependencies = {
             "story_writing_agents.conversations": {
@@ -676,11 +687,14 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 if source == "story_writing_agents.agent_context.ledger"
             },
             {
-                "story_writing_agents.agent_context.accounting",
-                "story_writing_agents.agent_context.manifest",
-                "story_writing_agents.agent_context.planning",
-                "story_writing_agents.runtime_state_paths",
-                "story_writing_agents.workspace",
+                'story_writing_agents.agent_context.accounting',
+                'story_writing_agents.agent_context.contracts.checkpoints',
+                'story_writing_agents.agent_context.contracts.planning_inputs',
+                'story_writing_agents.agent_context.contracts.projection',
+                'story_writing_agents.agent_context.contracts.projection_accounting',
+                'story_writing_agents.agent_context.manifest',
+                'story_writing_agents.runtime_state_paths',
+                'story_writing_agents.workspace',
             },
         )
         self.assertEqual(
@@ -690,10 +704,10 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 if source == "story_writing_agents.agent_context.actions"
             },
             {
-                "story_writing_agents.provider_wire",
-                "story_writing_agents.agent_context.manifest",
-                "story_writing_agents.agent_context.planning",
-                "story_writing_agents.structured_output_validation",
+                'story_writing_agents.agent_context.contracts.planning_inputs',
+                'story_writing_agents.agent_context.manifest',
+                'story_writing_agents.provider_wire',
+                'story_writing_agents.structured_output_validation',
             },
         )
         self.assertEqual(
@@ -720,42 +734,53 @@ class RagModuleBoundaryTests(unittest.TestCase):
             {
                 target
                 for source, target in edges
-                if source == "story_writing_agents.agent_context.service"
+                if source == "story_writing_agents.agent_context.invocation.session_execution"
             },
             {
-                "story_writing_agents.provider_wire",
-                "story_writing_agents.provider_adapter",
-                "story_writing_agents.agent_context.accounting",
-                "story_writing_agents.agent_context.actions",
-                "story_writing_agents.agent_context.continuation",
-                "story_writing_agents.agent_context.ledger",
-                "story_writing_agents.agent_context.manifest",
-                "story_writing_agents.agent_context.planning",
-                "story_writing_agents.agent_context.progress",
-                "story_writing_agents.agent_context.request_compaction",
-                "story_writing_agents.agent_context.sources",
-                "story_writing_agents.agents",
-                "story_writing_agents.conversations.session_context",
-                "story_writing_agents.errors",
-                "story_writing_agents.lead_provider_contracts",
-                "story_writing_agents.lead_schema_groups",
-                "story_writing_agents.provider_auth_recovery",
-                "story_writing_agents.provider_execution_workspace",
-                "story_writing_agents.structured_output_validation",
-                "story_writing_agents.workspace",
-                "story_writing_agents.writing_artifacts.read_actions",
-                "story_writing_agents.agent_context.group_observation",
+                'story_writing_agents.agent_context.accounting',
+                'story_writing_agents.agent_context.actions',
+                'story_writing_agents.agent_context.continuation',
+                'story_writing_agents.agent_context.contracts.action_schema',
+                'story_writing_agents.agent_context.contracts.bound_call',
+                'story_writing_agents.agent_context.contracts.call_offers',
+                'story_writing_agents.agent_context.contracts.checkpoints',
+                'story_writing_agents.agent_context.contracts.context_values',
+                'story_writing_agents.agent_context.contracts.errors',
+                'story_writing_agents.agent_context.contracts.events',
+                'story_writing_agents.agent_context.contracts.planning_inputs',
+                'story_writing_agents.agent_context.contracts.session',
+                'story_writing_agents.agent_context.group_observation',
+                'story_writing_agents.agent_context.invocation.delivery',
+                'story_writing_agents.agent_context.invocation.group_payload',
+                'story_writing_agents.agent_context.invocation.provider',
+                'story_writing_agents.agent_context.invocation.requests',
+                'story_writing_agents.agent_context.ledger',
+                'story_writing_agents.agent_context.manifest',
+                'story_writing_agents.agent_context.payload.actions',
+                'story_writing_agents.agent_context.payload.context',
+                'story_writing_agents.agent_context.payload.history',
+                'story_writing_agents.agent_context.planning',
+                'story_writing_agents.agent_context.progress',
+                'story_writing_agents.agent_context.sources',
+                'story_writing_agents.agents',
+                'story_writing_agents.conversations.session_context',
+                'story_writing_agents.errors',
+                'story_writing_agents.lead_schema_groups',
+                'story_writing_agents.provider_adapter',
+                'story_writing_agents.provider_auth_recovery',
+                'story_writing_agents.provider_wire',
+                'story_writing_agents.structured_output_validation',
+                'story_writing_agents.workspace',
+                'story_writing_agents.writing_artifacts.read_actions',
             },
         )
-        self.assertIn(
-            ('story_writing_agents.backend', 'story_writing_agents.agent_context.service'),
-            edges,
-        )
+        self.assertIn(('story_writing_agents.backend', 'story_writing_agents.agent_context.invocation.provider'), edges)
+        self.assertIn(('story_writing_agents.backend', 'story_writing_agents.agent_context.contracts.errors'), edges)
         self.assertEqual(
             {
                 source
                 for source, target in edges
-                if target == "story_writing_agents.agent_context.service"
+                if target == "story_writing_agents.agent_context.invocation.session_execution"
                 and source.startswith("story_writing_agents.interactive_controller.")
             },
             set(),
@@ -852,7 +877,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
         self.assertEqual(
             {source for source, target in edges
              if target == "story_writing_agents.agent_context.group_observation"},
-            {"story_writing_agents.agent_context.group_reporting", "story_writing_agents.agent_context.service",
+            {"story_writing_agents.agent_context.group_reporting", "story_writing_agents.agent_context.invocation.session_execution",
              "story_writing_agents.conversations.context", "story_writing_agents.conversations.events",
              "story_writing_agents.orchestrator"},
         )

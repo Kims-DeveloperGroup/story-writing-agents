@@ -45,6 +45,16 @@ worker receives one hour of test execution. Full-shard jobs and the workflow
 guard have 75-minute native limits; other jobs retain 60-minute limits. The
 complete workflow shares a 75-minute deadline, including setup and shutdown.
 
+이번 리팩토링의 실패 기준은 변경 때문에 발생한 실제 성능 회귀다. 정상 전후 3회 중앙값 비교에서 개별 메서드는 `max(1ms, 수정 전 중앙값의 3%, 수정 전 MAD의 3배)`, 원본 사례 합산·전체는 `max(5ms, 수정 전 중앙값의 1%, 수정 전 MAD의 3배)`를 원인 조사 경계로 사용한다. MAD는 각 표본과 중앙값 차이의 절댓값들의 중앙값이다. 예를 들어 100ms→101ms는 미세한 측정 변동으로 허용한다.
+
+경계를 넘으면 반복성·실제 입력과 준비·I/O·호출·할당·필요시 별도 GC 관측을 확인하고 원인 확인 전 통과 처리하지 않는다. 불필요한 중복 준비나 추가 작업으로 실제 비용이 증가하면 경계 이내라도 수정한다. 정상 clock·GC 설정·실행 순서를 바꾸거나 관측 시간을 빼서 회귀를 숨기지 않는다. 이 오차 처리로 기존 소스·시간·worker·ID·subTest 상한을 늘리지 않는다.
+
+## 패키지 이동의 원본 사례 보존 — #962 / #964
+
+승인된 파일·클래스 이동은 원본 ID와 실제 새 모듈 ID의 일대일 대응으로 검증한다. 이동 전후의 전체 사례 수, 메서드와 assertion·부정 입력, fixture 수명, 각 사례의 subTest cap과 수치 weight를 보존한다. 이동하지 않은 ID도 그대로 유지한다. 등록되지 않은 ID·중복 대상·누락 원본과 시나리오 추가는 계속 거절한다.
+
+대응 기록은 승인 기반의 소스 hash·원본 범위와 새 소유자를 연결한다. 소스 비용은 이동 코드와 추출 support를 중복 없이 계상하며 기존 미확인 1,550행과 전체 상한 151,431행을 유지한다. 옛 테스트 경로용 shim, `Case.__module__` 또는 `id()` 위장으로 이동 사실을 숨기지 않는다. 이 규칙은 런타임 저장 형식의 이행·호환 기능을 추가하지 않는다.
+
 ## Scope rule
 
 - Preserve the existing canonical test IDs or remove them. New IDs are not part

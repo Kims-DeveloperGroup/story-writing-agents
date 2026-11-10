@@ -1,7 +1,5 @@
 """Unit and integration tests for advisory progress live stream rendering."""
-
 from __future__ import annotations
-
 import asyncio
 import inspect
 import io
@@ -16,60 +14,29 @@ import threading
 import time
 import unittest
 from unittest import mock
-
 from story_writing_agents.agent_context.actions import ContextSourceBoundaryKind
-from story_writing_agents.agent_context.progress import (
-    ContextActionProgressEvent,
-    ContextActionProgressKind,
-    ContextActionProgressSource,
-    ContextSourceBoundary,
-    ContextSourceKind,
-    ProviderStreamEvent,
-    ProviderStreamEventKind,
-    active_provider_stream_sink,
-)
+from story_writing_agents.agent_context.progress import ContextActionProgressEvent, ContextActionProgressKind, ContextActionProgressSource, ProviderStreamEvent, ProviderStreamEventKind, active_provider_stream_sink
 from story_writing_agents.errors import BackendProtocolError, ProviderAuthenticationRequiredError
 from story_writing_agents.blocking_work import run_blocking
 from story_writing_agents.provider_auth_recovery import request_authentication
-from story_writing_agents.interactive_terminal import (
-    _core,
-    _driver,
-)
-from story_writing_agents.interactive_terminal._advisory_progress import (
-    AdvisoryProgressRequest,
-    AdvisoryProgressState,
-    bind_advisory_progress,
-    reset_advisory_progress,
-)
-from story_writing_agents.interactive_terminal._core import (
-    InteractiveAdvisoryProgress,
-    InteractiveTerminal,
-)
+from story_writing_agents.interactive_terminal import _core, _driver
+from story_writing_agents.interactive_terminal._advisory_progress import AdvisoryProgressRequest, AdvisoryProgressState, bind_advisory_progress, reset_advisory_progress
+from story_writing_agents.interactive_terminal._core import InteractiveAdvisoryProgress, InteractiveTerminal
 from story_writing_agents.interactive_terminal._driver import RawTerminalDriver
 from story_writing_agents.interactive_terminal import _progress_process as process_progress
-from story_writing_agents.interactive_terminal._model import (
-    CapabilityProfile,
-    KeyEvent,
-    KeyKind,
-    MultiAgentScrollState,
-    NestedScrollViewport,
-    RenderedFrame,
-    TerminalCapabilities,
-    ViewState,
-    display_character_width,
-)
-from story_writing_agents.interactive_terminal._controls import (
-    append_main_input_history,
-    transition_line_input,
-    transition_main_input,
-    transition_nested_scroll,
-)
+from story_writing_agents.interactive_terminal._model import CapabilityProfile, KeyEvent, KeyKind, MultiAgentScrollState, NestedScrollViewport, RenderedFrame, TerminalCapabilities, ViewState, display_character_width
+from story_writing_agents.interactive_terminal._controls import append_main_input_history, transition_line_input, transition_main_input, transition_nested_scroll
 from story_writing_agents.interactive_terminal._viewer_render import render_nested_scroll_view
 from story_writing_agents.provider_adapter import ProviderInvocation
+from story_writing_agents.agent_context import actions as ctx_actions
+from story_writing_agents.agent_context import manifest as ctx_manifest
+
+
 
 
 def _without_sgr(text):
     return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
 
 def _ansi_terminal_capabilities():
     return TerminalCapabilities(
@@ -213,8 +180,8 @@ class AdvisoryProgressStreamingTests(unittest.TestCase):
         # Line 1 should not be in the 5-line preview
         self.assertNotIn("Line 1: The cold wind howled.", rendered)
 
-        from story_writing_agents.agent_context.service import (ContextExecutionEvent,
-            ContextExecutionEventKind, ContextNativeDisposition, ContextScope, ContextSubjectKind)
+        from story_writing_agents.agent_context.contracts.events import ContextExecutionEvent, ContextExecutionEventKind, ContextNativeDisposition
+        from story_writing_agents.agent_context.manifest import ContextScope, ContextSubjectKind
         from story_writing_agents.lead_schema_groups import LeadGroupPhase
         from story_writing_agents.provider_adapter import (NativeContextCheck, NativeContextObservation,
             NativeContextCheckStage, NativeContextSourceStage, NativeContextCheckReason)
@@ -308,10 +275,10 @@ class AdvisoryProgressStreamingTests(unittest.TestCase):
     def test_render_collapses_multiple_sources_into_summary_line(self) -> None:
         state = AdvisoryProgressState()
         state.begin((AdvisoryProgressRequest("agent_searcher", "op_1", "Searching files"),))
-        boundary = ContextSourceBoundary(ContextSourceBoundaryKind.ARTIFACT_LINES, start=1, end=50)
+        boundary = ctx_actions.ContextSourceBoundary(ContextSourceBoundaryKind.ARTIFACT_LINES, start=1, end=50)
         sources = tuple(
             ContextActionProgressSource(
-                ContextSourceKind.WRITING_ARTIFACT,
+                ctx_manifest.ContextSourceKind.WRITING_ARTIFACT,
                 f"chapters/chapter_{i:02d}.md",
                 boundary,)
             for i in range(10)

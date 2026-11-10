@@ -12,6 +12,7 @@ from typing import Any, Sequence
 
 from tests.runner.contracts import RunnerError
 from tests.runner.reporting import reconcile_reports
+from tests.id_moves import remap_base_caps
 
 
 BUDGET_PATH = Path(__file__).parent / "fixtures" / "test_budget_v1.json"
@@ -105,13 +106,17 @@ def _feedback_migration(current: dict[str, Any], base: dict[str, Any]) -> bool:
 
 
 def check_monotonic(current: dict[str, Any], base: dict[str, Any]) -> None:
+    try:
+        base_caps = remap_base_caps(current["subtest_caps"], base["subtest_caps"])
+    except ValueError as error:
+        raise BudgetError(str(error)) from error
     approved_feedback_migration = _feedback_migration(current, base)
-    added = sorted(set(current["subtest_caps"]) - set(base["subtest_caps"]))
+    added = sorted(set(current["subtest_caps"]) - set(base_caps))
     if added and not approved_feedback_migration:
         raise BudgetError("new canonical test IDs: " + ", ".join(added))
     expanded = sorted(
         key for key, count in current["subtest_caps"].items()
-        if key in base["subtest_caps"] and count > base["subtest_caps"][key]
+        if key in base_caps and count > base_caps[key]
     )
     if expanded:
         raise BudgetError("increased subtest caps: " + ", ".join(expanded))

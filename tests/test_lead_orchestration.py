@@ -1,20 +1,14 @@
 """End-to-end acceptance tests for the lead-front-channel runtime."""
-
 from __future__ import annotations
 from tests.provider_wire_fixture import lead_fixture_scope_record, lead_fixture_response
 from tests.provider_wire_fixture import CallbackContextViews, ExplicitPhaseScript, FixturePhasePlanError, assert_phase_guide, selection_plan
-from tests.provider_wire_fixture import ( fixture_schema_node, indexed_response, lead_fixture_result,
-    lead_fixture_scope, offered_fixture_bindings, finite_fixture_selection,)
+from tests.provider_wire_fixture import fixture_schema_node, indexed_response, lead_fixture_result, lead_fixture_scope, offered_fixture_bindings, finite_fixture_selection
 from tests.provider_wire_fixture import lead_fixture_bound_scope
-
 import hashlib
 from story_writing_agents import core_document_readiness as core_readiness
 from tests.test_collaboration_events import editorial, editorial_request
 from story_writing_agents.provider_wire import project_result_schema
 from story_writing_agents.lead_provider_contracts import PremiseDecisionConstraints, LeadExplorationConstraints
-from story_writing_agents.agent_context.service import ContextJsonObjectResultContract
-from story_writing_agents.agent_context.service import BoundContextProviderCallRequest
-
 import asyncio
 from story_writing_agents import lead_premise_decisions as premise
 import copy
@@ -36,56 +30,43 @@ from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, replace, asdict
 from typing import Awaitable, Callable
 from unittest import mock
-
 from story_writing_agents import ReplyTraceOrigin, RuntimeSession, StoryRuntime, Workspace
 from story_writing_agents import orchestrator as orchestrator_module
-from story_writing_agents.agent_context.accounting import (
-    ProviderCallAccounting, ProviderCallKind, ProviderCallState, account_provider_payload,)
-from story_writing_agents.agent_context.service import (
-    ContextProviderCallRequest, ContextProviderCallResult, ContextContinuationRejection,
-    ContextProviderFailureFacts, ContextProviderTerminalCode, ContextReferencePreludeRequest,
-    ContextReferencePreludeResult, record_context_provider_failure,)
-from story_writing_agents.agents import (
-    CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST,
-    LEAD_ORCHESTRATOR, PLOT_ARCHITECT, SPECIALIST_IDS, behavior_policy_files,)
-from story_writing_agents.conversations import (
-    COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES, CollaborationAssignmentDispatchPayload,
-    CollaborationConfirmationDecision, CollaborationExecutionResult, CollaborationLeadSynthesisPayload,
-    CollaborationEventKind, CollaborationInputKind, CollaborationInvocationKind, CollaborationLeadJudgmentPayload,
-    CollaborationLeadOutcomeFailureCode, CollaborationLeadOutcomeFailurePayload, CollaborationMessagePayload,
-    CollaborationNextAction, CollaborationProposal, CollaborationProviderCallPayload, CollaborationProviderCallState,
-    CollaborationSideEffect, CollaborationStepState, LeadOutcomeKind, LeadOutcomeScope, LeadStepDecision,
-    project_collaboration_history,)
-from story_writing_agents.conversation_storage import ( compose_filesystem_conversation_storage,)
+from story_writing_agents.agent_context.accounting import ProviderCallAccounting, ProviderCallKind, ProviderCallState, account_provider_payload
+from story_writing_agents.agents import CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR, PLOT_ARCHITECT, SPECIALIST_IDS, behavior_policy_files
+from story_writing_agents.conversations import COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES, CollaborationAssignmentDispatchPayload, CollaborationConfirmationDecision, CollaborationExecutionResult, CollaborationLeadSynthesisPayload, CollaborationEventKind, CollaborationInputKind, CollaborationInvocationKind, CollaborationLeadJudgmentPayload, CollaborationLeadOutcomeFailureCode, CollaborationLeadOutcomeFailurePayload, CollaborationMessagePayload, CollaborationNextAction, CollaborationProposal, CollaborationProviderCallPayload, CollaborationProviderCallState, CollaborationSideEffect, CollaborationStepState, LeadOutcomeKind, LeadOutcomeScope, LeadStepDecision, project_collaboration_history
+from story_writing_agents.conversation_storage import compose_filesystem_conversation_storage
 from story_writing_agents.errors import BackendProtocolError, SessionIdError
 from story_writing_agents.structured_output_validation import DomainValidationRule as Rule, diagnose_json_text, failure_issues
-from story_writing_agents.lead_provider_contracts import (
-    LeadContractError, LeadProviderConstraints, canonical_assignments, canonical_scope,)
-from story_writing_agents.writing_artifacts.authorization import (ReferenceAuthorizationErrorCode,)
+from story_writing_agents.lead_provider_contracts import LeadContractError, LeadProviderConstraints, canonical_assignments, canonical_scope
+from story_writing_agents.writing_artifacts.authorization import ReferenceAuthorizationErrorCode
 from story_writing_agents.writing_artifacts.read_actions import ReferenceReadAction, ReferenceReadActionKind
 from story_writing_agents.workspace.initialization import SessionArtifactBindingError, provision_session_resources
-
 from story_writing_agents import lead_exploration as exploration
 from tests.provider_wire_fixture import answer as wire_answer, contract_id as wire_contract_id, scenario_input, response as wire_response, result as wire_result, assert_guidance, assert_schema_descriptions, capture_sample
 from tests.provider_wire_fixture import finite_fixture_read_selection
 from tests.collaboration_contract_fixture import contract_batches
 from tests.helpers import materialize_pristine_initialized_workspace
 from tests.test_agent_context_accounting import _expanded_context_payload
-from story_writing_agents.specialist_routing import (
-    ArtifactReviewDomain, AuthoringActivity, AuthoringScope, ReviewBasis, artifact_domain,)
+from story_writing_agents.specialist_routing import ArtifactReviewDomain, AuthoringActivity, AuthoringScope, ReviewBasis, artifact_domain
+from story_writing_agents.agent_context.contracts import call_offers as ctx_call_offers
+from story_writing_agents.agent_context.invocation import provider as ctx_provider
 
 
-_Response = str | BaseException | Callable[[ContextProviderCallRequest, '_LeadContextProvider'],
+
+
+_Response = str | BaseException | Callable[[ctx_provider.ContextProviderCallRequest, '_LeadContextProvider'],
     str | BaseException | Awaitable[str | BaseException]]
 
 
 _LIVE_CONTEXT = {}
 
-# Constructed USER bytes for explicit positive fixtures; no real provider/human evidence.
+
 _STORY_USER_INPUT = ("A courier loses a letter, retraces the route, and returns it. "
     "Preserve the premise; you may invent supporting motivation and decide missing details.")
-_REVIEW_USER_INPUT = "Review complete supplied candidate: " + _STORY_USER_INPUT
 
+
+_REVIEW_USER_INPUT = "Review complete supplied candidate: " + _STORY_USER_INPUT
 
 
 async def _confirmed_premise(case, conversation, *, reference=False, recommendation="knows"):
@@ -192,6 +173,7 @@ async def _confirmed_premise(case, conversation, *, reference=False, recommendat
     case.assertEqual(turn.premise_report.cost.submitted_call_ids, tuple(item.call_id for item in calls))
     return proposed, turn
 
+
 def _premise_choice(turn, targets, *, request_id="choose-knowledge"):
     ref, option = turn.premise_report_ref, turn.premise_report.options[0]
     return premise.PremiseDecisionSelection(request_id, premise.PremiseDecisionAction.CHOOSE,
@@ -199,12 +181,13 @@ def _premise_choice(turn, targets, *, request_id="choose-knowledge"):
         choice_policy=premise.PremiseChoicePolicy.USER_CHOICE, option_id=option.option_id,
         material_digest=option.material_digest, target_paths=targets)
 
+
 def _premise_native_contract(summary=False):
     constraints = PremiseDecisionConstraints('native-question', input_ids=('user_input',),
         reply_alternatives=(('native-reply', ('native-alternative',)),))
     family = "premise-decision-summary-v1" if summary else "premise-analysis-response-v1"
     schema = constraints.summary_schema() if summary else constraints.analysis_schema()
-    contract = ContextJsonObjectResultContract(family, project_result_schema(schema, family))
+    contract = ctx_call_offers.ContextJsonObjectResultContract(family, project_result_schema(schema, family))
     payload = {"workflow": "premise_decision_summary" if summary else "premise_analysis", "provisional": True,
                "premise_decision": {"question_id": "native-question", "slot_id": "knowledge", "question": "Who knows?", "dependent_domains": ["plot_structure"]}, "inputs": []}
     payload["inputs"] = [{"input_id": "user_input", "kind": "user_input", "selected_text": "Who knows?"}]
@@ -217,9 +200,9 @@ def _premise_native_contract(summary=False):
     value = {"status": "clarification", "message": "The knowledge choice remains unresolved.", "options": [], "recommended_option_key": None} if summary else {"assessment": "insufficient_evidence", "message": "No candidate was evaluated.", "alternatives": []}
     return contract.schema_value(), payload, wire_answer(value, family)
 
+
 def _history_validation_details(history):
     return tuple(detail for event in history if type(event.payload) is CollaborationMessagePayload for detail in event.payload.validation_details)
-
 
 
 def _selected_premise_proposal(selection, *, authoring_assessment=None):
@@ -251,8 +234,10 @@ def _selected_premise_proposal(selection, *, authoring_assessment=None):
             "anchors": dict.fromkeys((PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST), "user_input"),
             "recipients": dict.fromkeys(inputs, PLOT_ARCHITECT)})
 
+
 def _object_positional_patch(target, attribute, value):
     return mock.patch.object(target, attribute, value)
+
 
 class _Finalizer:
     """Minimal synchronous provider terminal seam."""
@@ -261,12 +246,12 @@ class _Finalizer:
 
     def accepted(self) -> None: self.calls.append(("accepted", None))
 
-    def rejected(self, code: ContextProviderTerminalCode) -> None:
+    def rejected(self, code: ctx_provider.ContextProviderTerminalCode) -> None:
         self.calls.append(("rejected", code))
 
     def cancelled(self) -> None: self.calls.append(("cancelled", None))
 
-    def post_response_runtime_failure(self, code: ContextProviderTerminalCode) -> None:
+    def post_response_runtime_failure(self, code: ctx_provider.ContextProviderTerminalCode) -> None:
         self.calls.append(("post_response_runtime_failure", code))
 
 
@@ -275,7 +260,7 @@ class _SubmittedFailure:
     failure: BaseException
     timed_out: bool = False
     submission_uncertain: bool = False
-    continuation_rejection: ContextContinuationRejection | None = None
+    continuation_rejection: ctx_provider.ContextContinuationRejection | None = None
 
 
 class _LeadContextProvider:
@@ -343,7 +328,7 @@ class _LeadContextProvider:
         return ProviderCallAccounting(accounting, state=ProviderCallState.SUBMITTED,
             actual_transport_utf8_bytes=len(encoded))
 
-    async def prepare_references(self, request: ContextReferencePreludeRequest) -> ContextReferencePreludeResult:
+    async def prepare_references(self, request: ctx_provider.ContextReferencePreludeRequest) -> ctx_provider.ContextReferencePreludeResult:
         self._require_active(request.scope, request.policy_fingerprint)
         self.backend.reference_calls.append(request)
         if self.reference_read is None or self._reference_prepared:
@@ -353,7 +338,7 @@ class _LeadContextProvider:
             reference_request.correlation, reference_request.references)
         result = self.reference_read.handle_reference_read_action(action)
         with result:
-            carrier = ContextReferencePreludeResult.from_read_result(result, request=request)
+            carrier = ctx_provider.ContextReferencePreludeResult.from_read_result(result, request=request)
             context = carrier.context
         self._reference_prepared = True
         self.backend.reference_contexts.append(context)
@@ -363,7 +348,7 @@ class _LeadContextProvider:
     def callback_payload(self, request):
         return self.backend.callback_views.for_request(request)
 
-    async def invoke_context(self, request: ContextProviderCallRequest) -> ContextProviderCallResult:
+    async def invoke_context(self, request: ctx_provider.ContextProviderCallRequest) -> ctx_provider.ContextProviderCallResult:
         self._require_active(request.scope, request.policy_fingerprint)
         self.backend.calls.append(request)
         capture_sample(request)
@@ -386,12 +371,12 @@ class _LeadContextProvider:
             if inspect.isawaitable(response):
                 response = await response
         except asyncio.CancelledError as failure:
-            record_context_provider_failure(failure, ContextProviderFailureFacts(accounting, taint_existing_thread=True))
+            ctx_provider.record_context_provider_failure(failure, ctx_provider.ContextProviderFailureFacts(accounting, taint_existing_thread=True))
             raise
         except Exception as failure:
             self.script.callback_failed(failure)
         if type(response) is _SubmittedFailure:
-            record_context_provider_failure(response.failure, ContextProviderFailureFacts(
+            ctx_provider.record_context_provider_failure(response.failure, ctx_provider.ContextProviderFailureFacts(
                 accounting, timed_out=response.timed_out, taint_existing_thread=True,
                 submission_uncertain=response.submission_uncertain,
                 continuation_rejection=response.continuation_rejection))
@@ -401,7 +386,7 @@ class _LeadContextProvider:
         self._threads[self._thread_key(request.scope, request.policy_fingerprint)] = thread_id
         finalizer = _Finalizer()
         self.backend.finalizers.append(finalizer)
-        return ContextProviderCallResult(_bind_legacy_fixture_ids(
+        return ctx_provider.ContextProviderCallResult(_bind_legacy_fixture_ids(
             request, response, wire_response(response, wire_contract_id(request.payload))),
             thread_id, accounting, finalizer)
 
@@ -462,9 +447,9 @@ class _LeadBackend:
         self.bind_failure = bind_failure
         self.scripts: list[ExplicitPhaseScript] = []
         self.scripts_by_agent: dict[str, list[ExplicitPhaseScript]] = {}
-        self.calls: list[ContextProviderCallRequest] = []
-        self.call_records: list[tuple[str, ContextProviderCallRequest]] = []
-        self.reference_calls: list[ContextReferencePreludeRequest] = []
+        self.calls: list[ctx_provider.ContextProviderCallRequest] = []
+        self.call_records: list[tuple[str, ctx_provider.ContextProviderCallRequest]] = []
+        self.reference_calls: list[ctx_provider.ContextReferencePreludeRequest] = []
         self.reference_contexts: list[tuple[dict[str, object], ...]] = []
         self.reference_records: list[tuple[str, tuple[dict[str, object], ...]]] = []
         self.finalizers: list[_Finalizer] = []
@@ -668,7 +653,7 @@ def _current_exploration_outcome(text="A provisional alternative.", *, observati
 
 def _exploration_native_contract():
     constraints = LeadExplorationConstraints()
-    contract = ContextJsonObjectResultContract("lead-exploration-response-v1", project_result_schema(constraints.schema(), "lead-exploration-response-v1"))
+    contract = ctx_call_offers.ContextJsonObjectResultContract("lead-exploration-response-v1", project_result_schema(constraints.schema(), "lead-exploration-response-v1"))
     return contract.schema_value(), {"workflow": "lead_exploration", "interaction_mode": "exploration", "exploration_request": {"request_event_id": "native-exploration-request", "provisional": True}, "provider_constraints": constraints.prompt_facts(), "command": "Explore provisional directions.", "input_aliases": []}
 
 
@@ -678,7 +663,7 @@ def _adoption_selection(conversation, event, paths):
 
 
 def _bind_legacy_fixture_ids(request, response, encoded):
-    if not isinstance(request, BoundContextProviderCallRequest) or response == encoded:
+    if not isinstance(request, ctx_provider.BoundContextProviderCallRequest) or response == encoded:
         return encoded
     original = json.loads(response)
     if type(original) is not dict or type(original.get("action")) is not dict:
@@ -709,16 +694,16 @@ def _provider_envelope(call, value, *, used_handles=()):
     return json.dumps({"action": {"kind": "answer", "result": _live_result(call, value), "used_handles": list(used_handles)}})
 
 
-
 def _bound_rejection_envelope(call, value):
     """Bind explicitly intended answer IDs while retaining the supplied violation."""
     outer, inner = offered_fixture_bindings(call, action_type='submit_result', response_type='answer', family=0)
     return indexed_response({'action_type': 'submit_result', 'task_result': value},
                             outer_schema_id=outer, inner_schema_id=inner, contract=call.contract)
 
+
 def _visible_outcome(kind: str, message: str = "Visible lead response.", *, recommended_action=None, grouped=False):
     def respond(
-        call: ContextProviderCallRequest,
+        call: ctx_provider.ContextProviderCallRequest,
         _provider: _LeadContextProvider,
     ) -> str:
         if (getattr(call, 'contract', None) is not None
@@ -752,7 +737,7 @@ def _proposal_outcome(assignments: list[dict[str, object]], *, relation: str='ne
     activity: str | None=None, authoring_assessment: dict[str, object] | None=None,
     paths: tuple[str, ...]=()):
     def respond(
-        call: ContextProviderCallRequest,
+        call: ctx_provider.ContextProviderCallRequest,
         _provider: _LeadContextProvider,
     ) -> str:
         core_statuses = _provider.callback_payload(call).get("core_document_statuses", [])
@@ -836,7 +821,7 @@ def _workflow_material(value: object) -> dict[str, object]:
 def _specialist_outcome(assessment: str='supports',
     message: str='The assigned evidence supports the proposed direction.'):
     def respond(
-        call: ContextProviderCallRequest,
+        call: ctx_provider.ContextProviderCallRequest,
         _provider: _LeadContextProvider,
     ) -> str: return _provider_envelope(call, {"assessment": assessment, "message": message,},)
 
@@ -857,7 +842,7 @@ def _synthesis_outcome(*, message: str = "The specialist evidence supports proce
     unresolved_input_ids: list[str] | None = None, next_intent: object = None, recommended_action: object = None,
     recommendation_family: int | None = None,):
     def respond(
-        call: ContextProviderCallRequest,
+        call: ctx_provider.ContextProviderCallRequest,
         _provider: _LeadContextProvider,
     ) -> str:
         value = {"message": message}
@@ -892,17 +877,17 @@ def _synthesis_outcome(*, message: str = "The specialist evidence supports proce
 def _search_history(call, _provider, text="A prior lead response"):
     action = {"action_type": "search_context", "queries": [{
         "search_text": text, "source_types": {"conversation_history": True}}]}
-    if type(call) is ContextProviderCallRequest:
+    if type(call) is ctx_provider.ContextProviderCallRequest:
         assert call.scope.agent_id in SPECIALIST_IDS
         action["queries"][0]["source_types"] = ["conversation_history"]
         return json.dumps({"agent_action": action})
-    assert type(call) is BoundContextProviderCallRequest and call.scope.agent_id == LEAD_ORCHESTRATOR
+    assert type(call) is ctx_provider.BoundContextProviderCallRequest and call.scope.agent_id == LEAD_ORCHESTRATOR
     outer, inner = offered_fixture_bindings(call, action_type="search_context", response_type=None, family=0)
     assert inner is None
     return indexed_response(action, outer_schema_id=outer, inner_schema_id=None)
 
 
-def _read_history_hit(call: ContextProviderCallRequest, provider: _LeadContextProvider):
+def _read_history_hit(call: ctx_provider.ContextProviderCallRequest, provider: _LeadContextProvider):
     observation = provider.callback_payload(call)["context_observation"]
     assert isinstance(observation, dict) and observation["observation_type"] == "context_search_results"
     handle = observation["search_results"][0]["read_handle"]
@@ -914,7 +899,7 @@ def _read_history_hit(call: ContextProviderCallRequest, provider: _LeadContextPr
                             outer_schema_id=outer, inner_schema_id=None)
 
 
-def _answer_from_history(call: ContextProviderCallRequest, provider: _LeadContextProvider, *, message_only=False):
+def _answer_from_history(call: ctx_provider.ContextProviderCallRequest, provider: _LeadContextProvider, *, message_only=False):
     observation = provider.callback_payload(call)["context_observation"]
     assert isinstance(observation, dict) and observation["observation_type"] == "context_read_results"
     if message_only:
@@ -940,10 +925,12 @@ _READINESS_USER = ( "Use bounded conversation history if needed. " "Assess readi
     "seal and transitions connect departure, crossing and return. Keep this ending and do not hide " "author-side facts from this assessment. Reveal the seal to readers only at the crossing; "
     "the author knows throughout that the seal proves ownership. Judge these exact whole documents." )
 
+
 _READINESS_DOCUMENTS = (("core_documents/global_outline.md", "Nora departs with the letter. A blocked bridge and a suspicious " "keeper prevent return. Her brother's seal resolves the conflict; she returns the letter.\n"),
     ("core_documents/part_outlines.md", "Departure establishes the letter and seal. The crossing follows " "departure and tests ownership. Return follows the crossing and resolves the late conflict.\n"),
     ("core_documents/character_sheets.md", "Nora's role is courier; she wants to honor her trusting brother. " "The keeper guards the bridge, suspects theft, and helps after recognizing the brother's seal.\n"),
     ("core_documents/narrative_rules.md", "Close third person and past tense; restrained tone and plain " "expression. Narration follows Nora; dialogue reveals the seal. No perspective exceptions.\n"),)
+
 
 def _whole_book_assessment(call, answer, *, offered_inputs, logical_transform: Callable[
     [core_readiness.CoreDocumentAssessment], core_readiness.CoreDocumentAssessment] | None = None):
@@ -998,6 +985,8 @@ def _whole_book_assessment(call, answer, *, offered_inputs, logical_transform: C
     answer["action"]["result"] = { "response_type": "core_document_readiness_assessment",
         "response_text": answer["action"]["result"]["message"], "writing_task_scope": None, "core_document_assessment": core_readiness.assessment_to_dict(assessment), }
     return json.dumps(answer, ensure_ascii=False)
+
+
 class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
     def _decide(self, turn, kind): return self.runtime.decide_lead_step(_decision(turn, kind))
 
@@ -1417,15 +1406,18 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
             self._revision_fixture_failure = (type(failure).__name__, str(failure)[:384])
             raise
 
+
 def _discussion_reply(text, kind="answer"):
     result = {"response_type": kind, "response_text": text, "used_evidence_ids": []}
     return json.dumps({"agent_action": {"action_type": "submit_result", "task_result": result}})
+
 
 def _task_fixture(test):
     case = LeadOrchestrationTestCase()
     case.addCleanup = test.addCleanup
     case.setUp()
     return case
+
 
 class LeadSchemaFactoringTests(unittest.TestCase):
     def test_small_factoring_annotations_and_owner_refs_are_exact(self) -> None:
@@ -1528,7 +1520,6 @@ class LeadSchemaFactoringTests(unittest.TestCase):
             self.assertTrue(paired_rules.findings(swapped))
 
 
-
 class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
     async def test_direct_search_read_answer_uses_bounded_history_without_proposal(self) -> None:
         self.backend.context_threads = {}
@@ -1574,7 +1565,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         from story_writing_agents.lead_schema_groups import LeadGroupPhase
         self.assertEqual(tuple(item.contract.schema_group_phase for item in calls),
             (LeadGroupPhase.SELECT, LeadGroupPhase.SELECT, LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE))
-        from story_writing_agents.agent_context.service import BoundContextProviderCallRequest
+        from story_writing_agents.agent_context.invocation.provider import BoundContextProviderCallRequest
         for physical in calls:
             self.assertIs(type(physical), BoundContextProviderCallRequest)
             current = physical.contract
@@ -1842,7 +1833,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
 
     async def test_strict_provider_outcomes_reject_unknown_private_mixed_and_duplicate(self,
     ) -> None:
-        def duplicate(call: ContextProviderCallRequest, _provider: object) -> str:
+        def duplicate(call: ctx_provider.ContextProviderCallRequest, _provider: object) -> str:
             scope = json.dumps(_compact_scope(_live_scope(call)))
             return ( '{"action":{"kind":"answer","result":' + '{"kind":"answer","kind":"question",'
                 '"message":"Visible.","authoring_scope":' + scope
@@ -1853,7 +1844,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             'kind': 'answer', 'message': 'Visible.', 'private_reasoning': 'PRIVATE'}, {
             'kind': 'answer', 'message': 'Visible.', 'proposal': {'assignments': []}}, ['answer','Visible.'])
         def invalid_response(value: object) -> _Response:
-            def respond(call: ContextProviderCallRequest, _provider: object) -> str:
+            def respond(call: ctx_provider.ContextProviderCallRequest, _provider: object) -> str:
                 result = value
                 if type(result) is dict:
                     result = {** result, "authoring_scope": _compact_scope(_live_scope(call)),}
@@ -1933,7 +1924,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         from story_writing_agents.structured_output_validation import SchemaRules
 
         conversation_id = self.conversation("Minimal schema"); self.backend.enqueue(_visible_outcome("answer"), control_plan=selection_plan("answer.workflow"))
-        from story_writing_agents.agent_context.service import AgentContextService
+        from story_writing_agents.agent_context.invocation.session_execution import AgentContextService
         from unittest import mock; front_results = []; original_invoke = AgentContextService.invoke; front_failures = []
         async def retain_front_authority(service, *args, **kwargs):
             try:
@@ -2286,7 +2277,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         mismatched = copy.deepcopy(action_packet); mismatched['agent_action']['schema_id'] = search_id
         self.assertTrue(action_projection.findings(mismatched))
         from story_writing_agents.structured_output_validation import BoundContract, ContractOwner
-        from story_writing_agents.agent_context.service import BoundCallContract
+        from story_writing_agents.agent_context.contracts.bound_call import BoundCallContract
         for method in ('schema', 'schema_value', 'validate', 'validate_authorized', 'repair',
                        'repair_input', 'corrective_input', 'decode_and_validate'):
             with self.assertRaises(TypeError): type('SeparatelyComposedOwner', (ContractOwner,), {method: lambda self: None})
@@ -4822,7 +4813,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             return ((0, LeadGroupPhase.SELECT, _group_control(group)),)
         conversation_id = self.conversation("Repair schema")
 
-        def missing_message(call: ContextProviderCallRequest, _provider: object) -> str:
+        def missing_message(call: ctx_provider.ContextProviderCallRequest, _provider: object) -> str:
             return json.dumps({'action': {'kind': 'answer', 'result': {'kind': 'answer',
                 'authoring_scope': _compact_scope(_live_scope(call))}, 'used_handles': []}})
 
@@ -5001,7 +4992,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             'dependency slot IDs must be unique within one authoring scope' in item for item in original.validation_details))
 
         from dataclasses import replace
-        from story_writing_agents.agent_context.service import AgentContextService
+        from story_writing_agents.agent_context.invocation.session_execution import AgentContextService
         from tests.test_agent_context_execution import _group_control
         original_factory = orchestrator_module._lead_call_contract_factory
         def grouped_factory(*args, **kwargs):
@@ -5165,7 +5156,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             if paths is not None: self.assertEqual(notice["paths"], paths)
 
         def current_result(value, response_type, family_number):
-            def respond(call: ContextProviderCallRequest, _provider: _LeadContextProvider) -> str:
+            def respond(call: ctx_provider.ContextProviderCallRequest, _provider: _LeadContextProvider) -> str:
                 record_notice_tasks(call)
                 outer, inner = offered_fixture_bindings(call, action_type='submit_result', response_type=response_type,
                     family=family_number)
@@ -5238,7 +5229,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                                    LEAD_ORCHESTRATOR, "procedure_status", phase_judgment.authoring_scope)
 
         def substantive(kind: str, activity: str):
-            def respond(call: ContextProviderCallRequest, _provider: _LeadContextProvider) -> str:
+            def respond(call: ctx_provider.ContextProviderCallRequest, _provider: _LeadContextProvider) -> str:
                 record_notice_tasks(call)
                 value: dict[str, object] = {'message': f'Direct {kind} attempted story work.',
                     'authoring_scope': _compact_scope(_live_scope(call, activity=activity, domains=(
@@ -5852,7 +5843,6 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
                              for event in case.history(conversation)))
 
 
-
 class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
     async def test_domain_rejection_without_repair_persists_safe_notice(self) -> None:
         conversation_id = self.conversation("Direct lead domain rejection")
@@ -6113,15 +6103,15 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                 'scope': 'workflow_meta', 'evidence_status': 'not_applicable', 'evidence_ids': [],
                 'artifact_intent': None, 'objective_intent': None, 'proposal': None}
 
-        def malformed(call: ContextProviderCallRequest, _provider: object) -> str:
+        def malformed(call: ctx_provider.ContextProviderCallRequest, _provider: object) -> str:
             return _bound_rejection_envelope(call, [complete_value(rejected_body)])
 
-        def offered_identity_mismatch(call: ContextProviderCallRequest, _provider: object) -> str:
+        def offered_identity_mismatch(call: ctx_provider.ContextProviderCallRequest, _provider: object) -> str:
             response = json.loads(_visible_outcome('answer', rejected_body)(call, _provider))
             response['agent_action']['schema_id'] = 'not_an_offered_schema'
             return json.dumps(response, separators=(',', ':'))
 
-        def semantic_rejection(call: ContextProviderCallRequest, _provider: object) -> str:
+        def semantic_rejection(call: ctx_provider.ContextProviderCallRequest, _provider: object) -> str:
             native = {"response_type": "answer", "response_text": rejected_body,
                 "task_scope": lead_fixture_bound_scope(call, _live_scope(
                     call, activity="workflow", domains=()), record=True)}
@@ -6142,10 +6132,10 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             return response
 
         cases = (
-            ("malformed",(malformed,), ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE,),
-            ("correlation",(offered_identity_mismatch,), ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE,),
+            ("malformed",(malformed,), ctx_provider.ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE,),
+            ("correlation",(offered_identity_mismatch,), ctx_provider.ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE,),
             ("semantic",(semantic_rejection,),
-                ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE,),
+                ctx_provider.ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE,),
         )
         for label, initial_script, rejection_code in cases:
             with self.subTest(label=label):
@@ -6156,7 +6146,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                 backend.enqueue(*initial_script, control_plan=selection_plan("answer.workflow"))
                 correction_records: list[tuple[str, str, str]] = []
 
-                def corrected(call: ContextProviderCallRequest, _provider: object) -> str:
+                def corrected(call: ctx_provider.ContextProviderCallRequest, _provider: object) -> str:
                     material = _workflow_material(_provider.callback_payload(call))
                     correction = material["response_correction"]
                     failed = backend.calls[-2]
@@ -6296,7 +6286,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         conversation_id = self.conversation("Pre-submission correction failure")
         rejected_body = "PRE_SUBMISSION_REJECTED_BODY"
 
-        def malformed(call: ContextProviderCallRequest, _provider: object) -> str:
+        def malformed(call: ctx_provider.ContextProviderCallRequest, _provider: object) -> str:
             return json.dumps({'action': {'kind': 'answer', 'result': [{'message': rejected_body}],
                 'used_handles': []}}, separators=(',', ':'))
 
@@ -6324,7 +6314,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self.assertEqual(failures[0].call_id, submitted[1].call_id)
         self.assertEqual(project_collaboration_history(history).physical_calls_spent, 2,)
         self.assertEqual(tuple((finalizer.calls for finalizer in backend.finalizers)), ([('accepted', None)], [(
-            'rejected', ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE)],))
+            'rejected', ctx_provider.ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE)],))
         self.assertEqual(backend.tainted_thread_ids, ["thread-lead-1"])
         self.assertNotIn(rejected_body, repr(history))
 
@@ -6349,7 +6339,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         conversation_id = self.conversation("Second rejection closes")
 
         def malformed(message: str):
-            def respond(call: ContextProviderCallRequest, _provider: object) -> str:
+            def respond(call: ctx_provider.ContextProviderCallRequest, _provider: object) -> str:
                 return json.dumps({'action': {'kind': 'answer', 'result': [{'message': message}],
                     'used_handles': []}}, separators=(',', ':'))
 
@@ -6373,8 +6363,8 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self.assertEqual(failures[0].invocation_id, submitted[-1].invocation_id)
         self.assertEqual(failures[0].call_id, submitted[-1].call_id)
         self.assertEqual(tuple((finalizer.calls for finalizer in backend.finalizers)), ([('accepted', None)], [(
-            'rejected', ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE)], [('rejected',
-            ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE)]))
+            'rejected', ctx_provider.ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE)], [('rejected',
+            ctx_provider.ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE)]))
         self.assertEqual(tuple(call.contract.schema_group_phase for call in backend.calls),
                          (LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE, LeadGroupPhase.GENERATE))
         self.assertEqual(tuple(call.expected_thread_id for call in backend.calls),
@@ -6388,7 +6378,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         secrets = ("PRIVATE_ORIGINAL_VALUE", "PRIVATE_REPAIR_VALUE")
 
         def invalid(value: object):
-            def respond(call: ContextProviderCallRequest, _provider: object) -> str:
+            def respond(call: ctx_provider.ContextProviderCallRequest, _provider: object) -> str:
                 return _bound_rejection_envelope(call, value)
             return respond
 
@@ -6492,10 +6482,10 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
     async def test_search_before_first_rejection_uses_attempt_labels(self) -> None:
         private = "PRIVATE_LATE_RETRIEVAL_REJECTION_한🙂"
 
-        def malformed(call: ContextProviderCallRequest, _provider: object) -> str:
+        def malformed(call: ctx_provider.ContextProviderCallRequest, _provider: object) -> str:
             return _bound_rejection_envelope(call, [private])
 
-        def invalid_object(call: ContextProviderCallRequest, _provider: object) -> str:
+        def invalid_object(call: ctx_provider.ContextProviderCallRequest, _provider: object) -> str:
             return _bound_rejection_envelope(call, {"unknown": private})
 
         cases = (('malformed_then_repaired', malformed, _visible_outcome('answer',
@@ -6586,7 +6576,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
     async def test_long_validation_details_survive_history_restart_in_chunks(self) -> None:
         conversation_id = self.conversation("Long validation report")
 
-        def many_independent_issues(call: ContextProviderCallRequest,
+        def many_independent_issues(call: ctx_provider.ContextProviderCallRequest,
             provider: _LeadContextProvider) -> str:
             value = json.loads(_visible_outcome("answer")(call, provider))
             details = value['agent_action']['task_result']['response_details']
@@ -6614,7 +6604,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         conversation_id = self.conversation("Huge validation report")
         secret = "PRIVATE_HUGE_REJECTED_RESPONSE_한🙂"
 
-        def huge_invalid_array(call: ContextProviderCallRequest,
+        def huge_invalid_array(call: ctx_provider.ContextProviderCallRequest,
             provider: _LeadContextProvider) -> str:
             value = json.loads(_visible_outcome("answer", secret)(call, provider))
             details = value['agent_action']['task_result']['response_details']
@@ -6681,7 +6671,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         runtime = StoryRuntime(self.control_workspace, backend)  # type: ignore[arg-type]
         conversation_id = self.conversation("Referenced correction")
 
-        def incomplete(call: ContextProviderCallRequest, _provider: object) -> str:
+        def incomplete(call: ctx_provider.ContextProviderCallRequest, _provider: object) -> str:
             return _visible_outcome('answer', 'Incomplete referenced result.')(call, _provider)
 
         backend.enqueue(incomplete, control_plan=selection_plan("answer.workflow"))
@@ -6709,11 +6699,11 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         def fixed_business_factory(*args, **kwargs):
             original = original_factory(*args, **kwargs)
             return FixedBusinessFactory(original, 'answer.workflow') if original.schema_group_protocol else original
-        def malformed(call: ContextProviderCallRequest, _provider: object) -> str:
+        def malformed(call: ctx_provider.ContextProviderCallRequest, _provider: object) -> str:
             return json.dumps({'action': {'kind': 'answer', 'result': [], 'used_handles': []}}, separators=(',', ':'))
 
-        cases = (('correctable_without_capacity', malformed, ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE),
-            ('action_exhausted', _search_history, ContextProviderTerminalCode.ACTION_EXHAUSTED))
+        cases = (('correctable_without_capacity', malformed, ctx_provider.ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE),
+            ('action_exhausted', _search_history, ctx_provider.ContextProviderTerminalCode.ACTION_EXHAUSTED))
         for label, response, expected_code in cases:
             with self.subTest(label=label):
                 backend = _LeadBackend(test_case=self)
@@ -6740,7 +6730,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                 if label != "action_exhausted":
                     finalized.insert(0, [("accepted", None)])
                 if label == "action_exhausted":
-                    finalized.insert(0, [("rejected", ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE)])
+                    finalized.insert(0, [("rejected", ctx_provider.ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE)])
                 self.assertEqual([item.calls for item in backend.finalizers], finalized)
                 failures = tuple((event.payload for event in self.history(conversation_id) if type(
                     event.payload) is CollaborationLeadOutcomeFailurePayload))
@@ -6750,7 +6740,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         conversation_id = self.conversation("No repair capacity diagnostics")
         private = "PRIVATE_NO_REPAIR_PROVIDER_VALUE_한🙂"
 
-        def malformed(_call: ContextProviderCallRequest, _provider: object) -> str:
+        def malformed(_call: ctx_provider.ContextProviderCallRequest, _provider: object) -> str:
             outer, inner = offered_fixture_bindings(
                 _call, action_type="submit_result", response_type="answer", family=0)
             return indexed_response({"action_type": "submit_result", "task_result": [private]},
@@ -6781,7 +6771,8 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self.assertNotIn(private, repr(history))
 
         from dataclasses import replace
-        from story_writing_agents.agent_context.service import AgentContextService, context_provider_failure_facts
+        from story_writing_agents.agent_context.invocation.session_execution import AgentContextService
+        from story_writing_agents.agent_context.invocation.provider import context_provider_failure_facts
         from story_writing_agents.lead_schema_groups import LeadGroupPhase
         from tests.test_agent_context_execution import _group_control
         original_factory = orchestrator_module._lead_call_contract_factory
@@ -6991,7 +6982,7 @@ class LeadSubmittedFailureRecoveryTests(LeadOrchestrationTestCase):
         self._set_up_fake_provider_boundary()
 
     async def _assert_submitted_failure_never_replays(self, label, corrective, failure_factory):
-        def malformed(call: ContextProviderCallRequest, _provider: object) -> str:
+        def malformed(call: ctx_provider.ContextProviderCallRequest, _provider: object) -> str:
             return _bound_rejection_envelope(call, [])
         with self.subTest(corrective=corrective, failure=label):
             backend = _LeadBackend(persist_context_threads=True, test_case=self)
@@ -7041,7 +7032,7 @@ class LeadSubmittedFailureRecoveryTests(LeadOrchestrationTestCase):
             if corrective:
                 self.assertEqual(backend.finalizers[0].calls, [("accepted", None)])
                 self.assertEqual(backend.finalizers[1].calls, [
-                    ("rejected", ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE)])
+                    ("rejected", ctx_provider.ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE)])
                 self.assertEqual(backend.tainted_thread_ids, ["thread-lead-1"])
             restarted_backend = _LeadBackend(test_case=self)
             restarted_backend.enqueue(_visible_outcome("answer"), control_plan=selection_plan("answer.workflow"))
@@ -7171,7 +7162,7 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
             return response
 
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, synthesis)
-        from story_writing_agents.agent_context.service import BoundCallContract
+        from story_writing_agents.agent_context.contracts.bound_call import BoundCallContract
         native_synthesis, checking = {}, set()
         original_final = BoundCallContract.require_authorized_answer
         def retain_authorized_phase(binding, decoded, authorization):

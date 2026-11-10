@@ -1,17 +1,16 @@
 """Synthetic recommendation producers and real-runtime setup; no automatic wire repair."""
-
 from __future__ import annotations
 from tests.provider_wire_fixture import lead_fixture_bound_scope, selection_plan
-
 from dataclasses import asdict, replace
 import copy
 import json
-
 from story_writing_agents import authoring_admission as admission, conversations as c
 from story_writing_agents.agents import PLOT_ARCHITECT
 from tests import test_lead_orchestration as lead
 from tests import test_artifact_proposal_orchestration as artifact
 from tests.test_artifact_objectives import DRAFT, OUTLINE, ObjectiveCase, digest, rewrite_history
+
+
 
 
 def _selection_failure_note(failure, hits, targets, *, point):
@@ -66,7 +65,6 @@ def _selection_failure_note(failure, hits, targets, *, point):
     BaseException.add_note(failure, encoded)
 
 
-
 def _bounded_failure_note(*snapshots):
     note = json.dumps(snapshots, ensure_ascii=True, separators=(',', ':'))
     return note if len(note) <= 1024 else '["unsupported-note-size"]'
@@ -76,9 +74,9 @@ def _scoped_failure_snapshots(backend, scoped, result):
     from story_writing_agents.agent_context.actions import ContextCallReadFact
     from story_writing_agents.agent_context.manifest import (
         ContextScope, ContextSourceKind, ContextSubjectKind)
-    from story_writing_agents.agent_context.service import (
-        BoundCallContract, BoundContextProviderCallRequest, ContextCallOffers,
-        ContextProviderTerminalCode as Code)
+    from story_writing_agents.agent_context.contracts.bound_call import BoundCallContract
+    from story_writing_agents.agent_context.invocation.provider import BoundContextProviderCallRequest, ContextProviderTerminalCode as Code
+    from story_writing_agents.agent_context.contracts.call_offers import ContextCallOffers
     unsupported = (('scoped', 'unsupported'),)
     if type(backend) is not lead._LeadBackend or type(scoped) is not tuple or len(scoped) != 6:
         return unsupported
@@ -183,9 +181,9 @@ def _stored_failure_snapshots(backend, *, scoped=None, result=None):
     if scoped is not None:
         return _scoped_failure_snapshots(backend, scoped, result)
     from types import MappingProxyType
-    from story_writing_agents.agent_context.service import (
-        BoundCallContract, BoundContextProviderCallRequest, ContextCallOffers,
-        ContextProviderTerminalCode as Code)
+    from story_writing_agents.agent_context.contracts.bound_call import BoundCallContract
+    from story_writing_agents.agent_context.invocation.provider import BoundContextProviderCallRequest, ContextProviderTerminalCode as Code
+    from story_writing_agents.agent_context.contracts.call_offers import ContextCallOffers
     unsupported = ('unsupported',)
     if type(backend) is not lead._LeadBackend:
         return unsupported, unsupported
@@ -271,8 +269,9 @@ def _stored_failure_snapshots(backend, *, scoped=None, result=None):
 
 def _zero_hit_failure_snapshots(call, targets):
     from types import MappingProxyType
-    from story_writing_agents.agent_context.service import (
-        BoundCallContract, BoundContextProviderCallRequest, ContextCallOffers)
+    from story_writing_agents.agent_context.contracts.bound_call import BoundCallContract
+    from story_writing_agents.agent_context.invocation.provider import BoundContextProviderCallRequest
+    from story_writing_agents.agent_context.contracts.call_offers import ContextCallOffers
     from story_writing_agents.agent_context.actions import (
         ContextSourceStatusKind as Status, ContextSourceStatusReceipt)
     from story_writing_agents.agent_context.manifest import ContextSourceKind
@@ -332,15 +331,15 @@ def _zero_hit_failure_snapshots(call, targets):
     return offer_note, zero_note, ('target', len(core), tuple(counts), joined, manifest_equal)
 
 
-
 def _current_policy_failure_note(
         backend, result=None, *, projection=None, selection=None, scoped=None):
     if scoped is not None:
         return _bounded_failure_note(
             *_stored_failure_snapshots(backend, scoped=scoped, result=result))
     from types import MappingProxyType
-    from story_writing_agents.agent_context.service import (
-        BoundCallContract, BoundContextProviderCallRequest, ContextCallOffers)
+    from story_writing_agents.agent_context.contracts.bound_call import BoundCallContract
+    from story_writing_agents.agent_context.invocation.provider import BoundContextProviderCallRequest
+    from story_writing_agents.agent_context.contracts.call_offers import ContextCallOffers
     from story_writing_agents.agent_context.actions import ContextCallReadFact
     from story_writing_agents.agent_context.manifest import ContextSourceKind
     from story_writing_agents.lead_provider_contracts import LeadProviderConstraints
@@ -461,6 +460,7 @@ def task_assessment(*, foundation_ids, actions):
 
 
 _RECOMMENDATION_SCOPE_DEFAULT = object()
+
 
 def recommendation(*, message=DRAFT, recommended_action=None, mutate=None,
                    authoring_scope=_RECOMMENDATION_SCOPE_DEFAULT, authoring_assessment=None):
@@ -687,7 +687,6 @@ def preparation(turn, *, text=DRAFT, mutate=None, read_evidence=False):
         native['task_scope'] = lead_fixture_bound_scope(call, body['authoring_scope'], record=True)
         return lead_fixture_response(call, lead_fixture_result(native), family=0)
     return respond
-
 
 
 class RecommendationCase(ObjectiveCase):

@@ -1,46 +1,37 @@
 """Exhaustive acceptance coverage for runtime-grounded lead judgments."""
-
 from __future__ import annotations
 from tests.provider_wire_fixture import selection_plan
 from story_writing_agents import authoring_admission as admission
 from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF, _fixture_assessment
-
-from tests.test_lead_orchestration import (
-    _exploration_outcome, _current_exploration_outcome, _read_history_hit)
+from tests.test_lead_orchestration import _exploration_outcome, _current_exploration_outcome, _read_history_hit
 from tests.provider_wire_fixture import indexed_response, offered_fixture_bindings
 from story_writing_agents import lead_exploration as exploration
 import hashlib
-
 import json
 import unittest
 from dataclasses import asdict, replace
 from types import SimpleNamespace
-
 from story_writing_agents import StoryRuntime
-from story_writing_agents.agent_context.service import (
-    BoundContextProviderCallRequest, ContextProviderTerminalCode)
 from story_writing_agents.agents import EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR, PLOT_ARCHITECT
-from story_writing_agents.conversations import ( CollaborationAppendError, CollaborationEvidenceAcquisition,
-    CollaborationEvidenceReceipt, CollaborationEventKind, CollaborationInputKind, CollaborationInputState,
-    CollaborationInvocationKind, CollaborationLeadEvidence, CollaborationLeadJudgmentPayload,
-    CollaborationLeadOutcomeFailureCode, CollaborationLeadOutcomeFailurePayload, CollaborationNextAction,
-    CollaborationProviderCallKind, CollaborationStepState, LeadEvidenceStatus, LeadOutcomeKind,
-    LeadOutcomeScope, collaboration_proposal_digest, encode_collaboration_event,
-    validate_collaboration_candidate_batch, )
+from story_writing_agents.conversations import CollaborationAppendError, CollaborationEvidenceAcquisition, CollaborationEvidenceReceipt, CollaborationEventKind, CollaborationInputKind, CollaborationInputState, CollaborationInvocationKind, CollaborationLeadEvidence, CollaborationLeadJudgmentPayload, CollaborationLeadOutcomeFailureCode, CollaborationLeadOutcomeFailurePayload, CollaborationNextAction, CollaborationProviderCallKind, CollaborationStepState, LeadEvidenceStatus, LeadOutcomeKind, LeadOutcomeScope, collaboration_proposal_digest, encode_collaboration_event, validate_collaboration_candidate_batch
 from story_writing_agents.errors import BackendProtocolError
-from story_writing_agents.writing_artifacts import ( ReferenceAuthorizationErrorCode,
-    ReferenceOperationFailure, )
+from story_writing_agents.writing_artifacts import ReferenceAuthorizationErrorCode, ReferenceOperationFailure
+from tests.test_lead_orchestration import LeadOrchestrationTestCase, _LeadBackend, _LeadContextProvider, _confirmed_premise, _decision, _live_scope, _provider_envelope, _specialist_outcome, _submitted_calls, _synthesis_outcome, _visible_outcome
+from tests.collaboration_contract_fixture import LEAD, RUNTIME, USER, make_batch, make_draft, provider_call_drafts, store_batch
+from story_writing_agents.agent_context.invocation import provider as ctx_provider
 
-from tests.test_lead_orchestration import ( LeadOrchestrationTestCase, _LeadBackend, _LeadContextProvider,
-    _confirmed_premise, _decision, _live_scope, _provider_envelope, _specialist_outcome,
-    _submitted_calls, _synthesis_outcome, _visible_outcome, )
-from tests.collaboration_contract_fixture import ( LEAD, RUNTIME, USER, make_batch, make_draft,
-    provider_call_drafts, store_batch, )
+
 
 
 _DIGEST_A = "sha256:" + "1" * 64
+
+
 _DIGEST_B = "sha256:" + "2" * 64
+
+
 _OPERATION = "lead_turn"
+
+
 _RESULT = "outcome_turn"
 
 
@@ -251,7 +242,7 @@ class DurableLeadEvidenceMatrixTests(unittest.TestCase):
 
 def _search(query: str, kinds: list[str]):
     def respond(call, _provider):
-        assert type(call) is BoundContextProviderCallRequest
+        assert type(call) is ctx_provider.BoundContextProviderCallRequest
         assert call.scope.agent_id == LEAD_ORCHESTRATOR
         source_types = {
             "w": "story_document",
@@ -1055,7 +1046,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                     self.assertTrue(code is None)
                 else:
                     self.assertTrue(
-                        code is ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE)
+                        code is ctx_provider.ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE)
                 states.append(state)
             self.assertCountEqual(states, ("accepted", *expected_states))
 
@@ -1341,7 +1332,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                 [
                     (
                         "rejected",
-                        ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE,
+                        ctx_provider.ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE,
                     )
                 ],
                 [("accepted", None)],

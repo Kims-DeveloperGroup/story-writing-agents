@@ -18,7 +18,7 @@ from ..agent_context.progress import (
     ProviderStreamEventKind,
     ProviderStreamSink,
 )
-from ..agent_context.service import (
+from ..agent_context.contracts.events import (
     ContextExecutionEvent,
     ContextExecutionEventKind,
     ContextNativeDisposition,
