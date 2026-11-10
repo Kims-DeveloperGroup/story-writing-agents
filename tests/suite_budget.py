@@ -10,11 +10,13 @@ import subprocess
 from pathlib import Path
 from typing import Any, Sequence
 
-from tests import runner
+from tests.runner.contracts import RunnerError
+from tests.runner.reporting import reconcile_reports
 
 
 BUDGET_PATH = Path(__file__).parent / "fixtures" / "test_budget_v1.json"
 BUDGET_REPO_PATH = "tests/fixtures/test_budget_v1.json"
+SOURCE_LEDGER_PATH = Path(__file__).parent / "fixtures" / "test_source_ledger_v1.json"
 
 
 class BudgetError(ValueError):
@@ -154,12 +156,31 @@ def check_monotonic(current: dict[str, Any], base: dict[str, Any]) -> None:
             raise BudgetError(f"increased {name}")
 
 
+def source_charge() -> dict[str, int]:
+    """Count moved test bodies once without expanding the execution-tool scope."""
+    root = Path(__file__).resolve().parents[1]
+    ledger = json.loads(SOURCE_LEDGER_PATH.read_text(encoding="utf-8"))
+    if ledger.get("schema_version") != 1 or ledger.get("legacy_unresolved_lines") != 1550:
+        raise BudgetError("source ledger must retain the unresolved 1550-line charge")
+    test_paths = {path.resolve() for path in (root / "tests").rglob("test*.py")}
+    support_paths = set()
+    for name in ledger["counted_support_files"]:
+        path = (root / name).resolve()
+        if not path.is_relative_to(root / "tests") or path.suffix != ".py" or not path.is_file():
+            raise BudgetError(f"invalid counted support path: {name}")
+        support_paths.add(path)
+    def count(paths):
+        return sum(sum(bool(line) and not line.startswith("#")
+                       for line in map(str.lstrip, path.read_text(encoding="utf-8").splitlines()))
+                   for path in paths)
+    raw = count(test_paths)
+    support = count(support_paths - test_paths)
+    return {"test_lines": raw, "support_lines": support, "legacy_lines": 1550,
+            "effective_lines": raw + support + 1550}
+
+
 def check_source_scope(current: dict[str, Any]) -> None:
-    lines = sum(
-        sum(bool(line.strip()) and not line.lstrip().startswith("#")
-            for line in path.read_text(encoding="utf-8").splitlines())
-        for path in sorted(Path(__file__).parent.glob("test*.py"))
-    )
+    lines = source_charge()["effective_lines"]
     if lines > current["max_test_source_lines"]:
         raise BudgetError(f"test source grew to {lines} lines")
 
@@ -167,7 +188,7 @@ def check_source_scope(current: dict[str, Any]) -> None:
 def check_reports(
     current: dict[str, Any], paths: Sequence[str], *, allow_wall_time_overage: bool = False,
 ) -> dict[str, Any]:
-    reconciliation = runner.reconcile_reports(paths)
+    reconciliation = reconcile_reports(paths)
     if reconciliation["outcome"] != "success":
         raise BudgetError("shard tests did not all pass")
     records: dict[str, int] = {}
@@ -213,7 +234,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = check_reports(
             current, args.report, allow_wall_time_overage=args.allow_wall_time_overage,
         )
-    except (BudgetError, runner.RunnerError, OSError, KeyError, TypeError, ValueError) as error:
+    except (BudgetError, RunnerError, OSError, KeyError, TypeError, ValueError) as error:
         parser.exit(1, f"test budget: {error}\n")
     allowance = " (wall-time overage explicitly allowed)" if args.allow_wall_time_overage else ""
     print(

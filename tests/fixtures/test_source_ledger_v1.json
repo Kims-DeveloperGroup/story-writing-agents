@@ -1,0 +1,123 @@
+{
+  "schema_version": 1,
+  "legacy_unresolved_lines": 1550,
+  "origin_commit": "3b74dce89a2fffd726b94a739c87d4524c3deed7",
+  "counted_support_files": [
+    "tests/feedback_probe.py",
+    "tests/module_graph_fixture.py",
+    "tests/terminal_input_fixture.py"
+  ],
+  "origins": {
+    "test_git_external_operation_inspection.py": {
+      "sha256": "a4f94fbef0517cf607f4d84ce0b50608e3006076bcf6e023ac47dbd55624c11a",
+      "source_ranges": [
+        [
+          342,
+          394
+        ],
+        [
+          404,
+          422
+        ]
+      ]
+    },
+    "test_artifact_application_contracts.py": {
+      "sha256": "d46a96f7d85fd8f0d30433bbfc264935924a077493100eaf6095f54b8ba1f26c",
+      "source_ranges": [
+        [
+          837,
+          894
+        ],
+        [
+          910,
+          928
+        ]
+      ]
+    },
+    "test_artifact_application_store_recovery.py": {
+      "sha256": "4e46cd1650c148c088b8302cb1e77946a6b468a72e861c20dd7cd78a39505cb2",
+      "source_ranges": [
+        [
+          372,
+          425
+        ],
+        [
+          452,
+          470
+        ]
+      ]
+    },
+    "test_artifact_relationship_policy.py": {
+      "sha256": "0662f380363951e954041c5eede14f44aef928ee233fa2cc8800d99ad78ebc44",
+      "source_ranges": [
+        [
+          1725,
+          1782
+        ],
+        [
+          1802,
+          1820
+        ]
+      ]
+    },
+    "test_interactive_terminal_composer.py": {
+      "sha256": "63b4ca48c29d415575e5246eb83c0d49b1b4b743e32a1f79094d177292e05af7",
+      "source_ranges": [
+        [
+          142,
+          143
+        ],
+        [
+          145,
+          149
+        ],
+        [
+          151,
+          154
+        ],
+        [
+          157,
+          202
+        ]
+      ]
+    },
+    "test_interactive_terminal_picker.py": {
+      "sha256": "01f0490d221e101ec2f2203fdf52400a5d36598e94a6e0b8471f152e0622a226",
+      "source_ranges": [
+        [
+          215,
+          216
+        ],
+        [
+          218,
+          222
+        ],
+        [
+          224,
+          227
+        ],
+        [
+          230,
+          275
+        ]
+      ]
+    },
+    "test_rag_module_and_packaging_boundary.py": {
+      "sha256": "bdd026a0ac28c17e5d634fe1d188a8684b2bb8974d0606a7b6fa7c7757f4b383",
+      "source_ranges": [
+        [
+          100,
+          109
+        ],
+        [
+          112,
+          120
+        ],
+        [
+          123,
+          163
+        ]
+      ]
+    }
+  }
+}

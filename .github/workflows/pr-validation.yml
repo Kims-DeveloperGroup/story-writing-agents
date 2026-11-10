@@ -17,6 +17,21 @@ on:
         description: affected 선택 시 실행할 정규 테스트 ID를 한 줄에 하나씩 입력
         required: false
         type: string
+      observe_gc:
+        description: 영향 선택의 GC 비용 관측만 수행하며 성능 합격 근거로 사용하지 않음
+        required: false
+        type: boolean
+        default: false
+      compare_feedback_baseline:
+        description: 기존 codec 피드백과 지정 영향 ID의 수정 전 시간을 같은 환경에서 측정
+        required: false
+        type: boolean
+        default: false
+      profile_selection:
+        description: 선택한 기존 사례를 cProfile로 진단하며 성능 통과 증거로 사용하지 않음
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -184,6 +199,9 @@ jobs:
         env:
           VALIDATION_SCOPE: ${{ inputs.validation_scope }}
           REQUESTED_TEST_IDS: ${{ inputs.test_ids }}
+          OBSERVE_GC: ${{ inputs.observe_gc }}
+          PROFILE_SELECTION: ${{ inputs.profile_selection }}
+          COMPARE_FEEDBACK_BASELINE: ${{ inputs.compare_feedback_baseline }}
         with:
           script: |
             const {owner, repo} = context.repo;
@@ -206,6 +224,16 @@ jobs:
             const scope = process.env.VALIDATION_SCOPE;
             const wholeFrontOnly = manualMode && scope === "whole-front";
             const affectedOnly = manualMode && scope === "affected";
+            if (process.env.OBSERVE_GC === "true" && !affectedOnly) {
+              core.setFailed("GC 관측은 수동 affected 선택에서만 허용합니다.");
+              return;
+            }
+            if (process.env.COMPARE_FEEDBACK_BASELINE === "true" && (!affectedOnly || process.env.OBSERVE_GC === "true")) {
+              core.setFailed("수정 전 피드백 비교는 GC 관측 없는 수동 affected 선택에서만 허용합니다."); return;
+            }
+            if (process.env.PROFILE_SELECTION === "true" && (!affectedOnly || process.env.OBSERVE_GC === "true")) {
+              core.setFailed("함수 프로파일은 GC 관측 없는 수동 affected 선택에서만 허용합니다."); return;
+            }
             core.setOutput("manual_mode", String(manualMode));
             core.setOutput("development_only", "false");
             core.setOutput("metadata_only", "false");
@@ -226,6 +254,9 @@ jobs:
                 if (ids.some(id => !canonicalId.test(id)) || new Set(ids).size !== ids.length) {
                   core.setFailed("영향 테스트 ID는 중복·빈 줄 없이 한 줄에 하나의 정규 ID여야 합니다.");
                   return;
+                }
+                if (process.env.COMPARE_FEEDBACK_BASELINE === "true" && !ids.includes("tests.test_selected_task_material_codec.SelectedTaskMaterialCodecTests.test_two_captures_keep_closed_wire_shape_and_order")) {
+                  core.setFailed("피드백 비교에는 기존 codec 사례의 정확한 ID가 필요합니다."); return;
                 }
                 affectedIds = ids.join("\n");
               } else if (requestedIds !== "") {
@@ -379,6 +410,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.RUNTIME_TEST_PYTHON_VERSION }}
+      - name: 공유 fixture의 선택 영향 선언 확인
+        run: PYTHONPATH=src python -m tests.runner.owner_map
       - name: Check patch whitespace
         env:
           BASE_SHA: ${{ needs.classify.outputs.base_sha }}
@@ -542,6 +575,8 @@ jobs:
       TEST_RUN_DEADLINE: ${{ needs.classify.outputs.test_run_deadline }}
       AFFECTED_ONLY: ${{ needs.classify.outputs.affected_only }}
       AFFECTED_IDS: ${{ needs.classify.outputs.affected_ids }}
+      OBSERVE_GC: ${{ inputs.observe_gc }}
+      PROFILE_SELECTION: ${{ inputs.profile_selection }}
     steps:
       - name: Record shared test deadline before setup
         run: |
@@ -592,7 +627,9 @@ jobs:
                   'expected_available_cpu_count': 4, 'job': os.environ['GITHUB_JOB'],
                   'selection': os.environ['TEST_HARDWARE_SELECTION'],
                   'shard': os.environ.get('TEST_HARDWARE_SHARD') or None,
-                  'recorded_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat()}
+              'recorded_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+              'diagnostic_gc_requested': os.environ.get('OBSERVE_GC') == 'true',
+                'diagnostic_profile_requested': os.environ.get('PROFILE_SELECTION') == 'true'}
           try:
               assert arch in expected, 'unsupported selected runner architecture'
               affinity = sorted(os.sched_getaffinity(0))
@@ -643,13 +680,67 @@ jobs:
           if (( test_seconds > 3150 )); then test_seconds=3150; fi
           printf '{"worker_limit_seconds":%s,"kill_grace_seconds":30,"cleanup_reserve_seconds":60,"cancellation_reserve_seconds":360}\n' "$test_seconds" > "$RUNNER_TEMP/fast-control.json"
           if (( test_seconds <= 0 )); then exit 124; fi
+          runner=(.venv/bin/python -m tests.runner run "${selector[@]}" --json "$RUNNER_TEMP/fast.json")
+          if [[ "$OBSERVE_GC" == "true" ]]; then
+            runner=(.venv/bin/python -m tests.runner.gc_diagnostic --observation-json "$RUNNER_TEMP/gc-diagnostic.json" -- run "${selector[@]}" --json "$RUNNER_TEMP/gc-diagnostic-run.json")
+          fi
+          if [[ "$PROFILE_SELECTION" == "true" ]]; then
+            runner=(.venv/bin/python -m cProfile -o "$RUNNER_TEMP/case-profile-current.prof" -m tests.runner run "${selector[@]}" --json "$RUNNER_TEMP/case-profile-current.json")
+          fi
           set +e
-          timeout --signal=INT --kill-after=30s "${test_seconds}s" env PYTHONPATH=src .venv/bin/python -m tests.runner run "${selector[@]}" --json "$RUNNER_TEMP/fast.json" 2>&1 | tee "$RUNNER_TEMP/fast.log"
+          timeout --signal=INT --kill-after=30s "${test_seconds}s" env PYTHONPATH=src "${runner[@]}" 2>&1 | tee "$RUNNER_TEMP/fast.log"
           test_statuses=("${PIPESTATUS[@]}")
           test_status=${test_statuses[0]}
           if (( test_status == 0 && test_statuses[1] != 0 )); then test_status=${test_statuses[1]}; fi
           printf '%s\n' "$test_status" > "$RUNNER_TEMP/fast-exit-code.txt"
           exit "$test_status"
+      - name: 기존 순수 계약의 RED와 GREEN 피드백 확인
+        if: needs.classify.outputs.affected_only == 'true' && inputs.observe_gc != true && inputs.profile_selection != true
+        run: |
+          codec_id='tests.test_selected_task_material_codec.SelectedTaskMaterialCodecTests.test_two_captures_keep_closed_wire_shape_and_order'
+          if grep -Fxq "$codec_id" <<< "$AFFECTED_IDS"; then
+            PYTHONPATH=src .venv/bin/python -m tests.feedback_probe \
+              --json "$RUNNER_TEMP/feedback-probe.json"
+          fi
+      - name: 수정 전 피드백 소스 준비
+        if: inputs.compare_feedback_baseline == true && needs.classify.outputs.affected_only == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: 45cf084f0d28eb5926863e90509e5f14bbd3497e
+          submodules: recursive
+          path: .feedback-baseline
+      - name: 같은 환경에서 수정 전 RED와 GREEN 측정
+        if: inputs.compare_feedback_baseline == true && needs.classify.outputs.affected_only == 'true'
+        run: |
+          set -e
+          cmp pyproject.toml .feedback-baseline/pyproject.toml
+          cmp uv.lock .feedback-baseline/uv.lock
+          cmp .gitmodules .feedback-baseline/.gitmodules
+          test "$(git ls-tree HEAD vendor/)" = "$(git -C .feedback-baseline ls-tree HEAD vendor/)"
+          cd .feedback-baseline
+          baseline_ids=()
+          while IFS= read -r identifier; do
+            baseline_ids+=(--id "$identifier")
+          done <<< "$AFFECTED_IDS"
+          baseline_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))
+          if (( baseline_seconds > 3150 )); then baseline_seconds=3150; fi
+          if (( baseline_seconds <= 0 )); then exit 124; fi
+          printf '{"worker_limit_seconds":%s,"kill_grace_seconds":30,"cleanup_reserve_seconds":60,"cancellation_reserve_seconds":360}\n' "$baseline_seconds" > "$RUNNER_TEMP/feedback-probe-baseline-affected-control.json"
+          baseline_runner=("$GITHUB_WORKSPACE/.venv/bin/python" -m tests.runner run "${baseline_ids[@]}" --json "$RUNNER_TEMP/feedback-probe-baseline-affected.json")
+          if [[ "$PROFILE_SELECTION" == "true" ]]; then
+            baseline_runner=("$GITHUB_WORKSPACE/.venv/bin/python" -m cProfile -o "$RUNNER_TEMP/case-profile-baseline.prof" -m tests.runner run "${baseline_ids[@]}" --json "$RUNNER_TEMP/case-profile-baseline.json")
+          fi
+          set +e
+          timeout --signal=INT --kill-after=30s "${baseline_seconds}s" env PYTHONPATH=src "${baseline_runner[@]}" 2>&1 | tee "$RUNNER_TEMP/feedback-probe-baseline-affected.log"
+          baseline_statuses=("${PIPESTATUS[@]}")
+          set -e
+          baseline_status=${baseline_statuses[0]}
+          if (( baseline_status == 0 && baseline_statuses[1] != 0 )); then baseline_status=${baseline_statuses[1]}; fi
+          if (( baseline_status != 0 )); then exit "$baseline_status"; fi
+          if [[ "$PROFILE_SELECTION" != "true" ]]; then
+            PYTHONPATH=src "$GITHUB_WORKSPACE/.venv/bin/python" "$GITHUB_WORKSPACE/tests/feedback_probe.py" \
+              --repository-root "$PWD" --json "$RUNNER_TEMP/feedback-probe-baseline.json"
+          fi
       - uses: actions/upload-artifact@v4
         timeout-minutes: 1
         if: always()
@@ -659,6 +750,9 @@ jobs:
             ${{ runner.temp }}/fast.json
             ${{ runner.temp }}/fast.log
             ${{ runner.temp }}/fast-control.json
+            ${{ runner.temp }}/feedback-probe*
+            ${{ runner.temp }}/gc-diagnostic*
+            ${{ runner.temp }}/case-profile-*
             ${{ runner.temp }}/fast-exit-code.txt
             ${{ runner.temp }}/fast-selection-argv.txt
             ${{ runner.temp }}/runner-hardware-fast.json

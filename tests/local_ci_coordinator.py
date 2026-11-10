@@ -15,7 +15,7 @@ import time
 import uuid
 from pathlib import Path
 
-from tests.local_ci_state import (ACTIVE, CAPACITY, TERMINAL, LocalCIError, environment,
+from tests.local_ci_state import (ARGUMENT_VALUE_OPTIONS, ACTIVE, CAPACITY, TERMINAL, LocalCIError, environment,
                                   group_members, owner_directory, process_identity,
                                   read_json, service_sources, snapshot, state_root, write_json)
 from tests.local_ci_state import boot_identity, live_owned, observed_descendants, prepare_service, signal_owned, verified_boot_change
@@ -110,13 +110,19 @@ def prepare_lima_control(job: dict) -> dict:
 def validate_arguments(arguments: list[str]) -> None:
     if not arguments or arguments[0] != "run":
         raise LocalCIError("coordinator accepts only canonical runner run requests")
-    values = {"--id", "--module", "--tier", "--shard", "--json", "--slowest"}
+    values = ARGUMENT_VALUE_OPTIONS
     index = 1
     while index < len(arguments):
         option = arguments[index]
         if option == "--failfast":
             index += 1
         elif option in values and index + 1 < len(arguments):
+            value = arguments[index + 1]
+            if option == "--changed-from" and (type(value) is not str or len(value) != 40
+                                               or set(value) - set("0123456789abcdef")):
+                raise LocalCIError("queued --changed-from must be a resolved commit SHA")
+            if option == "--scope" and value not in ("focused", "affected"):
+                raise LocalCIError("unsupported changed-path selection scope")
             index += 2
         else:
             raise LocalCIError(f"unsupported canonical runner argument: {option}")

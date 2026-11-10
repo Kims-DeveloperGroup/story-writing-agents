@@ -10,7 +10,17 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, call, patch
 
-from tests import runner, suite_budget, suite_policy
+from tests import suite_budget, suite_policy
+from tests.runner import contracts as runner_contracts
+from tests.runner import collection as runner_collection
+from tests.runner import selection as runner_selection
+from tests.runner import evidence as runner_evidence
+from tests.runner import execution as runner_execution
+from tests.runner import profile as runner_profile
+from tests.runner import reporting as runner_reporting
+from tests.runner import supervision as runner_supervision
+from tests.runner import hosted as runner_hosted
+from tests.runner import cli as runner_cli
 
 
 class SuiteBudgetTests(unittest.TestCase):
@@ -25,19 +35,19 @@ class SuiteBudgetTests(unittest.TestCase):
         self.plan = suite_policy.partition_full_shards(ids, self.weights)
         inventory = Path(directory) / "inventory.json"
         inventory.write_text(json.dumps(self.budget), encoding="utf-8")
-        self.enterContext(patch.object(runner, "CANONICAL_INVENTORY_PATH", inventory))
+        self.enterContext(patch.object(runner_reporting, "CANONICAL_INVENTORY_PATH", inventory))
         self.enterContext(patch.object(suite_policy, "load_timing_weights", return_value=self.weights))
 
         class Control(unittest.FunctionTestCase):
             def id(self): return self._description
 
         cases = tuple(Control(lambda: None, description=identifier) for identifier in ids)
-        canonical = runner.CanonicalCollection(cases, ids)
+        canonical = runner_contracts.CanonicalCollection(cases, ids)
         self.report_data = []
         for index, selected_ids in enumerate(self.plan.shard_ids):
-            selected = runner.CanonicalCollection(tuple(cases[ids.index(value)] for value in selected_ids), selected_ids)
-            report = runner._run_report(canonical, selected, runner._execute(selected, stream=io.StringIO()), slowest=0,
-                                        policy_metadata={"suite_policy": runner._suite_policy_metadata(self.weights, self.plan),
+            selected = runner_contracts.CanonicalCollection(tuple(cases[ids.index(value)] for value in selected_ids), selected_ids)
+            report = runner_reporting.run_report(canonical, selected, runner_execution.execute(selected, stream=io.StringIO()), slowest=0,
+                                        policy_metadata={"suite_policy": runner_selection.suite_policy_metadata(self.weights, self.plan),
                                                          "selection": {"tiers": [], "shard": f"{index + 1}/5"}})
             maximum = self.budget["max_shard_wall_seconds"]
             report["durations"].update(wall_seconds=maximum if index == 0 else (
@@ -298,63 +308,63 @@ class SuiteBudgetTests(unittest.TestCase):
 
         from types import SimpleNamespace
         import os, sys, time
-        ids = runner._HOSTED_METHOD_IDS
-        self.assertEqual(runner._manifest(ids)["digest"],
+        ids = runner_profile.HOSTED_METHOD_IDS
+        self.assertEqual(runner_evidence.manifest(ids)["digest"],
                          'sha256:e8d09d1ef1495148a6a70dd327610265f6f206916423688144b4fb05e6863e4f')
         self.assertEqual((len(ids), len({value.rsplit(".", 1)[0] for value in ids})), (162, 21))
-        cases = tuple(Mock(id=Mock(return_value=value)) for value in (*ids, *runner._HOSTED_MIXED_SERIAL_IDS, "unreviewed.test"))
-        canonical = runner.CanonicalCollection(cases, (*ids, *runner._HOSTED_MIXED_SERIAL_IDS, "unreviewed.test"))
-        serial, scheduled = runner._hosted_partition(canonical, canonical)
+        cases = tuple(Mock(id=Mock(return_value=value)) for value in (*ids, *runner_profile.HOSTED_MIXED_SERIAL_IDS, "unreviewed.test"))
+        canonical = runner_contracts.CanonicalCollection(cases, (*ids, *runner_profile.HOSTED_MIXED_SERIAL_IDS, "unreviewed.test"))
+        serial, scheduled = runner_hosted.hosted_partition(canonical, canonical)
         self.assertEqual((serial.tests, scheduled), (cases[len(ids):], ids))
-        isolated = runner.CanonicalCollection((cases[ids.index(suite_policy.ISOLATED_TEST_ID)],),
+        isolated = runner_contracts.CanonicalCollection((cases[ids.index(suite_policy.ISOLATED_TEST_ID)],),
                                              (suite_policy.ISOLATED_TEST_ID,))
-        serial, scheduled = runner._hosted_partition(canonical, isolated)
+        serial, scheduled = runner_hosted.hosted_partition(canonical, isolated)
         self.assertEqual((serial.ids, scheduled), ((), (suite_policy.ISOLATED_TEST_ID,)))
         launch_digest = 'sha256:8d41f4d50e3c1cb4d6d8ccf18dfdbdfe6c3ef2492bf3a6e1bbdf501ee14d7ff5'
-        self.assertEqual(runner._manifest(runner._hosted_launch_order(ids))["digest"], launch_digest)
-        self.assertEqual(runner._hosted_launch_order(ids[::-1]), runner._hosted_launch_order(ids))
-        self.assertEqual(runner._hosted_launch_order((ids[-1], ids[0])), (ids[0], ids[-1]))
-        drift = runner.CanonicalCollection(cases, (*ids, *runner._HOSTED_MIXED_SERIAL_IDS, ids[0].rsplit(".", 1)[0] + ".test_unreviewed"))
-        self.assertRaises(runner.RunnerError, runner._hosted_partition, drift, drift)
-        real = runner._discover_canonical()
-        real_serial, real_scheduled = runner._hosted_partition(real, real)
+        self.assertEqual(runner_evidence.manifest(runner_profile.hosted_launch_order(ids))["digest"], launch_digest)
+        self.assertEqual(runner_profile.hosted_launch_order(ids[::-1]), runner_profile.hosted_launch_order(ids))
+        self.assertEqual(runner_profile.hosted_launch_order((ids[-1], ids[0])), (ids[0], ids[-1]))
+        drift = runner_contracts.CanonicalCollection(cases, (*ids, *runner_profile.HOSTED_MIXED_SERIAL_IDS, ids[0].rsplit(".", 1)[0] + ".test_unreviewed"))
+        self.assertRaises(runner_contracts.RunnerError, runner_hosted.hosted_partition, drift, drift)
+        real = runner_collection.discover_canonical()
+        real_serial, real_scheduled = runner_hosted.hosted_partition(real, real)
         self.assertEqual(real_scheduled, ids)
-        self.assertEqual(set(real_serial.ids) & set(runner._HOSTED_MIXED_SERIAL_IDS), set(runner._HOSTED_MIXED_SERIAL_IDS))
-        self.assertFalse(set(real_scheduled) & set(runner._HOSTED_MIXED_SERIAL_IDS))
+        self.assertEqual(set(real_serial.ids) & set(runner_profile.HOSTED_MIXED_SERIAL_IDS), set(runner_profile.HOSTED_MIXED_SERIAL_IDS))
+        self.assertFalse(set(real_scheduled) & set(runner_profile.HOSTED_MIXED_SERIAL_IDS))
         self.assertIn("tests.test_specialist_routing.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip", real_serial.ids)
-        self.assertEqual(len(runner._HOSTED_MIXED_SERIAL_IDS), 8)
-        missing = runner.CanonicalCollection(cases, (*ids[:-1], *runner._HOSTED_MIXED_SERIAL_IDS))
-        self.assertRaises(runner.RunnerError, runner._hosted_partition, missing, missing)
+        self.assertEqual(len(runner_profile.HOSTED_MIXED_SERIAL_IDS), 8)
+        missing = runner_contracts.CanonicalCollection(cases, (*ids[:-1], *runner_profile.HOSTED_MIXED_SERIAL_IDS))
+        self.assertRaises(runner_contracts.RunnerError, runner_hosted.hosted_partition, missing, missing)
         args = SimpleNamespace(command="run", hosted_methods='audited-162-v6', hosted_deadline_epoch=time.time()+3500,
                                shard="1/5", id=[], module=[], tier=[], failfast=False, json="report.json")
         env = dict(GITHUB_ACTIONS="true", TEST_RUN_DEADLINE=str(time.time()+4500),
                    TEST_JOB_DEADLINE=str(time.time()+4500))
         with patch.dict(os.environ, env, clear=True), patch.object(sys, "platform", "linux"):
-            options = runner._hosted_options(args)
+            options = runner_hosted.hosted_options(args)
             self.assertEqual(options["cleanup_deadline_epoch"], args.hosted_deadline_epoch + 30)
             self.assertEqual((options["deadline"], options["started"]),
                              (options["work_deadline"] + 30, options["work_deadline"] - 3600))
             for cpu, expected in ((1, 1), (2, 2), (4, 4), (8, 4)):
                 with (patch.object(os, "cpu_count", return_value=cpu),
                       patch.object(os, "sched_getaffinity", return_value=set(range(cpu)), create=True)):
-                    self.assertEqual(runner._hosted_options(args)["capacity"], expected)
+                    self.assertEqual(runner_hosted.hosted_options(args)["capacity"], expected)
             for key, value in (("id", [ids[0]]), ("module", ["tests"]), ("tier", ["fast"]), ("failfast", True),
                 ("shard", None), ("json", None), ("hosted_methods", "unknown"), ("hosted_deadline_epoch", time.time()),
                 ("hosted_deadline_epoch", time.time()+3601), ("hosted_deadline_epoch", float("nan"))):
-                self.assertRaises(runner.RunnerError, runner._hosted_options,
+                self.assertRaises(runner_contracts.RunnerError, runner_hosted.hosted_options,
                                   SimpleNamespace(**{**vars(args), key: value}))
             for forbidden in ("STORY_WIRE_TEST_CAPTURE_DIR", "STORY_LOCAL_CI_TOKEN"):
                 with patch.dict(os.environ, {forbidden: ""}):
-                    self.assertRaises(runner.RunnerError, runner._hosted_options, args)
+                    self.assertRaises(runner_contracts.RunnerError, runner_hosted.hosted_options, args)
             with patch.dict(os.environ, GITHUB_ACTIONS="false"):
-                self.assertRaises(runner.RunnerError, runner._hosted_options, args)
-        self.assertIsNone(runner._hosted_options(SimpleNamespace(hosted_methods=None, hosted_deadline_epoch=None)))
+                self.assertRaises(runner_contracts.RunnerError, runner_hosted.hosted_options, args)
+        self.assertIsNone(runner_hosted.hosted_options(SimpleNamespace(hosted_methods=None, hosted_deadline_epoch=None)))
         with tempfile.TemporaryDirectory() as directory:
             report_path = str(Path(directory) / "result.json")
-            owned = runner._hosted_artifacts(report_path)
+            owned = runner_hosted.hosted_artifacts(report_path)
             self.assertEqual((owned.name, owned.stat().st_mode & 0o777), ("result.json.methods", 0o700))
             marker = owned / "worker.log"; marker.write_text("retained")
-            self.assertRaises(FileExistsError, runner._hosted_artifacts, report_path)
+            self.assertRaises(FileExistsError, runner_hosted.hosted_artifacts, report_path)
             self.assertEqual(marker.read_text(), "retained")
 
     def test_exact_duration_boundary_passes_and_excess_fails(self) -> None:
@@ -362,8 +372,8 @@ class SuiteBudgetTests(unittest.TestCase):
             self.budget.update(max_sequential_wall_seconds=total, max_shard_wall_seconds=maximum)
             with tempfile.TemporaryDirectory() as directory:
                 paths = self._reports(directory, (2, 0))
-                reconciliation = suite_budget.runner.reconcile_reports(paths)
-                with patch.object(suite_budget.runner, "reconcile_reports", return_value=reconciliation), patch(
+                reconciliation = runner_reporting.reconcile_reports(paths)
+                with patch.object(suite_budget, "reconcile_reports", return_value=reconciliation), patch(
                     "builtins.open", side_effect=AssertionError("budget reopened validated reports") ):
                     self.assertIs(suite_budget.check_reports(self.budget, paths), reconciliation)
                     reconciliation["shards"][0]["durations"]["wall_seconds"] = maximum + .001
@@ -379,36 +389,36 @@ class SuiteBudgetTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             paths = self._reports(directory, (0, 0)); rows = self.report_data
             metadata = {"version": 1, "mode": "hosted-whole-method", "profile": 'audited-162-v6',
-                        "profile_manifest": runner._manifest(runner._HOSTED_METHOD_IDS),
+                        "profile_manifest": runner_evidence.manifest(runner_profile.HOSTED_METHOD_IDS),
                         "capacity": 2, "peak_children": 0, "work_deadline_epoch": 10000.0,
-                        "cleanup_deadline_epoch": 10030.0, "launch_manifest": runner._manifest(()),
+                        "cleanup_deadline_epoch": 10030.0, "launch_manifest": runner_evidence.manifest(()),
                         "launched": 0, "completed": 0, "cleanup_complete": True, "infrastructure_errors": [],
-                        "timing_basis": "observed-parent-wall-and-test-sum", "scheduled_manifest": runner._manifest(())}
+                        "timing_basis": "observed-parent-wall-and-test-sum", "scheduled_manifest": runner_evidence.manifest(())}
             for path, row in zip(paths, rows):
                 row["execution"] = {**metadata, "serial_manifest": row["selection_manifest"]}
                 if row["selection"]["shard"] == "5/5":
-                    row["execution"].update(serial_manifest=runner._manifest(()), peak_children=1,
+                    row["execution"].update(serial_manifest=runner_evidence.manifest(()), peak_children=1,
                         scheduled_manifest=row["selection_manifest"], launch_manifest=row["selection_manifest"],
                         launched=1, completed=1)
                 Path(path).write_text(json.dumps(row))
-            result = runner.reconcile_reports(paths)
+            result = runner_reporting.reconcile_reports(paths)
             self.assertEqual(result["durations"], {"sequential_equivalent_wall_seconds": 18000,
                              "concurrent_wall_seconds": 3600, "cumulative_test_seconds": 5})
             self.assertEqual(result["execution"]["timing_basis"], "sum-observed-shard-walls")
             for key, value in (("capacity", True), ("cleanup_complete", False), ("profile", "unknown"), ("timing_basis",
                 "serial_prediction"), ("extra", 1), ("completed", 1), ("cleanup_deadline_epoch", 10031),
-                ("work_deadline_epoch", True), ("launch_manifest", runner._manifest((runner._HOSTED_PRIORITY_ID,)))):
-                self.assertRaises(runner.RunnerError, runner._execution_metadata,
+                ("work_deadline_epoch", True), ("launch_manifest", runner_evidence.manifest((runner_profile.HOSTED_PRIORITY_ID,)))):
+                self.assertRaises(runner_contracts.RunnerError, runner_profile.execution_metadata,
                                   {**rows[0], "execution": {**rows[0]["execution"], key: value}})
             rows[0].pop("execution"); Path(paths[0]).write_text(json.dumps(rows[0]))
-            self.assertRaisesRegex(runner.RunnerError, "mixed execution", runner.reconcile_reports, paths)
+            self.assertRaisesRegex(runner_contracts.RunnerError, "mixed execution", runner_reporting.reconcile_reports, paths)
 
     def test_subtest_expansion_and_incomplete_shards_fail(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             paths = self._reports(directory, (3, 0))
-            result = runner.reconcile_reports(list(reversed(paths)))
-            self.assertEqual(runner._parser().parse_args(["reconcile", *paths]).reports, paths)
-            self.assertRaises(SystemExit, runner._parser().parse_args, ["reconcile", *paths[:-1]])
+            result = runner_reporting.reconcile_reports(list(reversed(paths)))
+            self.assertEqual(runner_cli.parser().parse_args(["reconcile", *paths]).reports, paths)
+            self.assertRaises(SystemExit, runner_cli.parser().parse_args, ["reconcile", *paths[:-1]])
             self.assertEqual(tuple(row["canonical_id"] for row in result["tests"]), tuple(self.budget["subtest_caps"]))
             self.assertEqual(result["durations"], {"sequential_equivalent_wall_seconds": 1080, "concurrent_wall_seconds": 540, "cumulative_test_seconds": 5})
             self.assertEqual(suite_policy.partition_full_shards(tuple(reversed(self.budget["subtest_caps"])), self.weights), self.plan)
@@ -425,21 +435,21 @@ class SuiteBudgetTests(unittest.TestCase):
                 for path, value in zip(paths, values): Path(path).write_text(json.dumps(value), encoding="utf-8")
             def reject(change, message):
                 write(change)
-                self.assertRaisesRegex(runner.RunnerError, message, runner.reconcile_reports, paths)
+                self.assertRaisesRegex(runner_contracts.RunnerError, message, runner_reporting.reconcile_reports, paths)
             def status_change(values, kind, reason):
                 row = values[0]
                 row["tests"][0]["status"] = "failed"
                 row["totals"].update(passed=0, failures=1)
                 row.update(details=[{"canonical_id": "a.test", "kind": kind, "reason": reason}], outcome="failure")
             def omit_case(values):
-                for row in values: row["canonical_manifest"] = runner._manifest(("a.test", "b.test", "c.control"))
+                for row in values: row["canonical_manifest"] = runner_evidence.manifest(("a.test", "b.test", "c.control"))
             def selection_change(values, identifier):
-                values[0]["selection_manifest"] = runner._manifest((identifier,))
+                values[0]["selection_manifest"] = runner_evidence.manifest((identifier,))
                 values[0]["tests"][0]["canonical_id"] = identifier
-            with self.assertRaisesRegex(runner.RunnerError, "reconcile requires five distinct shard report paths"):
-                runner.reconcile_reports(paths[:3])
-            with self.assertRaisesRegex(runner.RunnerError, "reconcile requires five distinct shard report paths"):
-                runner.reconcile_reports([*paths[:3], paths[0]])
+            with self.assertRaisesRegex(runner_contracts.RunnerError, "reconcile requires five distinct shard report paths"):
+                runner_reporting.reconcile_reports(paths[:3])
+            with self.assertRaisesRegex(runner_contracts.RunnerError, "reconcile requires five distinct shard report paths"):
+                runner_reporting.reconcile_reports([*paths[:3], paths[0]])
             reject(omit_case, "shard canonical inventory differs from the current frozen inventory")
             reject(lambda rows: rows[1]["selection"].update(shard="1/5"), "reports must have complementary unique five-shard identities")
             reject(lambda rows: rows[0]["selection"].update(shard="1/2"), "reports must have complementary unique five-shard identities")
@@ -449,35 +459,35 @@ class SuiteBudgetTests(unittest.TestCase):
                 "shard canonical manifests or policy partition metadata disagree", )
             reject(lambda rows: selection_change(rows, "b.test"), "shard 1/5 differs from its ordered partition plan")
             write(lambda rows: status_change(rows, "failure", "retained failure"))
-            self.assertEqual(runner.reconcile_reports(paths)["outcome"], "failure")
+            self.assertEqual(runner_reporting.reconcile_reports(paths)["outcome"], "failure")
             with self.assertRaisesRegex(suite_budget.BudgetError, "did not all pass"):
                 suite_budget.check_reports(self.budget, paths, allow_wall_time_overage=True)
             write()
             binding = self.report_data[0]["source_binding"]
-            with ( patch.object(runner, "snapshot", return_value={**binding, "digest": "sha256:" + "0" * 64}),
-                self.assertRaisesRegex(runner.RunnerError, "shard source differs from the current checkout inputs"), ):
-                runner.reconcile_reports(paths)
+            with ( patch.object(runner_reporting, "snapshot", return_value={**binding, "digest": "sha256:" + "0" * 64}),
+                self.assertRaisesRegex(runner_contracts.RunnerError, "shard source differs from the current checkout inputs"), ):
+                runner_reporting.reconcile_reports(paths)
             for allowed in (False, True):
-                with patch.object(suite_budget.runner, "reconcile_reports", return_value=result):
+                with patch.object(suite_budget, "reconcile_reports", return_value=result):
                     with self.assertRaisesRegex(suite_budget.BudgetError, "subtest scope"):
                         suite_budget.check_reports(self.budget, paths, allow_wall_time_overage=allowed)
-                with patch.object(suite_budget.runner, "reconcile_reports", side_effect=suite_budget.runner.RunnerError("incomplete")):
-                    with self.assertRaisesRegex(suite_budget.runner.RunnerError, "incomplete"):
+                with patch.object(suite_budget, "reconcile_reports", side_effect=runner_contracts.RunnerError("incomplete")):
+                    with self.assertRaisesRegex(runner_contracts.RunnerError, "incomplete"):
                         suite_budget.check_reports(self.budget, paths, allow_wall_time_overage=allowed)
 
         with tempfile.TemporaryDirectory() as directory:
             self._reports(directory, (0, 0)); rows = self.report_data; ids = tuple(self.budget["subtest_caps"])
-            canonical = runner.CanonicalCollection((), ids); first = rows[0]
+            canonical = runner_contracts.CanonicalCollection((), ids); first = rows[0]
             inputs = [(row, tuple(row["selection_manifest"]["ordered_ids"]), 0) for row in reversed(rows)]
             options = dict(binding=first["source_binding"], environment=first["environment"],
                            caps=self.budget["subtest_caps"], wall=3.5, metadata={}, errors=[], slowest=0)
-            merged = runner._merge_method_reports(canonical, canonical, inputs, **options)
+            merged = runner_hosted.merge_method_reports(canonical, canonical, inputs, **options)
             self.assertEqual([row["canonical_id"] for row in merged["tests"]], list(ids))
             self.assertEqual(merged["durations"], {"wall_seconds": 3.5, "cumulative_test_seconds": 5})
-            partial = runner._merge_method_reports(canonical, canonical, inputs[:1], **options)
+            partial = runner_hosted.merge_method_reports(canonical, canonical, inputs[:1], **options)
             self.assertEqual((partial["outcome"], partial["totals"]["completed"],
                               len(partial["unexecuted_ids"])), ("failure", 1, 4))
-            self.assertRaises(runner.RunnerError, runner._merge_method_reports,
+            self.assertRaises(runner_contracts.RunnerError, runner_hosted.merge_method_reports,
                               canonical, canonical, inputs+inputs, **options)
             for change in (lambda r: r["tests"][0].update(subtest_count=True),
                 lambda r: r["tests"][0].update(subtest_count=99), lambda r: r.update(unexecuted_ids=[ids[0]]),
@@ -485,9 +495,9 @@ class SuiteBudgetTests(unittest.TestCase):
                 lambda r: r["environment"].update(executable="foreign"), lambda r: r["totals"].update(errors=1),
                 lambda r: r["source_binding"].update(checkout_sha="0"*40), lambda r: r.update(outcome="interrupted")):
                 bad = json.loads(json.dumps(first)); change(bad)
-                self.assertRaises(runner.RunnerError, runner._validate_method_report, bad, (ids[0],), ids,
+                self.assertRaises(runner_contracts.RunnerError, runner_hosted.validate_method_report, bad, (ids[0],), ids,
                                   options["binding"], options["environment"], options["caps"], 0)
-            self.assertRaises(runner.RunnerError, runner._validate_method_report, first, (ids[0],), ids,
+            self.assertRaises(runner_contracts.RunnerError, runner_hosted.validate_method_report, first, (ids[0],), ids,
                               options["binding"], options["environment"], options["caps"], 1)
 
     def test_runner_counts_successful_subtests_in_parent_record(self) -> None:
@@ -499,7 +509,7 @@ class SuiteBudgetTests(unittest.TestCase):
                         self.assertGreater(value, 0)
 
         case = Synthetic()
-        result = suite_budget.runner.TimedTextTestResult(io.StringIO(), descriptions=False, verbosity=0)
+        result = runner_execution.TimedTextTestResult(io.StringIO(), descriptions=False, verbosity=0)
         unittest.TestSuite([case]).run(result)
         self.assertEqual(result.records([case.id()])[0]["subtest_count"], 2)
 
@@ -560,12 +570,12 @@ class SuiteBudgetTests(unittest.TestCase):
             call.umask(0o077), call.parser(*worker_calls.parser.call_args.args, **worker_calls.parser.call_args.kwargs),
             call.parser().parse_args(worker_arguments), call.snapshot(Path("harmless-fixture")), ])
 
-        collection = runner.CanonicalCollection((case,), (case.id(),))
+        collection = runner_contracts.CanonicalCollection((case,), (case.id(),))
         arguments = ["run", "--id", case.id()]
-        with patch.object(runner, "_discover_canonical", return_value=collection), patch.object(
-            runner, "_policy_select", return_value=runner.PolicySelection(collection, {})
-        ), patch.object(local_ci, "runner_admission", return_value=17) as admission, patch.object(runner, "_execute") as execute:
-            self.assertEqual(runner.main(arguments), 17)
+        with patch.object(runner_cli, "prepare_selection", return_value=(collection,
+                runner_contracts.PolicySelection(collection, {}))), patch.object(local_ci,
+                "runner_admission", return_value=17) as admission, patch.object(runner_cli, "execute") as execute:
+            self.assertEqual(runner_cli.main(arguments), 17)
             admission.assert_called_once_with(arguments)
             execute.assert_not_called()
         host_exists = Path.exists
@@ -888,41 +898,41 @@ class SuiteBudgetTests(unittest.TestCase):
             def tearDownClass(cls): events.append("class end")
             def runTest(self): events.append("method")
         ordered = (Ordered(), Ordered())
-        runner._execute(runner.CanonicalCollection(ordered, tuple(case.id() for case in ordered)), stream=io.StringIO())
+        runner_execution.execute(runner_contracts.CanonicalCollection(ordered, tuple(case.id() for case in ordered)), stream=io.StringIO())
         self.assertEqual(events, ["class start", "method", "method", "class end"])
         if sys.platform != "linux" or os.environ.get("GITHUB_ACTIONS") != "true": return
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); worker_pids = []
             for index in range(2):
                 work = root / str(index); work.mkdir()
-                process, pipe, config = runner._launch_method(
+                process, pipe, config = runner_supervision.launch_method(
                     [sys.executable, "-c", "pass"], work, work_deadline=time.monotonic()+15)
                 try:
                     self.assertEqual(process.wait(timeout=8), 0)
-                    receipt = runner._method_receipt(config, process); worker_pids.append(receipt["worker_pid"])
+                    receipt = runner_supervision.method_receipt(config, process); worker_pids.append(receipt["worker_pid"])
                     self.assertEqual((receipt["worker_exit"], receipt["reason"]), (0, "completed"))
                     for field, bad in (("reaped", False), ("group_absent", False), ("deadline", config["deadline"]+1)):
-                        with patch.object(runner, "_load_json_object", return_value={**receipt, field: bad}):
-                            self.assertRaises(runner.RunnerError, runner._method_receipt, config, process)
+                        with patch.object(runner_supervision, "load_json_object", return_value={**receipt, field: bad}):
+                            self.assertRaises(runner_contracts.RunnerError, runner_supervision.method_receipt, config, process)
                 finally:
                     os.close(pipe)
                     if process.poll() is None: process.terminate(); process.wait(timeout=8)
             grant = {**config, "work_deadline": float.fromhex("0x1.fffffffffffffp+6"), "deadline": 158.0}
-            with (patch.object(runner, "_load_json_object", return_value=grant),
+            with (patch.object(runner_supervision, "load_json_object", return_value=grant),
                   patch("ctypes.CDLL", side_effect=LookupError("admitted"))):
-                self.assertRaisesRegex(LookupError, "admitted", runner._method_supervisor, work / "config.json")
+                self.assertRaisesRegex(LookupError, "admitted", runner_supervision.method_supervisor, work / "config.json")
                 grant["deadline"] = float.fromhex("0x1.3c00000000001p+7")
-                self.assertRaises(runner.RunnerError, runner._method_supervisor, work / "config.json")
+                self.assertRaises(runner_contracts.RunnerError, runner_supervision.method_supervisor, work / "config.json")
             self.assertEqual(len(set(worker_pids + [os.getpid()])), 3)
             with patch("subprocess.Popen") as launch:
-                self.assertRaises(runner.RunnerError, runner._launch_method, [sys.executable], root, work_deadline=0)
+                self.assertRaises(runner_contracts.RunnerError, runner_supervision.launch_method, [sys.executable], root, work_deadline=0)
                 launch.assert_not_called()
             work = root / "orphan"; work.mkdir(); ready = work / "ready"
             body = ("import subprocess,sys,time; from pathlib import Path; "
                     "p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)']); "
                     "Path(" + repr(str(ready)) + ").write_text(str(p.pid)); time.sleep(60)")
-            controller = ("from tests import runner; import sys,time; from pathlib import Path; "
-                          "runner._launch_method([sys.executable,'-c'," + repr(body) + "],Path(" + repr(str(work)) +
+            controller = ("from tests.runner import supervision as runner_supervision; import sys,time; from pathlib import Path; "
+                          "runner_supervision.launch_method([sys.executable,'-c'," + repr(body) + "],Path(" + repr(str(work)) +
                           "),work_deadline=time.monotonic()+15); time.sleep(60)")
             parent = subprocess.Popen([sys.executable, "-c", controller], start_new_session=True)
             try:
@@ -935,7 +945,7 @@ class SuiteBudgetTests(unittest.TestCase):
                 receipt = json.loads((work/"supervisor.json").read_text())
                 self.assertEqual((receipt["reason"], receipt["complete"], receipt["reaped"], receipt["group_absent"]),
                                  ("parent_closed", True, True, True))
-                self.assertTrue(runner._method_group_absent(receipt["worker_pid"]))
+                self.assertTrue(runner_supervision.method_group_absent(receipt["worker_pid"]))
             finally:
                 if parent.poll() is None: parent.kill()
                 parent.wait(timeout=2)

@@ -1,5 +1,30 @@
 # Test suite cost policy
 
+## 패키지 리팩토링의 사례·소스 계상 — #962 / #963
+
+[#938](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/938)의 독립 사례,
+최소 유효 fixture, 실제 RED/GREEN과 개발·최종 검증 분리를 적용한다. 기존 사례의
+입력·준비 상태·실제 생산 경계·assertion·부정 사례를 이동표로 보존한다. 독립 조합의
+분해는 정확한 ID/subTest 이관을 기록한 범위에서만 허용하며 신규 시나리오는 추가하지
+않는다. 알려진 실패를 삭제·완화·skip으로 숨기지 않는다.
+
+소스 비용은 하위 패키지의 `test*.py`를 재귀적으로 세고,
+`tests/fixtures/test_source_ledger_v1.json`에 등록한 추출 fixture·검증 support를
+합집합으로 한 번만 더한다. 원본 commit·hash·범위로 이동 출처를 추적한다. 기존
+미확인 보조 코드 **1,550행**은 중복·종료가 입증되기 전까지 유지한다. 기존 범용
+러너·queue·reporting 도구 전체를 새로 청구하는 범위 확대는 하지 않으며, 테스트
+내용을 도구로 옮겨 비용을 누락시키는 것은 금지한다. 상한 **151,431행**은 유지한다.
+
+개발 반복에서는 최소 유효 focused 선택을 사용하고, 공유 계약·fixture·상태·권한
+변경은 필요한 실제 소비자와 host 경계로 확대한다. 영향이 불명확하면 전체를 선택한다.
+전달 전 affected와 최종 동일 HEAD의 fast·전체 5개 shard·조정을 완료한다. 선택 실행의
+inventory 선언과 실제 전체 discovery를 구분한다. 전체 검증 예산·병렬도는 유지한다.
+
+동일 CI 환경에서 전후 1회 비교하고 증가 항목은 각각 총 3회 중앙값으로 재판정한다.
+메서드별 시간과 원본 사례별 합산·중복 준비 비용, setup·import/collection·실행·정리·결과
+전달 시간을 기록하고 queue 대기는 구분한다. 작은 변경에 무관한 Runtime/전체 prefix가
+필요하면 목표 미달이다. historical weight나 시간 추정, 임의의 120초 기준으로 완료하지 않는다.
+
 ## Scoped development feedback — Issue #938
 
 An edit/test iteration should run the smallest independent regression selection

@@ -14,6 +14,10 @@ from pathlib import Path
 
 CAPACITY = 4
 SCHEMA_VERSION = 1
+ARGUMENT_VALUE_OPTIONS = frozenset({
+    "--id", "--module", "--tier", "--shard", "--json", "--slowest",
+    "--changed-from", "--path", "--scope",
+})
 ACTIVE = {"starting", "running", "cancelling", "quarantined"}
 TERMINAL = {"finished", "cancelled", "stale", "failed"}
 SERVICE_MODULES = ("local_ci.py", "local_ci_coordinator.py", "local_ci_state.py", "local_ci_worker.py")
