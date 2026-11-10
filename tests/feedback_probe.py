@@ -22,47 +22,73 @@ SOURCE_WITNESSES = (
      "tests.agent_context.sources.test_source_contracts.SourceSurfacePolicyAndValueTests.test_descriptor_snapshot_records_are_exact_immutable_and_content_hidden"),
 )
 
-def source_snapshot_fault(root, digest):
-    layouts = [row for row in SOURCE_WITNESSES if (root / row[0]).is_file() and (root / row[1]).is_file()]
+def production_fault(root, digest, witness):
+    witnesses = SOURCE_WITNESSES if witness == "source-snapshot" else ACCOUNTING_WITNESSES
+    layouts = [row for row in witnesses if (root / row[0]).is_file() and (root / row[1]).is_file()]
+    if witness == "provider-call-ordinal":
+        layouts = [row for row in layouts if any(isinstance(node, ast.ClassDef)
+                   and node.name == row[3]
+                   for node in ast.parse((root / row[1]).read_bytes()).body)]
     if len(layouts) != 1:
         raise RuntimeError("source witness differs the two approved owner layouts")
-    case_path, source_path, case = layouts[0]
+    case_path, source_path, case = layouts[0][:3]
     source = root / source_path
     original = source.read_bytes()
     for path in (case_path, source_path):
         committed = subprocess.check_output(["git", "show", "HEAD:" + path], cwd=root)
         if (root / path).read_bytes() != committed:
             raise RuntimeError("source witness differs its exact HEAD blob")
-    targets = [node for owner in ast.parse(original).body
-               if isinstance(owner, ast.ClassDef) and owner.name == "ContextSourceSnapshot"
-               for node in owner.body if isinstance(node, ast.AnnAssign)
-               and isinstance(node.target, ast.Name) and node.target.id == "content"]
-    if len(targets) != 1 or not isinstance(targets[0].value, ast.Call):
-        raise RuntimeError("source witness content field is not unique")
-    arguments = [item.value for item in targets[0].value.keywords if item.arg == "repr"]
-    if len(arguments) != 1 or not isinstance(arguments[0], ast.Constant) or arguments[0].value is not False:
-        raise RuntimeError("source witness repr guard differs approved field")
-    target = arguments[0]
+    if witness == "source-snapshot":
+        targets = [node for owner in ast.parse(original).body
+                   if isinstance(owner, ast.ClassDef) and owner.name == "ContextSourceSnapshot"
+                   for node in owner.body if isinstance(node, ast.AnnAssign)
+                   and isinstance(node.target, ast.Name) and node.target.id == "content"]
+        if len(targets) != 1 or not isinstance(targets[0].value, ast.Call):
+            raise RuntimeError("source witness content field is not unique")
+        arguments = [item.value for item in targets[0].value.keywords if item.arg == "repr"]
+        if len(arguments) != 1 or not isinstance(arguments[0], ast.Constant) or arguments[0].value is not False:
+            raise RuntimeError("source witness repr guard differs approved field")
+        target = arguments[0]
+        expected, replacement = b"False", b"True"
+    else:
+        classes = [node for node in ast.parse(original).body
+                   if isinstance(node, ast.ClassDef)
+                   and node.name == layouts[0][3]]
+        methods = [node for owner in classes for node in owner.body
+                   if isinstance(node, ast.FunctionDef) and node.name == "_prepare"]
+        assignments = [node for method in methods for node in method.body
+                       if isinstance(node, ast.Assign) and len(node.targets) == 1
+                       and isinstance(node.targets[0], ast.Name) and node.targets[0].id == "ordinal"]
+        if len(classes) != 1 or len(methods) != 1 or len(assignments) != 1:
+            raise RuntimeError("provider-call ordinal assignment is not unique")
+        value = assignments[0].value
+        if (not isinstance(value, ast.BinOp) or not isinstance(value.op, ast.Add)
+                or ast.dump(value.left) != ast.dump(ast.parse("len(self._ordinals)", mode="eval").body)):
+            raise RuntimeError("provider-call ordinal expression differs")
+        target = value.right
+        if not isinstance(target, ast.Constant) or type(target.value) is not int or target.value != 1:
+            raise RuntimeError("provider-call ordinal token differs")
+        expected, replacement = b"1", b"0"
     lines = original.splitlines(keepends=True)
     start = sum(map(len, lines[:target.lineno - 1])) + target.col_offset
     end = sum(map(len, lines[:target.end_lineno - 1])) + target.end_col_offset
-    if original[start:end] != b"False":
+    if original[start:end] != expected:
         raise RuntimeError("source witness repr token differs approved field")
-    return source, original, original[:start] + b"True" + original[end:], case, digest((root / case_path).read_bytes())
+    return source, original, original[:start] + replacement + original[end:], case, digest((root / case_path).read_bytes())
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json", required=True)
     parser.add_argument("--repository-root")
-    parser.add_argument("--witness", choices=("codec", "source-snapshot"), default="codec")
+    parser.add_argument("--witness", choices=("codec", "source-snapshot", "provider-call-ordinal"), default="codec")
     args = parser.parse_args()
     output = Path(args.json).resolve()
     root = Path(args.repository_root).resolve() if args.repository_root else Path(__file__).resolve().parents[1]
     digest = lambda data: hashlib.sha256(data).hexdigest()
     if os.environ.get("GITHUB_ACTIONS") != "true" or Path.cwd().resolve() != root:
         raise RuntimeError("feedback replay requires the disposable CI checkout")
-    if args.witness == "source-snapshot":
-        source, original, temporary, case, case_hash = source_snapshot_fault(root, digest)
+    if args.witness != "codec":
+        source, original, temporary, case, case_hash = production_fault(root, digest, args.witness)
     else:
         case = CASE
         source = root / "tests/test_selected_task_material_codec.py"
@@ -98,6 +124,10 @@ def main():
                     or payload["source_binding"]["source_valid"] is not True
                     or row["source_sha256"] != digest(content)):
                 raise RuntimeError("feedback replay did not observe the exact expected case result")
+            if args.witness == "provider-call-ordinal" and phase == "red":
+                failures = [detail for detail in payload["details"] if detail["kind"] == "failure"]
+                if len(failures) != 1 or "AssertionError: 0 != 1" not in failures[0]["traceback"]:
+                    raise RuntimeError("provider-call ordinal fault did not reach the existing assertion")
         summary["outcome"] = "success"
     finally:
         source.write_bytes(original)
@@ -108,5 +138,15 @@ def main():
     return 0
 
 
+ACCOUNTING_WITNESSES = (
+    ("tests/test_provider_timeout_recovery.py",
+     "src/story_writing_agents/orchestrator.py",
+     "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_failure_closure_write_error_keeps_history_gated",
+     "_AccountingContextProvider"),
+    ("tests/test_provider_timeout_recovery.py",
+     "src/story_writing_agents/runtime_resources/provider_call_accounting.py",
+     "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_failure_closure_write_error_keeps_history_gated",
+     "AccountingContextProvider"),
+)
 if __name__ == "__main__":
     raise SystemExit(main())
