@@ -2,11 +2,10 @@
 from __future__ import annotations
 from story_writing_agents.agent_context.actions import CONTEXT_ACTION_POLICY
 from story_writing_agents.agent_context.accounting import ProviderCallKind
-from tests.test_agent_context_accounting import assert_phase_guide
 from story_writing_agents.agent_context.invocation import context_execution as owner_context_execution
 from tests.agent_context.invocation import execution_fixture as fixture_execution_fixture
 from story_writing_agents.agent_context.contracts import call_offers as owner_call_offers
-from tests.provider_wire_fixture import selection_plan
+from tests.provider_wire_fixture import selection_plan, assert_phase_guide
 from story_writing_agents.lead_schema_groups import LeadGroupPhase
 import asyncio
 import json
