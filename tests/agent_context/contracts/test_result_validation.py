@@ -64,7 +64,7 @@ class StructuredOutputValidationTests(unittest.TestCase):
                 ("a" * 65, False), ("a\n", False), ("a\r", False), ("a\x00", False)):
             self.assertEqual(not rules.findings(value), expected, repr(value))
 
-        from story_writing_agents.structured_output_validation import compile_schema_pattern
+        from story_writing_agents.provider_schema_patterns import compile_schema_pattern
         strict = r"^ok\z"
         rules = SchemaRules.declare({"type": "string", "pattern": strict})
         self.assertEqual(rules.schema_value()["pattern"], strict)

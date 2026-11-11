@@ -13666,6 +13666,22 @@
         "tests.test_collaboration_events.CollaborationWireContractTests.test_duplicate_extra_missing_nonfinite_and_noncanonical_json_are_rejected"
       ],
       "affected_full": true
+    },
+    {
+      "name": "provider-schema-patterns",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/provider_schema_patterns.py"
+      ],
+      "depends_on": [],
+      "focused_ids": [
+        "tests.agent_context.contracts.test_result_validation.StructuredOutputValidationTests.test_diagnose_json_text_reports_all_independent_safe_issues"
+      ],
+      "affected_ids": [
+        "tests.agent_context.contracts.test_result_validation.StructuredOutputValidationTests.test_diagnose_json_text_reports_all_independent_safe_issues",
+        "tests.agent_context.contracts.test_result_validation.StructuredOutputValidationTests.test_union_selects_matching_branch_without_other_branch_noise"
+      ],
+      "affected_full": true
     }
   ],
   "ignored_names": [

@@ -102,7 +102,7 @@ class WorkspaceSessionHistoryCompositionTests(GitSessionResourceGitTestCase):
         self.assertFalse(history_root.exists())
         self.assertEqual(self.repository_snapshot(root), repository_before)
         modules, edges = _module_graph()
-        self.assertEqual((len(modules), len(edges)), (232, 1177))
+        self.assertEqual((len(modules), len(edges)), (233, 1181))
         self.assertFalse(_has_cycle(modules, edges))
         self.assertIn(("workspace.initialization", "git.session_history"), edges)
 
