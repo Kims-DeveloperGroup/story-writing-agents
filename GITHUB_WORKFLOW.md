@@ -196,6 +196,7 @@ writer, with `expected_round` as an optimistic concurrency check:
 | --- | --- |
 | `request` | Initial rationale, or a reason and reconciliation evidence for another round. From round 3, High/Critical severity plus the finding URL; changed evidence is required for a repeated finding. |
 | `reconcile` | Current round, reason, evidence, and outcome. `completed` requires a matching provider review ID (plus actual Copilot effort), Codex's clean thumbs-up, or an authentic clean Codex response comment identifying the reviewed commit. New Codex rounds also verify the personal request. `failed`/`not_sent` require evidence of terminal failure or confirmed non-delivery. |
+| `recover` | Writer-authorized reconciliation of an unedited personal Codex request in round 1 or 2 with only the documented wording omissions. Requires an authentic clean response comment bound to the reserved commit; records original reservation and request/response hashes. |
 | `close` | Current round, current-base/head closure evidence, and the root's verified-closure assessment. Requires a completed review, including later local fix/diff verification. |
 | `adopt` | Existing open PR history, its prior round count, and evidence reconciling all findings and outstanding requests. Import at least two prior rounds so subsequent work is defect-only. Never replay an initial request. |
 
@@ -214,6 +215,17 @@ Follow GITHUB_WORKFLOW.md for severity and verified closure.
 
 <!-- ai-review-request:v1:PR_NUMBER:ROUND:ATTEMPT -->
 ```
+
+Recovery is a separate, explicit operation; new requests and ordinary reconciliation still
+require the exact canonical text. It accepts only the omission of `is` from `feedback is
+optional`, or `for` and `and` from `for severity and verified closure`, with the remaining
+words unchanged. The reserved round, attempt marker, personal writer permission, base/head,
+request and response times, Codex identity, clean result and reviewed-commit binding all
+remain required. The request must never have been edited. Recovery cannot use a native
+review ID, a clean reaction, round 3 or later, or an outstanding native review. It appends
+completion to the same round/attempt and records the original reservation comment and
+SHA-256 of both original comment bodies. Preserve prior automation failures. It sends no
+new provider request and does not close the round or waive current validation and merge gates.
 
 Replace every uppercase placeholder with the reservation's exact value. For rounds 1–2,
 SEVERITY_CONSTRAINTS is `Prioritize confirmed defects. Medium feedback is optional and never blocks completion.`
