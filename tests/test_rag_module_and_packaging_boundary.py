@@ -346,8 +346,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 232)
-        self.assertEqual(len(edges), 1166)
+        self.assertEqual(len(modules), 234)
+        self.assertEqual(len(edges), 1185)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -712,6 +712,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 'story_writing_agents.agent_context.contracts.planning_inputs',
                 'story_writing_agents.agent_context.manifest',
                 'story_writing_agents.provider_wire',
+                'story_writing_agents.provider_schema_patterns',
                 'story_writing_agents.structured_output_validation',
             },
         )
@@ -905,6 +906,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
         self.assertEqual({source for source, target in edges if target == "story_writing_agents.review_contracts"}, {
             "story_writing_agents.authoring_task_lifecycle", "story_writing_agents.conversations", "story_writing_agents.conversations.context",
             "story_writing_agents.conversations.events", "story_writing_agents.interactive_terminal._collaboration_view",
+            "story_writing_agents.lead_preparation.outcome_decoding",
             "story_writing_agents.lead_preparation.call_rule_factory", "story_writing_agents.lead_provider_contracts", "story_writing_agents.orchestrator"})
         self.assertIn("story_writing_agents.document_plan", modules)
         self.assertEqual({target for source, target in edges if source == "story_writing_agents.document_plan"}, {
@@ -1168,6 +1170,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 requires,
             )
             group_package_paths = (
+            "story_writing_agents/provider_schema_patterns.py",
                 "story_writing_agents/agent_context/group_observation.py",
                 "story_writing_agents/agent_context/group_reporting.py",
                 "story_writing_agents/antigravity_response_decoding.py",

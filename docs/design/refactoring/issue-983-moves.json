@@ -1,0 +1,407 @@
+{
+  "schema": 1,
+  "issue": 983,
+  "parent": 968,
+  "root_parent": 962,
+  "state": "현재 main 일반 병합 후 기존 경계·테스트 보존 감사 완료, 최종 호스팅 검증 대기",
+  "observed_head": "9105b43f28720f8611de27ef656685fbafe7cf03",
+  "source_path": "src/story_writing_agents/orchestrator.py",
+  "source_sha256": "1f89e987d8ab75d14ecf96aa8f03c3c50e77b9a8afe43bea128cd5f38cef9fc9",
+  "target": "src/story_writing_agents/lead_preparation/outcome_decoding.py",
+  "definitions": [
+    {
+      "old": "_DuplicateJsonKey",
+      "proposed_name": "DuplicateJsonKey",
+      "lines": [
+        701,
+        702
+      ],
+      "before_ast_sha256": "7d69cfe72f7fb724fde456223a5fedfd59fc3ba5fc58651d7422afd5a78e7f27",
+      "before_decorators": [],
+      "references_outside_moved_definitions": [],
+      "planned_name": "_DuplicateJsonKey",
+      "public": false
+    },
+    {
+      "old": "StoryRuntime._decode_lead_outcome",
+      "proposed_name": "decode_lead_outcome",
+      "lines": [
+        13848,
+        14172
+      ],
+      "before_ast_sha256": "b0b7bc912abf0148723ee063b72c20032efe475ba989f0ac08f068526b7276a5",
+      "before_decorators": [
+        "staticmethod"
+      ],
+      "references_outside_moved_definitions": [
+        [
+          "src/story_writing_agents/orchestrator.py",
+          11056
+        ],
+        [
+          "src/story_writing_agents/orchestrator.py",
+          11871
+        ],
+        [
+          "src/story_writing_agents/orchestrator.py",
+          11031
+        ],
+        [
+          "tests/test_lead_orchestration.py",
+          5884
+        ],
+        [
+          "tests/test_lead_orchestration.py",
+          6562
+        ],
+        [
+          "tests/agent_context/invocation/execution_fixture.py",
+          115
+        ],
+        [
+          "tests/agent_context/invocation/test_execution_lifecycle.py",
+          233
+        ]
+      ],
+      "planned_name": "decode_lead_outcome",
+      "public": true
+    },
+    {
+      "old": "StoryRuntime._decode_recommended_action",
+      "proposed_name": "decode_recommended_action",
+      "lines": [
+        14175,
+        14230
+      ],
+      "before_ast_sha256": "2a9aa6161e08d94990637c07aea58a6b463ad91f5d02db601f1b8d65a1ffbf6c",
+      "before_decorators": [
+        "staticmethod"
+      ],
+      "references_outside_moved_definitions": [
+        [
+          "src/story_writing_agents/orchestrator.py",
+          9392
+        ]
+      ],
+      "planned_name": "decode_recommended_action",
+      "public": true
+    },
+    {
+      "old": "StoryRuntime._decode_objective_intent",
+      "proposed_name": "decode_objective_intent",
+      "lines": [
+        14233,
+        14276
+      ],
+      "before_ast_sha256": "5324d7f4669e91df37024d401b4c5d6078f2fd4141bc9c7424c7481996c9a02a",
+      "before_decorators": [
+        "staticmethod"
+      ],
+      "references_outside_moved_definitions": [],
+      "planned_name": "_decode_objective_intent",
+      "public": false
+    },
+    {
+      "old": "StoryRuntime._decode_artifact_intent",
+      "proposed_name": "decode_artifact_intent",
+      "lines": [
+        14279,
+        14361
+      ],
+      "before_ast_sha256": "4d1fe2c832df0f944d92f9995a99ae48d167faf06219ed2f85169673840f0199",
+      "before_decorators": [
+        "staticmethod"
+      ],
+      "references_outside_moved_definitions": [],
+      "planned_name": "_decode_artifact_intent",
+      "public": false
+    },
+    {
+      "old": "StoryRuntime._decode_shared_premise_intents",
+      "proposed_name": "decode_shared_premise_intents",
+      "lines": [
+        14389,
+        14400
+      ],
+      "before_ast_sha256": "84b69d8265591268cd3665e07f4ebf5929917f127e6564fd4948f126cd721279",
+      "before_decorators": [
+        "staticmethod"
+      ],
+      "references_outside_moved_definitions": [],
+      "planned_name": "_decode_shared_premise_intents",
+      "public": false
+    },
+    {
+      "old": "StoryRuntime._strict_json_object",
+      "proposed_name": "strict_json_object",
+      "lines": [
+        9545,
+        9575
+      ],
+      "before_ast_sha256": "7de00023273830a7ec19277363db7c464a5214ae56614a2e27c22dcf24d0e375",
+      "before_decorators": [
+        "staticmethod"
+      ],
+      "references_outside_moved_definitions": [
+        [
+          "src/story_writing_agents/orchestrator.py",
+          7259
+        ],
+        [
+          "src/story_writing_agents/orchestrator.py",
+          9285
+        ],
+        [
+          "src/story_writing_agents/orchestrator.py",
+          9339
+        ],
+        [
+          "src/story_writing_agents/orchestrator.py",
+          7175
+        ],
+        [
+          "src/story_writing_agents/orchestrator.py",
+          9273
+        ],
+        [
+          "src/story_writing_agents/orchestrator.py",
+          10954
+        ]
+      ],
+      "planned_name": "strict_json_object",
+      "public": true
+    },
+    {
+      "old": "StoryRuntime._declares_artifact_intent",
+      "proposed_name": "declares_artifact_intent",
+      "lines": [
+        13783,
+        13817
+      ],
+      "before_ast_sha256": "5ef23e2b423d28436e8e0693d7cf516c8bc141bdcede67989e92f332b9064089",
+      "before_decorators": [
+        "staticmethod"
+      ],
+      "references_outside_moved_definitions": [
+        [
+          "src/story_writing_agents/orchestrator.py",
+          10976
+        ],
+        [
+          "src/story_writing_agents/orchestrator.py",
+          10977
+        ]
+      ],
+      "planned_name": "declares_artifact_intent",
+      "public": true
+    },
+    {
+      "old": "StoryRuntime._lead_outcome_validation_details",
+      "proposed_name": "lead_outcome_validation_details",
+      "lines": [
+        13821,
+        13845
+      ],
+      "before_ast_sha256": "e38d0bb5616867ee8918c786c5ea4d4e9b29d77a145a4d9b6751e68d30b9105f",
+      "before_decorators": [
+        "staticmethod"
+      ],
+      "references_outside_moved_definitions": [
+        [
+          "src/story_writing_agents/orchestrator.py",
+          10910
+        ],
+        [
+          "tests/test_lead_orchestration.py",
+          6563
+        ]
+      ],
+      "planned_name": "lead_outcome_validation_details",
+      "public": true
+    }
+  ],
+  "source_budget_projection": {
+    "before": 151431,
+    "API": 1,
+    "graph": 1,
+    "unused": -2,
+    "after": 151431
+  },
+  "Draft_before_code": true,
+  "accepted_base": "e0381a122153bb3944b83395a86f048a9141c98e",
+  "accepted_tree": "faeaf5243a103cf73858c1cb67902adad0883c9a",
+  "github_planning_gate": "passed",
+  "native_plan_sha256": "b2ec7c0fa27a190c620806f21edfe451fc390e6e975de492814dd83196867296",
+  "draft_before_code_required": true,
+  "parent_reports": [
+    {
+      "issue": 962,
+      "body_sha256": "c1c4d3b758eac5a5aa2858494d431bbc92629ccd637c5fb79c5f8029e99cb578",
+      "body_lines": 92,
+      "body_chars": 5245,
+      "status": "In progress"
+    },
+    {
+      "issue": 968,
+      "body_sha256": "8b300d30f383a941335cb70c598b4e41eddb1968a2b2c34b18fb5764e203cd46",
+      "body_lines": 64,
+      "body_chars": 4028,
+      "status": "Backlog"
+    }
+  ],
+  "before_validation": {
+    "red_run": 42920582453,
+    "red_sha": "ac7b123d3d6c91cc19970e201e018b8f051aec39",
+    "red_failures": 1,
+    "red_errors": 0,
+    "red_fingerprint_sha256": "366e9495a83d00e75f3f8d9826b2f04b9b190fb1c2d6aaa590d668017b776f44",
+    "normal_run": 42921253874,
+    "normal_attempts": [
+      1,
+      2,
+      3
+    ],
+    "normal_production_test_workflow_equal_to_base": true,
+    "normal_wall_samples": [
+      63.578959972999996,
+      61.54520701500002,
+      61.326430482999996
+    ],
+    "normal_median": 61.54520701500002,
+    "initial_no_case_classification_failure_run": 42920582394,
+    "expanded_before_run": 42922337403
+  },
+  "production_implementation": {
+    "moved_definitions": 9,
+    "moved_body_rows": 613,
+    "public_definitions": 5,
+    "private_definitions": 4,
+    "external_references": 13,
+    "internal_references": 4,
+    "callback_positions": 4,
+    "recursive_code_pairs": 962,
+    "original_import_binding_checks": 44,
+    "graph": {
+      "modules": 231,
+      "full_edges": 1175,
+      "controller_edges": 1163,
+      "relative_only_edges": 1174,
+      "SCC": 0
+    },
+    "new_runtime_capabilities": 0,
+    "new_forward_frames": 0,
+    "changed_files": {
+      "src/story_writing_agents/orchestrator.py": {
+        "sha256": "3012a32bc0fc06ceff6b04e8dcbc36bc2038a8c17bef68be48f4f9ae7355f715",
+        "rows": 17796
+      },
+      "src/story_writing_agents/lead_preparation/outcome_decoding.py": {
+        "sha256": "0be4b903411515412a5ac5f14894fe71f23b1fe86e85709918fc20f3e03690fb",
+        "rows": 692
+      },
+      "PYTHON_MODULE_INDEX.md": {
+        "sha256": "39a759d78c4d8c04f6339cdddb0e9e7712d8ca6814c2ce56dc1381fd1fda2e31",
+        "rows": 300
+      }
+    },
+    "local_Case_runs": 0,
+    "local_Suite_runs": 0,
+    "historical_graph_on_initial_base": {
+      "modules": 230,
+      "full_edges": 1172,
+      "controller_edges": 1160,
+      "SCC": 0
+    }
+  },
+  "test_implementation": {
+    "test_file_sha256": {
+      "tests/agent_context/invocation/execution_fixture.py": "f4c1742312b6b6151b71bca5b0be3f1d2cef9edf2472b9ecab95d4bef853cb87",
+      "tests/agent_context/invocation/test_execution_lifecycle.py": "d426d71c7df1e84d70d6c8fe86449b99f82ac0cbfa302a4aa669343edc5199f4",
+      "tests/fixtures/test_owners_v1.json": "902430288d652748c1a10ec24423c7f91a9e365eea237ad47860ed621fd967b7",
+      "tests/test_artifact_application_contracts.py": "ab7acb5fb5f3f865a35e4ab006e6dc41adceb0230491ad416655c13e9ed4e939",
+      "tests/test_artifact_application_store_recovery.py": "316680c5afc13418fcf03f75a67dd326b6f020ee29ff4e01bfbd4a56c50bcc22",
+      "tests/test_artifact_relationship_policy.py": "52155fe271e1d9e14d18b1219c5ef2b8956cbd4eeca49bde37cce3b4a5d08462",
+      "tests/test_git_external_operation_inspection.py": "d59dad271ffeaa17882147d89a473c0f7bc99cab70d3009216d8a5ed9653d1ac",
+      "tests/test_interactive_controller.py": "db9ab6f9ee6c46d3c025aa788b16bcfbaf2945f2b2d3573717495927a9333e44",
+      "tests/test_lead_orchestration.py": "b68e3c86146ae0d1a0743aba18a688c896a638374784c6bf98e372e86da09cc6",
+      "tests/test_rag_module_and_packaging_boundary.py": "2119f53f976e08f3335c0a5b5c65a0933afb73748b933c57bb4eef38df991866",
+      "tests/test_session_lifecycle.py": "b0584fbbd1267fb9a40232e1979590bd0b9ad35b09310c3c929b5a321cec4d70",
+      "tests/test_session_recovery_contracts.py": "c5b3e75629f580e408959fcdebe2f49eba350e0c0fb2f15c97f070101068cad4",
+      "tests/test_workspace_session_history.py": "31bc6ae8269a05a847b1c537790e47fb6311bbcf4d400282e0e07a92a9b7cf8d"
+    },
+    "freeze_manifest_sha256": "1d58e7b27f5595d8bc04ec29149fc80432decfda15016d3d7b85a70611a4d5c5",
+    "source_charge": 151431,
+    "existing_case_count": 2544,
+    "class_count": 389,
+    "existing_cap_and_weights_unchanged": true,
+    "focused_file_ids": 2,
+    "focused_package_ids": 5,
+    "affected": 2544,
+    "actual_graph": {
+      "complete_modules": 231,
+      "complete_edges": 1175,
+      "controller_edges": 1163,
+      "Rag_review_contracts_importer_members": 9,
+      "relative_only_edges": 1174
+    },
+    "new_cases": 0,
+    "local_Case_runs": 0,
+    "local_Suite_runs": 0
+  },
+  "original_accepted_base": "648e5a4e5675001ed2d9aa91aaf400d485356568",
+  "original_accepted_tree": "0e9f90d272ef6f770d84efa7a24fcbe2a11ad6b5",
+  "current_base_merge": {
+    "accepted_main": "e0381a122153bb3944b83395a86f048a9141c98e",
+    "prior_head": "255d9189b8efffcb028540e52cfb80f37acb9965",
+    "source_union_digest": "802a62dd84d41df95db5f570a45df48a30d691100ccf6f2c01a4b8e9edc2598b",
+    "test_hashes": {
+      "tests/test_artifact_application_contracts.py": "7ec3b75ab1d84f1ec58fc88c788bb99e43aa3aea9f29c0d1d9ce936ec8a01c09",
+      "tests/test_artifact_application_store_recovery.py": "55e49f609f9a7cf7089e93c45b1e4173f0c9cafa30433f306331dbb84c94be44",
+      "tests/test_artifact_relationship_policy.py": "7ff044b97bb76f3f61c9e0b303cd1f22fd7af492b25eda56aebe8a10199b979f",
+      "tests/test_git_external_operation_inspection.py": "e4e6fe3429114ec88854444b76dc2bf31e9fa2cbbd1a974b0c37e5acc0727e96",
+      "tests/test_interactive_controller.py": "ab8415389cb497a1f698f0f219c945da1f6a3b6b69f70b143c682a0ef385b336",
+      "tests/test_rag_module_and_packaging_boundary.py": "64f58aa43cbd32120e9fa26e7144ce0a76e13d6630a325a42ac5b3d9cf6bdf72",
+      "tests/test_session_lifecycle.py": "ce145f2690a648636ebf038f1e65b39e8f9667e3b22a297cd712543979401399",
+      "tests/test_session_recovery_contracts.py": "f4599dbc8764e92e108cbbcfd55f3b96c0447fc7abb67babf8a8ea057f927613",
+      "tests/test_workspace_session_history.py": "f8204e29cf972b3ccc24d9704d7b5032419b3921e8d5668979ccae9513e7d3b2",
+      "tests/fixtures/test_owners_v1.json": "22b1f92448af17c45f0b1af5758bd4309cbdb5310bbc6b048dccffb93ada4319"
+    },
+    "source_charge": {
+      "raw": 148450,
+      "support": 1431,
+      "legacy": 1550,
+      "effective": 151431
+    },
+    "current_full_pending": true,
+    "managed_review": {
+      "round": 1,
+      "attempt": 1,
+      "reviewed_base": "648e5a4e5675001ed2d9aa91aaf400d485356568",
+      "reviewed_head": "255d9189b8efffcb028540e52cfb80f37acb9965",
+      "recovered_state_comment": 6784750169,
+      "actual_recovery_run": 42942715759,
+      "original_request_response_unchanged": true
+    }
+  },
+  "final_integration": {
+    "base": "26373d4a44b351b9bf27dfd7b9c46b627b17b772",
+    "previous_head": "22dc896b82b091d0a3886fa85ead6ee4aecaff05",
+    "source_modules": 232,
+    "full_edges": 1179,
+    "controller_edges": 1166,
+    "relative_edges": 1177,
+    "cycles": 0,
+    "canonical_cases": 2544,
+    "class_groups": 389,
+    "test_source_charge": 151431,
+    "retained_code_pairs": 961,
+    "retained_global_name_loads": 6038,
+    "retained_annotations": 1218,
+    "new_unresolved_globals": 0,
+    "baseline_unresolved_preserved": [
+      "SessionContextHistoryChangedError"
+    ],
+    "source_index_and_test_merge_freezes_verified": true,
+    "current_HEAD_full_CI_pending": true
+  }
+}
