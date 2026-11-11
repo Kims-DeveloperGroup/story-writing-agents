@@ -3578,9 +3578,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             write([{**metadata, "payload": {**metadata["payload"], "id": rollout}}, settings, *turn(first, "turn-1")])
             self.assertIsNone(codex_native_context.inspect_codex_context_witness(root, first, thread))
             write(extended)
-            with mock.patch.object(codex_native_context, "_CONTEXT_WITNESS_BYTES", path.stat().st_size - 1):
+            with mock.patch.object(codex_native_context, "CONTEXT_WITNESS_BYTES", path.stat().st_size - 1):
                 self.assertIsNone(codex_native_context.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness))
-            with mock.patch.object(codex_native_context, "_CONTEXT_WITNESS_LINES", len(extended) - 1):
+            with mock.patch.object(codex_native_context, "CONTEXT_WITNESS_LINES", len(extended) - 1):
                 self.assertIsNone(codex_native_context.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness))
             wrong_prefix = path.read_bytes().replace(b"configuration-hash", b"configuration-edit", 1)
             path.write_bytes(wrong_prefix)

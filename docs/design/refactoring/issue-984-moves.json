@@ -177,7 +177,7 @@
   "issue": 984,
   "parent": 969,
   "root_parent": 962,
-  "state": "생산 및 테스트 변경 동결; 현재 후보의 호스팅 검증 예정",
+  "state": "첫 호스팅 실행의 실제 테스트 참조 교정; 생산 소스 동결 유지",
   "github_planning_gate": "passed",
   "native_plan_sha256": "6cdee59efa375421df9e986832fbcbd3705ec330d1e4d3a618011de3b687f426",
   "draft_before_code_required": true,
@@ -273,5 +273,32 @@
     "new_cases": 0,
     "local_Case_runs": 0,
     "local_Suite_runs": 0
-  }
+  },
+  "validation_history": [
+    {
+      "head": "d695aeafcd126cccd93b01ec06559c761a8a1598",
+      "expected_red_run": 42928397845,
+      "same_exact_assertion": true,
+      "boundary_run": 42928397753,
+      "boundary_passed": 2,
+      "initial_normal_run": 42928399009,
+      "initial_graph_run": 42928397701,
+      "initial_unexpected_failures_proof_sha256": "7c3566591d9c87ce48c0fe5a6aaab122580bea14a27cf667acd153f778b94c9b",
+      "reference_failures": "실제 cap 이름 대신 이동 전 비공개 이름 사용, 상대 import 전용 그래프 기대값 2곳",
+      "correction": "상수 문자열 2곳, 상대 import 전용 해석기의 기대 숫자 2곳만 교정; 전체와 Controller 값 보존",
+      "production_unchanged": true,
+      "new_cases": 0,
+      "correction_freeze_sha256": "d4309572524b4a74cfbc5a1d04416f3e3de9fac3900da42b8a686f567aaec8cf",
+      "actual_relative_graph": {
+        "modules": 230,
+        "edges": 1159
+      },
+      "correction_test_hashes": {
+        "tests/test_codex_backend.py": "780b342eaa0ef3fbb7c9863ad76ad007044923a3173401072e95ea84ec649eb5",
+        "tests/test_session_recovery_contracts.py": "bc275bccd4fa8b203fd3368494f53447470872d4788c20655ba01b5f9364fa55",
+        "tests/test_workspace_session_history.py": "caa3ec8ffa1307ddc35eacba68d18a8336c8cd60b7b717f82240b43a90faa202"
+      },
+      "active_owner_references_verified": 47
+    }
+  ]
 }
