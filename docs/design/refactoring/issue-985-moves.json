@@ -3,7 +3,7 @@
   "parent": 970,
   "program_parent": 962,
   "status": "새 기준과 운영·테스트 병합 완료, 호스팅 검증 중",
-  "accepted_base": "7799cf232545e8f9d3deba9ff3f90c716b971bba",
+  "accepted_base": "e0381a122153bb3944b83395a86f048a9141c98e",
   "source": "src/story_writing_agents/conversations/events.py",
   "planned_owner": "src/story_writing_agents/conversations/event_value_validation.py",
   "purpose": "이벤트 값 검증과 엄격한 JSON 코덱만 같은 호출·오류·직렬화 계약으로 분리한다.",
@@ -415,7 +415,7 @@
     "red_after_run": 42933378675
   },
   "current_base_verification": {
-    "accepted_main": "7799cf232545e8f9d3deba9ff3f90c716b971bba",
+    "accepted_main": "e0381a122153bb3944b83395a86f048a9141c98e",
     "accepted_tree": "99a8d08ae30d1e014626b96f99170e128843b53b",
     "baseline_full_run": 42929889224,
     "production_union_verified": true,
@@ -440,6 +440,13 @@
     },
     "current_case_count": 2544,
     "current_class_groups": 389,
-    "current_source_charge": 151431
+    "current_source_charge": 151431,
+    "runtime_before_policy_base": "7799cf232545e8f9d3deba9ff3f90c716b971bba",
+    "policy_change_only": true,
+    "runtime_test_dependency_ci_inputs_exact_after_policy_merge": true,
+    "focused_normal_after_run": 42940046776,
+    "graph_packaging_after_run": 42940059276,
+    "red_after_run": 42940285352,
+    "normal_three_runs_within_tolerance": true
   }
 }
