@@ -1,0 +1,1422 @@
+{
+  "schema_version": 1,
+  "issue": 1002,
+  "parent": 970,
+  "root_parent": 962,
+  "phase": "구현 전 Draft 계획",
+  "accepted_main": "28dfbf569e0157fbbe51a6c2b1a56b9827f534bc",
+  "native_plan_sha256": "620e448ee030914cb71334f06aaa9717e30d926729dabf7f8620c035dbe20927",
+  "source_preflight_sha256": "d57b012e2ece2bf52cd33e4594beca39473cfc85269e919eae4f788c2909eac7",
+  "test_preflight_sha256": "cbd143ecb01022bc40529fa411400aa3203b16fe7f0268f524649b428811c2d4",
+  "credit_allocation_sha256": "497c74f8f175420e28979e1029c6cfd6926d94a0167763a9991447b03ded7538",
+  "source_or_test_implementation": false,
+  "local_Case_Suite_runs": 0,
+  "moves": [
+    {
+      "old_path": "src/story_writing_agents/conversations/events.py",
+      "name": "CollaborationEventKind",
+      "lines": [
+        167,
+        211
+      ],
+      "body_rows": 45,
+      "source_body_sha256": "f604b511f54781a5936f36516d4494999ba9fb2838a7af768495ae1cc17c1161",
+      "AST_sha256": "c56022f06cc4d2755b6b329df2d3962792aad1317080d5f70089cfa90eeb991a",
+      "target": "src/story_writing_agents/conversations/event_vocabulary.py",
+      "public_name": "CollaborationEventKind",
+      "member_order_preserved": true,
+      "existing_facade_normalization": true
+    },
+    {
+      "old_path": "src/story_writing_agents/conversations/events.py",
+      "name": "CollaborationActorKind",
+      "lines": [
+        214,
+        222
+      ],
+      "body_rows": 9,
+      "source_body_sha256": "7bf7f47dbfeed3c6a2153f33db53735bb88cf4e16298c2ded6a4b995d6a301c1",
+      "AST_sha256": "3819c884c3f39c774486a9bc3f2c787ede204996756ab614b929f0fc0fafb034",
+      "target": "src/story_writing_agents/conversations/event_vocabulary.py",
+      "public_name": "CollaborationActorKind",
+      "member_order_preserved": true,
+      "existing_facade_normalization": true
+    },
+    {
+      "old_path": "src/story_writing_agents/conversations/events.py",
+      "name": "CollaborationDirection",
+      "lines": [
+        225,
+        240
+      ],
+      "body_rows": 16,
+      "source_body_sha256": "5ce6c36da9a390a5726615b8f6223bb91f02b915036394995421c4b840927dd9",
+      "AST_sha256": "0998d15e223f65838f9a38d0a6cf9261af8c4fa3072877e6c36c165018a32b32",
+      "target": "src/story_writing_agents/conversations/event_vocabulary.py",
+      "public_name": "CollaborationDirection",
+      "member_order_preserved": true,
+      "existing_facade_normalization": true
+    },
+    {
+      "old_path": "src/story_writing_agents/conversations/events.py",
+      "name": "CollaborationStepKind",
+      "lines": [
+        243,
+        249
+      ],
+      "body_rows": 7,
+      "source_body_sha256": "6e1c4e43d12ec61d8c197322d32d8e59bedd785a4d584d88d1210bf80c57b153",
+      "AST_sha256": "ebe73844b0db4f3738fef18865750f30d08051729d60760a4d3bb058058ca0f7",
+      "target": "src/story_writing_agents/conversations/event_vocabulary.py",
+      "public_name": "CollaborationStepKind",
+      "member_order_preserved": true,
+      "existing_facade_normalization": true
+    },
+    {
+      "old_path": "src/story_writing_agents/conversations/events.py",
+      "name": "CollaborationSideEffect",
+      "lines": [
+        252,
+        260
+      ],
+      "body_rows": 9,
+      "source_body_sha256": "d3bc5d689fa925b472eee4e89f88260cf29f42102df078b022704ae042e73dbb",
+      "AST_sha256": "a1b9146b28317bbdf0e2ee3f1c8498a59638bf1e456d52ae611d439fe7e53f16",
+      "target": "src/story_writing_agents/conversations/event_vocabulary.py",
+      "public_name": "CollaborationSideEffect",
+      "member_order_preserved": true,
+      "existing_facade_normalization": true
+    },
+    {
+      "old_path": "src/story_writing_agents/conversations/events.py",
+      "name": "CollaborationInputKind",
+      "lines": [
+        263,
+        272
+      ],
+      "body_rows": 10,
+      "source_body_sha256": "bc46c96f3d10f29acde0f954b91a9d4024a5a3daeb446161c7625c252aa301db",
+      "AST_sha256": "1526e42bf90039e1d14f77695abb925546d3090746860c03e90829f2eb6c1c47",
+      "target": "src/story_writing_agents/conversations/event_vocabulary.py",
+      "public_name": "CollaborationInputKind",
+      "member_order_preserved": true,
+      "existing_facade_normalization": true
+    },
+    {
+      "old_path": "src/story_writing_agents/conversations/events.py",
+      "name": "CollaborationInputState",
+      "lines": [
+        275,
+        279
+      ],
+      "body_rows": 5,
+      "source_body_sha256": "f2999497a6b23f5529ff8801db2b474e4007f40140660d9e09a5ebde5d8400ff",
+      "AST_sha256": "1a63338746991475fb9c928544cc520706f50b8bd98a1ed938f5c3cf0f68a432",
+      "target": "src/story_writing_agents/conversations/event_vocabulary.py",
+      "public_name": "CollaborationInputState",
+      "member_order_preserved": true,
+      "existing_facade_normalization": true
+    },
+    {
+      "old_path": "src/story_writing_agents/conversations/events.py",
+      "name": "CollaborationStepState",
+      "lines": [
+        921,
+        934
+      ],
+      "body_rows": 14,
+      "source_body_sha256": "215e8e1f07b299c17d0b62e727d0871f53cf88f008c953d878864073a9c53d53",
+      "AST_sha256": "ecdbac014eb2afb953c7f1aa18c07c8b9f2606c5a41b57e6c2b06472e2d45aea",
+      "target": "src/story_writing_agents/conversations/event_vocabulary.py",
+      "public_name": "CollaborationStepState",
+      "member_order_preserved": true,
+      "existing_facade_normalization": true
+    },
+    {
+      "old_path": "src/story_writing_agents/conversations/events.py",
+      "name": "ArtifactProposalState",
+      "lines": [
+        937,
+        948
+      ],
+      "body_rows": 12,
+      "source_body_sha256": "91653c847bf817f4fc7284644207736680bc280f8e7640ff3a4e0bda5f81fac3",
+      "AST_sha256": "0665bb1c4a5da0872572b07f9c2cc49024723f5e2a30e8fa542ad27a349cff72",
+      "target": "src/story_writing_agents/conversations/event_vocabulary.py",
+      "public_name": "ArtifactProposalState",
+      "member_order_preserved": true,
+      "existing_facade_normalization": true
+    },
+    {
+      "old_path": "src/story_writing_agents/conversations/events.py",
+      "name": "ArtifactReviewDecision",
+      "lines": [
+        951,
+        956
+      ],
+      "body_rows": 6,
+      "source_body_sha256": "3af8fefb85c7df17c29225b4aee63b3c5b1be9244b7ff580ff405b6b2a190946",
+      "AST_sha256": "b690f97c21cd8c67ab36a741da2fccacbd5ed097e1f054b2d9cefe6ed916e9a2",
+      "target": "src/story_writing_agents/conversations/event_vocabulary.py",
+      "public_name": "ArtifactReviewDecision",
+      "member_order_preserved": true,
+      "existing_facade_normalization": true
+    },
+    {
+      "old_path": "src/story_writing_agents/conversations/events.py",
+      "name": "ArtifactReviewFailureCode",
+      "lines": [
+        959,
+        966
+      ],
+      "body_rows": 8,
+      "source_body_sha256": "9ad84ba21de1c5bbc3849499a909629262e655b08ee5225249a0de024d82611d",
+      "AST_sha256": "66d12e35cb0588cf0b9139f4d83e6f631b62a99bccc6472bfc8f6d084756754f",
+      "target": "src/story_writing_agents/conversations/event_vocabulary.py",
+      "public_name": "ArtifactReviewFailureCode",
+      "member_order_preserved": true,
+      "existing_facade_normalization": true
+    },
+    {
+      "old_path": "src/story_writing_agents/conversations/events.py",
+      "name": "CollaborationConfirmationDecision",
+      "lines": [
+        969,
+        974
+      ],
+      "body_rows": 6,
+      "source_body_sha256": "6ad2f81a479e0efe4649313ab6240ada671b3e207bc8c60d969e5574210d3323",
+      "AST_sha256": "2ebb20759c08557b1f2794e150bbca5fd945bf66bfee29ac4ce54c4554f92829",
+      "target": "src/story_writing_agents/conversations/event_vocabulary.py",
+      "public_name": "CollaborationConfirmationDecision",
+      "member_order_preserved": true,
+      "existing_facade_normalization": true
+    },
+    {
+      "old_path": "src/story_writing_agents/conversations/events.py",
+      "name": "ArtifactApplicationDecisionKind",
+      "lines": [
+        977,
+        982
+      ],
+      "body_rows": 6,
+      "source_body_sha256": "5fa28faea9b5a522701eed526dfd157bbc762e84b4d4f4ab011a80680eb252be",
+      "AST_sha256": "6b1034baf2d7096b259948ce0416b5a9c0b8e5bca825f2d4a099a221aa878d8a",
+      "target": "src/story_writing_agents/conversations/event_vocabulary.py",
+      "public_name": "ArtifactApplicationDecisionKind",
+      "member_order_preserved": true,
+      "existing_facade_normalization": true
+    },
+    {
+      "old_path": "src/story_writing_agents/conversations/events.py",
+      "name": "ArtifactApplicationOutcomeKind",
+      "lines": [
+        985,
+        994
+      ],
+      "body_rows": 10,
+      "source_body_sha256": "957b99ef93931b7cdcadf6e34066b4c0a6bcd192c294445f8c5d5a5ca49c2099",
+      "AST_sha256": "2a6b0daaee77abff8aa39649473c4cef9885cf98115a5075071322b0128f4bb4",
+      "target": "src/story_writing_agents/conversations/event_vocabulary.py",
+      "public_name": "ArtifactApplicationOutcomeKind",
+      "member_order_preserved": true,
+      "existing_facade_normalization": true
+    },
+    {
+      "old_path": "src/story_writing_agents/conversations/events.py",
+      "name": "ArtifactApplicationNextAction",
+      "lines": [
+        997,
+        1005
+      ],
+      "body_rows": 9,
+      "source_body_sha256": "efcb496bdac70a3d44a297e7c1adefb056f52bfbc4409041e860f4f75a61105f",
+      "AST_sha256": "06bbb7020f63f4b99c514aff30bcbb6578da58f8f703505935369af10df465a9",
+      "target": "src/story_writing_agents/conversations/event_vocabulary.py",
+      "public_name": "ArtifactApplicationNextAction",
+      "member_order_preserved": true,
+      "existing_facade_normalization": true
+    },
+    {
+      "old_path": "src/story_writing_agents/conversations/events.py",
+      "name": "StoryCommitOutcomeKind",
+      "lines": [
+        1008,
+        1016
+      ],
+      "body_rows": 9,
+      "source_body_sha256": "577ab57413f0ad944d3945f7dcfc5169bf3aad29b6ef41312bc4455a1c1f910d",
+      "AST_sha256": "c61b914851cc1e20c72de67a4036c45db6f08f334cb2a997f561da1da7e4a1f9",
+      "target": "src/story_writing_agents/conversations/event_vocabulary.py",
+      "public_name": "StoryCommitOutcomeKind",
+      "member_order_preserved": true,
+      "existing_facade_normalization": true
+    },
+    {
+      "old_path": "src/story_writing_agents/conversations/events.py",
+      "name": "StoryCommitNextAction",
+      "lines": [
+        1019,
+        1025
+      ],
+      "body_rows": 7,
+      "source_body_sha256": "2330763a3bbf566f66f99085840d130ece9da7e6bce2a2b25294daa5936b593f",
+      "AST_sha256": "c0cfeb8f3c7a692d2604eaa06efc760e152c40a22fe76c3b46eb61a0ca31fc05",
+      "target": "src/story_writing_agents/conversations/event_vocabulary.py",
+      "public_name": "StoryCommitNextAction",
+      "member_order_preserved": true,
+      "existing_facade_normalization": true
+    },
+    {
+      "old_path": "src/story_writing_agents/conversations/events.py",
+      "name": "LeadOutcomeKind",
+      "lines": [
+        1028,
+        1038
+      ],
+      "body_rows": 11,
+      "source_body_sha256": "60c0e409a48494b232477ef89327d56771f30618e1fa182daf587784da62ded9",
+      "AST_sha256": "7010bc8da82ff98e6cc157f49f72860982f5c94769b140981efda0cd6268a0e8",
+      "target": "src/story_writing_agents/conversations/event_vocabulary.py",
+      "public_name": "LeadOutcomeKind",
+      "member_order_preserved": true,
+      "existing_facade_normalization": true
+    },
+    {
+      "old_path": "src/story_writing_agents/conversations/events.py",
+      "name": "LeadOutcomeScope",
+      "lines": [
+        1041,
+        1046
+      ],
+      "body_rows": 6,
+      "source_body_sha256": "2362fe2ce2a45a5658ad17cde2fca4fa8094b1dee1be24a949acf9617b0dbe9e",
+      "AST_sha256": "9805636fe06a8830b910e015d97a59ac4d784d3f88c0fac2722a33a628a04bbd",
+      "target": "src/story_writing_agents/conversations/event_vocabulary.py",
+      "public_name": "LeadOutcomeScope",
+      "member_order_preserved": true,
+      "existing_facade_normalization": true
+    },
+    {
+      "old_path": "src/story_writing_agents/conversations/events.py",
+      "name": "LeadEvidenceStatus",
+      "lines": [
+        1049,
+        1057
+      ],
+      "body_rows": 9,
+      "source_body_sha256": "e141ccbcef48bbbbb24e3c85114a6d521d5b2f4d2e756480e7e164065a50eada",
+      "AST_sha256": "2e74e57f92ffa7f85ee4d13ad840dc82aee3718695cd20c0f4680bbde1ff524b",
+      "target": "src/story_writing_agents/conversations/event_vocabulary.py",
+      "public_name": "LeadEvidenceStatus",
+      "member_order_preserved": true,
+      "existing_facade_normalization": true
+    },
+    {
+      "old_path": "src/story_writing_agents/conversations/events.py",
+      "name": "CollaborationEvidenceAcquisition",
+      "lines": [
+        1060,
+        1066
+      ],
+      "body_rows": 7,
+      "source_body_sha256": "420066502ba8ea47b204450c17be25368c391d2e9c8a3a8de5bfaa21fa7006b9",
+      "AST_sha256": "a3bde159e8caa7b2aad452580ba5fad9a47539c5b95f702709a192330e195121",
+      "target": "src/story_writing_agents/conversations/event_vocabulary.py",
+      "public_name": "CollaborationEvidenceAcquisition",
+      "member_order_preserved": true,
+      "existing_facade_normalization": true
+    },
+    {
+      "old_path": "src/story_writing_agents/conversations/events.py",
+      "name": "CollaborationLeadOutcomeFailureCode",
+      "lines": [
+        1069,
+        1079
+      ],
+      "body_rows": 11,
+      "source_body_sha256": "b6ccba3e01522401c36a6e23bfdc616f74859b1eaac8486213382bdd4d9fb360",
+      "AST_sha256": "0c1026c150d9727c299d9914ff06727c23c41fc5b9859ae0eb8673b8fc43a598",
+      "target": "src/story_writing_agents/conversations/event_vocabulary.py",
+      "public_name": "CollaborationLeadOutcomeFailureCode",
+      "member_order_preserved": true,
+      "existing_facade_normalization": true
+    },
+    {
+      "old_path": "src/story_writing_agents/conversations/events.py",
+      "name": "LeadProposalRelation",
+      "lines": [
+        1082,
+        1087
+      ],
+      "body_rows": 6,
+      "source_body_sha256": "6f2a132aab1b7e198315c41fa12dd8c297c263b17fbea5ace8f89675bb42e20d",
+      "AST_sha256": "c301e5b76d54ee14bd4a4c8fe2c7e1b503ff123055979440c652c4d592ae7647",
+      "target": "src/story_writing_agents/conversations/event_vocabulary.py",
+      "public_name": "LeadProposalRelation",
+      "member_order_preserved": true,
+      "existing_facade_normalization": true
+    },
+    {
+      "old_path": "src/story_writing_agents/conversations/events.py",
+      "name": "LeadObjectiveAction",
+      "lines": [
+        1090,
+        1095
+      ],
+      "body_rows": 6,
+      "source_body_sha256": "0dbeb690769ee9442eaaee2d3f294373e37292baa11979dff0bec92467242efa",
+      "AST_sha256": "c922f0abb6e3fa67550a1ea43ad94e8613396fff5af25793ef86b0de4f02081d",
+      "target": "src/story_writing_agents/conversations/event_vocabulary.py",
+      "public_name": "LeadObjectiveAction",
+      "member_order_preserved": true,
+      "existing_facade_normalization": true
+    },
+    {
+      "old_path": "src/story_writing_agents/conversations/events.py",
+      "name": "ArtifactObjectiveNextStep",
+      "lines": [
+        1098,
+        1101
+      ],
+      "body_rows": 4,
+      "source_body_sha256": "3db50cec8c9d38c90d8f167b2ea3c2d29bd2bf06f715a162080e8e3702e1c93d",
+      "AST_sha256": "8cfb374428ac73cc88a85e6cd40734f94a44aff82798f9e8be4a1779feb8ee3e",
+      "target": "src/story_writing_agents/conversations/event_vocabulary.py",
+      "public_name": "ArtifactObjectiveNextStep",
+      "member_order_preserved": true,
+      "existing_facade_normalization": true
+    },
+    {
+      "old_path": "src/story_writing_agents/conversations/events.py",
+      "name": "ArtifactObjectiveState",
+      "lines": [
+        1104,
+        1107
+      ],
+      "body_rows": 4,
+      "source_body_sha256": "2aec8412ed6d2b765acac1639c17aaf57f7fdbd17d353211b2caac82b83c6a02",
+      "AST_sha256": "3b83c9eee7d7c34663fc424320c43fc7abecad7d77e1c77891e12e0dc3d769e3",
+      "target": "src/story_writing_agents/conversations/event_vocabulary.py",
+      "public_name": "ArtifactObjectiveState",
+      "member_order_preserved": true,
+      "existing_facade_normalization": true
+    },
+    {
+      "old_path": "src/story_writing_agents/conversations/events.py",
+      "name": "CollaborationInvocationKind",
+      "lines": [
+        1774,
+        1783
+      ],
+      "body_rows": 10,
+      "source_body_sha256": "19c1aa06132ba408e5762def62bc3af2de98dea4ea09feb88ce53642522349e3",
+      "AST_sha256": "a9e9788891ff9d5a5b4369c0f29114eb9a43033af04c661d8214d6c558dc28cb",
+      "target": "src/story_writing_agents/conversations/event_vocabulary.py",
+      "public_name": "CollaborationInvocationKind",
+      "member_order_preserved": true,
+      "existing_facade_normalization": true
+    },
+    {
+      "old_path": "src/story_writing_agents/conversations/events.py",
+      "name": "CollaborationProviderCallKind",
+      "lines": [
+        1786,
+        1791
+      ],
+      "body_rows": 6,
+      "source_body_sha256": "2665a77e51dae02676d4e3d54df70ad07c9618c1bbbc8449864ae71407b50bf9",
+      "AST_sha256": "c44319c21be07bd9f3f27f6da1c3fa49e1acfdb2372666a8d2b554135f590fcc",
+      "target": "src/story_writing_agents/conversations/event_vocabulary.py",
+      "public_name": "CollaborationProviderCallKind",
+      "member_order_preserved": true,
+      "existing_facade_normalization": true
+    },
+    {
+      "old_path": "src/story_writing_agents/conversations/events.py",
+      "name": "CollaborationProviderCallState",
+      "lines": [
+        1794,
+        1798
+      ],
+      "body_rows": 5,
+      "source_body_sha256": "334b698911b5c191c2f54a37ac10bcc1b1d2f4793288bb738abfcf162d28a3a0",
+      "AST_sha256": "4bc8ceaa05fcd85706e1b8f6ee43656abd4220abdaaddc694202891af2684ead",
+      "target": "src/story_writing_agents/conversations/event_vocabulary.py",
+      "public_name": "CollaborationProviderCallState",
+      "member_order_preserved": true,
+      "existing_facade_normalization": true
+    },
+    {
+      "old_path": "src/story_writing_agents/conversations/events.py",
+      "name": "CollaborationAssignmentOutcomeKind",
+      "lines": [
+        1801,
+        1806
+      ],
+      "body_rows": 6,
+      "source_body_sha256": "091e7093a61ee6776ce5f0ae1c08b77405293c717a136383057d7955b8e1ce21",
+      "AST_sha256": "cbfb6265717fe76617906e6a158567f85d2c746247397e45c3cb5452d606c40a",
+      "target": "src/story_writing_agents/conversations/event_vocabulary.py",
+      "public_name": "CollaborationAssignmentOutcomeKind",
+      "member_order_preserved": true,
+      "existing_facade_normalization": true
+    },
+    {
+      "old_path": "src/story_writing_agents/conversations/events.py",
+      "name": "CollaborationSpecialistAssessment",
+      "lines": [
+        1809,
+        1818
+      ],
+      "body_rows": 10,
+      "source_body_sha256": "cbff82f896592a925d9819f43314a30b3cdaaeb824f64bde481cb70e18b83dea",
+      "AST_sha256": "763a902d989b594e7ee5b9153e792f9f807ce3190e30987ef5e6f397b089734d",
+      "target": "src/story_writing_agents/conversations/event_vocabulary.py",
+      "public_name": "CollaborationSpecialistAssessment",
+      "member_order_preserved": true,
+      "existing_facade_normalization": true
+    },
+    {
+      "old_path": "src/story_writing_agents/conversations/events.py",
+      "name": "CollaborationSynthesisOutcomeKind",
+      "lines": [
+        1821,
+        1827
+      ],
+      "body_rows": 7,
+      "source_body_sha256": "1292f6451a81224bf73c7d9ad15c605eeca33a8b404d90f9e0a4b35736351eb6",
+      "AST_sha256": "21026c8d7febec28bd6d6aa6dc19beb7dcde4164eb339d84a27889cf941e7f63",
+      "target": "src/story_writing_agents/conversations/event_vocabulary.py",
+      "public_name": "CollaborationSynthesisOutcomeKind",
+      "member_order_preserved": true,
+      "existing_facade_normalization": true
+    },
+    {
+      "old_path": "src/story_writing_agents/conversations/events.py",
+      "name": "CollaborationExecutionOutcomeKind",
+      "lines": [
+        1830,
+        1835
+      ],
+      "body_rows": 6,
+      "source_body_sha256": "26ab27aa7d66f24271835a2983c1670f7c90655dd504c8e9afedf17a7e9e7681",
+      "AST_sha256": "24af4121398f7be87f0a8641b98108502485571bd4070a7a9203ba157f20e683",
+      "target": "src/story_writing_agents/conversations/event_vocabulary.py",
+      "public_name": "CollaborationExecutionOutcomeKind",
+      "member_order_preserved": true,
+      "existing_facade_normalization": true
+    },
+    {
+      "old_path": "src/story_writing_agents/conversations/events.py",
+      "name": "CollaborationTerminalScope",
+      "lines": [
+        1838,
+        1842
+      ],
+      "body_rows": 5,
+      "source_body_sha256": "2a417cf169c34b5f5d7019a538865c97fb3f5f1ceda1641e277175cb257986b3",
+      "AST_sha256": "15afd607cb1473aa094f2a680634dd3005926095d1da3a53f1526b882a67a6d9",
+      "target": "src/story_writing_agents/conversations/event_vocabulary.py",
+      "public_name": "CollaborationTerminalScope",
+      "member_order_preserved": true,
+      "existing_facade_normalization": true
+    },
+    {
+      "old_path": "src/story_writing_agents/conversations/events.py",
+      "name": "CollaborationAppendStatus",
+      "lines": [
+        1845,
+        1849
+      ],
+      "body_rows": 5,
+      "source_body_sha256": "b54fcd5e7b5033c2d77473cd5297475b30f2ec2d3bc2e9781143fce8fe94f9db",
+      "AST_sha256": "92747012dee3d9d119016798939b18df07a52effeb2e2fbd7e42f3e5b4fffe41",
+      "target": "src/story_writing_agents/conversations/event_vocabulary.py",
+      "public_name": "CollaborationAppendStatus",
+      "member_order_preserved": true,
+      "existing_facade_normalization": true
+    },
+    {
+      "old_path": "src/story_writing_agents/conversations/events.py",
+      "name": "CollaborationAppendFailure",
+      "lines": [
+        1852,
+        1859
+      ],
+      "body_rows": 8,
+      "source_body_sha256": "894411f77acf9278c9cc36bc294eebaa0a9f0e76db2408d0024f9c29b2e0caab",
+      "AST_sha256": "8e72cc79bc9cfc3e31d8403fff59d743934fa3eae464e62c02906a8d1cb16230",
+      "target": "src/story_writing_agents/conversations/event_vocabulary.py",
+      "public_name": "CollaborationAppendFailure",
+      "member_order_preserved": true,
+      "existing_facade_normalization": true
+    },
+    {
+      "old_path": "src/story_writing_agents/conversations/events.py",
+      "name": "ConversationEventKind",
+      "lines": [
+        1862,
+        1867
+      ],
+      "body_rows": 6,
+      "source_body_sha256": "82dd9391c656a1a0cd35e4ce27b159d7605019fa1ffc7be73ad7f0306da52245",
+      "AST_sha256": "64ddf1ddf50a9f995671e99a1b344dd5aadce3b735a1781346a14c621448bab9",
+      "target": "src/story_writing_agents/conversations/event_vocabulary.py",
+      "public_name": "ConversationEventKind",
+      "member_order_preserved": true,
+      "existing_facade_normalization": true
+    }
+  ],
+  "public_boundary": {
+    "leaf_before": 134,
+    "leaf_after_events": 97,
+    "leaf_after_vocabulary": 37,
+    "context": 37,
+    "conversations": 235,
+    "ArtifactObjectiveState_old_events_namespace": "기존 class definition으로 존재",
+    "ArtifactObjectiveState_new_events_namespace": "정의·__all__에서 제거하고 unused import를 추가하지 않음. 이 이전 직접module API는 의도적으로 종료.",
+    "ArtifactObjectiveState_supported_public_paths": [
+      "story_writing_agents.conversations.event_vocabulary.ArtifactObjectiveState",
+      "story_writing_agents.conversations.ArtifactObjectiveState"
+    ],
+    "events_genuine_Enum_imports": 36,
+    "events_genuine_import_names": [
+      "ArtifactApplicationDecisionKind",
+      "ArtifactApplicationNextAction",
+      "ArtifactApplicationOutcomeKind",
+      "ArtifactObjectiveNextStep",
+      "ArtifactProposalState",
+      "ArtifactReviewDecision",
+      "ArtifactReviewFailureCode",
+      "CollaborationActorKind",
+      "CollaborationAppendFailure",
+      "CollaborationAppendStatus",
+      "CollaborationAssignmentOutcomeKind",
+      "CollaborationConfirmationDecision",
+      "CollaborationDirection",
+      "CollaborationEventKind",
+      "CollaborationEvidenceAcquisition",
+      "CollaborationExecutionOutcomeKind",
+      "CollaborationInputKind",
+      "CollaborationInputState",
+      "CollaborationInvocationKind",
+      "CollaborationLeadOutcomeFailureCode",
+      "CollaborationProviderCallKind",
+      "CollaborationProviderCallState",
+      "CollaborationSideEffect",
+      "CollaborationSpecialistAssessment",
+      "CollaborationStepKind",
+      "CollaborationStepState",
+      "CollaborationSynthesisOutcomeKind",
+      "CollaborationTerminalScope",
+      "ConversationEventKind",
+      "LeadEvidenceStatus",
+      "LeadObjectiveAction",
+      "LeadOutcomeKind",
+      "LeadOutcomeScope",
+      "LeadProposalRelation",
+      "StoryCommitNextAction",
+      "StoryCommitOutcomeKind"
+    ],
+    "events_remaining_all_names_bound": true
+  },
+  "facade_and_pickle": {
+    "protected_all": {
+      "module": "src/story_writing_agents/conversations/__init__.py",
+      "count": 235,
+      "order": [
+        "ArtifactObjective",
+        "ArtifactDraftSource",
+        "ArtifactObjectiveCandidateBinding",
+        "ArtifactObjectiveFacts",
+        "ArtifactObjectiveFactsV2",
+        "ArtifactObjectiveNextStep",
+        "ArtifactObjectivePayload",
+        "ArtifactObjectivePayloadV2",
+        "ArtifactObjectiveState",
+        "LeadObjectiveAction",
+        "LeadObjectiveIntent",
+        "LeadRecommendedAction",
+        "LeadRecommendationActionKind",
+        "LeadRecommendationDecision",
+        "LeadRecommendationDecisionPayload",
+        "LeadRecommendationRequestPayload",
+        "LeadRecommendationResultPayload",
+        "LeadRecommendationStartedPayload",
+        "LeadRecommendationState",
+        "artifact_objective_context",
+        "authoring_scope_from_dict",
+        "authoring_scope_to_dict",
+        "lead_outcome_scope_paths",
+        "review_basis_from_dict",
+        "review_basis_to_dict",
+        "ARTIFACT_REVIEW_SCHEMA_VERSION",
+        "COLLABORATION_EVENT_SCHEMA_VERSION",
+        "COLLABORATION_PHYSICAL_CALL_LIMIT",
+        "COLLABORATION_ROUND_LIMIT",
+        "COLLABORATION_READABLE_CONTEXT_POLICY",
+        "COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES",
+        "CONVERSATION_CONTEXT_POLICY",
+        "CONVERSATION_EVENT_SCHEMA_VERSION",
+        "CONVERSATION_METADATA_SCHEMA_VERSION",
+        "CONVERSATION_SUBJECT_NORMALIZATION_VERSION",
+        "MAX_CONVERSATION_SUBJECT_LENGTH",
+        "ArtifactProposalResult",
+        "ArtifactApplicationDecision",
+        "ArtifactApplicationDecisionKind",
+        "ArtifactApplicationDecisionPayload",
+        "ArtifactApplicationDecisionResult",
+        "ArtifactApplicationNextAction",
+        "ArtifactApplicationOutcomeKind",
+        "ArtifactApplicationRequestPayload",
+        "ArtifactApplicationResultPayload",
+        "StoryCommitPreparationRequest",
+        "StoryCommitDecisionRequest",
+        "StoryCommitDecisionResult",
+        "StoryCommitDecision",
+        "StoryCommitDecisionPayload",
+        "StoryCommitNextAction",
+        "StoryCommitOutcomeKind",
+        "StoryCommitRequestPayload",
+        "StoryCommitResultPayload",
+        "build_story_commit_request_payload",
+        "ArtifactProposalState",
+        "ArtifactProposalStatePayload",
+        "ArtifactReviewCandidatePayload",
+        "ArtifactReviewDecision",
+        "ArtifactReviewFailureCode",
+        "ArtifactReviewFailurePayload",
+        "ArtifactReviewReply",
+        "ArtifactReviewSynthesisPayload",
+        "ArtifactReviewedProposal",
+        "CollaborationActor",
+        "CollaborationActorKind",
+        "CollaborationAgentProfile",
+        "CollaborationAppendError",
+        "CollaborationAppendFailure",
+        "CollaborationAppendReceipt",
+        "CollaborationAppendStatus",
+        "CollaborationAssignment",
+        "CollaborationAssignmentDispatchPayload",
+        "CollaborationAssignmentOutcome",
+        "CollaborationAssignmentOutcomeKind",
+        "CollaborationBudget",
+        "CollaborationConfirmationDecision",
+        "CollaborationConfirmationPayload",
+        "CollaborationContextBootstrap",
+        "CollaborationDirection",
+        "CollaborationEvidenceAcquisition",
+        "CollaborationEvidenceReceipt",
+        "CollaborationEvent",
+        "CollaborationEventBatch",
+        "CollaborationEventDraft",
+        "CollaborationEventKind",
+        "CollaborationEventStore",
+        "CollaborationExecutionOutcomeKind",
+        "CollaborationExecutionResult",
+        "CollaborationHistoryProjection",
+        "CollaborationInputKind",
+        "CollaborationInputRevision",
+        "CollaborationInputState",
+        "CollaborationInterruptionPayload",
+        "CollaborationInvocationKind",
+        "CollaborationLeadSynthesisPayload",
+        "CollaborationLeadEvidence",
+        "CollaborationLeadJudgmentPayload",
+        "CollaborationLeadOutcomeFailureCode",
+        "CollaborationLeadOutcomeFailurePayload",
+        "CollaborationLeadExplorationRequestPayload",
+        "CollaborationLeadExplorationResultPayload",
+        "CollaborationExplorationAdoptionPayload",
+        "CollaborationEditorialRecordPayload",
+        "CollaborationPremiseDecisionPayload",
+        "CollaborationPremiseSelectionPayload",
+        "CollaborationPremiseFreshWorkAdmissionPayload",
+        "CollaborationMessagePayload",
+        "CollaborationNextAction",
+        "CollaborationPayload",
+        "CollaborationProposal",
+        "CollaborationProposalBasis",
+        "CollaborationProviderCallKind",
+        "CollaborationProviderCallPayload",
+        "CollaborationProviderCallState",
+        "CollaborationReadableContext",
+        "CollaborationReadableContextPolicy",
+        "CollaborationReadableField",
+        "CollaborationReadableFieldKey",
+        "CollaborationReadableRecord",
+        "CollaborationSideEffect",
+        "CollaborationSpecialistReplyPayload",
+        "CollaborationSpecialistAssessment",
+        "CollaborationStepKind",
+        "CollaborationStepState",
+        "CollaborationStepStatePayload",
+        "CollaborationSynthesisOutcomeKind",
+        "CollaborationTerminalOutcomePayload",
+        "CollaborationTerminalScope",
+        "ConversationCatalog",
+        "ConversationContextPolicy",
+        "ConversationContextWindow",
+        "ConversationEvent",
+        "ConversationEventKind",
+        "ConversationMetadata",
+        "ConversationStatus",
+        "LeadAssignmentIntent",
+        "LeadDecisionResult",
+        "LeadOutcomeKind",
+        "LeadOutcomeScope",
+        "LeadEvidenceStatus",
+        "LeadProposalIntent",
+        "LeadProposalRelation",
+        "LeadProviderOutcome",
+        "LeadStepDecision",
+        "LeadTurnResult",
+        "collaboration_batch_digest",
+        "artifact_reviewed_proposal_digest",
+        "collaboration_proposal_digest",
+        "decode_collaboration_batch",
+        "decode_artifact_reviewed_proposal",
+        "decode_collaboration_event",
+        "decode_collaboration_event_draft",
+        "decode_collaboration_proposal",
+        "encode_collaboration_batch",
+        "encode_artifact_reviewed_proposal",
+        "encode_collaboration_event",
+        "encode_collaboration_event_draft",
+        "encode_collaboration_proposal",
+        "normalize_conversation_subject",
+        "project_collaboration_history",
+        "project_editorial_state",
+        "editorial_provenance_available",
+        "project_collaboration_readable_history",
+        "select_bounded_collaboration_context",
+        "select_bounded_conversation_context",
+        "validate_collaboration_candidate_batch",
+        "validate_collaboration_transition",
+        "validate_conversation_context_window",
+        "CollaborationLeadTaskDecisionPayload",
+        "CollaborationLeadTaskTransitionPayload",
+        "CollaborationLeadMaterialCapturePayload",
+        "CollaborationLeadDiscussionPayload",
+        "CollaborationLeadPublicResponsePayload",
+        "LeadTaskView",
+        "LeadMaterialChoice",
+        "LeadPublicResponseView",
+        "LeadTaskDecisionResult",
+        "EditorialScopeKind",
+        "EditorialScopeTarget",
+        "EditorialScope",
+        "EditorialScopeCoverage",
+        "editorial_scope_relation",
+        "EditorialRelationKind",
+        "EditorialRelationDecision",
+        "EditorialScopeRelationFact",
+        "EditorialRecordScopeState",
+        "EditorialApplicationAttempt",
+        "ReviewTargetKind",
+        "ReviewTargetAvailability",
+        "PreliminaryNextAction",
+        "ReviewTarget",
+        "ReviewFinding",
+        "LeadPreliminaryReview",
+        "FinalReviewEvidence",
+        "FinalReviewQualification",
+        "qualify_final_review",
+        "preliminary_review_to_dict",
+        "preliminary_review_from_dict",
+        "final_review_evidence_to_dict",
+        "final_review_evidence_from_dict",
+        "build_final_review_evidence",
+        "ReviewStage",
+        "SpecialistWorkKind",
+        "SpecialistWorkQuestion",
+        "SpecialistStagePlan",
+        "stage_required_specialists",
+        "validate_stage_routing",
+        "DocumentPlanningGoalRef",
+        "DocumentPlanRef",
+        "DocumentNodeSpec",
+        "DocumentPlan",
+        "DocumentCandidateRef",
+        "DocumentCandidateUseIntent",
+        "DocumentNodeBinding",
+        "DocumentNodeView",
+        "DocumentPlanView",
+        "DocumentNodeState",
+        "DocumentNodeNextAction",
+        "document_plan_to_dict",
+        "document_plan_from_dict",
+        "document_node_binding_to_dict",
+        "document_node_binding_from_dict",
+        "document_value_digest",
+        "document_lineage_cost",
+        "project_document_plan_views",
+        "is_new_task_recommendation_source",
+        "DocumentNodeSelection",
+        "DocumentCandidateSelection",
+        "document_node_selection_to_dict",
+        "document_node_selection_from_dict",
+        "document_candidate_selection_to_dict",
+        "document_candidate_selection_from_dict",
+        "planning_goal_to_dict",
+        "planning_goal_from_dict"
+      ]
+    },
+    "protected_normalization": "현재_PUBLIC_TYPES의125개기존objects와기존28개function__module__대입·순서를그대로유지.37선택Enums는전부기존type목록에있다. 기존루프에새정규화대상을추가하거나__qualname__를조작하지않는다.",
+    "normalization_counts": {
+      "type_entries": 125,
+      "separate_function_module_assignments": 28
+    },
+    "class_object_identity": "facade/events36/context31/session2/UI1모두새leaf의동일실제classobject를import한다. old/newclass중복정의·proxy·Enum재구성·aliases-onlycompatlayer없음.",
+    "canonical_type_module": "완전한기존package import후기존facade루프가37class.__module__을 story_writing_agents.conversations로설정하며현재와같다. class.__name__/__qualname__/member이름·값·순서·EnumType/StrEnum기반을그대로둔다.",
+    "pickle": "기존공개Enum/그Enum을담은DTO의canonical import경로는conversations.<TypeName>으로유지된다.2개추천Enum의events경로는실제owner를보존하여지킨다. 실제pickle실행은하지않았으며기존boundaryCase로후속확인한다.",
+    "get_type_hints": "남은events함수의36개Enumglobal/localalias이름을유지하며context의CollaborationEventKindV2등alias도그대로다. 새publicclass는같은표준StrEnum이므로typingglobals를다른DTO/registry로대체하지않는다.",
+    "startup_metadata_change": "events.__dict__에서ArtifactObjectiveState가사라지고새package submoduleattribute가생긴다. 사용자가허용한공개API수정으로기록하며235공개facade·JSONwire와혼동하지않는다.",
+    "eager_facade_kept": "__getattr__/lazyloader추가없음. 직접newleaf import에도현재package __init__가먼저전체family/context를eagerload하고마지막기존정규화를끝낸다. import격리의한계는남는다."
+  },
+  "initialization_limits": {
+    "creation_order": "37class/member내원래순서는유지하지만DTO와interleave되던생성은newleaf초기화로모인다.2추천class와DTO/codecs는기존source에남긴다.",
+    "cold_facade": "기존eager__init__의최종normalization을유지하므로coldleafimport도전체package를적재할수있다. 새lazyloader설계없음.",
+    "cost": "module/dict/tuple/importref·loader/heap/GCphase·source-scanfile1의실제변화.0비용/동일실행시간이라고주장하지않음."
+  },
+  "actual_before_and_projected_after": {
+    "reader_scope": "기존complete/Controller/relative규칙을현재immutable233개AST에서재현",
+    "actual_before": {
+      "complete": {
+        "modules": 233,
+        "edges": 1183,
+        "cycles": []
+      },
+      "controller": {
+        "modules": 233,
+        "edges": 1170,
+        "cycles": []
+      },
+      "relative": {
+        "modules": 233,
+        "edges": 1181,
+        "cycles": []
+      }
+    },
+    "virtual_after": {
+      "complete": {
+        "modules": 234,
+        "edges": 1188,
+        "added_edges": 5,
+        "removed_edges": 0,
+        "cycles": []
+      },
+      "controller": {
+        "modules": 234,
+        "edges": 1175,
+        "added_edges": 5,
+        "removed_edges": 0,
+        "cycles": []
+      },
+      "relative": {
+        "modules": 234,
+        "edges": 1186,
+        "added_edges": 5,
+        "removed_edges": 0,
+        "cycles": []
+      }
+    },
+    "added_edges": [
+      [
+        "story_writing_agents.conversations",
+        "story_writing_agents.conversations.event_vocabulary"
+      ],
+      [
+        "story_writing_agents.conversations.context",
+        "story_writing_agents.conversations.event_vocabulary"
+      ],
+      [
+        "story_writing_agents.conversations.events",
+        "story_writing_agents.conversations.event_vocabulary"
+      ],
+      [
+        "story_writing_agents.conversations.session_context",
+        "story_writing_agents.conversations.event_vocabulary"
+      ],
+      [
+        "story_writing_agents.interactive_controller._exchange_projection",
+        "story_writing_agents.conversations.event_vocabulary"
+      ]
+    ],
+    "removed_edges": [],
+    "correction": "현재요청의+4가정은UI11DTO잔존eventsedge를제거할수없는점과맞지않아+5로정정. 원e7데이터의5추가edge·oldedge잔류근거를보존하고현재main기준숫자만갱신한다.",
+    "no_actualafter_certification": true
+  },
+  "test_selection": {
+    "minimum": [
+      "tests.test_collaboration_events.CollaborationValueContractTests.test_constants_and_closed_enums_are_exact"
+    ],
+    "minimum_real_boundary": "Existing27 enum types /170 values compared in order to independent literals; not37/215 exhaustive runtime coverage",
+    "expanded_contract6": [
+      "tests.test_collaboration_events.CollaborationValueContractTests.test_constants_and_closed_enums_are_exact",
+      "tests.test_collaboration_events.CollaborationWireContractTests.test_all_wire_values_have_stable_golden_hashes_and_round_trip",
+      "tests.test_collaboration_events.CollaborationPackageBoundaryTests.test_leaf_and_facade_exports_identity_metadata_pickle_and_root_omission",
+      "tests.test_collaboration_events.CollaborationPackageBoundaryTests.test_clean_import_orders_have_no_cwd_io_or_dynamic_forwarding",
+      "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_supported_package_exports_are_identity_stable",
+      "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_public_definitions_live_in_their_exact_owner_modules"
+    ],
+    "why_not_original3_only": "Two actual Catalog fixture consumers and existing three cold import orders are affected; Catalog exact ClassDef ownership must include the new real file",
+    "graph9_plus_actual_packaging1": "Separate existing cohort; no Case overlap with contract6. Whole full2544 remains final gate.",
+    "remaining10_value_scope": "Source AST receipts preserve all37 definitions/215 member values. Existing minimum runtime table omits10 enums/45 values; wire/type/identity/metadata and other existing Cases provide partial coverage, not a new exhaustive literal table. No new tests designed to fill this existing gap.",
+    "unchanged_receipts": [
+      {
+        "id": "tests.test_collaboration_events.CollaborationValueContractTests.test_constants_and_closed_enums_are_exact",
+        "path": "tests/test_collaboration_events.py",
+        "lines": [
+          285,
+          465
+        ],
+        "subtest_cap": 27,
+        "method_AST_sha256_Python31118": "0f8195a43e07d6d47b97a32f20699fa0ff63042d385fbc77694be967456e74a1",
+        "class_bases": [
+          "unittest.TestCase"
+        ],
+        "class_declared_setup_teardown": []
+      },
+      {
+        "id": "tests.test_collaboration_events.CollaborationWireContractTests.test_all_wire_values_have_stable_golden_hashes_and_round_trip",
+        "path": "tests/test_collaboration_events.py",
+        "lines": [
+          1172,
+          1318
+        ],
+        "subtest_cap": 4,
+        "method_AST_sha256_Python31118": "7a78528757e501ec2e5d79c3da7f57a13745d31bc873f54dffe08ce973f1940a",
+        "class_bases": [
+          "unittest.TestCase"
+        ],
+        "class_declared_setup_teardown": []
+      },
+      {
+        "id": "tests.test_collaboration_events.CollaborationPackageBoundaryTests.test_leaf_and_facade_exports_identity_metadata_pickle_and_root_omission",
+        "path": "tests/test_collaboration_events.py",
+        "lines": [
+          1657,
+          1745
+        ],
+        "subtest_cap": 212,
+        "method_AST_sha256_Python31118": "fdbdb91558d81c15ebb809f34588a2dca7a734dfec56228e140b2d7ba75a5745",
+        "class_bases": [
+          "unittest.TestCase"
+        ],
+        "class_declared_setup_teardown": []
+      },
+      {
+        "id": "tests.test_collaboration_events.CollaborationPackageBoundaryTests.test_clean_import_orders_have_no_cwd_io_or_dynamic_forwarding",
+        "path": "tests/test_collaboration_events.py",
+        "lines": [
+          1778,
+          1824
+        ],
+        "subtest_cap": 3,
+        "method_AST_sha256_Python31118": "7cea45cc92a4941307c3a22fe3ccfe17d455ce52f0ad8b1f492ab3a075fdec40",
+        "class_bases": [
+          "unittest.TestCase"
+        ],
+        "class_declared_setup_teardown": []
+      },
+      {
+        "id": "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_supported_package_exports_are_identity_stable",
+        "path": "tests/test_conversation_catalog.py",
+        "lines": [
+          836,
+          911
+        ],
+        "subtest_cap": 28,
+        "method_AST_sha256_Python31118": "e3246f05b2244fc3647d1a7dadab18ce50dba13b54a0de46774188e880d875c4",
+        "class_bases": [
+          "unittest.TestCase"
+        ],
+        "class_declared_setup_teardown": []
+      },
+      {
+        "id": "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_public_definitions_live_in_their_exact_owner_modules",
+        "path": "tests/test_conversation_catalog.py",
+        "lines": [
+          913,
+          950
+        ],
+        "subtest_cap": 4,
+        "method_AST_sha256_Python31118": "4ae94c6a3427100bbde549507a10e77488ef75d316ffb79bc95bac9daa3cce42",
+        "class_bases": [
+          "unittest.TestCase"
+        ],
+        "class_declared_setup_teardown": []
+      }
+    ]
+  },
+  "preferred_four_cap_source_owner_plan": {
+    "original_cap": 4,
+    "after_cap": 4,
+    "families": [
+      "__init__.py",
+      "catalog.py",
+      "events.py family",
+      "context.py"
+    ],
+    "event_family_actual_files": [
+      "events.py",
+      "event_vocabulary.py"
+    ],
+    "real_definition_checks": [
+      "Parse each source separately with actual filename; retain original ClassDef/FunctionDef/Assign/AnnAssign collection and public_names intersection",
+      "events expected97 exports plus original explicit build_final_review_evidence; vocabulary expected37. Do not replace actual definitions with import names or union both source owners into one undifferentiated set.",
+      "Complete original public_names whitelist and all other family expectations unchanged; preserve original subTest begin after preparation.",
+      "Store per-file definitions/expected pairs, then run the original equality separately for each actual owner inside the existing events family subTest."
+    ],
+    "charged_rows": 7,
+    "work_delta": "One additional real source read/AST parse and37 class-definition coverage in its real file, a small prepared list per existing family and five owner-result pairs. No zero allocation/time claim. Old events definition body shrinks; new module/import/__all__ work remains observed.",
+    "identity_owner_case_cap28_preserved": "Group the actual events97/vocabulary37 records under the original events owner-family subTest; keep three family subTests and all original member identities. +4 charged rows.",
+    "not_implemented_or_runtime_verified": true
+  },
+  "row_ledger": [
+    {
+      "path": "tests/collaboration_contract_fixture.py",
+      "change": "Move the 37 original export string rows once into new independent vocabulary expected tuple; preserve old relative order in both97/37 partitions",
+      "delta": 2,
+      "reason": "One new tuple assignment/open row and one closing row; original37 literal rows moved, not copied or excluded",
+      "classification": "counted domain support"
+    },
+    {
+      "path": "tests/test_collaboration_events.py",
+      "change": "Add the new expected vocabulary export tuple to existing multiline fixture import",
+      "delta": 1,
+      "classification": "test"
+    },
+    {
+      "path": "tests/test_collaboration_events.py",
+      "change": "Existing leaf import becomes ordinary same-package two-module import events/vocabulary",
+      "delta": 0,
+      "classification": "test"
+    },
+    {
+      "path": "tests/test_collaboration_events.py",
+      "change": "Exact vocabulary.__all__ tuple assertion in existing public-surface scenario",
+      "delta": 1,
+      "classification": "test"
+    },
+    {
+      "path": "tests/test_collaboration_events.py",
+      "change": "Apply existing no-__getattr__ namespace invariant to new real leaf",
+      "delta": 1,
+      "classification": "test"
+    },
+    {
+      "path": "tests/test_collaboration_events.py",
+      "change": "Current owner iteration partitions134 into events97+vocabulary37; no added subTest count; cold-script events134→97 literal only",
+      "delta": 0,
+      "classification": "test"
+    },
+    {
+      "path": "tests/collaboration_contract_fixture.py",
+      "change": "seed_reviewed_artifact same-package local import adds vocabulary binding; qualify7 enum references to true public owner; all DTO and I/O callsites remain",
+      "delta": 0,
+      "classification": "counted domain support"
+    },
+    {
+      "path": "tests/test_conversation_catalog.py",
+      "change": "Explicit vocabulary module import, expected tuple import, derived vocabulary expected set",
+      "delta": 3,
+      "classification": "test"
+    },
+    {
+      "path": "tests/test_conversation_catalog.py",
+      "change": "Existing three owner-family records: event family gets two separately checked owner records; readable expanded event data +3 rows, one inner loop +1. Existing28 subTests retained",
+      "delta": 4,
+      "classification": "test"
+    },
+    {
+      "path": "tests/test_conversation_catalog.py",
+      "change": "Existing four source-owner-family records: event family contains two actual filename/expected pairs. Event data +3; per-family prepared list +1, actual-file loop +1, prepared append +1, per-owner assertion loop +1. Existing4 subTests retained",
+      "delta": 7,
+      "classification": "test"
+    },
+    {
+      "path": "tests/test_rag_module_and_packaging_boundary.py",
+      "change": "Retain all old exact dependency members, add actual vocabulary dependency in conversations, events, context existing dict records",
+      "delta": 3,
+      "classification": "test"
+    },
+    {
+      "path": "tests/test_rag_module_and_packaging_boundary.py",
+      "change": "Add actual new source byte-path to existing wheel/sdist conversation package registry",
+      "delta": 1,
+      "classification": "test"
+    },
+    {
+      "path": "existing graph9 / tests/fixtures/test_owners_v1.json",
+      "change": "Existing17 numeric graph literals and data-only new owner registration; no predicate/Case/selector algorithm changes",
+      "delta": 0,
+      "classification": "existing tooling data"
+    }
+  ],
+  "credit_allocation": {
+    "issue": 1002,
+    "parent": 970,
+    "allocation_status": "root_reserved_for_1002_only_not_yet_removed",
+    "main": "28dfbf569e0157fbbe51a6c2b1a56b9827f534bc",
+    "gross_new_rows": 23,
+    "credit_rows": 23,
+    "projected_net": 0,
+    "cap": 151431,
+    "projected_charge": 151431,
+    "canonical_case_additions": 0,
+    "subtest_cap_changes": 0,
+    "row_compression": false,
+    "logic_externalization": false,
+    "entries": [
+      {
+        "path": "tests/test_interactive_controller.py",
+        "symbol": "ConversationTranscriptCursor",
+        "module": "story_writing_agents.conversation_search",
+        "physical_credit_rows": 1,
+        "original_basis_member_row": 53,
+        "current_member_row": 52,
+        "current_source_row": "    ConversationTranscriptCursor,",
+        "current_file_sha256": "d42200928ff89e3f31b0724b0d37ac86e7ab1e8fe90774c50b6960c8795bb08a"
+      },
+      {
+        "path": "tests/test_interactive_controller.py",
+        "symbol": "ConversationTranscriptPage",
+        "module": "story_writing_agents.conversation_search",
+        "physical_credit_rows": 1,
+        "original_basis_member_row": 54,
+        "current_member_row": 53,
+        "current_source_row": "    ConversationTranscriptPage,",
+        "current_file_sha256": "d42200928ff89e3f31b0724b0d37ac86e7ab1e8fe90774c50b6960c8795bb08a"
+      },
+      {
+        "path": "tests/test_interactive_controller.py",
+        "symbol": "CollaborationEventBatch",
+        "module": "story_writing_agents.conversations",
+        "physical_credit_rows": 1,
+        "original_basis_member_row": 77,
+        "current_member_row": 76,
+        "current_source_row": "    CollaborationEventBatch,",
+        "current_file_sha256": "d42200928ff89e3f31b0724b0d37ac86e7ab1e8fe90774c50b6960c8795bb08a"
+      },
+      {
+        "path": "tests/test_interactive_controller.py",
+        "symbol": "CollaborationReadableField",
+        "module": "story_writing_agents.conversations",
+        "physical_credit_rows": 1,
+        "original_basis_member_row": 79,
+        "current_member_row": 78,
+        "current_source_row": "    CollaborationReadableField,",
+        "current_file_sha256": "d42200928ff89e3f31b0724b0d37ac86e7ab1e8fe90774c50b6960c8795bb08a"
+      },
+      {
+        "path": "tests/test_interactive_controller.py",
+        "symbol": "CollaborationReadableFieldKey",
+        "module": "story_writing_agents.conversations",
+        "physical_credit_rows": 1,
+        "original_basis_member_row": 80,
+        "current_member_row": 79,
+        "current_source_row": "    CollaborationReadableFieldKey,",
+        "current_file_sha256": "d42200928ff89e3f31b0724b0d37ac86e7ab1e8fe90774c50b6960c8795bb08a"
+      },
+      {
+        "path": "tests/test_interactive_controller.py",
+        "symbol": "CONVERSATION_EVENT_SCHEMA_VERSION",
+        "module": "story_writing_agents.conversations",
+        "physical_credit_rows": 1,
+        "original_basis_member_row": 82,
+        "current_member_row": 81,
+        "current_source_row": "    CONVERSATION_EVENT_SCHEMA_VERSION,",
+        "current_file_sha256": "d42200928ff89e3f31b0724b0d37ac86e7ab1e8fe90774c50b6960c8795bb08a"
+      },
+      {
+        "path": "tests/test_interactive_controller.py",
+        "symbol": "ConversationEvent",
+        "module": "story_writing_agents.conversations",
+        "physical_credit_rows": 1,
+        "original_basis_member_row": 85,
+        "current_member_row": 84,
+        "current_source_row": "    ConversationEvent,",
+        "current_file_sha256": "d42200928ff89e3f31b0724b0d37ac86e7ab1e8fe90774c50b6960c8795bb08a"
+      },
+      {
+        "path": "tests/test_interactive_controller.py",
+        "symbol": "ConversationEventKind",
+        "module": "story_writing_agents.conversations",
+        "physical_credit_rows": 1,
+        "original_basis_member_row": 86,
+        "current_member_row": 85,
+        "current_source_row": "    ConversationEventKind,",
+        "current_file_sha256": "d42200928ff89e3f31b0724b0d37ac86e7ab1e8fe90774c50b6960c8795bb08a"
+      },
+      {
+        "path": "tests/test_interactive_controller.py",
+        "symbol": "ConversationExistsError",
+        "module": "story_writing_agents.errors",
+        "physical_credit_rows": 1,
+        "original_basis_member_row": 98,
+        "current_member_row": 97,
+        "current_source_row": "    ConversationExistsError,",
+        "current_file_sha256": "d42200928ff89e3f31b0724b0d37ac86e7ab1e8fe90774c50b6960c8795bb08a"
+      },
+      {
+        "path": "tests/test_interactive_controller.py",
+        "symbol": "SessionExistsError",
+        "module": "story_writing_agents.errors",
+        "physical_credit_rows": 1,
+        "original_basis_member_row": 100,
+        "current_member_row": 99,
+        "current_source_row": "    SessionExistsError,",
+        "current_file_sha256": "d42200928ff89e3f31b0724b0d37ac86e7ab1e8fe90774c50b6960c8795bb08a"
+      },
+      {
+        "path": "tests/test_interactive_controller.py",
+        "symbol": "SessionIdError",
+        "module": "story_writing_agents.errors",
+        "physical_credit_rows": 1,
+        "original_basis_member_row": 101,
+        "current_member_row": 100,
+        "current_source_row": "    SessionIdError,",
+        "current_file_sha256": "d42200928ff89e3f31b0724b0d37ac86e7ab1e8fe90774c50b6960c8795bb08a"
+      },
+      {
+        "path": "tests/test_interactive_controller.py",
+        "symbol": "SessionAccessBlockedError",
+        "module": "story_writing_agents.errors",
+        "physical_credit_rows": 1,
+        "original_basis_member_row": 102,
+        "current_member_row": 101,
+        "current_source_row": "    SessionAccessBlockedError,",
+        "current_file_sha256": "d42200928ff89e3f31b0724b0d37ac86e7ab1e8fe90774c50b6960c8795bb08a"
+      },
+      {
+        "path": "tests/test_interactive_controller.py",
+        "symbol": "SessionNotFoundError",
+        "module": "story_writing_agents.errors",
+        "physical_credit_rows": 1,
+        "original_basis_member_row": 103,
+        "current_member_row": 102,
+        "current_source_row": "    SessionNotFoundError,",
+        "current_file_sha256": "d42200928ff89e3f31b0724b0d37ac86e7ab1e8fe90774c50b6960c8795bb08a"
+      },
+      {
+        "path": "tests/test_interactive_controller.py",
+        "symbol": "SessionOwnershipUnknownError",
+        "module": "story_writing_agents.errors",
+        "physical_credit_rows": 1,
+        "original_basis_member_row": 104,
+        "current_member_row": 103,
+        "current_source_row": "    SessionOwnershipUnknownError,",
+        "current_file_sha256": "d42200928ff89e3f31b0724b0d37ac86e7ab1e8fe90774c50b6960c8795bb08a"
+      },
+      {
+        "path": "tests/test_interactive_controller.py",
+        "symbol": "SessionPausedError",
+        "module": "story_writing_agents.errors",
+        "physical_credit_rows": 1,
+        "original_basis_member_row": 105,
+        "current_member_row": 104,
+        "current_source_row": "    SessionPausedError,",
+        "current_file_sha256": "d42200928ff89e3f31b0724b0d37ac86e7ab1e8fe90774c50b6960c8795bb08a"
+      },
+      {
+        "path": "tests/test_interactive_controller.py",
+        "symbol": "WorkspaceFormatError",
+        "module": "story_writing_agents.errors",
+        "physical_credit_rows": 1,
+        "original_basis_member_row": 106,
+        "current_member_row": 105,
+        "current_source_row": "    WorkspaceFormatError,",
+        "current_file_sha256": "d42200928ff89e3f31b0724b0d37ac86e7ab1e8fe90774c50b6960c8795bb08a"
+      },
+      {
+        "path": "tests/test_interactive_controller.py",
+        "symbol": "WorkspaceSecurityError",
+        "module": "story_writing_agents.errors",
+        "physical_credit_rows": 1,
+        "original_basis_member_row": 107,
+        "current_member_row": 106,
+        "current_source_row": "    WorkspaceSecurityError,",
+        "current_file_sha256": "d42200928ff89e3f31b0724b0d37ac86e7ab1e8fe90774c50b6960c8795bb08a"
+      },
+      {
+        "path": "tests/test_interactive_controller.py",
+        "symbol": "WorkspaceVersionUnsupportedError",
+        "module": "story_writing_agents.errors",
+        "physical_credit_rows": 1,
+        "original_basis_member_row": 108,
+        "current_member_row": 107,
+        "current_source_row": "    WorkspaceVersionUnsupportedError,",
+        "current_file_sha256": "d42200928ff89e3f31b0724b0d37ac86e7ab1e8fe90774c50b6960c8795bb08a"
+      },
+      {
+        "path": "tests/test_interactive_controller.py",
+        "symbol": "ReferenceInputFailure",
+        "module": "story_writing_agents.interactive_terminal",
+        "physical_credit_rows": 1,
+        "original_basis_member_row": 135,
+        "current_member_row": 134,
+        "current_source_row": "    ReferenceInputFailure,",
+        "current_file_sha256": "d42200928ff89e3f31b0724b0d37ac86e7ab1e8fe90774c50b6960c8795bb08a"
+      },
+      {
+        "path": "tests/test_interactive_controller.py",
+        "symbol": "ReferenceInputFailureKind",
+        "module": "story_writing_agents.interactive_terminal",
+        "physical_credit_rows": 1,
+        "original_basis_member_row": 136,
+        "current_member_row": 135,
+        "current_source_row": "    ReferenceInputFailureKind,",
+        "current_file_sha256": "d42200928ff89e3f31b0724b0d37ac86e7ab1e8fe90774c50b6960c8795bb08a"
+      },
+      {
+        "path": "tests/test_lead_artifact_application.py",
+        "symbol": "SessionArtifactAccess",
+        "module": "story_writing_agents.workspace.initialization",
+        "physical_credit_rows": 1,
+        "original_basis_member_row": 40,
+        "current_member_row": 40,
+        "current_source_row": "    SessionArtifactAccess,",
+        "current_file_sha256": "aff824bcec09570e8238d6fc131853712edab48f5716fcac0c688f8ccff2aeda"
+      },
+      {
+        "path": "tests/test_lead_artifact_application.py",
+        "symbol": "SessionArtifactBinding",
+        "module": "story_writing_agents.workspace.initialization",
+        "physical_credit_rows": 1,
+        "original_basis_member_row": 41,
+        "current_member_row": 41,
+        "current_source_row": "    SessionArtifactBinding,",
+        "current_file_sha256": "aff824bcec09570e8238d6fc131853712edab48f5716fcac0c688f8ccff2aeda"
+      },
+      {
+        "path": "tests/test_lead_artifact_application.py",
+        "symbol": "SessionArtifactBindingError",
+        "module": "story_writing_agents.workspace.initialization",
+        "physical_credit_rows": 1,
+        "original_basis_member_row": 42,
+        "current_member_row": 42,
+        "current_source_row": "    SessionArtifactBindingError,",
+        "current_file_sha256": "aff824bcec09570e8238d6fc131853712edab48f5716fcac0c688f8ccff2aeda"
+      }
+    ],
+    "prior_allocation_files_checked": [
+      "S13-990-two-credit-allocation.json",
+      "S03-boundmethod-allocation-diagnostic.json",
+      "S07-996-two-credit-allocation.json",
+      "S13-991-two-credit-allocation.json",
+      "S07-999-two-credit-allocation.json",
+      "S06-988-reserved-local-credit-allocation-e7.json"
+    ],
+    "evidence": {
+      "test_preflight": "cbd143ecb01022bc40529fa411400aa3203b16fe7f0268f524649b428811c2d4",
+      "additional3_census": "f57f41ed1c61cd94f71debd04d820bbf8106d24f377e489aff3bd616d9ee3a09",
+      "supplement": "60141a4cfa13085fca084f949a3739c2592ac6b23fb0e03e40ecc1731b631bc0"
+    },
+    "side_effect_limits": "기존 unused binding23개만삭제. 원래owner의이미eager인실제Sibling import를유지하여모듈최초초기화/등록/I/O/설정/GC동작제거를하지않는다. arbitrary외부introspection보장은아니다.",
+    "at_utc": "2026-11-11T12:28:36.286790+00:00"
+  },
+  "after_verification_required": "구현 후 실제Case/fixture/cap/charge/그래프 및 같은오류RED/GREEN·정상반복·최신main전체CI를확인한다. 이문서전용계획은실제통과가아니다."
+}
