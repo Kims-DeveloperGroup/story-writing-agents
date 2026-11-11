@@ -3,7 +3,7 @@
   "parent": 975,
   "root_parent": 962,
   "accepted_base": "e0381a122153bb3944b83395a86f048a9141c98e",
-  "status": "구현 전 이동 계획",
+  "status": "기존 함수와 실제 소비자 및 테스트 소유자 이동 완료, 호스팅 검증 중",
   "source": "src/story_writing_agents/structured_output_validation.py",
   "owner": "src/story_writing_agents/provider_schema_patterns.py",
   "purpose": "엄격한 정규식 끝 처리와 유니코드 범위의 순수 소유자 분리",
@@ -54,5 +54,69 @@
     "기존 초기화 시점의 실제 Unicode range 생성 유지",
     "runtime 기능·알고리즘 변경 없음",
     "문서 Draft를 실제 구현 전에 생성"
-  ]
+  ],
+  "production": {
+    "owner_rows": 134,
+    "index_rows": 300,
+    "source_sha256": {
+      "src/story_writing_agents/structured_output_validation.py": "05a6028b8c159cc82ac58e7d1cdcf779e413c9efa36a2c022c355fba590ae429",
+      "src/story_writing_agents/provider_schema_patterns.py": "843e5a57f0b5e664b583a30479c12bd970e7c879379f600aded0ae7321febadf",
+      "src/story_writing_agents/agent_context/actions.py": "66569aaba937f6ee90b6aa715166e8b13c31debe7f21fc7b02f8d71420a501ba",
+      "src/story_writing_agents/specialist_routing.py": "6fba9a0ab7fbbcb580bfaa6567f66688101ddd968a87a210b3f27557342af40e",
+      "src/story_writing_agents/lead_provider_contracts.py": "2f609225dba46d5980bb562a6d2cc6b7ec7536278cd0de81d3b85bd6ca5155c2",
+      "PYTHON_MODULE_INDEX.md": "f8dda5eaa78427cb285bf31d93b2a9bec3ef9ff0a52ce58cdc3286652d61ce58"
+    },
+    "modules": 231,
+    "complete_edges": 1164,
+    "controller_edges": 1154,
+    "relative_only_edges": 1163,
+    "nontrivial_cycles": 0,
+    "retained_recursive_code_pairs": 997,
+    "retained_runtime_name_loads": 5580,
+    "retained_annotation_expressions": 1258,
+    "remaining_global_binding_audit": "누락 없음"
+  },
+  "test_preservation": {
+    "existing_cases": 2544,
+    "class_groups": 389,
+    "local_cases": 0,
+    "effective_source_charge": 151431,
+    "test_sha256": {
+      "tests/test_artifact_application_contracts.py": "165957048a0ad2bdbd2f3f6c0528a3a6d1bd9506251752c961fb9f752e833805",
+      "tests/test_artifact_application_store_recovery.py": "e522ace65327bd161f1884feff1781cb67bcd6fddd43428462d746c83b092fd8",
+      "tests/test_artifact_relationship_policy.py": "e701480bfa4f231f32a24728492648fce8760bec7ef0c9f37358ec1c06c7833c",
+      "tests/test_git_external_operation_inspection.py": "0cbd68a1b6c8b6d4172b4d5cc862b972368eab169cd1dc6f37b83fcae88e8e26",
+      "tests/test_rag_module_and_packaging_boundary.py": "e83f77b60d1ce10260391d2064001631a4641f95283a18ea96039090328e497f",
+      "tests/test_interactive_controller.py": "3ddf89bb0b76328b32e8939c06931765a238d37d16dc44ae8c2300bd05367ea9",
+      "tests/test_session_recovery_contracts.py": "93b7c5feb1f4dfb5dff0b8ee43b585cc015079766b4162034926c8f4aaf86f1f",
+      "tests/test_workspace_session_history.py": "3d809feb8f804f89d008a9fe6c2abd1f883381264fd1a0b189d1b17e5980850a",
+      "tests/test_session_lifecycle.py": "ce145f2690a648636ebf038f1e65b39e8f9667e3b22a297cd712543979401399",
+      "tests/agent_context/contracts/test_result_validation.py": "0c76a9fbc92bc69b00b43d29f14b543742c50448b522aee1a329236f79d73f42",
+      "tests/test_consensus_projection.py": "61f3354510b7869a908d5758ead25488d1c90b5d018ecd58553ca50d5afe1608",
+      "tests/fixtures/test_owners_v1.json": "b0a2df621aab82810e1f8b391f3fbfabd1f66a174d6403ca5895f32d4da49409"
+    },
+    "gross_added_counted_rows": 2,
+    "independent_removed_unused_alias_rows": 2,
+    "input_assertion_subtest_caps_weights_preserved": true
+  },
+  "before_validation": {
+    "normal_run": 42944031458,
+    "normal_attempts": [
+      1,
+      2,
+      3
+    ],
+    "passed_each": 2,
+    "red_run": 42944073983,
+    "selected": 1,
+    "failures": 1,
+    "errors": 0,
+    "fingerprint": "AssertionError: True != False : 'a\\n'"
+  },
+  "additional_independent_credit": {
+    "path": "tests/test_interactive_controller.py",
+    "symbol": "ConversationCitation",
+    "line_on_accepted_base": 47,
+    "purpose": "기존 사용 중인 eager import와 모든 Case를 유지하며 독립 unused 별칭 한 행을 제거해 RAG 기대 경로 한 행을 상쇄"
+  }
 }

@@ -12,10 +12,10 @@ import re
 import unicodedata
 from ..structured_output_validation import (
     SCHEMA_PYTHON_WHITESPACE,
-    unicode_scalar_classes,
     validation_failure,
     validation_call,
 )
+from ..provider_schema_patterns import unicode_scalar_classes
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
