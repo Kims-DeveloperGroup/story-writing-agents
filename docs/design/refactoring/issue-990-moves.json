@@ -1,0 +1,146 @@
+{
+  "issue": 990,
+  "parent": 975,
+  "root_parent": 962,
+  "accepted_base": "28dfbf569e0157fbbe51a6c2b1a56b9827f534bc",
+  "status": "현재 main 통합 후 코드 동결 시점의 정적 기록",
+  "owner": "src/story_writing_agents/provider_schema_selection.py",
+  "moves": [
+    "SchemaSelectionInput",
+    "LEAD_GROUP_PHASE_GUIDES"
+  ],
+  "consumers": [
+    "provider_wire",
+    "agent_context.contracts.bound_call",
+    "agent_context.invocation.delivery",
+    "agent_context.invocation.group_payload"
+  ],
+  "constraints": [
+    "동작·예외·검증 순서·불변성·카탈로그와 현재 호출 상관 보존",
+    "기존 Case·입력·assertion·fixture·실행 수명 보존",
+    "신규 Case 추가 없음, 실제 회귀 금지, 미세 측정 오차는 승인된 화면 기준으로 조사"
+  ],
+  "test_budget": {
+    "issue": 990,
+    "gross_rows": 2,
+    "credits": [
+      {
+        "path": "tests/test_consensus_story_runtime_bridge.py",
+        "alias": "ConsensusContinuation"
+      },
+      {
+        "path": "tests/test_interactive_controller.py",
+        "alias": "ConversationSearchHit"
+      }
+    ],
+    "not_reused_by": [
+      983,
+      988,
+      991
+    ],
+    "source_charge": 151431,
+    "test_scenario_change": 0
+  },
+  "verification_status": "이전 HEAD의 정상·같은 오류·그래프는 보존, 공개 값 연결 교정 후 같은 기존 영향 테스트와 최종 HEAD 전체 CI·성능·관리 리뷰 미완료",
+  "draft_pr": 995,
+  "draft_created_at": "2026-11-11T02:57:09Z",
+  "diagnostic_before": {
+    "run": 42949682683,
+    "expected_errors": 1,
+    "expected_failures": 0,
+    "fingerprint": "RuntimeError: schema_selection is not a closed current input",
+    "normal_code_mutation": false
+  },
+  "production": {
+    "owner_rows": 119,
+    "original_body_rows": 106,
+    "class_decorator_rows": 1,
+    "graphs": {
+      "modules": 231,
+      "full_edges": 1163,
+      "controller_edges": 1153,
+      "relative_edges": 1162,
+      "cycles": 0
+    },
+    "retained_code_pairs": 277,
+    "retained_global_loads": 1234,
+    "retained_annotations": 392,
+    "new_missing_globals": 0,
+    "type_hint_checks": 116,
+    "type_hint_errors": 0,
+    "import_lowering_sites": 3,
+    "source_sha256": {
+      "src/story_writing_agents/provider_wire.py": "3605f9909c70d414723fd254ff1081cd855b2ac5d511cc1c9f1e4265d8cae856",
+      "src/story_writing_agents/agent_context/contracts/bound_call.py": "ec1e3fa3ed38335bf29af2105fcfb2fd171494ddec001ba92807eba6e8d662dc",
+      "src/story_writing_agents/agent_context/invocation/delivery.py": "2f9089917046758d04377a58e15e6e9a31b639de235cee6bee09b66c18b0b997",
+      "src/story_writing_agents/agent_context/invocation/group_payload.py": "bed61c640f853db0aa29033962a97eb3da897929c087639e28ad5c3a505029ee",
+      "src/story_writing_agents/provider_schema_selection.py": "cc9d00af0c61a51806e3d07d6128978a79ccf5adff16a0545c855356192355a3",
+      "PYTHON_MODULE_INDEX.md": "83a5ba1e26c8e9c5b5a1aa1142f7aa1099d1e0c49536aecf871b9fb7ec00121c"
+    }
+  },
+  "test_preservation": {
+    "fresh_ids": 2544,
+    "class_groups": 389,
+    "source_charge": 151431,
+    "cases_added": 0,
+    "assertions_inputs_fixtures_lifetimes_preserved": true,
+    "focused_count": 1,
+    "expanded_count": 3,
+    "affected_full": true
+  },
+  "before_validation": {
+    "normal_run": 42949679819,
+    "attempts": [
+      1,
+      2,
+      3
+    ],
+    "passed_each": 3,
+    "red_run": 42949682683,
+    "red_errors": 1,
+    "red_failures": 0,
+    "red_fingerprint": "RuntimeError: schema_selection is not a closed current input"
+  },
+  "public_facade_correction": {
+    "previous_head": "1cedb97a3f51ae174b5ad4d1ceffb4fe9b40fa76",
+    "old_import_lowering_sites": 3,
+    "preserved_original_host_opcode_streams": 173,
+    "private_initialization_bindings": 2,
+    "module_initialization_assignments": 2,
+    "per_call_wrapper_frames_added": 0,
+    "source_sha256": "3605f9909c70d414723fd254ff1081cd855b2ac5d511cc1c9f1e4265d8cae856",
+    "objects_annotations_and_graphs_unchanged": true,
+    "performance_cause_not_claimed": true,
+    "before_normal_wall_median": 153.025479044,
+    "old_after_normal_wall_median": 157.72432073099998,
+    "old_matched_lifecycle_delta": 0.22623459900006537,
+    "old_matched_lifecycle_band": 0.10742175441000029,
+    "old_results_retained": true,
+    "current_measurements_pending": true
+  },
+  "original_accepted_base": "e0381a122153bb3944b83395a86f048a9141c98e",
+  "current_merge_snapshot": {
+    "prior_optimized_head": "bab4bc4a54f0dd4f7552724da9da874d003e309a",
+    "incoming_main": "28dfbf569e0157fbbe51a6c2b1a56b9827f534bc",
+    "source_union": "기존bab4최적화5source와현재main source의byte정확합집합",
+    "source_files": 234,
+    "index_rows": 300,
+    "modules": 234,
+    "full_edges": 1186,
+    "controller_edges": 1173,
+    "relative_edges": 1184,
+    "nontrivial_cycles": 0,
+    "Cases": 2544,
+    "classes": 389,
+    "fixtures": 65,
+    "test_lines": 148450,
+    "counted_support": 1431,
+    "legacy_reserved": 1550,
+    "source_charge": 151431,
+    "local_Case_Suite_runs": 0,
+    "test_freeze_sha256": "6fd563a893eeeda9daa1022ae332496fa296ae1f4420f4057c8b4d90f420e039",
+    "production_index_freeze_sha256": "c253ea5a98501dab36503a1281950c3a7f0de0f61303a0ce2517267d4c81293e",
+    "native_plan_sha256": "b37a4f3b599b97efd5c7be46870a1c499cb19e4bfc056350e16624f9c106871e"
+  },
+  "current_verification_handoff": "이 snapshot은실제호스팅전정적기록이다. 현재main의문서전용baseline과병합후HEAD에서기존3Case반복·같은실제RED·경계10개·최종전체CI/시간·관리리뷰를확인한다. 과거e038/1ced실패/고친bab4자료는역사적자료로보존하고현재통과로대체하지않는다."
+}

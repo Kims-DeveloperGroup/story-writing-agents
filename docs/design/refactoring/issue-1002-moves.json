@@ -1549,5 +1549,49 @@
     "new_Cases_or_assertions_or_rows": 0,
     "same_scenarios_preserved": true,
     "next": "실패한 기존 packaging Case와 같은 oracle의 기존 wheel/editable Case를 포함한 graph11 hosted 재검증; 실제 통과 전 완료로 판단하지 않는다."
+  },
+  "current_main_merge_static_snapshot": {
+    "accepted_main": "c3ffd74cbd965166cf955e7271408330b9bdd097",
+    "prior_head": "5697417d0e13c884e83b65e9b376d28fbf6a885c",
+    "native_plan_sha256": "be5584a4f5ca6a99dfe13ea30b1f1c943ba778ebfb846259a25e5d7126291aa4",
+    "test_freeze_sha256": "46c8ac6c7701bb00ce2dbac816df85e60dbec7fa312386a81067256bfa375eef",
+    "source235_index_and_all302_test_hashes_exact": true,
+    "graphs": {
+      "modules": 235,
+      "complete_edges": 1191,
+      "Controller_edges": 1178,
+      "relative_edges": 1189,
+      "cyclic_SCCs": 0
+    },
+    "Cases": 2544,
+    "classes": 389,
+    "fixtures": 65,
+    "caps_weights_receipts_lifetimes_preserved": true,
+    "budget": {
+      "actual_charge": {
+        "test_lines": 148448,
+        "support_lines": 1431,
+        "legacy_lines": 1550,
+        "effective_lines": 151429
+      },
+      "cap": 151431,
+      "headroom": 2,
+      "unchanged_legacy1550": true,
+      "no_ledger_policy_counter_partial_line_exception_or_support_scope_change": true,
+      "own_credits23": "Controller20 + LeadArtifact SessionArtifactAccess/Binding/BindingError3 기존 공제 유지",
+      "incoming_990_credits2": "SearchHit/ConsensusContinuation 기존 공제 유지, 재회수0",
+      "future996_999_credits_not_used": "MatchKind/Query/Result/Scope import4개를 그대로 보존",
+      "headroom2_reserved_only_for_future1004": "#1002 통합 후 실제 확보 확인이 조건이며 다른 scope 가용 credit이 아니다. #1004 구현 승인/현재 main 가용이라는 주장을 하지 않는다.",
+      "existing_legacy_literal_tuple_layout": "원래 helper37 literal을97/37로 분할한 tuple header2는 이전 root 계상결정대로 남으며1550/whole-file counted 지원목록은 바꾸지 않았다."
+    },
+    "declared_owners": 247,
+    "owner_map_test_modules": 184,
+    "focused": 1,
+    "expanded": 6,
+    "graph_packaging": 11,
+    "affected_full": 2544,
+    "embedded_oracle2_preserved": true,
+    "local_Case_Suite_runs": 0,
+    "current_hosted_after_full_review": "미실행: 정적 결과를 현재 기능·성능 성공으로 대신하지 않는다."
   }
 }

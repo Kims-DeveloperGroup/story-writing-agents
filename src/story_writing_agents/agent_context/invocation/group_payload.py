@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+from ...provider_schema_selection import SchemaSelectionInput
 from ...provider_wire import (
-    SchemaSelectionInput,
     add_contract_guidance,
     project_context_payload,
 )
