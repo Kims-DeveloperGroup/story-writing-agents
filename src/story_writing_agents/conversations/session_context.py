@@ -41,7 +41,6 @@ from .events import (
     CollaborationMessagePayload,
     CollaborationConfirmationPayload,
     CollaborationExecutionResult,
-    CollaborationExecutionOutcomeKind,
     CollaborationStepStatePayload,
     ArtifactApplicationDecisionPayload, ArtifactApplicationRequestPayload,
     ArtifactApplicationResultPayload, ArtifactReviewCandidatePayload,
@@ -65,6 +64,9 @@ from .events import (
     CollaborationPremiseDecisionPayload,
     CollaborationPremiseFreshWorkAdmissionPayload,
     CollaborationPremiseSelectionPayload,
+)
+from .event_vocabulary import (
+    CollaborationExecutionOutcomeKind,
     CollaborationSpecialistAssessment,
 )
 from ..writing_artifacts.change_sets import (

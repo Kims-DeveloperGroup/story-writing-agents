@@ -3,13 +3,13 @@
   "issue": 1002,
   "parent": 970,
   "root_parent": 962,
-  "phase": "구현 전 Draft 계획",
+  "phase": "구현 동결 및 hosted 검증 준비",
   "accepted_main": "28dfbf569e0157fbbe51a6c2b1a56b9827f534bc",
-  "native_plan_sha256": "620e448ee030914cb71334f06aaa9717e30d926729dabf7f8620c035dbe20927",
+  "native_plan_sha256": "c2e96fb5cb0425a3c6c5bc4894bc0547a939d075335ab44f0040b1e790aaa1f9",
   "source_preflight_sha256": "d57b012e2ece2bf52cd33e4594beca39473cfc85269e919eae4f788c2909eac7",
   "test_preflight_sha256": "cbd143ecb01022bc40529fa411400aa3203b16fe7f0268f524649b428811c2d4",
   "credit_allocation_sha256": "497c74f8f175420e28979e1029c6cfd6926d94a0167763a9991447b03ded7538",
-  "source_or_test_implementation": false,
+  "source_or_test_implementation": true,
   "local_Case_Suite_runs": 0,
   "moves": [
     {
@@ -1418,5 +1418,111 @@
     "side_effect_limits": "기존 unused binding23개만삭제. 원래owner의이미eager인실제Sibling import를유지하여모듈최초초기화/등록/I/O/설정/GC동작제거를하지않는다. arbitrary외부introspection보장은아니다.",
     "at_utc": "2026-11-11T12:28:36.286790+00:00"
   },
-  "after_verification_required": "구현 후 실제Case/fixture/cap/charge/그래프 및 같은오류RED/GREEN·정상반복·최신main전체CI를확인한다. 이문서전용계획은실제통과가아니다."
+  "after_verification_required": "구현 후 실제Case/fixture/cap/charge/그래프 및 같은오류RED/GREEN·정상반복·최신main전체CI를확인한다. 이문서전용계획은실제통과가아니다.",
+  "implementation_static_snapshot": {
+    "accepted_main": "28dfbf569e0157fbbe51a6c2b1a56b9827f534bc",
+    "production_freeze_sha256": "dc2b890019d1cb1e98b2af8f7be507b12b4ae0d09293e3d9e08cc7e89bcaa2c6",
+    "test_freeze_sha256": "a211a51c62c29a72f8054ab520620166ff3d5a26aee75a47bc53ee01b8641060",
+    "actual_graph": {
+      "actual_modules": 234,
+      "actual_complete_edges": 1188,
+      "actual_Controller_edges": 1175,
+      "actual_relative_only_edges": 1186,
+      "cyclic_back_edges": 0,
+      "existing_resolvers_unchanged": true,
+      "numeric_graph_Constants": 17,
+      "new_exact_outgoing_dependency_members": 3,
+      "old_UI11_DTO_events_import_retained": [
+        {
+          "module": "conversations.events",
+          "level": 2,
+          "names": [
+            "ArtifactReviewCandidatePayload",
+            "ArtifactReviewedProposal",
+            "ArtifactReviewSynthesisPayload",
+            "CollaborationAssignmentDispatchPayload",
+            "CollaborationEvent",
+            "CollaborationLeadJudgmentPayload",
+            "CollaborationLeadPublicResponsePayload",
+            "CollaborationLeadSynthesisPayload",
+            "CollaborationProposal",
+            "CollaborationProviderCallPayload",
+            "CollaborationSpecialistReplyPayload"
+          ]
+        },
+        {
+          "module": "conversations.event_vocabulary",
+          "level": 2,
+          "names": [
+            "CollaborationProviderCallState"
+          ]
+        }
+      ],
+      "RAG_existing_pure_equalities47_matched": true,
+      "packaging_existing_wheel_sdist_byte_path_added": 1
+    },
+    "case_and_fixture_preservation": {
+      "actual_fresh_canonical_Cases": 2544,
+      "class_groups": 389,
+      "actual_ordered_IDs_equal_frozen_inventory": true,
+      "manifest_digest": "sha256:86aca048edf3744d5bdf317ccebf94de95406aa509747ab3b27ddd1c5d7a0417",
+      "fixture65_case_data_budget_weights_receipts_ledger_bytes_unchanged": true,
+      "finite_inverse_whole_module_AST_proofs13": true,
+      "new_cases_scenarios_skips_cap_values_weight_values_fixture_lifetime_or_ID_rekeys": 0,
+      "enum_minimum27types170values_AST_unchanged": true,
+      "remaining10types45values_not_claimed_exhaustively_runtime_covered": true,
+      "wire_golden_original_method_and_literals_unchanged": true,
+      "source_helper7_Enum_owner_qualifications_only": "seed_reviewed_artifact retains original async declaration, callsites, state, locks/lifecycle and all values; same row import adds real vocabulary binding",
+      "original_unknown_source_helpers_not_moved_or_newly_excluded": true
+    },
+    "accounting": {
+      "cap_unchanged": 151431,
+      "actual_counted_test_lines": 148448,
+      "actual_counted_support_lines": 1431,
+      "legacy_reserved_unchanged": 1550,
+      "actual_effective_lines": 151429,
+      "actual_headroom": 2,
+      "actual_charged_gross_new_rows": 21,
+      "exact_root_allocated_unused_import_rows_removed": 23,
+      "new_charged_net": -2,
+      "original_helper_data_tuple_header_rows_not_claimed_counted_support": 2,
+      "noncomment_nonblank_physical_layout_net": 0,
+      "root_accounting_decision": {
+        "issue": 1002,
+        "pr": 1003,
+        "scope_expansion": false,
+        "ledger_or_policy_code_change": false,
+        "cap": 151431,
+        "legacy_reserved_unchanged": 1550,
+        "prior_physical_gross": 23,
+        "actual_charged_gross": 21,
+        "existing_legacy_data_layout_rows": 2,
+        "exact_unused_credit_rows": 23,
+        "projected_actual_charged_total": 151429,
+        "projected_headroom": 2,
+        "physical_delta": 0,
+        "new_case": false,
+        "logic_externalization": false,
+        "data_move_only": "기존37개literal행을원래helper에서한번씩97/37tuple로분할;새검증은기존testCase안에보존",
+        "original_credit_allocation_sha256": "497c74f8f175420e28979e1029c6cfd6926d94a0167763a9991447b03ded7538",
+        "native_plan_before_sha256": "620e448ee030914cb71334f06aaa9717e30d926729dabf7f8620c035dbe20927",
+        "native_plan_after_sha256": "c2e96fb5cb0425a3c6c5bc4894bc0547a939d075335ab44f0040b1e790aaa1f9",
+        "next": "기존계상도구의actual151429와원래Case/cap/fixtures/소스hash를구현후검증",
+        "at_utc": "2026-11-11T13:08:21.191787+00:00"
+      },
+      "ledger_policy_counting_code_and_whole_file_support_list_unchanged": true,
+      "row_compression_new_partial_line_exception_logic_externalization": false,
+      "source_model_initial_assumption_corrected": "The initial preflight incorrectly described existing helper header rows as counted support. Root explicitly corrected classification, leaving actual tool151429 and old rules unchanged."
+    },
+    "runtime_evidence_limits": [
+      "Existing4 owner-family subTests now prepare five actual source files and retain separate definitions/expected results. This adds one read/AST parse and fresh short per-family lists; no zero-work/allocation/timing claim.",
+      "Existing metadata identity/name domains are partitioned across97/37 real owners. Enum construction/facade eager initialization remains a runtime cost observed only by root hosted runs.",
+      "Pure codec/enum/header tests do not certify append/history/replay/restart/authority boundaries; full CI remains required.",
+      "No local runtime skip totals, failure fingerprint, GREEN or performance certificate inferred from static/collection results. Root retains actual beforeGREEN43022593332, actual enum RED43022623085 and normal6×3 evidence.",
+      "The two helper header rows are an existing legacy data layout change outside the unchanged automated file list; they are not reported as counted support or used to claim151431.",
+      "Independent static definition and pure graph inventories do not execute any Case/subTest/assertion methods."
+    ],
+    "local_Case_Suite_runs": 0,
+    "hosted_after_and_full_CI": "미실행: 이 정적 기록은 기능·성능 통과가 아니다."
+  }
 }
