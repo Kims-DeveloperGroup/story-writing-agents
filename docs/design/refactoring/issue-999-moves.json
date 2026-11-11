@@ -1,0 +1,364 @@
+{
+  "schema_version": 1,
+  "issue": 999,
+  "parent": 969,
+  "phase": "구현 전 Draft",
+  "base": "26373d4a44b351b9bf27dfd7b9c46b627b17b772",
+  "source": "src/story_writing_agents/antigravity_adapter.py",
+  "source_sha256": "9748da9cf159f484478c9401ead4dd6623ded803e0115d1b8031e9af76bfd782",
+  "owner": "src/story_writing_agents/antigravity_response_decoding.py",
+  "definitions": [
+    {
+      "old": "_DuplicateField",
+      "new_name": "_DuplicateField",
+      "public": false,
+      "span": [
+        113,
+        114
+      ],
+      "body_rows": 2,
+      "original_decorators": [],
+      "AST_sha256": "f23524fccd8ec832414cb8a4d8c4d93416394070ff79ad19924e746d41458451",
+      "source_sha256": "235e9f4ede85a6639c46f05d057dc9b8941941777e4c4a5dc7a4e15e58406ae5",
+      "signature": null,
+      "return_annotation": null,
+      "runtime_and_annotation_NameLoads": [
+        "ValueError"
+      ]
+    },
+    {
+      "old": "_reject_duplicate_fields",
+      "new_name": "reject_duplicate_fields",
+      "public": true,
+      "span": [
+        117,
+        125
+      ],
+      "body_rows": 9,
+      "original_decorators": [],
+      "AST_sha256": "aaf23b3f136e74f2fe7353e0166bb3a5fa8c7514540aa3cc680ec13087a9f843",
+      "source_sha256": "6d7391a9f86994f02c9a017721cc52d804e5e3d2397bf289c475e14a0b9d09b3",
+      "signature": "pairs: list[tuple[str, Any]]",
+      "return_annotation": "dict[str, Any]",
+      "runtime_and_annotation_NameLoads": [
+        "Any",
+        "_DuplicateField",
+        "dict",
+        "item",
+        "key",
+        "list",
+        "pairs",
+        "str",
+        "tuple",
+        "value"
+      ]
+    },
+    {
+      "old": "_reject_constant",
+      "new_name": "reject_constant",
+      "public": true,
+      "span": [
+        128,
+        129
+      ],
+      "body_rows": 2,
+      "original_decorators": [],
+      "AST_sha256": "36234eb1e12aeca5bbd52de81146f697c47867d076163a28c04cbbeff20f05d2",
+      "source_sha256": "2479814604accf496cca7fc9087e0c50f09cdd544246df57abf451d83c88a2b9",
+      "signature": "_value: str",
+      "return_annotation": "None",
+      "runtime_and_annotation_NameLoads": [
+        "ValueError",
+        "str"
+      ]
+    },
+    {
+      "old": "_finite_float",
+      "new_name": "finite_float",
+      "public": true,
+      "span": [
+        132,
+        136
+      ],
+      "body_rows": 5,
+      "original_decorators": [],
+      "AST_sha256": "32c1209491a21ba053b49c31ae16e70c10e267590687cc3c7cd77ab35f766c10",
+      "source_sha256": "eb414f94c38cfb9c13532d972bab18eb6272670a4945a59047ffa4583a43f7df",
+      "signature": "value: str",
+      "return_annotation": "float",
+      "runtime_and_annotation_NameLoads": [
+        "ValueError",
+        "float",
+        "math",
+        "number",
+        "str",
+        "value"
+      ]
+    },
+    {
+      "old": "AntigravityAdapter._parse_result",
+      "new_name": "parse_result",
+      "public": true,
+      "span": [
+        2385,
+        2419
+      ],
+      "body_rows": 35,
+      "original_decorators": [
+        "staticmethod"
+      ],
+      "AST_sha256": "02a83003e1da2bb464bc3cc3af66d54bbfd0ac90fe18122b47a95e6d845aa5cb",
+      "source_sha256": "040d65f7dea5afb54ed76193bea39f9e226166176be7f195890c6b125d3811b0",
+      "signature": "stdout: bytes",
+      "return_annotation": "dict[str, Any]",
+      "runtime_and_annotation_NameLoads": [
+        "Any",
+        "ProviderInvocationError",
+        "RecursionError",
+        "UnicodeDecodeError",
+        "UnicodeError",
+        "ValueError",
+        "_finite_float",
+        "_reject_constant",
+        "_reject_duplicate_fields",
+        "bytes",
+        "dict",
+        "invalid_utf8",
+        "json",
+        "malformed",
+        "staticmethod",
+        "stdout",
+        "str",
+        "text",
+        "type",
+        "value"
+      ]
+    },
+    {
+      "old": "AntigravityAdapter._malformed_output",
+      "new_name": "malformed_output",
+      "public": true,
+      "span": [
+        2422,
+        2426
+      ],
+      "body_rows": 5,
+      "original_decorators": [
+        "staticmethod"
+      ],
+      "AST_sha256": "22ee7f60677266d67ef6545e5f7224314326c643cf88cd0012c0beebd60ec0b0",
+      "source_sha256": "f4c32280fc71485efd2851163a94800347eba385ab4260ebced55f25937a308e",
+      "signature": "",
+      "return_annotation": "None",
+      "runtime_and_annotation_NameLoads": [
+        "ProviderInvocationError",
+        "staticmethod"
+      ]
+    }
+  ],
+  "original_body_rows": 58,
+  "host_import_AST": {
+    "kind": "ImportFrom",
+    "level": 1,
+    "module": "antigravity_response_decoding",
+    "aliases": [
+      {
+        "name": "reject_duplicate_fields",
+        "asname": "_reject_duplicate_fields"
+      },
+      {
+        "name": "reject_constant",
+        "asname": "_reject_constant"
+      },
+      {
+        "name": "finite_float",
+        "asname": "_finite_float"
+      },
+      {
+        "name": "parse_result",
+        "asname": "_decode_antigravity_response"
+      },
+      {
+        "name": "malformed_output",
+        "asname": "_raise_antigravity_malformed_output"
+      }
+    ]
+  },
+  "class_slot_initialization": [
+    {
+      "old_method": "AntigravityAdapter._parse_result",
+      "at_old_definition_position": true,
+      "expression": "_parse_result = staticmethod(_decode_antigravity_response)"
+    },
+    {
+      "old_method": "AntigravityAdapter._malformed_output",
+      "at_old_definition_position": true,
+      "expression": "_malformed_output = staticmethod(_raise_antigravity_malformed_output)"
+    }
+  ],
+  "projected_graphs": {
+    "complete": {
+      "actual_immutable_baseline_modules": 231,
+      "actual_immutable_baseline_edges": 1164,
+      "baseline_cyclic_components": 0,
+      "projected_modules": 232,
+      "projected_edges": 1166,
+      "projected_cyclic_components": 0,
+      "added_edges": [
+        [
+          "story_writing_agents.antigravity_adapter",
+          "story_writing_agents.antigravity_response_decoding"
+        ],
+        [
+          "story_writing_agents.antigravity_response_decoding",
+          "story_writing_agents.provider_adapter"
+        ]
+      ],
+      "removed_edges": []
+    },
+    "controller": {
+      "actual_immutable_baseline_modules": 231,
+      "actual_immutable_baseline_edges": 1153,
+      "baseline_cyclic_components": 0,
+      "projected_modules": 232,
+      "projected_edges": 1155,
+      "projected_cyclic_components": 0,
+      "added_edges": [
+        [
+          "story_writing_agents.antigravity_adapter",
+          "story_writing_agents.antigravity_response_decoding"
+        ],
+        [
+          "story_writing_agents.antigravity_response_decoding",
+          "story_writing_agents.provider_adapter"
+        ]
+      ],
+      "removed_edges": []
+    },
+    "relative": {
+      "actual_immutable_baseline_modules": 231,
+      "actual_immutable_baseline_edges": 1162,
+      "baseline_cyclic_components": 0,
+      "projected_modules": 232,
+      "projected_edges": 1164,
+      "projected_cyclic_components": 0,
+      "added_edges": [
+        [
+          "antigravity_adapter",
+          "antigravity_response_decoding"
+        ],
+        [
+          "antigravity_response_decoding",
+          "provider_adapter"
+        ]
+      ],
+      "removed_edges": []
+    }
+  },
+  "source_preflight": "e820ae52aa854304d5d096ee218932071aa9c504c66d4d80ce61e4f8eb6bb9d7",
+  "import_position_note": "ea9ca690ce9dd8c2929ebb32a79949faecf0eaa1733220da040e8e74fbfa2871",
+  "Case_runs": 0,
+  "behavior_change": false,
+  "focused_ids": [
+    "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_strictly_rejects_duplicate_fields_in_streamed_result",
+    "tests.test_antigravity_adapter.AntigravityAdapterTests.test_identifier_and_json_failures_are_fixed_and_confidential"
+  ],
+  "minimum_complete_leaf_direct_id": "tests.test_antigravity_adapter.AntigravityAdapterTests.test_identifier_and_json_failures_are_fixed_and_confidential",
+  "same_error_actual_invoke_RED_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_strictly_rejects_duplicate_fields_in_streamed_result",
+  "expanded_ids": [
+    "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_streams_events_and_parses_stream_json",
+    "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_strictly_rejects_duplicate_fields_in_streamed_result",
+    "tests.test_antigravity_adapter.AntigravityAdapterTests.test_command_stdin_paths_and_fresh_resume_results_are_exact",
+    "tests.test_antigravity_adapter.AntigravityAdapterTests.test_completed_failures_retain_exact_native_diagnostic_and_accounting",
+    "tests.test_antigravity_adapter.AntigravityAdapterTests.test_identifier_and_json_failures_are_fixed_and_confidential"
+  ],
+  "expanded_count": 5,
+  "existing_subtest_caps": {
+    "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_streams_events_and_parses_stream_json": 0,
+    "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_strictly_rejects_duplicate_fields_in_streamed_result": 0,
+    "tests.test_antigravity_adapter.AntigravityAdapterTests.test_command_stdin_paths_and_fresh_resume_results_are_exact": 0,
+    "tests.test_antigravity_adapter.AntigravityAdapterTests.test_completed_failures_retain_exact_native_diagnostic_and_accounting": 6,
+    "tests.test_antigravity_adapter.AntigravityAdapterTests.test_identifier_and_json_failures_are_fixed_and_confidential": 22
+  },
+  "affected_full": true,
+  "depends_on": [],
+  "depends_on_reason": "실제 leaf의 유일한 내부 의존 provider_adapter.py는 main263 owner manifest에 등록 owner가 없음; 이름을 발명하지 않음.",
+  "scope_limit": "native/state/recovery 전체 영향 격리를 주장하지 않으며 affected는2544 전체검증으로 유지.",
+  "test_preflight_sha256": "efcc18784429760e00ebab53b4825859941b84dace0e4ebc3bb60cffd6fb19dd",
+  "test_source_budget": {
+    "issue": 999,
+    "base": "26373d4a44b351b9bf27dfd7b9c46b627b17b772",
+    "allocated_by": "root",
+    "at_utc": "2026-11-11T07:48:20.964569+00:00",
+    "path": "tests/test_interactive_controller.py",
+    "aliases": [
+      "ConversationSearchResult",
+      "ConversationSearchScope"
+    ],
+    "credit_rows": 2,
+    "positive_rows": 2,
+    "net_rows": 0,
+    "budget": 151431,
+    "proof_sha256": "d6bf2b5c518a8ef776d58a39a0d69551916cc93fd9a8bacbae777251e5605520",
+    "existing_reservation_native_plan_readback": [
+      {
+        "issue": 983,
+        "body_sha256": "87488a05c2353240c188d90fcbe92babb680684efec68d11a97ad7dcc77bd45f",
+        "candidate_credit_mentions": {
+          "ConversationSearchResult": 0,
+          "ConversationSearchScope": 0
+        }
+      },
+      {
+        "issue": 984,
+        "body_sha256": "6cdee59efa375421df9e986832fbcbd3705ec330d1e4d3a618011de3b687f426",
+        "candidate_credit_mentions": {
+          "ConversationSearchResult": 0,
+          "ConversationSearchScope": 0
+        }
+      },
+      {
+        "issue": 985,
+        "body_sha256": "b4a911c694cd1c2d98d9a52aeb380400bcd3addb469f2ba63f54eed6571d4780",
+        "candidate_credit_mentions": {
+          "ConversationSearchResult": 0,
+          "ConversationSearchScope": 0
+        }
+      },
+      {
+        "issue": 988,
+        "body_sha256": "90a5672d5596571a76f9335d0f4aa7acdc4c758cd60f4320ffba1f49e6bb583d",
+        "candidate_credit_mentions": {
+          "ConversationSearchResult": 0,
+          "ConversationSearchScope": 0
+        }
+      },
+      {
+        "issue": 990,
+        "body_sha256": "8fbcd0af42d415c9320f342dbf1ce82e25c479d00d64485520d516af39b7efd9",
+        "candidate_credit_mentions": {
+          "ConversationSearchResult": 0,
+          "ConversationSearchScope": 0
+        }
+      },
+      {
+        "issue": 991,
+        "body_sha256": "14009007cacd07028fb05d2d669f46ba3a7bc35a3c4f121b57d2ab018bf09c84",
+        "candidate_credit_mentions": {
+          "ConversationSearchResult": 0,
+          "ConversationSearchScope": 0
+        }
+      },
+      {
+        "issue": 996,
+        "body_sha256": "a370422f0a24a9fd665765d881bf3fbc647be14789623a91349158ee4856de8e",
+        "candidate_credit_mentions": {
+          "ConversationSearchResult": 0,
+          "ConversationSearchScope": 0
+        }
+      }
+    ],
+    "same_eager_module_import_retained": true,
+    "unrelated_aliases_or_cases_may_not_be_deleted": true
+  }
+}
