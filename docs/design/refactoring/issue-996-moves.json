@@ -55,7 +55,7 @@
       990,
       991
     ],
-    "source_charge": 151431,
+    "source_charge": 151429,
     "test_scenario_change": 0
   },
   "verification_status": "이동 전 정상5개 세 번과 실제 Secret 누출 RED 확인, 이동 후 정상·같은 오류·그래프/패키징·최종 전체 CI·성능·관리 리뷰 대기",
@@ -89,7 +89,7 @@
   "test_preservation": {
     "fresh_ids": 2544,
     "class_groups": 389,
-    "source_charge": 151431,
+    "source_charge": 151429,
     "Case_Suite_local_execution": 0,
     "new_Cases": 0,
     "inputs_assertions_fixtures_lifetimes_preserved": true,
@@ -112,38 +112,80 @@
     "actual_red_assertion": "Secret absent from emitted_texts"
   },
   "current_main_merge_static_snapshot": {
-    "accepted_main": "28dfbf569e0157fbbe51a6c2b1a56b9827f534bc",
-    "prior_head": "01e23e1179a68b27d5ced9142eddfffc07188286",
-    "native_plan_sha256": "6d80a925c3b2bb7cfaad36ef131024fa83f1b2c4b423d9075a531facaf2d38e3",
-    "test_freeze_sha256": "1b4a2ea8d2fb14c18ea37b484cff968921fa0dbc1680af988ce65e2464bddd88",
-    "source234_and_index_preserved": true,
+    "accepted_main": "6428c6bab4f5678fbe245ad9ebf8e2f78eadde2c",
+    "prior_head": "745435982d7c410c2c335dc57fd21012a7050d20",
+    "source236_and_index_preserved": true,
     "graphs": {
-      "actual_modules": 234,
-      "complete_edges": 1185,
-      "Controller_edges": 1172,
-      "relative_only_edges": 1183,
-      "cycle_back_edges": 0,
-      "three_original_resolvers_and_predicates_unchanged": true,
-      "RAG_existing_pure_equalities": 47,
-      "RAG_mismatches": 0,
-      "both_Codex_event_and_pattern_packaging_literals_retained": true,
-      "incoming_event_value_validation_packaging_and_true_dependency_retained": true,
-      "incoming_outcome_review_contract_importer_retained": true
+      "actual_modules": 236,
+      "complete_edges": 1193,
+      "Controller_edges": 1180,
+      "relative_only_edges": 1191,
+      "cycle_back_edges": 0
     },
-    "budget": {
-      "test_lines": 148450,
-      "counted_support_lines": 1431,
-      "legacy_reserved_lines": 1550,
-      "effective_lines": 151431,
-      "cap": 151431,
-      "headroom": 0,
-      "own_global_MatchKind_Query_credits_preserved": true,
-      "incoming_Citation_PhaseRequest_local_LeadGroupPhase_InteractiveLeadAdapter_and_duplicated_set_credits_preserved": true,
-      "future999_Result_Scope_aliases_retained": true,
-      "unmerged990_SearchHit_alias_retained": true,
-      "new_support_files_line_compression_policy_or_ledger_changes": false
-    },
+    "index_rows": 300,
+    "index_sha256": "76810270713178e2a9369ba089487704481cd48ec970f4889a7b2ab395708bff",
+    "declared_owners": 248,
+    "owner_map_modules": 184,
+    "RAG_existing_relations_verified": 56,
+    "new_Cases": 0,
     "local_Case_Suite_runs": 0,
-    "current_hosted_after_full_review": "미실행: 정적 결과를 현재 기능·성능 성공으로 대신하지 않는다."
-  }
+    "resolved_test_paths": 11,
+    "resolved_regions": 13,
+    "both_sides_AST_inverse_pairs": 20,
+    "budget": {
+      "actual_charge": {
+        "test_lines": 148448,
+        "support_lines": 1431,
+        "legacy_lines": 1550,
+        "effective_lines": 151429
+      },
+      "cap": 151431,
+      "headroom": 2,
+      "headroom2_reserved_only_future1004_after_integration": true,
+      "own_MatchKind_Query_credits2_preserved": true,
+      "main_Controller20_LeadArtifact3_SearchHit_Continuation_credits_preserved": true,
+      "future999_Result_Scope_imports_retained": true,
+      "no_new_API_rows_compression_support_externalization_ledger_counter_or_legacy1550_change": true
+    },
+    "test_freeze_sha256": "673f802518299f3e07fc71b4ca5da46f7f590ea14cd5c4933f771cd57d181026",
+    "actual_production_audit_sha256": "4130de25de09d73d90a166603b1685c38f054332e33681b9b92855dd38150ce5",
+    "verification_status": "현재source/namespace/정적test통합완료. 현재main기준hosted정상반복/동일RED/전체CI/관리리뷰는별도진행."
+  },
+  "historical_main_merge_static_snapshots": [
+    {
+      "accepted_main": "28dfbf569e0157fbbe51a6c2b1a56b9827f534bc",
+      "prior_head": "01e23e1179a68b27d5ced9142eddfffc07188286",
+      "native_plan_sha256": "6d80a925c3b2bb7cfaad36ef131024fa83f1b2c4b423d9075a531facaf2d38e3",
+      "test_freeze_sha256": "1b4a2ea8d2fb14c18ea37b484cff968921fa0dbc1680af988ce65e2464bddd88",
+      "source234_and_index_preserved": true,
+      "graphs": {
+        "actual_modules": 234,
+        "complete_edges": 1185,
+        "Controller_edges": 1172,
+        "relative_only_edges": 1183,
+        "cycle_back_edges": 0,
+        "three_original_resolvers_and_predicates_unchanged": true,
+        "RAG_existing_pure_equalities": 47,
+        "RAG_mismatches": 0,
+        "both_Codex_event_and_pattern_packaging_literals_retained": true,
+        "incoming_event_value_validation_packaging_and_true_dependency_retained": true,
+        "incoming_outcome_review_contract_importer_retained": true
+      },
+      "budget": {
+        "test_lines": 148450,
+        "counted_support_lines": 1431,
+        "legacy_reserved_lines": 1550,
+        "effective_lines": 151431,
+        "cap": 151431,
+        "headroom": 0,
+        "own_global_MatchKind_Query_credits_preserved": true,
+        "incoming_Citation_PhaseRequest_local_LeadGroupPhase_InteractiveLeadAdapter_and_duplicated_set_credits_preserved": true,
+        "future999_Result_Scope_aliases_retained": true,
+        "unmerged990_SearchHit_alias_retained": true,
+        "new_support_files_line_compression_policy_or_ledger_changes": false
+      },
+      "local_Case_Suite_runs": 0,
+      "current_hosted_after_full_review": "미실행: 정적 결과를 현재 기능·성능 성공으로 대신하지 않는다."
+    }
+  ]
 }
