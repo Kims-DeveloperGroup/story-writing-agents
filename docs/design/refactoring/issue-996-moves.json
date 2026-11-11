@@ -1,0 +1,62 @@
+{
+  "issue": 996,
+  "parent": 969,
+  "root_parent": 962,
+  "accepted_base": "e0381a122153bb3944b83395a86f048a9141c98e",
+  "status": "문서 전용 Draft 준비, 소스·테스트·진단 변경 전",
+  "owner": "src/story_writing_agents/codex_event_decoding.py",
+  "functions": [
+    "reject_duplicate_fields",
+    "reject_constant",
+    "finite_float",
+    "extract_stream_text",
+    "resolve_aliased_field",
+    "codex_usage_observation"
+  ],
+  "original_body_rows": 126,
+  "real_lookup_sites": 15,
+  "host_imports": "새 공개 함수의 실제 사용 로컬 별칭, 기존 stdlib/accounting import 유지",
+  "preserve": [
+    "self/cls.parse_events와 self.provider_usage dispatch",
+    "반복·callback·예외·입력·출력·순서·patch 시점",
+    "process·native 파일·thread·취소·복구 수명",
+    "기존 Case·assertion·fixture·수명·caps·weights와 소스 예산"
+  ],
+  "focused_ids": [
+    "tests.test_adapter_streaming.AdapterStreamingTests.test_codex_adapter_rejects_duplicate_keys_and_nonfinite_values_in_stream",
+    "tests.test_adapter_streaming.AdapterStreamingTests.test_codex_adapter_extract_stream_text_ignores_non_string_values"
+  ],
+  "expanded_ids": [
+    "tests.test_adapter_streaming.AdapterStreamingTests.test_codex_adapter_rejects_duplicate_keys_and_nonfinite_values_in_stream",
+    "tests.test_adapter_streaming.AdapterStreamingTests.test_codex_adapter_streams_status_reasoning_and_message_events",
+    "tests.test_adapter_streaming.AdapterStreamingTests.test_codex_adapter_rejects_conflicting_top_level_and_nested_descriptors",
+    "tests.test_adapter_streaming.AdapterStreamingTests.test_codex_adapter_extract_stream_text_ignores_non_string_values",
+    "tests.test_codex_backend.CodexBackendTestCase.test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread"
+  ],
+  "budget": {
+    "issue": 996,
+    "gross_rows": 2,
+    "credits": [
+      {
+        "path": "tests/test_interactive_controller.py",
+        "alias": "ConversationSearchMatchKind",
+        "line_on_base": 49
+      },
+      {
+        "path": "tests/test_interactive_controller.py",
+        "alias": "ConversationSearchQuery",
+        "line_on_base": 50
+      }
+    ],
+    "not_reused_by": [
+      983,
+      984,
+      988,
+      990,
+      991
+    ],
+    "source_charge": 151431,
+    "test_scenario_change": 0
+  },
+  "verification_status": "미실행, 문서 JSON·diff만 검토"
+}
