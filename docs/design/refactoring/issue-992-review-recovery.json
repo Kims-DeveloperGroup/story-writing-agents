@@ -1,0 +1,28 @@
+{
+  "issue": 992,
+  "parent": 962,
+  "unblocks": 983,
+  "accepted_base": "7799cf232545e8f9d3deba9ff3f90c716b971bba",
+  "status": "구현 전 복구 범위",
+  "new_operation": "recover",
+  "preserved": [
+    "일반 요청과 대조의 현행 고정 문구",
+    "원본 요청·응답과 예약 기록",
+    "작성자 권한과 정확한 라운드·시도 마커",
+    "예약된 base/head와 실제 응답 commit",
+    "생성·편집·응답 시각",
+    "별도의 최신 검증·종료·통합 게이트"
+  ],
+  "recovery_only": [
+    "1~2라운드 개인 요청",
+    "생성 이후 편집되지 않은 요청",
+    "같은 의미의 확인된 연결어 생략",
+    "커밋이 명시된 실제 Codex 지적 없음 응답",
+    "원 예약과 요청·응답 본문 SHA-256의 감사 기록"
+  ],
+  "recorded_regression_sources": [
+    986,
+    987
+  ],
+  "runtime_and_canonical_test_edits": false
+}
