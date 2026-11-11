@@ -13968,7 +13968,7 @@ class StoryRuntime:
                 'schema_version': 3 if 'contributions' in raw_scope else 2 if 'intent' in raw_scope else 1,
                     **{key: item for key, item in raw_scope.items() if key != 'task'},
                     'task_id': task_id,
-                    'task_revision': validation_call('$.authoring_scope.task', int, raw_revision),
+                    'task_revision': validation_call('$.authoring_scope.revision', int, raw_revision),
                     'interpretation': raw_scope.get('interpretation', message),
                 },
             )
