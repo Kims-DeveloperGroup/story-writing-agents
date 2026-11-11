@@ -13644,6 +13644,26 @@
         "tests.test_collaboration_events.CollaborationWireContractTests.test_duplicate_extra_missing_nonfinite_and_noncanonical_json_are_rejected"
       ],
       "affected_full": true
+    },
+    {
+      "name": "antigravity-response-decoding",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/antigravity_response_decoding.py"
+      ],
+      "depends_on": [],
+      "focused_ids": [
+        "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_strictly_rejects_duplicate_fields_in_streamed_result",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_identifier_and_json_failures_are_fixed_and_confidential"
+      ],
+      "affected_ids": [
+        "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_streams_events_and_parses_stream_json",
+        "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_strictly_rejects_duplicate_fields_in_streamed_result",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_command_stdin_paths_and_fresh_resume_results_are_exact",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_completed_failures_retain_exact_native_diagnostic_and_accounting",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_identifier_and_json_failures_are_fixed_and_confidential"
+      ],
+      "affected_full": true
     }
   ],
   "ignored_names": [

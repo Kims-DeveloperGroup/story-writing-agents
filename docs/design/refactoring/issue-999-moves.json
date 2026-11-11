@@ -2,7 +2,7 @@
   "schema_version": 1,
   "issue": 999,
   "parent": 969,
-  "phase": "구현 전 Draft",
+  "phase": "소스·기존 테스트 이동 완료; hosted after 검증 대기",
   "base": "26373d4a44b351b9bf27dfd7b9c46b627b17b772",
   "source": "src/story_writing_agents/antigravity_adapter.py",
   "source_sha256": "9748da9cf159f484478c9401ead4dd6623ded803e0115d1b8031e9af76bfd782",
@@ -257,7 +257,6 @@
   },
   "source_preflight": "e820ae52aa854304d5d096ee218932071aa9c504c66d4d80ce61e4f8eb6bb9d7",
   "import_position_note": "ea9ca690ce9dd8c2929ebb32a79949faecf0eaa1733220da040e8e74fbfa2871",
-  "Case_runs": 0,
   "behavior_change": false,
   "focused_ids": [
     "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_strictly_rejects_duplicate_fields_in_streamed_result",
@@ -360,5 +359,261 @@
     ],
     "same_eager_module_import_retained": true,
     "unrelated_aliases_or_cases_may_not_be_deleted": true
-  }
+  },
+  "local_Case_Suite_runs": 0,
+  "actual_source_rows": {
+    "src/story_writing_agents/antigravity_adapter.py": 2420,
+    "src/story_writing_agents/antigravity_response_decoding.py": 79,
+    "PYTHON_MODULE_INDEX.md": 300
+  },
+  "source_freeze_sha256": "b4fbe3568cf0f4735f5c8fe99c5b61e7cedba64e3a9109d530f1444fbcaee6a8",
+  "source_static_results": {
+    "certified_interpreter": "/Users/anonymousanonym/Documents/story-writing-agents/.venv/bin/python (3.11.18)",
+    "compile_production_files": 232,
+    "source_other_base_files_byte_exact": 230,
+    "moved_definitions": 6,
+    "moved_body_rows": 58,
+    "moved_recursive_code_pairs": 6,
+    "retained_recursive_code_pairs_exact": 81,
+    "retained_class_initializer_exception": "two accepted same-position staticmethod initializations only",
+    "global_name_load_operations": 682,
+    "unresolved_globals": [],
+    "retained_annotation_expressions": 206,
+    "moved_annotation_expressions": 10,
+    "type_hint_checks": 63,
+    "type_hint_errors": [],
+    "all_original_import_origins_and_order_exact": true,
+    "host_removed_bindings": [
+      "_DuplicateField"
+    ],
+    "host_added_bindings": [
+      "_decode_antigravity_response",
+      "_raise_antigravity_malformed_output"
+    ],
+    "shared_json_math_Any_ProviderInvocationError_identity": true,
+    "descriptor_identity": true,
+    "actual_cls_dispatch_sites": 6,
+    "original_argument_default_decorator_exception_AST_preserved_except_accepted_moves": true,
+    "new_import_line": 66,
+    "first_constant_line": 75,
+    "taint_true_sites": 4,
+    "graphs": {
+      "complete": {
+        "modules": 232,
+        "edges": 1166,
+        "cyclic_components": 0
+      },
+      "controller": {
+        "modules": 232,
+        "edges": 1155,
+        "cyclic_components": 0
+      },
+      "relative": {
+        "modules": 232,
+        "edges": 1164,
+        "cyclic_components": 0
+      }
+    },
+    "private_imports_added": 0,
+    "index_rows": 300,
+    "diff_check": "passed",
+    "new_leaf_trailing_whitespace": "none",
+    "Case_Suite_profile_CI_runs": 0,
+    "tests_docs_config_edits": 0,
+    "source_Git_mutations": 0
+  },
+  "test_freeze_sha256": "680ac04130e0363abce3ee13313b09c7aedcb3c6d1b0cfbf9bdb8f8b0693f2ad",
+  "test_source_charge": {
+    "test_lines": 148451,
+    "support_lines": 1430,
+    "legacy_lines": 1550,
+    "effective_lines": 151431
+  },
+  "actual_graph": {
+    "modules": 232,
+    "complete_edges": 1166,
+    "controller_edges": 1155,
+    "relative_edges": 1164,
+    "cycles": 0,
+    "complete_minus_controller": [
+      [
+        "story_writing_agents.conversations.events",
+        "story_writing_agents.conversations.event_value_validation"
+      ],
+      [
+        "story_writing_agents.lead_preparation.reply_contract_values",
+        "story_writing_agents.runtime_resources.collaboration_event_journal"
+      ],
+      [
+        "story_writing_agents.lead_preparation.response_rules",
+        "story_writing_agents.lead_preparation.reply_contract_values"
+      ],
+      [
+        "story_writing_agents.orchestrator",
+        "story_writing_agents.lead_preparation.call_rule_factory"
+      ],
+      [
+        "story_writing_agents.orchestrator",
+        "story_writing_agents.lead_preparation.reply_contract_values"
+      ],
+      [
+        "story_writing_agents.orchestrator",
+        "story_writing_agents.lead_preparation.response_rules"
+      ],
+      [
+        "story_writing_agents.orchestrator",
+        "story_writing_agents.runtime_resources.collaboration_event_journal"
+      ],
+      [
+        "story_writing_agents.orchestrator",
+        "story_writing_agents.runtime_resources.reference_operation_registry"
+      ],
+      [
+        "story_writing_agents.orchestrator",
+        "story_writing_agents.runtime_resources.session_worktree_access"
+      ],
+      [
+        "story_writing_agents.runtime_resources.provider_call_accounting",
+        "story_writing_agents.runtime_resources.collaboration_event_journal"
+      ],
+      [
+        "story_writing_agents.runtime_resources.reference_operation_registry",
+        "story_writing_agents.runtime_resources.session_worktree_access"
+      ]
+    ],
+    "complete_minus_relative": [
+      [
+        "story_writing_agents.codex_adapter",
+        "story_writing_agents.codex_native_context"
+      ],
+      [
+        "story_writing_agents.conversations.events",
+        "story_writing_agents.conversations.event_value_validation"
+      ]
+    ],
+    "unchanged_reader_AST": true,
+    "production_freeze_hashes_match": true,
+    "Case_Suite_attempts": []
+  },
+  "preserved_canonical_inventory": {
+    "fresh_discovery": true,
+    "actual_ids": 2544,
+    "class_groups": 389,
+    "manifest_digest": "sha256:86aca048edf3744d5bdf317ccebf94de95406aa509747ab3b27ddd1c5d7a0417",
+    "actual_inventory_exact_match": true,
+    "ID_order": "unchanged",
+    "subtest_caps_weights_receipts_source_ledger_unchanged": true,
+    "weight_sum_microseconds": 53351213361,
+    "fixture_bytes_exact_count": 65,
+    "fixture_SHA256": {
+      "tests/fixtures/agent_context/provider_context_baseline_v1.json": "c8b3737b97e33fa90d825b4ca41cfda6b3b348d62401689bdfd90dbbd7b214f4",
+      "tests/fixtures/agent_context/provider_context_optimized_v1.json": "20b2a2a11028a17fb35e6be0ce8e8107f5166a40912234b367857f9fe63b1a5b",
+      "tests/fixtures/antigravity_live_cases.json": "371e9541880921a09d2775c21ddbc7a0c3264ad0a8796ab2c7869b87c6b77902",
+      "tests/fixtures/antigravity_recovered_finish/metadata.json": "0687776154051bd5a962605639164c04a0101e6eb2f470c777a6c0f925865831",
+      "tests/fixtures/antigravity_recovered_finish/request.json": "4ded2a625bd05808431deec1dd47331e8618a527e2aece89dad99d54ba292b7a",
+      "tests/fixtures/antigravity_recovered_finish/terminal.json": "7d4591e88809a071d4abacc9ed8326f8db556b2bda57c894fadb077b43a5d04e",
+      "tests/fixtures/antigravity_recovered_finish/transcript.jsonl": "b391bc64b75eb17af5d2d705c90939ffa40b1906dfcd80a77395c877bb786328",
+      "tests/fixtures/authoring_scope_compatibility/ordinary_v1_c20dc40.json": "b0f2c20d888222e16addfa05807df63dfb3fe8e0379adddb2d75f137b5c0ca1d",
+      "tests/fixtures/authoring_scope_compatibility/ordinary_v1_c20dc40.manifest.json": "74d9758371527dda042f729a61a5af22dc2df4b86199679f827fe9400f5797a2",
+      "tests/fixtures/authoring_scope_compatibility/scope_v2_basis_v1_76a80f7.json": "617896f44ed157ba79034efaf29910c8acced8b79b1153e050b413673d355c15",
+      "tests/fixtures/authoring_scope_compatibility/scope_v2_basis_v1_76a80f7.manifest.json": "71912df41464058859eeef2d16a64be1ee953c0e66701c0b7de484f1b818789d",
+      "tests/fixtures/consensus_compatibility/authoring_v3_c20dc40.json": "173023d5484c9e85c3ddf2fb2a08bcf3294c85e9a39c0ded51dc4bb96d554d2c",
+      "tests/fixtures/consensus_compatibility/authoring_v3_c20dc40.manifest.json": "ed3be986e7a13797e159b86de2f6893f9eeceaadfd40ec5b1f6d1e3a414b5083",
+      "tests/fixtures/lead_editorial_comparison/captures.json": "ebfca80bfee83f49ce67ae391e2566a8c358d636990d2b815a993901ae237dbb",
+      "tests/fixtures/lead_editorial_comparison/incompatible-recommendations.txt": "e6a402e6cd9eb134f46d2b0c204533cafd1ed63f9a799dca155b8719be7be77b",
+      "tests/fixtures/lead_editorial_comparison/record.txt": "4dafb39cec8926ebdb9707162af4060af4f50e861380cc9427a7ac2c94f2e711",
+      "tests/fixtures/lead_editorial_comparison/reviews.json": "8e60c9d2fba5ec9d854782abee343afc0e79b9ac0a7f65abdca9247bbb6bd257",
+      "tests/fixtures/lead_editorial_comparison/stronger-effect.txt": "bdca2f1333c16d6921f00b3a6852e08609d7776fd72e58c0d643778a33e339fb",
+      "tests/fixtures/test_budget_v1.json": "e05afba792b20ac2521ebbbb58d22dd426356231bba89e3ba9149fc9af7531d5",
+      "tests/fixtures/test_id_moves_v1.json": "91375b3932eff2287c43fc0a73c9484cab19b803ea3783a0b7727854d09918d9",
+      "tests/fixtures/test_source_ledger_v1.json": "a62138d9a350b2184b4c240a36258be410b9d74ebb48545e5f880f2ea0754b84",
+      "tests/fixtures/test_timing_weights_v1.json": "640805afc9d9a4f1f8f6c159e75bdbebb697a83c5f28e48e59b2f3562a5821bc",
+      "tests/fixtures/workspace_policy_baselines/character_custodian.md": "18b3ef46527944538cf36179190b82214809f9db56582afa47e21851cd7d797a",
+      "tests/fixtures/workspace_policy_baselines/common.md": "909402eae32a0b1ae4f978bea14a03f752d8450040ae5e50fcf592a26c3d0703",
+      "tests/fixtures/workspace_policy_baselines/execution_specialist.md": "d638cda4ee27306b8c87379bf9fee5e76652832bbd63a59b4372aabfbfc2b458",
+      "tests/fixtures/workspace_policy_baselines/integrated_794_09db65c/character_custodian.md": "806db0bae145e2ba50e920174299de06c20c083e45bba04b76ffe9c2d550e923",
+      "tests/fixtures/workspace_policy_baselines/integrated_794_09db65c/common.md": "eb78a7d3a5a3d83291b188f5109f3b3132582109e1211e30bac7e33a9eab18a5",
+      "tests/fixtures/workspace_policy_baselines/integrated_794_09db65c/execution_specialist.md": "4a3ead3e2389bda9662989d02bb8817ad1ec2d7b4d4f322b246b892545d3979b",
+      "tests/fixtures/workspace_policy_baselines/integrated_794_09db65c/lead_orchestrator.md": "497c0927a7733fc37c553aefd056753246bfd0554331bfd64dd6f6ccd6cf1160",
+      "tests/fixtures/workspace_policy_baselines/integrated_794_09db65c/manifest.json": "a16cf7143219dcc622e0ed4640c1e2c02bee8979c8a4d5a5672057f80e791ae6",
+      "tests/fixtures/workspace_policy_baselines/integrated_794_09db65c/plot_architect.md": "e59aba2b2e750c7b9ef00b2c3f1ea4e7e9b2889f7abf25a840d7db781d5d93e7",
+      "tests/fixtures/workspace_policy_baselines/integrated_794_09db65c/specialist_collaboration.md": "4ab83f3792a2598a174e6bfb02511162e26f963b5fe73c661afcfdaa3a5afcc3",
+      "tests/fixtures/workspace_policy_baselines/integrated_796_76a80f7/manifest.json": "ffa85af2911da2cb763b2be29cf9d02053c84516df809cfe5283465da4ef2880",
+      "tests/fixtures/workspace_policy_baselines/integrated_796_76a80f7/policies/character_custodian.md": "806db0bae145e2ba50e920174299de06c20c083e45bba04b76ffe9c2d550e923",
+      "tests/fixtures/workspace_policy_baselines/integrated_796_76a80f7/policies/common.md": "eb78a7d3a5a3d83291b188f5109f3b3132582109e1211e30bac7e33a9eab18a5",
+      "tests/fixtures/workspace_policy_baselines/integrated_796_76a80f7/policies/execution_specialist.md": "4a3ead3e2389bda9662989d02bb8817ad1ec2d7b4d4f322b246b892545d3979b",
+      "tests/fixtures/workspace_policy_baselines/integrated_796_76a80f7/policies/lead_orchestrator.md": "93181819635ddd9b1a5c636cae4ff3e1a8b78bf3bf1442a8b4fb790c131c3a18",
+      "tests/fixtures/workspace_policy_baselines/integrated_796_76a80f7/policies/plot_architect.md": "e59aba2b2e750c7b9ef00b2c3f1ea4e7e9b2889f7abf25a840d7db781d5d93e7",
+      "tests/fixtures/workspace_policy_baselines/integrated_796_76a80f7/policies/specialist_collaboration.md": "9fd629d51572990c79efffcf66fd857de1bce7912f3e304af785248a676ccb4b",
+      "tests/fixtures/workspace_policy_baselines/lead_orchestrator.md": "8e360d15b4a98d50c025a4fa1150b8c845786996d83569adaaeb1ce26c7dfc53",
+      "tests/fixtures/workspace_policy_baselines/manifest.json": "7f2086c04a62a0698f8eb900afd6dfe3f96b7509aca95a0cdaa5d31f01227a12",
+      "tests/fixtures/workspace_policy_baselines/plot_architect.md": "79f2f072beeacb420479098788df6b9cda34d5bc5b33c9c02c577f45eeef7f3d",
+      "tests/fixtures/workspace_policy_baselines/pre_guidance_97879d4/character_custodian.md": "806db0bae145e2ba50e920174299de06c20c083e45bba04b76ffe9c2d550e923",
+      "tests/fixtures/workspace_policy_baselines/pre_guidance_97879d4/common.md": "2bc0ea34377319843c3a998c95a873bd7c70d77d4f31304f7259b6a928e688b8",
+      "tests/fixtures/workspace_policy_baselines/pre_guidance_97879d4/execution_specialist.md": "4a3ead3e2389bda9662989d02bb8817ad1ec2d7b4d4f322b246b892545d3979b",
+      "tests/fixtures/workspace_policy_baselines/pre_guidance_97879d4/lead_bytes.json": "0b490e85661ca3198da56c52ffc9493d39a2280f2ceddeb231fc6ea76f4c125e",
+      "tests/fixtures/workspace_policy_baselines/pre_guidance_97879d4/lead_orchestrator.md": "5278b90ba5939db6ee31d4e2e4808ba583b66ebb25614acaf8a79200b9e7ea7a",
+      "tests/fixtures/workspace_policy_baselines/pre_guidance_97879d4/manifest.json": "030f8847a1534b1c7d95a1c47ad1226567df63b18cac7db42aaf9e6b5be646ac",
+      "tests/fixtures/workspace_policy_baselines/pre_guidance_97879d4/plot_architect.md": "e59aba2b2e750c7b9ef00b2c3f1ea4e7e9b2889f7abf25a840d7db781d5d93e7",
+      "tests/fixtures/workspace_policy_baselines/pre_guidance_97879d4/specialist_collaboration.md": "4ab83f3792a2598a174e6bfb02511162e26f963b5fe73c661afcfdaa3a5afcc3",
+      "tests/fixtures/workspace_policy_baselines/published_2e9/character_custodian.md": "18b3ef46527944538cf36179190b82214809f9db56582afa47e21851cd7d797a",
+      "tests/fixtures/workspace_policy_baselines/published_2e9/common.md": "909402eae32a0b1ae4f978bea14a03f752d8450040ae5e50fcf592a26c3d0703",
+      "tests/fixtures/workspace_policy_baselines/published_2e9/execution_specialist.md": "d638cda4ee27306b8c87379bf9fee5e76652832bbd63a59b4372aabfbfc2b458",
+      "tests/fixtures/workspace_policy_baselines/published_2e9/lead_orchestrator.md": "55cd8383ef191dea2d129678552ea459f8a403bc4488402af2b2343f06f3c62c",
+      "tests/fixtures/workspace_policy_baselines/published_2e9/manifest.json": "5cfc7948006dda2458c9780b10a7fda106499ca3023b02ba0341ce33aad51ff6",
+      "tests/fixtures/workspace_policy_baselines/published_2e9/plot_architect.md": "79f2f072beeacb420479098788df6b9cda34d5bc5b33c9c02c577f45eeef7f3d",
+      "tests/fixtures/workspace_policy_baselines/published_2e9/specialist_collaboration.md": "7aad65b0511fe4087513ff55c999d9ca974c600d33908eb5b32770e2a7d763f1",
+      "tests/fixtures/workspace_policy_baselines/published_main_1e482fe/character_custodian.md": "18b3ef46527944538cf36179190b82214809f9db56582afa47e21851cd7d797a",
+      "tests/fixtures/workspace_policy_baselines/published_main_1e482fe/common.md": "909402eae32a0b1ae4f978bea14a03f752d8450040ae5e50fcf592a26c3d0703",
+      "tests/fixtures/workspace_policy_baselines/published_main_1e482fe/execution_specialist.md": "d638cda4ee27306b8c87379bf9fee5e76652832bbd63a59b4372aabfbfc2b458",
+      "tests/fixtures/workspace_policy_baselines/published_main_1e482fe/lead_orchestrator.md": "6dbfd65607be6799511c8300370445b5194c01ae4554e5400ea521c1bb7ce5eb",
+      "tests/fixtures/workspace_policy_baselines/published_main_1e482fe/manifest.json": "e33122e21c4b58f20b782f4f57777565ca99923a64f338ed2aec567e1952f16d",
+      "tests/fixtures/workspace_policy_baselines/published_main_1e482fe/plot_architect.md": "79f2f072beeacb420479098788df6b9cda34d5bc5b33c9c02c577f45eeef7f3d",
+      "tests/fixtures/workspace_policy_baselines/published_main_1e482fe/specialist_collaboration.md": "7aad65b0511fe4087513ff55c999d9ca974c600d33908eb5b32770e2a7d763f1",
+      "tests/fixtures/workspace_policy_baselines/specialist_collaboration.md": "7aad65b0511fe4087513ff55c999d9ca974c600d33908eb5b32770e2a7d763f1"
+    },
+    "21old_runtime_skip_results_not_reexecuted": "skip declarations AST preserved; hosted CI authoritative"
+  },
+  "test_changed_paths": [
+    "tests/fixtures/test_owners_v1.json",
+    "tests/test_antigravity_parity.py",
+    "tests/test_artifact_application_contracts.py",
+    "tests/test_artifact_application_store_recovery.py",
+    "tests/test_artifact_relationship_policy.py",
+    "tests/test_git_external_operation_inspection.py",
+    "tests/test_interactive_controller.py",
+    "tests/test_rag_module_and_packaging_boundary.py",
+    "tests/test_session_lifecycle.py",
+    "tests/test_session_recovery_contracts.py",
+    "tests/test_workspace_session_history.py"
+  ],
+  "before_green": {
+    "run": 42983122721,
+    "attempts": [
+      1,
+      2,
+      3
+    ],
+    "cases_per_attempt": 5,
+    "all_passed": true
+  },
+  "before_actual_RED": {
+    "issue": 999,
+    "run_id": 42983128892,
+    "head": "423bd84d98410c3d4cbb2221ce4b28e47b1e5483",
+    "canonical_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_strictly_rejects_duplicate_fields_in_streamed_result",
+    "failure_fingerprint": "AssertionError: 'malformed JSON' not found in 'Antigravity CLI did not complete successfully'",
+    "failures": 1,
+    "errors": 0,
+    "subtests": 0,
+    "raw_report_sha256": "c024732692fd93c72206cc55590f07dbde636ad0c82e628af3b87dc20576c9c8",
+    "same_error_after_move": "pending",
+    "delivery_fault_included": false,
+    "at_utc": "2026-11-11T07:59:53.027401+00:00"
+  },
+  "current_gate_limits": [
+    "현재base263의after정상/같은RED/시간비교대기",
+    "최종main정렬·전체CI·R1종료대기",
+    "실제owner/namespace·초기heap·GC비용0주장금지"
+  ]
 }

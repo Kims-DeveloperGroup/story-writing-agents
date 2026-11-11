@@ -48,8 +48,6 @@ from story_writing_agents.conversation_search import (
     ConversationSearchHit,
     ConversationSearchMatchKind,
     ConversationSearchQuery,
-    ConversationSearchResult,
-    ConversationSearchScope,
     ConversationTranscriptCursor,
     ConversationTranscriptPage,
 )
@@ -1775,8 +1773,8 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 231)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 1153)
+        self.assertEqual(len(modules), 232)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 1155)
         self.assertTrue(
             {
                 "story_writing_agents.artifact_proposals",
