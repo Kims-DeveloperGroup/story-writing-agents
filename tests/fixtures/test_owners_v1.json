@@ -13555,6 +13555,28 @@
       "affected_full": true
     },
     {
+      "name": "lead-preparation.outcome_decoding",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/lead_preparation/outcome_decoding.py",
+        "src/story_writing_agents/lead_preparation",
+        "src/story_writing_agents/lead_preparation/__init__.py"
+      ],
+      "depends_on": [
+        "lead-preparation.reply_contract_values"
+      ],
+      "focused_ids": [
+        "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_lead_search_read_json_answer_uses_exact_dynamic_contract_and_limit",
+        "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_domain_rejection_without_repair_persists_safe_notice"
+      ],
+      "affected_ids": [
+        "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_lead_search_read_json_answer_uses_exact_dynamic_contract_and_limit",
+        "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_domain_rejection_without_repair_persists_safe_notice",
+        "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_untrusted_answer_diagnostic_cannot_publish_private_text"
+      ],
+      "affected_full": true
+    },
+    {
       "name": "lead-preparation.reply_contract_values",
       "boundary": "pure",
       "paths": [
