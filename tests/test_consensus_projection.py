@@ -20,7 +20,6 @@ from story_writing_agents.consensus import (
     ConsensusNextAction,
     ConsensusPhase,
     ConsensusPhaseDecision,
-    ConsensusPhaseRequest,
     ConsensusPhaseResult,
     ConsensusPhaseState,
     ConsensusInputKind,
