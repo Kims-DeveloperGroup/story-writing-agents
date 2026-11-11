@@ -16,7 +16,7 @@ from .agent_context.accounting import (
 def reject_duplicate_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     value: dict[str, Any] = {}
     for key, item in pairs:
-        if key in value:
+        if key in pairs:
             raise ValueError("duplicate JSON field")
         value[key] = item
     return value
