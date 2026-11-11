@@ -1,0 +1,58 @@
+{
+  "issue": 991,
+  "parent": 975,
+  "root_parent": 962,
+  "accepted_base": "e0381a122153bb3944b83395a86f048a9141c98e",
+  "status": "구현 전 이동 계획",
+  "source": "src/story_writing_agents/structured_output_validation.py",
+  "owner": "src/story_writing_agents/provider_schema_patterns.py",
+  "purpose": "엄격한 정규식 끝 처리와 유니코드 범위의 순수 소유자 분리",
+  "source_sha256": "e55331f244449e3d46b7776d9fbcd23e867474909edc94caf9d672653a6ed19b",
+  "definitions": [
+    {
+      "name": "_schema_pattern_tokens",
+      "lines": [
+        556,
+        622
+      ],
+      "normalized_ast_sha256": "bdf9581f2ee16d0ff2a8c3957c3d091e7cd922ad82be4d618a7b7417dfa2ecfc"
+    },
+    {
+      "name": "compile_schema_pattern",
+      "lines": [
+        625,
+        638
+      ],
+      "normalized_ast_sha256": "03ba25f73995791a05864462e149d84279c2d2dd4dff93e36cc55b335f1402a4"
+    },
+    {
+      "name": "unicode_scalar_classes",
+      "lines": [
+        641,
+        680
+      ],
+      "normalized_ast_sha256": "6315c6b265640bbf15ec44d446d64d369f6b0d65f59b462049e4d537c7e8f32d"
+    }
+  ],
+  "body_rows": 121,
+  "existing_case_id": "tests.agent_context.contracts.test_result_validation.StructuredOutputValidationTests.test_diagnose_json_text_reports_all_independent_safe_issues",
+  "diagnostic": {
+    "source_line": 635,
+    "old_token": "strict EOF \\Z",
+    "changed_token": "$",
+    "expected_existing_assertion": "기존 alternative_key의 a 뒤 줄바꿈 거절 assertion, 실제 호스팅에서 먼저 확인"
+  },
+  "source_charge": 151431,
+  "independent_credit": {
+    "path": "tests/test_consensus_projection.py",
+    "symbol": "ConsensusPhaseRequest",
+    "line_on_accepted_base": 23,
+    "purpose": "사용하지 않는 기존 eager import 별칭 한 행으로 새 패키징 경로 한 행을 상쇄"
+  },
+  "constraints": [
+    "기존 입력·하위 사례·assertion·ID·시간·소스 예산 유지",
+    "기존 초기화 시점의 실제 Unicode range 생성 유지",
+    "runtime 기능·알고리즘 변경 없음",
+    "문서 Draft를 실제 구현 전에 생성"
+  ]
+}
