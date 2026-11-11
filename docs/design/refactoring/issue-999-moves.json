@@ -1,0 +1,689 @@
+{
+  "schema_version": 1,
+  "issue": 999,
+  "parent": 969,
+  "phase": "소스·기존 테스트 이동 완료; hosted after 검증 대기",
+  "base": "26373d4a44b351b9bf27dfd7b9c46b627b17b772",
+  "source": "src/story_writing_agents/antigravity_adapter.py",
+  "source_sha256": "9748da9cf159f484478c9401ead4dd6623ded803e0115d1b8031e9af76bfd782",
+  "owner": "src/story_writing_agents/antigravity_response_decoding.py",
+  "definitions": [
+    {
+      "old": "_DuplicateField",
+      "new_name": "_DuplicateField",
+      "public": false,
+      "span": [
+        113,
+        114
+      ],
+      "body_rows": 2,
+      "original_decorators": [],
+      "AST_sha256": "f23524fccd8ec832414cb8a4d8c4d93416394070ff79ad19924e746d41458451",
+      "source_sha256": "235e9f4ede85a6639c46f05d057dc9b8941941777e4c4a5dc7a4e15e58406ae5",
+      "signature": null,
+      "return_annotation": null,
+      "runtime_and_annotation_NameLoads": [
+        "ValueError"
+      ]
+    },
+    {
+      "old": "_reject_duplicate_fields",
+      "new_name": "reject_duplicate_fields",
+      "public": true,
+      "span": [
+        117,
+        125
+      ],
+      "body_rows": 9,
+      "original_decorators": [],
+      "AST_sha256": "aaf23b3f136e74f2fe7353e0166bb3a5fa8c7514540aa3cc680ec13087a9f843",
+      "source_sha256": "6d7391a9f86994f02c9a017721cc52d804e5e3d2397bf289c475e14a0b9d09b3",
+      "signature": "pairs: list[tuple[str, Any]]",
+      "return_annotation": "dict[str, Any]",
+      "runtime_and_annotation_NameLoads": [
+        "Any",
+        "_DuplicateField",
+        "dict",
+        "item",
+        "key",
+        "list",
+        "pairs",
+        "str",
+        "tuple",
+        "value"
+      ]
+    },
+    {
+      "old": "_reject_constant",
+      "new_name": "reject_constant",
+      "public": true,
+      "span": [
+        128,
+        129
+      ],
+      "body_rows": 2,
+      "original_decorators": [],
+      "AST_sha256": "36234eb1e12aeca5bbd52de81146f697c47867d076163a28c04cbbeff20f05d2",
+      "source_sha256": "2479814604accf496cca7fc9087e0c50f09cdd544246df57abf451d83c88a2b9",
+      "signature": "_value: str",
+      "return_annotation": "None",
+      "runtime_and_annotation_NameLoads": [
+        "ValueError",
+        "str"
+      ]
+    },
+    {
+      "old": "_finite_float",
+      "new_name": "finite_float",
+      "public": true,
+      "span": [
+        132,
+        136
+      ],
+      "body_rows": 5,
+      "original_decorators": [],
+      "AST_sha256": "32c1209491a21ba053b49c31ae16e70c10e267590687cc3c7cd77ab35f766c10",
+      "source_sha256": "eb414f94c38cfb9c13532d972bab18eb6272670a4945a59047ffa4583a43f7df",
+      "signature": "value: str",
+      "return_annotation": "float",
+      "runtime_and_annotation_NameLoads": [
+        "ValueError",
+        "float",
+        "math",
+        "number",
+        "str",
+        "value"
+      ]
+    },
+    {
+      "old": "AntigravityAdapter._parse_result",
+      "new_name": "parse_result",
+      "public": true,
+      "span": [
+        2385,
+        2419
+      ],
+      "body_rows": 35,
+      "original_decorators": [
+        "staticmethod"
+      ],
+      "AST_sha256": "02a83003e1da2bb464bc3cc3af66d54bbfd0ac90fe18122b47a95e6d845aa5cb",
+      "source_sha256": "040d65f7dea5afb54ed76193bea39f9e226166176be7f195890c6b125d3811b0",
+      "signature": "stdout: bytes",
+      "return_annotation": "dict[str, Any]",
+      "runtime_and_annotation_NameLoads": [
+        "Any",
+        "ProviderInvocationError",
+        "RecursionError",
+        "UnicodeDecodeError",
+        "UnicodeError",
+        "ValueError",
+        "_finite_float",
+        "_reject_constant",
+        "_reject_duplicate_fields",
+        "bytes",
+        "dict",
+        "invalid_utf8",
+        "json",
+        "malformed",
+        "staticmethod",
+        "stdout",
+        "str",
+        "text",
+        "type",
+        "value"
+      ]
+    },
+    {
+      "old": "AntigravityAdapter._malformed_output",
+      "new_name": "malformed_output",
+      "public": true,
+      "span": [
+        2422,
+        2426
+      ],
+      "body_rows": 5,
+      "original_decorators": [
+        "staticmethod"
+      ],
+      "AST_sha256": "22ee7f60677266d67ef6545e5f7224314326c643cf88cd0012c0beebd60ec0b0",
+      "source_sha256": "f4c32280fc71485efd2851163a94800347eba385ab4260ebced55f25937a308e",
+      "signature": "",
+      "return_annotation": "None",
+      "runtime_and_annotation_NameLoads": [
+        "ProviderInvocationError",
+        "staticmethod"
+      ]
+    }
+  ],
+  "original_body_rows": 58,
+  "host_import_AST": {
+    "kind": "ImportFrom",
+    "level": 1,
+    "module": "antigravity_response_decoding",
+    "aliases": [
+      {
+        "name": "reject_duplicate_fields",
+        "asname": "_reject_duplicate_fields"
+      },
+      {
+        "name": "reject_constant",
+        "asname": "_reject_constant"
+      },
+      {
+        "name": "finite_float",
+        "asname": "_finite_float"
+      },
+      {
+        "name": "parse_result",
+        "asname": "_decode_antigravity_response"
+      },
+      {
+        "name": "malformed_output",
+        "asname": "_raise_antigravity_malformed_output"
+      }
+    ]
+  },
+  "class_slot_initialization": [
+    {
+      "old_method": "AntigravityAdapter._parse_result",
+      "at_old_definition_position": true,
+      "expression": "_parse_result = staticmethod(_decode_antigravity_response)"
+    },
+    {
+      "old_method": "AntigravityAdapter._malformed_output",
+      "at_old_definition_position": true,
+      "expression": "_malformed_output = staticmethod(_raise_antigravity_malformed_output)"
+    }
+  ],
+  "projected_graphs": {
+    "complete": {
+      "actual_immutable_baseline_modules": 231,
+      "actual_immutable_baseline_edges": 1164,
+      "baseline_cyclic_components": 0,
+      "projected_modules": 232,
+      "projected_edges": 1166,
+      "projected_cyclic_components": 0,
+      "added_edges": [
+        [
+          "story_writing_agents.antigravity_adapter",
+          "story_writing_agents.antigravity_response_decoding"
+        ],
+        [
+          "story_writing_agents.antigravity_response_decoding",
+          "story_writing_agents.provider_adapter"
+        ]
+      ],
+      "removed_edges": []
+    },
+    "controller": {
+      "actual_immutable_baseline_modules": 231,
+      "actual_immutable_baseline_edges": 1153,
+      "baseline_cyclic_components": 0,
+      "projected_modules": 232,
+      "projected_edges": 1155,
+      "projected_cyclic_components": 0,
+      "added_edges": [
+        [
+          "story_writing_agents.antigravity_adapter",
+          "story_writing_agents.antigravity_response_decoding"
+        ],
+        [
+          "story_writing_agents.antigravity_response_decoding",
+          "story_writing_agents.provider_adapter"
+        ]
+      ],
+      "removed_edges": []
+    },
+    "relative": {
+      "actual_immutable_baseline_modules": 231,
+      "actual_immutable_baseline_edges": 1162,
+      "baseline_cyclic_components": 0,
+      "projected_modules": 232,
+      "projected_edges": 1164,
+      "projected_cyclic_components": 0,
+      "added_edges": [
+        [
+          "antigravity_adapter",
+          "antigravity_response_decoding"
+        ],
+        [
+          "antigravity_response_decoding",
+          "provider_adapter"
+        ]
+      ],
+      "removed_edges": []
+    }
+  },
+  "source_preflight": "e820ae52aa854304d5d096ee218932071aa9c504c66d4d80ce61e4f8eb6bb9d7",
+  "import_position_note": "ea9ca690ce9dd8c2929ebb32a79949faecf0eaa1733220da040e8e74fbfa2871",
+  "behavior_change": false,
+  "focused_ids": [
+    "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_strictly_rejects_duplicate_fields_in_streamed_result",
+    "tests.test_antigravity_adapter.AntigravityAdapterTests.test_identifier_and_json_failures_are_fixed_and_confidential"
+  ],
+  "minimum_complete_leaf_direct_id": "tests.test_antigravity_adapter.AntigravityAdapterTests.test_identifier_and_json_failures_are_fixed_and_confidential",
+  "same_error_actual_invoke_RED_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_strictly_rejects_duplicate_fields_in_streamed_result",
+  "expanded_ids": [
+    "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_streams_events_and_parses_stream_json",
+    "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_strictly_rejects_duplicate_fields_in_streamed_result",
+    "tests.test_antigravity_adapter.AntigravityAdapterTests.test_command_stdin_paths_and_fresh_resume_results_are_exact",
+    "tests.test_antigravity_adapter.AntigravityAdapterTests.test_completed_failures_retain_exact_native_diagnostic_and_accounting",
+    "tests.test_antigravity_adapter.AntigravityAdapterTests.test_identifier_and_json_failures_are_fixed_and_confidential"
+  ],
+  "expanded_count": 5,
+  "existing_subtest_caps": {
+    "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_streams_events_and_parses_stream_json": 0,
+    "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_strictly_rejects_duplicate_fields_in_streamed_result": 0,
+    "tests.test_antigravity_adapter.AntigravityAdapterTests.test_command_stdin_paths_and_fresh_resume_results_are_exact": 0,
+    "tests.test_antigravity_adapter.AntigravityAdapterTests.test_completed_failures_retain_exact_native_diagnostic_and_accounting": 6,
+    "tests.test_antigravity_adapter.AntigravityAdapterTests.test_identifier_and_json_failures_are_fixed_and_confidential": 22
+  },
+  "affected_full": true,
+  "depends_on": [],
+  "depends_on_reason": "실제 leaf의 유일한 내부 의존 provider_adapter.py는 main263 owner manifest에 등록 owner가 없음; 이름을 발명하지 않음.",
+  "scope_limit": "native/state/recovery 전체 영향 격리를 주장하지 않으며 affected는2544 전체검증으로 유지.",
+  "test_preflight_sha256": "efcc18784429760e00ebab53b4825859941b84dace0e4ebc3bb60cffd6fb19dd",
+  "test_source_budget": {
+    "issue": 999,
+    "base": "26373d4a44b351b9bf27dfd7b9c46b627b17b772",
+    "allocated_by": "root",
+    "at_utc": "2026-11-11T07:48:20.964569+00:00",
+    "path": "tests/test_interactive_controller.py",
+    "aliases": [
+      "ConversationSearchResult",
+      "ConversationSearchScope"
+    ],
+    "credit_rows": 2,
+    "positive_rows": 2,
+    "net_rows": 0,
+    "budget": 151431,
+    "proof_sha256": "d6bf2b5c518a8ef776d58a39a0d69551916cc93fd9a8bacbae777251e5605520",
+    "existing_reservation_native_plan_readback": [
+      {
+        "issue": 983,
+        "body_sha256": "87488a05c2353240c188d90fcbe92babb680684efec68d11a97ad7dcc77bd45f",
+        "candidate_credit_mentions": {
+          "ConversationSearchResult": 0,
+          "ConversationSearchScope": 0
+        }
+      },
+      {
+        "issue": 984,
+        "body_sha256": "6cdee59efa375421df9e986832fbcbd3705ec330d1e4d3a618011de3b687f426",
+        "candidate_credit_mentions": {
+          "ConversationSearchResult": 0,
+          "ConversationSearchScope": 0
+        }
+      },
+      {
+        "issue": 985,
+        "body_sha256": "b4a911c694cd1c2d98d9a52aeb380400bcd3addb469f2ba63f54eed6571d4780",
+        "candidate_credit_mentions": {
+          "ConversationSearchResult": 0,
+          "ConversationSearchScope": 0
+        }
+      },
+      {
+        "issue": 988,
+        "body_sha256": "90a5672d5596571a76f9335d0f4aa7acdc4c758cd60f4320ffba1f49e6bb583d",
+        "candidate_credit_mentions": {
+          "ConversationSearchResult": 0,
+          "ConversationSearchScope": 0
+        }
+      },
+      {
+        "issue": 990,
+        "body_sha256": "8fbcd0af42d415c9320f342dbf1ce82e25c479d00d64485520d516af39b7efd9",
+        "candidate_credit_mentions": {
+          "ConversationSearchResult": 0,
+          "ConversationSearchScope": 0
+        }
+      },
+      {
+        "issue": 991,
+        "body_sha256": "14009007cacd07028fb05d2d669f46ba3a7bc35a3c4f121b57d2ab018bf09c84",
+        "candidate_credit_mentions": {
+          "ConversationSearchResult": 0,
+          "ConversationSearchScope": 0
+        }
+      },
+      {
+        "issue": 996,
+        "body_sha256": "a370422f0a24a9fd665765d881bf3fbc647be14789623a91349158ee4856de8e",
+        "candidate_credit_mentions": {
+          "ConversationSearchResult": 0,
+          "ConversationSearchScope": 0
+        }
+      }
+    ],
+    "same_eager_module_import_retained": true,
+    "unrelated_aliases_or_cases_may_not_be_deleted": true
+  },
+  "local_Case_Suite_runs": 0,
+  "actual_source_rows": {
+    "src/story_writing_agents/antigravity_adapter.py": 2420,
+    "src/story_writing_agents/antigravity_response_decoding.py": 79,
+    "PYTHON_MODULE_INDEX.md": 300
+  },
+  "source_freeze_sha256": "b4fbe3568cf0f4735f5c8fe99c5b61e7cedba64e3a9109d530f1444fbcaee6a8",
+  "source_static_results": {
+    "certified_interpreter": "/Users/anonymousanonym/Documents/story-writing-agents/.venv/bin/python (3.11.18)",
+    "compile_production_files": 232,
+    "source_other_base_files_byte_exact": 230,
+    "moved_definitions": 6,
+    "moved_body_rows": 58,
+    "moved_recursive_code_pairs": 6,
+    "retained_recursive_code_pairs_exact": 81,
+    "retained_class_initializer_exception": "two accepted same-position staticmethod initializations only",
+    "global_name_load_operations": 682,
+    "unresolved_globals": [],
+    "retained_annotation_expressions": 206,
+    "moved_annotation_expressions": 10,
+    "type_hint_checks": 63,
+    "type_hint_errors": [],
+    "all_original_import_origins_and_order_exact": true,
+    "host_removed_bindings": [
+      "_DuplicateField"
+    ],
+    "host_added_bindings": [
+      "_decode_antigravity_response",
+      "_raise_antigravity_malformed_output"
+    ],
+    "shared_json_math_Any_ProviderInvocationError_identity": true,
+    "descriptor_identity": true,
+    "actual_cls_dispatch_sites": 6,
+    "original_argument_default_decorator_exception_AST_preserved_except_accepted_moves": true,
+    "new_import_line": 66,
+    "first_constant_line": 75,
+    "taint_true_sites": 4,
+    "graphs": {
+      "complete": {
+        "modules": 232,
+        "edges": 1166,
+        "cyclic_components": 0
+      },
+      "controller": {
+        "modules": 232,
+        "edges": 1155,
+        "cyclic_components": 0
+      },
+      "relative": {
+        "modules": 232,
+        "edges": 1164,
+        "cyclic_components": 0
+      }
+    },
+    "private_imports_added": 0,
+    "index_rows": 300,
+    "diff_check": "passed",
+    "new_leaf_trailing_whitespace": "none",
+    "Case_Suite_profile_CI_runs": 0,
+    "tests_docs_config_edits": 0,
+    "source_Git_mutations": 0
+  },
+  "test_freeze_sha256": "680ac04130e0363abce3ee13313b09c7aedcb3c6d1b0cfbf9bdb8f8b0693f2ad",
+  "test_source_charge": {
+    "test_lines": 148448,
+    "support_lines": 1431,
+    "legacy_lines": 1550,
+    "effective_lines": 151429
+  },
+  "actual_graph": {
+    "modules": 232,
+    "complete_edges": 1166,
+    "controller_edges": 1155,
+    "relative_edges": 1164,
+    "cycles": 0,
+    "complete_minus_controller": [
+      [
+        "story_writing_agents.conversations.events",
+        "story_writing_agents.conversations.event_value_validation"
+      ],
+      [
+        "story_writing_agents.lead_preparation.reply_contract_values",
+        "story_writing_agents.runtime_resources.collaboration_event_journal"
+      ],
+      [
+        "story_writing_agents.lead_preparation.response_rules",
+        "story_writing_agents.lead_preparation.reply_contract_values"
+      ],
+      [
+        "story_writing_agents.orchestrator",
+        "story_writing_agents.lead_preparation.call_rule_factory"
+      ],
+      [
+        "story_writing_agents.orchestrator",
+        "story_writing_agents.lead_preparation.reply_contract_values"
+      ],
+      [
+        "story_writing_agents.orchestrator",
+        "story_writing_agents.lead_preparation.response_rules"
+      ],
+      [
+        "story_writing_agents.orchestrator",
+        "story_writing_agents.runtime_resources.collaboration_event_journal"
+      ],
+      [
+        "story_writing_agents.orchestrator",
+        "story_writing_agents.runtime_resources.reference_operation_registry"
+      ],
+      [
+        "story_writing_agents.orchestrator",
+        "story_writing_agents.runtime_resources.session_worktree_access"
+      ],
+      [
+        "story_writing_agents.runtime_resources.provider_call_accounting",
+        "story_writing_agents.runtime_resources.collaboration_event_journal"
+      ],
+      [
+        "story_writing_agents.runtime_resources.reference_operation_registry",
+        "story_writing_agents.runtime_resources.session_worktree_access"
+      ]
+    ],
+    "complete_minus_relative": [
+      [
+        "story_writing_agents.codex_adapter",
+        "story_writing_agents.codex_native_context"
+      ],
+      [
+        "story_writing_agents.conversations.events",
+        "story_writing_agents.conversations.event_value_validation"
+      ]
+    ],
+    "unchanged_reader_AST": true,
+    "production_freeze_hashes_match": true,
+    "Case_Suite_attempts": []
+  },
+  "preserved_canonical_inventory": {
+    "fresh_discovery": true,
+    "actual_ids": 2544,
+    "class_groups": 389,
+    "manifest_digest": "sha256:86aca048edf3744d5bdf317ccebf94de95406aa509747ab3b27ddd1c5d7a0417",
+    "actual_inventory_exact_match": true,
+    "ID_order": "unchanged",
+    "subtest_caps_weights_receipts_source_ledger_unchanged": true,
+    "weight_sum_microseconds": 53351213361,
+    "fixture_bytes_exact_count": 65,
+    "fixture_SHA256": {
+      "tests/fixtures/agent_context/provider_context_baseline_v1.json": "c8b3737b97e33fa90d825b4ca41cfda6b3b348d62401689bdfd90dbbd7b214f4",
+      "tests/fixtures/agent_context/provider_context_optimized_v1.json": "20b2a2a11028a17fb35e6be0ce8e8107f5166a40912234b367857f9fe63b1a5b",
+      "tests/fixtures/antigravity_live_cases.json": "371e9541880921a09d2775c21ddbc7a0c3264ad0a8796ab2c7869b87c6b77902",
+      "tests/fixtures/antigravity_recovered_finish/metadata.json": "0687776154051bd5a962605639164c04a0101e6eb2f470c777a6c0f925865831",
+      "tests/fixtures/antigravity_recovered_finish/request.json": "4ded2a625bd05808431deec1dd47331e8618a527e2aece89dad99d54ba292b7a",
+      "tests/fixtures/antigravity_recovered_finish/terminal.json": "7d4591e88809a071d4abacc9ed8326f8db556b2bda57c894fadb077b43a5d04e",
+      "tests/fixtures/antigravity_recovered_finish/transcript.jsonl": "b391bc64b75eb17af5d2d705c90939ffa40b1906dfcd80a77395c877bb786328",
+      "tests/fixtures/authoring_scope_compatibility/ordinary_v1_c20dc40.json": "b0f2c20d888222e16addfa05807df63dfb3fe8e0379adddb2d75f137b5c0ca1d",
+      "tests/fixtures/authoring_scope_compatibility/ordinary_v1_c20dc40.manifest.json": "74d9758371527dda042f729a61a5af22dc2df4b86199679f827fe9400f5797a2",
+      "tests/fixtures/authoring_scope_compatibility/scope_v2_basis_v1_76a80f7.json": "617896f44ed157ba79034efaf29910c8acced8b79b1153e050b413673d355c15",
+      "tests/fixtures/authoring_scope_compatibility/scope_v2_basis_v1_76a80f7.manifest.json": "71912df41464058859eeef2d16a64be1ee953c0e66701c0b7de484f1b818789d",
+      "tests/fixtures/consensus_compatibility/authoring_v3_c20dc40.json": "173023d5484c9e85c3ddf2fb2a08bcf3294c85e9a39c0ded51dc4bb96d554d2c",
+      "tests/fixtures/consensus_compatibility/authoring_v3_c20dc40.manifest.json": "ed3be986e7a13797e159b86de2f6893f9eeceaadfd40ec5b1f6d1e3a414b5083",
+      "tests/fixtures/lead_editorial_comparison/captures.json": "ebfca80bfee83f49ce67ae391e2566a8c358d636990d2b815a993901ae237dbb",
+      "tests/fixtures/lead_editorial_comparison/incompatible-recommendations.txt": "e6a402e6cd9eb134f46d2b0c204533cafd1ed63f9a799dca155b8719be7be77b",
+      "tests/fixtures/lead_editorial_comparison/record.txt": "4dafb39cec8926ebdb9707162af4060af4f50e861380cc9427a7ac2c94f2e711",
+      "tests/fixtures/lead_editorial_comparison/reviews.json": "8e60c9d2fba5ec9d854782abee343afc0e79b9ac0a7f65abdca9247bbb6bd257",
+      "tests/fixtures/lead_editorial_comparison/stronger-effect.txt": "bdca2f1333c16d6921f00b3a6852e08609d7776fd72e58c0d643778a33e339fb",
+      "tests/fixtures/test_budget_v1.json": "e05afba792b20ac2521ebbbb58d22dd426356231bba89e3ba9149fc9af7531d5",
+      "tests/fixtures/test_id_moves_v1.json": "91375b3932eff2287c43fc0a73c9484cab19b803ea3783a0b7727854d09918d9",
+      "tests/fixtures/test_source_ledger_v1.json": "a62138d9a350b2184b4c240a36258be410b9d74ebb48545e5f880f2ea0754b84",
+      "tests/fixtures/test_timing_weights_v1.json": "640805afc9d9a4f1f8f6c159e75bdbebb697a83c5f28e48e59b2f3562a5821bc",
+      "tests/fixtures/workspace_policy_baselines/character_custodian.md": "18b3ef46527944538cf36179190b82214809f9db56582afa47e21851cd7d797a",
+      "tests/fixtures/workspace_policy_baselines/common.md": "909402eae32a0b1ae4f978bea14a03f752d8450040ae5e50fcf592a26c3d0703",
+      "tests/fixtures/workspace_policy_baselines/execution_specialist.md": "d638cda4ee27306b8c87379bf9fee5e76652832bbd63a59b4372aabfbfc2b458",
+      "tests/fixtures/workspace_policy_baselines/integrated_794_09db65c/character_custodian.md": "806db0bae145e2ba50e920174299de06c20c083e45bba04b76ffe9c2d550e923",
+      "tests/fixtures/workspace_policy_baselines/integrated_794_09db65c/common.md": "eb78a7d3a5a3d83291b188f5109f3b3132582109e1211e30bac7e33a9eab18a5",
+      "tests/fixtures/workspace_policy_baselines/integrated_794_09db65c/execution_specialist.md": "4a3ead3e2389bda9662989d02bb8817ad1ec2d7b4d4f322b246b892545d3979b",
+      "tests/fixtures/workspace_policy_baselines/integrated_794_09db65c/lead_orchestrator.md": "497c0927a7733fc37c553aefd056753246bfd0554331bfd64dd6f6ccd6cf1160",
+      "tests/fixtures/workspace_policy_baselines/integrated_794_09db65c/manifest.json": "a16cf7143219dcc622e0ed4640c1e2c02bee8979c8a4d5a5672057f80e791ae6",
+      "tests/fixtures/workspace_policy_baselines/integrated_794_09db65c/plot_architect.md": "e59aba2b2e750c7b9ef00b2c3f1ea4e7e9b2889f7abf25a840d7db781d5d93e7",
+      "tests/fixtures/workspace_policy_baselines/integrated_794_09db65c/specialist_collaboration.md": "4ab83f3792a2598a174e6bfb02511162e26f963b5fe73c661afcfdaa3a5afcc3",
+      "tests/fixtures/workspace_policy_baselines/integrated_796_76a80f7/manifest.json": "ffa85af2911da2cb763b2be29cf9d02053c84516df809cfe5283465da4ef2880",
+      "tests/fixtures/workspace_policy_baselines/integrated_796_76a80f7/policies/character_custodian.md": "806db0bae145e2ba50e920174299de06c20c083e45bba04b76ffe9c2d550e923",
+      "tests/fixtures/workspace_policy_baselines/integrated_796_76a80f7/policies/common.md": "eb78a7d3a5a3d83291b188f5109f3b3132582109e1211e30bac7e33a9eab18a5",
+      "tests/fixtures/workspace_policy_baselines/integrated_796_76a80f7/policies/execution_specialist.md": "4a3ead3e2389bda9662989d02bb8817ad1ec2d7b4d4f322b246b892545d3979b",
+      "tests/fixtures/workspace_policy_baselines/integrated_796_76a80f7/policies/lead_orchestrator.md": "93181819635ddd9b1a5c636cae4ff3e1a8b78bf3bf1442a8b4fb790c131c3a18",
+      "tests/fixtures/workspace_policy_baselines/integrated_796_76a80f7/policies/plot_architect.md": "e59aba2b2e750c7b9ef00b2c3f1ea4e7e9b2889f7abf25a840d7db781d5d93e7",
+      "tests/fixtures/workspace_policy_baselines/integrated_796_76a80f7/policies/specialist_collaboration.md": "9fd629d51572990c79efffcf66fd857de1bce7912f3e304af785248a676ccb4b",
+      "tests/fixtures/workspace_policy_baselines/lead_orchestrator.md": "8e360d15b4a98d50c025a4fa1150b8c845786996d83569adaaeb1ce26c7dfc53",
+      "tests/fixtures/workspace_policy_baselines/manifest.json": "7f2086c04a62a0698f8eb900afd6dfe3f96b7509aca95a0cdaa5d31f01227a12",
+      "tests/fixtures/workspace_policy_baselines/plot_architect.md": "79f2f072beeacb420479098788df6b9cda34d5bc5b33c9c02c577f45eeef7f3d",
+      "tests/fixtures/workspace_policy_baselines/pre_guidance_97879d4/character_custodian.md": "806db0bae145e2ba50e920174299de06c20c083e45bba04b76ffe9c2d550e923",
+      "tests/fixtures/workspace_policy_baselines/pre_guidance_97879d4/common.md": "2bc0ea34377319843c3a998c95a873bd7c70d77d4f31304f7259b6a928e688b8",
+      "tests/fixtures/workspace_policy_baselines/pre_guidance_97879d4/execution_specialist.md": "4a3ead3e2389bda9662989d02bb8817ad1ec2d7b4d4f322b246b892545d3979b",
+      "tests/fixtures/workspace_policy_baselines/pre_guidance_97879d4/lead_bytes.json": "0b490e85661ca3198da56c52ffc9493d39a2280f2ceddeb231fc6ea76f4c125e",
+      "tests/fixtures/workspace_policy_baselines/pre_guidance_97879d4/lead_orchestrator.md": "5278b90ba5939db6ee31d4e2e4808ba583b66ebb25614acaf8a79200b9e7ea7a",
+      "tests/fixtures/workspace_policy_baselines/pre_guidance_97879d4/manifest.json": "030f8847a1534b1c7d95a1c47ad1226567df63b18cac7db42aaf9e6b5be646ac",
+      "tests/fixtures/workspace_policy_baselines/pre_guidance_97879d4/plot_architect.md": "e59aba2b2e750c7b9ef00b2c3f1ea4e7e9b2889f7abf25a840d7db781d5d93e7",
+      "tests/fixtures/workspace_policy_baselines/pre_guidance_97879d4/specialist_collaboration.md": "4ab83f3792a2598a174e6bfb02511162e26f963b5fe73c661afcfdaa3a5afcc3",
+      "tests/fixtures/workspace_policy_baselines/published_2e9/character_custodian.md": "18b3ef46527944538cf36179190b82214809f9db56582afa47e21851cd7d797a",
+      "tests/fixtures/workspace_policy_baselines/published_2e9/common.md": "909402eae32a0b1ae4f978bea14a03f752d8450040ae5e50fcf592a26c3d0703",
+      "tests/fixtures/workspace_policy_baselines/published_2e9/execution_specialist.md": "d638cda4ee27306b8c87379bf9fee5e76652832bbd63a59b4372aabfbfc2b458",
+      "tests/fixtures/workspace_policy_baselines/published_2e9/lead_orchestrator.md": "55cd8383ef191dea2d129678552ea459f8a403bc4488402af2b2343f06f3c62c",
+      "tests/fixtures/workspace_policy_baselines/published_2e9/manifest.json": "5cfc7948006dda2458c9780b10a7fda106499ca3023b02ba0341ce33aad51ff6",
+      "tests/fixtures/workspace_policy_baselines/published_2e9/plot_architect.md": "79f2f072beeacb420479098788df6b9cda34d5bc5b33c9c02c577f45eeef7f3d",
+      "tests/fixtures/workspace_policy_baselines/published_2e9/specialist_collaboration.md": "7aad65b0511fe4087513ff55c999d9ca974c600d33908eb5b32770e2a7d763f1",
+      "tests/fixtures/workspace_policy_baselines/published_main_1e482fe/character_custodian.md": "18b3ef46527944538cf36179190b82214809f9db56582afa47e21851cd7d797a",
+      "tests/fixtures/workspace_policy_baselines/published_main_1e482fe/common.md": "909402eae32a0b1ae4f978bea14a03f752d8450040ae5e50fcf592a26c3d0703",
+      "tests/fixtures/workspace_policy_baselines/published_main_1e482fe/execution_specialist.md": "d638cda4ee27306b8c87379bf9fee5e76652832bbd63a59b4372aabfbfc2b458",
+      "tests/fixtures/workspace_policy_baselines/published_main_1e482fe/lead_orchestrator.md": "6dbfd65607be6799511c8300370445b5194c01ae4554e5400ea521c1bb7ce5eb",
+      "tests/fixtures/workspace_policy_baselines/published_main_1e482fe/manifest.json": "e33122e21c4b58f20b782f4f57777565ca99923a64f338ed2aec567e1952f16d",
+      "tests/fixtures/workspace_policy_baselines/published_main_1e482fe/plot_architect.md": "79f2f072beeacb420479098788df6b9cda34d5bc5b33c9c02c577f45eeef7f3d",
+      "tests/fixtures/workspace_policy_baselines/published_main_1e482fe/specialist_collaboration.md": "7aad65b0511fe4087513ff55c999d9ca974c600d33908eb5b32770e2a7d763f1",
+      "tests/fixtures/workspace_policy_baselines/specialist_collaboration.md": "7aad65b0511fe4087513ff55c999d9ca974c600d33908eb5b32770e2a7d763f1"
+    },
+    "21old_runtime_skip_results_not_reexecuted": "skip declarations AST preserved; hosted CI authoritative"
+  },
+  "test_changed_paths": [
+    "tests/fixtures/test_owners_v1.json",
+    "tests/test_antigravity_parity.py",
+    "tests/test_artifact_application_contracts.py",
+    "tests/test_artifact_application_store_recovery.py",
+    "tests/test_artifact_relationship_policy.py",
+    "tests/test_git_external_operation_inspection.py",
+    "tests/test_interactive_controller.py",
+    "tests/test_rag_module_and_packaging_boundary.py",
+    "tests/test_session_lifecycle.py",
+    "tests/test_session_recovery_contracts.py",
+    "tests/test_workspace_session_history.py"
+  ],
+  "before_green": {
+    "run": 42983122721,
+    "attempts": [
+      1,
+      2,
+      3
+    ],
+    "cases_per_attempt": 5,
+    "all_passed": true
+  },
+  "before_actual_RED": {
+    "issue": 999,
+    "run_id": 42983128892,
+    "head": "423bd84d98410c3d4cbb2221ce4b28e47b1e5483",
+    "canonical_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_strictly_rejects_duplicate_fields_in_streamed_result",
+    "failure_fingerprint": "AssertionError: 'malformed JSON' not found in 'Antigravity CLI did not complete successfully'",
+    "failures": 1,
+    "errors": 0,
+    "subtests": 0,
+    "raw_report_sha256": "c024732692fd93c72206cc55590f07dbde636ad0c82e628af3b87dc20576c9c8",
+    "same_error_after_move": "pending",
+    "delivery_fault_included": false,
+    "at_utc": "2026-11-11T07:59:53.027401+00:00"
+  },
+  "current_gate_limits": [
+    "현재base263의after정상/같은RED/시간비교대기",
+    "최종main정렬·전체CI·R1종료대기",
+    "실제owner/namespace·초기heap·GC비용0주장금지"
+  ],
+  "current_main_merge_static_snapshot": {
+    "accepted_main": "575543b46c34a79b7e4e71f37e5d93cf2f011cc2",
+    "prior_head": "e2cdbad5c1aab384431cceecd57b318c9a2a3dec",
+    "source237_and_index_preserved": true,
+    "graphs": {
+      "source_modules": 237,
+      "complete_edges": 1195,
+      "Controller_edges": 1182,
+      "relative_only_edges": 1193,
+      "cycles": 0
+    },
+    "index_rows": 300,
+    "index_sha256": "bc12d400066dbbf4e0351415da2d6c950cd92598df77397f4fd0287e7fa42b5f",
+    "declared_owners": 249,
+    "owner_map_modules": 184,
+    "resolved_test_paths": 10,
+    "auto_source_scan_both_paths_preserved": true,
+    "RAG_static_relations": 56,
+    "budget": {
+      "test_lines": 148448,
+      "counted_support_lines": 1431,
+      "legacy_reserved_lines": 1550,
+      "effective_lines": 151429,
+      "cap": 151431,
+      "headroom": 2,
+      "headroom_reserved_issue": 1004,
+      "own_Result_Scope_and_all_main_credits_preserved": true,
+      "additional_line_compression_or_ledger_counter_changes": false
+    },
+    "test_freeze_sha256": "bccec74fc51fa70b3c44e340f10d6c4cccb61030b6bd25100037df3e7f420989",
+    "actual_production_audit_sha256": "66ec8f604502219daf43f75855220126fcc22a52ba0bde1eedc71e3fb4b37485",
+    "local_Case_Suite_runs": 0,
+    "verification_status": "현재source/namespace/정적test통합완료. current575 before/after hosted최소GREEN/정상반복/같은오류RED/전체CI/관리리뷰는별도검증."
+  },
+  "historical_main_merge_static_snapshots": [
+    {
+      "accepted_main": "28dfbf569e0157fbbe51a6c2b1a56b9827f534bc",
+      "prior_head": "1ba6b48283a4a4175d360466a4803b58bb29a1d5",
+      "native_plan_sha256": "21dd1bcb079ee7c47703b2f00d92c66b98da1eac4fd45c3ec1c63fa8c595264b",
+      "test_freeze_sha256": "89be8c62a6ecb8be276580f1333dd626aaa377dedcfb9c2454c12e74a95fb7c9",
+      "source234_and_index_preserved": true,
+      "graphs": {
+        "actual_modules": 234,
+        "actual_complete_edges": 1185,
+        "actual_Controller_edges": 1172,
+        "actual_relative_edges": 1183,
+        "cycle_back_edges": 0,
+        "all_original_readers_and_predicates_unchanged": true,
+        "RAG_existing_pure_equalities": 47,
+        "RAG_mismatches": 0,
+        "both_own_Antigravity_response_and_incoming_pattern_packaging_paths_retained": true,
+        "incoming_outcome_importer_and_already_shared985_event_value_data_preserved": true
+      },
+      "budget": {
+        "test_lines": 148450,
+        "counted_support_lines": 1431,
+        "legacy_reserved_lines": 1550,
+        "effective_lines": 151431,
+        "cap": 151431,
+        "headroom": 0,
+        "own_Result_Scope_credit_rows_kept_removed": true,
+        "incoming_Citation_PhaseRequest_983_local_LeadGroupPhase_and_InteractiveLeadAdapter_credits_preserved": true,
+        "985_duplicate_set_credit_shared_and_not_double_spent": true,
+        "future996_MatchKind_Query_and990_Hit_aliases_retained": true,
+        "line_compression_helper_logic_externalization_policy_or_ledger_change": false
+      },
+      "local_Case_Suite_runs": 0,
+      "current_hosted_after_full_review": "미실행: 정적 결과를 현재 기능·성능 성공으로 대신하지 않는다."
+    }
+  ]
+}
