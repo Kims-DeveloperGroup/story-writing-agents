@@ -2338,7 +2338,6 @@ print(json.dumps([data.hex(), stamps]), flush=True)
         self.assertEqual(list(driver._typeahead_buffer), ["c", "m", "d"])
 
     def test_run_progress_frames_propagates_eof_and_interrupt_without_advisory_error_wrapping(self) -> None:
-        from story_writing_agents.interactive_terminal._driver import AdvisoryProgressError
 
         driver = _progress_driver()
         fake_caps = _ansi_terminal_capabilities()
@@ -2978,7 +2977,7 @@ print(json.dumps([data.hex(), stamps]), flush=True)
 
         async def cancel_blocking_preparation():
             from pathlib import Path
-            from story_writing_agents import codex_adapter
+            from story_writing_agents import codex_native_context
             loop, entered, release = asyncio.get_running_loop(), asyncio.Event(), threading.Event()
             worker_threads = []
             def blocked(*_args, **_kwargs):
@@ -3018,8 +3017,8 @@ print(json.dumps([data.hex(), stamps]), flush=True)
             invocation = mock.Mock(session_id="session", context_call_id="call", payload_json=b"{}",
                 payload={"response_contract": {"schema_selection": {"issued_contract": {"call_id": "call"}}}},
                 execution_workspace=owner)
-            with mock.patch.object(codex_adapter, "_read_codex_native_observation", new=blocked):
-                await cancel_and_join(codex_adapter._inspect_codex_native_observation_async(
+            with mock.patch.object(codex_native_context, "read_codex_native_observation", new=blocked):
+                await cancel_and_join(codex_native_context.inspect_codex_native_observation_async(
                     Path("/tmp"), invocation, "native-thread"), OSError)
             self.assertEqual(owner.require_current.call_count, 2)
         asyncio.run(cancel_blocking_preparation())

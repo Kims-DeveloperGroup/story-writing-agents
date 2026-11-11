@@ -2690,7 +2690,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         from story_writing_agents.agent_context.group_reporting import group_trace_report
         from story_writing_agents.provider_adapter import (NativeContextCheck, NativeContextCheckStage,
             NativeContextCheckReason, NativeContextSourceStage, ProviderInvocationError)
-        from story_writing_agents import codex_adapter as codex_adapter_module
+        from story_writing_agents import codex_native_context
         native_mutations, native_cleanups, unavailable_native_calls, native_results = {}, {}, set(), []
         omitted_thread_reports = set()
         pre_submit_probe = None
@@ -2753,7 +2753,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                         "usage": native_info["total_token_usage"]}) + b"\n"
                 return ProcessResult(stdout=stdout, stderr=b"", returncode=0)
             creator, scan_threads, guard_threads = threading.get_ident(), set(), set()
-            facts = codex_adapter_module._native_file_facts
+            facts = codex_native_context._native_file_facts
             require_current = ProviderExecutionWorkspace.require_current
             def observed_facts(*args, **kwargs):
                 scan_threads.add(threading.get_ident())
@@ -2765,7 +2765,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             try:
                 with (mock.patch.dict(os.environ, {"CODEX_HOME": str(history.root)}),
                       mock.patch("story_writing_agents.codex_adapter.run_process", new=native_process),
-                      mock.patch.object(codex_adapter_module, "_native_file_facts", new=observed_facts),
+                      mock.patch.object(codex_native_context, "_native_file_facts", new=observed_facts),
                       mock.patch.object(ProviderExecutionWorkspace, "require_current", new=observed_guard)):
                     result = await native_invoke(binding, invocation)
             finally:
@@ -3265,7 +3265,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                  "last_token_usage": {"input_tokens": 1000, "output_tokens": 10, "cached_input_tokens": 0}},
                 {"total_token_usage": {"input_tokens": 3000, "output_tokens": 30, "cached_input_tokens": 0},
                  "last_token_usage": {"input_tokens": 1000, "output_tokens": 10, "cached_input_tokens": 0}}, ]
-            hidden, inspect_native = [], codex_adapter_module._inspect_codex_native_observation_async
+            hidden, inspect_native = [], codex_native_context.inspect_codex_native_observation_async
             def restore_rollout():
                 if hidden and hidden[-1][0].exists(): hidden[-1][0].replace(hidden[-1][1])
             async def inspect_before_publication(*args, **kwargs):
@@ -3280,7 +3280,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 self.addCleanup(restore_rollout)
             native_mutations, native_cleanups = {2: hide_rollout}, {2: restore_rollout}
             inspection_fault, fault_active = RuntimeError("PRIVATE_NATIVE_INSPECTION_DETAIL"), [False]
-            original_file_facts = codex_adapter_module._native_file_facts
+            original_file_facts = codex_native_context._native_file_facts
             def file_facts(path, *args, **kwargs):
                 if fault_active[0] and Path(path) == history.path: raise inspection_fault
                 return original_file_facts(path, *args, **kwargs)
@@ -3309,8 +3309,8 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 result_correlation_id="native-observation-result-" + native_thread,
                 physical_call_limit=3, mandatory_references=(), reference_operation_id=None))
             with mock.patch.object(backend._codex_adapter, "invoke", new=invoke), \
-                    mock.patch.object(codex_adapter_module, "_native_file_facts", new=file_facts), \
-                    mock.patch.object(codex_adapter_module, "_inspect_codex_native_observation_async", new=inspect_before_publication):
+                    mock.patch.object(codex_native_context, "_native_file_facts", new=file_facts), \
+                    mock.patch.object(codex_native_context, "inspect_codex_native_observation_async", new=inspect_before_publication):
                 if report_thread:
                     observed_result = await service.invoke(unavailable_request, ObservedProvider(),
                         group_observation_sink=observations.append, **authorities)
@@ -3425,7 +3425,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
 
     def _assert_owned_native_context_witness(self, invocation) -> None:
         import sqlite3
-        from story_writing_agents import codex_adapter
+        from story_writing_agents import codex_adapter, codex_native_context
         from story_writing_agents.provider_wire import SchemaSelectionInput
 
         thread = "11111111-1111-4111-8111-111111111111"
@@ -3462,7 +3462,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
 
             records = [metadata, *turn(first, "turn-1")]
             write(records)
-            witness = codex_adapter.inspect_codex_context_witness(root, first, thread)
+            witness = codex_native_context.inspect_codex_context_witness(root, first, thread)
             self.assertIsNotNone(witness)
             self.assertEqual((witness.thread_id, witness.rollout_id), (thread, rollout))
             self.assertEqual(witness.call_id, selection.call_id)
@@ -3485,15 +3485,15 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     ([user("prefix" + environment_text), wire], False), ([user(environment_text + "business prose"), wire], False),
                     ([environment, other_wire], False)):
                 write([metadata, started, context, *messages, completed])
-                observed = codex_adapter.inspect_codex_context_witness(root, first, thread)
+                observed = codex_native_context.inspect_codex_context_witness(root, first, thread)
                 self.assertEqual(observed is not None, accepted, messages)
                 if accepted: self.assertEqual(observed.input_lineage_count, 1)
             write([metadata, started, context, environment, wire])
-            self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, first, thread))
+            self.assertIsNone(codex_native_context.inspect_codex_context_witness(root, first, thread))
             write(records)
             from story_writing_agents.agent_context.accounting import ProviderUsage, ProviderUsageScope, normalized_provider_usage
             raw_usage = ProviderUsage(7, 3, 0)
-            self.assertIsNone(codex_adapter._inspect_codex_native_observation(root, first, thread).last_token_usage)
+            self.assertIsNone(codex_native_context.inspect_codex_native_observation(root, first, thread).last_token_usage)
             def token_count(info):
                 return {"type": "event_msg", "payload": {"type": "token_count", "info": info}}
             last = {"input_tokens": 7, "output_tokens": 3, "cached_input_tokens": 0}
@@ -3504,7 +3504,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     ({"last_token_usage": dict.fromkeys(last, 0)}, ProviderUsage(0, 0, 0)),
                     ({"last_token_usage": {**last, "input_tokens": True}}, None), ({}, None)):
                 write([metadata, started, context, wire, stale, token_count(info), completed])
-                native = codex_adapter._inspect_codex_native_observation(root, first, thread)
+                native = codex_native_context.inspect_codex_native_observation(root, first, thread)
                 self.assertIsNotNone(native.witness)
                 self.assertEqual(native.last_token_usage, expected)
             write(records)
@@ -3512,21 +3512,21 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(uninspected.raw, raw_usage)
             self.assertIs(uninspected.scope, ProviderUsageScope.UNKNOWN)
             self.assertEqual(uninspected.source, "codex.turn.completed.usage:context_not_inspected")
-            self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, first, thread, previous=witness, before=True))
-            self.assertIs(codex_adapter.inspect_codex_context_witness(root, first, thread, previous=witness, anchor=witness, before=True), witness)
-            self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, first, rollout))
-            self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, replace(first, session_id="wrong-scope"), thread, previous=witness, anchor=witness))
+            self.assertIsNone(codex_native_context.inspect_codex_context_witness(root, first, thread, previous=witness, before=True))
+            self.assertIs(codex_native_context.inspect_codex_context_witness(root, first, thread, previous=witness, anchor=witness, before=True), witness)
+            self.assertIsNone(codex_native_context.inspect_codex_context_witness(root, first, rollout))
+            self.assertIsNone(codex_native_context.inspect_codex_context_witness(root, replace(first, session_id="wrong-scope"), thread, previous=witness, anchor=witness))
             second_payload = dict(payload)
             second_payload["response_contract"] = {**payload["response_contract"], "schema_selection": replace(selection, call_id=selection.call_id + "-next").as_object()}
             second = replace(first, payload=second_payload, context_call_id=selection.call_id + "-next", thread_id=thread)
-            self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness))
+            self.assertIsNone(codex_native_context.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness))
             extended = [*records, *turn(second, "turn-2")]
             write(extended)
-            continued = codex_adapter.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness)
+            continued = codex_native_context.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness)
             self.assertIsNotNone(continued)
             self.assertEqual(continued.turn_id, "turn-2")
             write([metadata, started, context, wire, stale, completed, *turn(second, "turn-2")])
-            native = codex_adapter._inspect_codex_native_observation(root, second, thread, previous=witness, anchor=witness)
+            native = codex_native_context.inspect_codex_native_observation(root, second, thread, previous=witness, anchor=witness)
             self.assertIsNotNone(native.witness)
             self.assertIsNone(native.last_token_usage)
             write(extended)
@@ -3556,55 +3556,55 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(continued.file_identity, witness.file_identity)
             self.assertGreater(continued.prefix_utf8_bytes, witness.prefix_utf8_bytes)
             self.assertEqual(hashlib.sha256(path.read_bytes()[:witness.prefix_utf8_bytes]).hexdigest(), witness.prefix_sha256)
-            self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness, before=True))
+            self.assertIsNone(codex_native_context.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness, before=True))
             invalid = [ [*records, *turn(second, "turn-2")[:-1]],
                 [*records, {"type": "compacted", "payload": {}}, *turn(second, "turn-2")],
                 [*records, {"type": "event_msg", "payload": {"type": "thread_rolled_back", "turn_id": "turn-2"}}, *turn(second, "turn-2")],
                 [*records, *turn(second, "turn-2"), *turn(second, "turn-3")], ]
             for bad_records in invalid:
                 write(bad_records)
-                self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness))
+                self.assertIsNone(codex_native_context.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness))
             # 비핵심 기록·설정 변화는 보존된 실제 입력 계보를 무효화하지 않는다.
             for metadata_only in (
                 [*records, {"type": "unknown_record", "payload": {}}, *turn(second, "turn-2")],
                 [*records, {"type": "turn_context", "payload": {**settings["payload"], "comp_hash": "different-configuration"}}, *turn(second, "turn-2")],
             ):
                 write(metadata_only)
-                self.assertIsNotNone(codex_adapter.inspect_codex_context_witness(root, second, thread,
+                self.assertIsNotNone(codex_native_context.inspect_codex_context_witness(root, second, thread,
                     previous=witness, anchor=witness))
             for key in ("history_base", "forked_from_id", "parent_thread_id", "forked_from_ordinal_exclusive"):
                 write([{**metadata, "payload": {**metadata["payload"], key: "unproven-branch"}}, settings, *turn(first, "turn-1")])
-                self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, first, thread))
+                self.assertIsNone(codex_native_context.inspect_codex_context_witness(root, first, thread))
             write([{**metadata, "payload": {**metadata["payload"], "id": rollout}}, settings, *turn(first, "turn-1")])
-            self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, first, thread))
+            self.assertIsNone(codex_native_context.inspect_codex_context_witness(root, first, thread))
             write(extended)
-            with mock.patch.object(codex_adapter, "_CONTEXT_WITNESS_BYTES", path.stat().st_size - 1):
-                self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness))
-            with mock.patch.object(codex_adapter, "_CONTEXT_WITNESS_LINES", len(extended) - 1):
-                self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness))
+            with mock.patch.object(codex_native_context, "CONTEXT_WITNESS_BYTES", path.stat().st_size - 1):
+                self.assertIsNone(codex_native_context.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness))
+            with mock.patch.object(codex_native_context, "CONTEXT_WITNESS_LINES", len(extended) - 1):
+                self.assertIsNone(codex_native_context.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness))
             wrong_prefix = path.read_bytes().replace(b"configuration-hash", b"configuration-edit", 1)
             path.write_bytes(wrong_prefix)
-            self.assertIsNotNone(codex_adapter.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness))
+            self.assertIsNotNone(codex_native_context.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness))
             write(extended)
             replacement = path.with_suffix(".replacement")
             replacement.write_bytes(path.read_bytes())
             replacement.chmod(0o600)
             replacement.replace(path)
-            self.assertIsNotNone(codex_adapter.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness))
+            self.assertIsNotNone(codex_native_context.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness))
             with sqlite3.connect(database) as connection: connection.execute("UPDATE threads SET archived=1")
-            self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, first, thread))
+            self.assertIsNone(codex_native_context.inspect_codex_context_witness(root, first, thread))
             with sqlite3.connect(database) as connection:
                 connection.execute("UPDATE threads SET archived=0, rollout_path=?", (str(root / "outside.jsonl"),))
-            self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, first, thread))
+            self.assertIsNone(codex_native_context.inspect_codex_context_witness(root, first, thread))
             target = path.with_suffix(".owned")
             path.replace(target)
             path.symlink_to(target)
             with sqlite3.connect(database) as connection:
                 connection.execute("UPDATE threads SET rollout_path=?", (str(path),))
-            self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, first, thread))
+            self.assertIsNone(codex_native_context.inspect_codex_context_witness(root, first, thread))
             path.unlink()
             target.replace(path)
-            current = codex_adapter.inspect_codex_context_witness(root, second, thread)
+            current = codex_native_context.inspect_codex_context_witness(root, second, thread)
             self.assertIsNotNone(current)
             alternate = path.with_name(path.name.replace(rollout, "55555555-5555-4555-8555-555555555555"))
             alternate.write_bytes(path.read_bytes())
@@ -3613,17 +3613,17 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             path.replace(original)
             with sqlite3.connect(database) as connection:
                 connection.execute("UPDATE threads SET rollout_path=?", (str(alternate),))
-            self.assertIsNotNone(codex_adapter.inspect_codex_context_witness(root, second, thread, previous=current, anchor=current, before=True))
-            self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, second, thread, previous=current, anchor=current))
-            self.assertIsNotNone(codex_adapter.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness))
+            self.assertIsNotNone(codex_native_context.inspect_codex_context_witness(root, second, thread, previous=current, anchor=current, before=True))
+            self.assertIsNone(codex_native_context.inspect_codex_context_witness(root, second, thread, previous=current, anchor=current))
+            self.assertIsNotNone(codex_native_context.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness))
             original.replace(path)
             with sqlite3.connect(database) as connection:
                 connection.execute("UPDATE threads SET rollout_path=?", (str(path),))
-            self.assertIsNotNone(codex_adapter.inspect_codex_context_witness(root, second, thread,
+            self.assertIsNotNone(codex_native_context.inspect_codex_context_witness(root, second, thread,
                 previous=current, anchor=replace(current, prefix_sha256="0" * 64), before=True))
-            with mock.patch.object(codex_adapter.os, "geteuid", return_value=path.stat().st_uid + 1):
-                self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, second, thread))
-            real_facts = codex_adapter._native_file_facts
+            with mock.patch.object(codex_native_context.os, "geteuid", return_value=path.stat().st_uid + 1):
+                self.assertIsNone(codex_native_context.inspect_codex_context_witness(root, second, thread))
+            real_facts = codex_native_context._native_file_facts
             observed = 0
 
             def concurrent_change(candidate, **kwargs):
@@ -3635,21 +3635,21 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                         with path.open("ab") as stream: stream.write(b'{"type":"world_state","payload":{}}\n')
                 return facts
 
-            with mock.patch.object(codex_adapter, "_native_file_facts", side_effect=concurrent_change):
-                self.assertIsNotNone(codex_adapter.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness))
+            with mock.patch.object(codex_native_context, "_native_file_facts", side_effect=concurrent_change):
+                self.assertIsNotNone(codex_native_context.inspect_codex_context_witness(root, second, thread, previous=witness, anchor=witness))
             self.assertGreaterEqual(observed, 1)
             write(extended)
             with sqlite3.connect(database) as connection:
                 self.assertEqual(connection.execute("PRAGMA journal_mode=WAL").fetchone()[0], "wal")
                 connection.execute("UPDATE threads SET archived=0")
                 connection.commit()
-                self.assertIsNotNone(codex_adapter.inspect_codex_context_witness(root, second, thread))
+                self.assertIsNotNone(codex_native_context.inspect_codex_context_witness(root, second, thread))
                 shared = database.with_name(database.name + "-shm")
                 saved = shared.with_suffix(".saved")
                 self.assertTrue(shared.exists())
                 shared.replace(saved)
                 try:
-                    self.assertIsNone(codex_adapter.inspect_codex_context_witness(root, second, thread))
+                    self.assertIsNone(codex_native_context.inspect_codex_context_witness(root, second, thread))
                     self.assertFalse(shared.exists())
                 finally: saved.replace(shared)
 

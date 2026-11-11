@@ -1078,7 +1078,7 @@ class OwnedNativeHistory:
         self.witnesses = []
 
     def complete(self, invocation, *, token_usage=None, after_write=None, expect_unavailable=False):
-        from story_writing_agents.codex_adapter import inspect_codex_context_witness
+        from story_writing_agents.codex_native_context import inspect_codex_context_witness
         if self.records:
             self.case.assertEqual(invocation.thread_id, self.thread_id)
             previous = inspect_codex_context_witness(self.root, invocation, self.thread_id,
