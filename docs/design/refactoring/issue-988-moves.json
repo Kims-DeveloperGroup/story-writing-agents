@@ -1,0 +1,1158 @@
+{
+  "schema_version": 1,
+  "issue": 988,
+  "parent": 968,
+  "phase": "구현 전 Draft 계획",
+  "accepted_main_proposed": "e7bd11b53b9aaa15b3563e2795e8d85956ecc94f",
+  "source": "src/story_writing_agents/orchestrator.py",
+  "owner": "src/story_writing_agents/lead_preparation/authoring_authority.py",
+  "definitions": [
+    {
+      "old": "StoryRuntime._routing_path",
+      "proposed_public_name": "routing_path",
+      "current_lines": [
+        13737,
+        13743
+      ],
+      "body_rows": 7,
+      "args_current": "locator: str",
+      "args_after_receiver_removal": "locator: str",
+      "returns": "str | None",
+      "decorators": [
+        "staticmethod"
+      ],
+      "source_sha256": "d738cd7a8af1e7f5769c2d2f68a8b70853ba394be7c3a3805eed459085a04b85",
+      "AST_sha256": "1e8a07d78e3d4896324aae68c2ecee102d46dcf976b6176479e5874e12749100",
+      "AST_matches_255d": true,
+      "runtime_global_names": [
+        "TypeError",
+        "ValueError",
+        "artifact_domain",
+        "len",
+        "parse_artifact_references"
+      ],
+      "annotation_names": [
+        "str"
+      ],
+      "recursive_code_objects": 1,
+      "external_refs": 1,
+      "internal_host_attributes": []
+    },
+    {
+      "old": "StoryRuntime._authoring_affected_paths",
+      "proposed_public_name": "authoring_affected_paths",
+      "current_lines": [
+        13746,
+        13759
+      ],
+      "body_rows": 14,
+      "args_current": "cls, inputs: tuple[CollaborationInputRevision, ...], evidence: CollaborationLeadEvidence | None",
+      "args_after_receiver_removal": "inputs: tuple[CollaborationInputRevision, ...], evidence: CollaborationLeadEvidence | None",
+      "returns": "tuple[str, ...]",
+      "decorators": [
+        "classmethod"
+      ],
+      "source_sha256": "78dfeb97e9320860ebb750d932418bf39e7983a3f3e2ebea2a1a92c011a0e5d2",
+      "AST_sha256": "64a86e14c4c0b0a75f15853501850c35d77a42e7849e45599b24c4ff4d5808d4",
+      "AST_matches_255d": true,
+      "runtime_global_names": [
+        "CollaborationInputKind",
+        "dict",
+        "tuple"
+      ],
+      "annotation_names": [
+        "CollaborationInputRevision",
+        "CollaborationLeadEvidence",
+        "str",
+        "tuple"
+      ],
+      "recursive_code_objects": 4,
+      "external_refs": 4,
+      "internal_host_attributes": [
+        "cls._routing_path"
+      ]
+    },
+    {
+      "old": "StoryRuntime._has_present_references",
+      "proposed_public_name": "has_present_references",
+      "current_lines": [
+        13893,
+        13897
+      ],
+      "body_rows": 5,
+      "args_current": "inputs: tuple[CollaborationInputRevision, ...]",
+      "args_after_receiver_removal": "inputs: tuple[CollaborationInputRevision, ...]",
+      "returns": "bool",
+      "decorators": [
+        "staticmethod"
+      ],
+      "source_sha256": "1224054626d88026c74bed92967d78553319f5367bf66b830950bf7ca0737f80",
+      "AST_sha256": "a97091f8a5d7c6e819f28fcaa7a8e29af7239ccc3812d89ebab0e87ac1399cbf",
+      "AST_matches_255d": true,
+      "runtime_global_names": [
+        "CollaborationInputKind",
+        "CollaborationInputState",
+        "any"
+      ],
+      "annotation_names": [
+        "CollaborationInputRevision",
+        "bool",
+        "tuple"
+      ],
+      "recursive_code_objects": 2,
+      "external_refs": 3,
+      "internal_host_attributes": []
+    },
+    {
+      "old": "StoryRuntime._final_review_floor",
+      "proposed_public_name": "final_review_floor",
+      "current_lines": [
+        13900,
+        13904
+      ],
+      "body_rows": 5,
+      "args_current": "cls, scope: AuthoringScope, inputs: tuple[CollaborationInputRevision, ...], *, preparation: bool",
+      "args_after_receiver_removal": "scope: AuthoringScope, inputs: tuple[CollaborationInputRevision, ...], *, preparation: bool",
+      "returns": "int",
+      "decorators": [
+        "classmethod"
+      ],
+      "source_sha256": "30323183c7e84632536c17cb5f9b9baa1cf763e415db650ed0842ba5bb6bdb0a",
+      "AST_sha256": "563481f350eaf19a65d011a77d80e1e211c16b52fe15042f5f27253bcff6e15f",
+      "AST_matches_255d": true,
+      "runtime_global_names": [
+        "int",
+        "len",
+        "required_authoring_specialists"
+      ],
+      "annotation_names": [
+        "AuthoringScope",
+        "CollaborationInputRevision",
+        "bool",
+        "int",
+        "tuple"
+      ],
+      "recursive_code_objects": 1,
+      "external_refs": 2,
+      "internal_host_attributes": [
+        "cls._has_present_references"
+      ]
+    },
+    {
+      "old": "StoryRuntime._future_authoring_floor",
+      "proposed_public_name": "future_authoring_floor",
+      "current_lines": [
+        13907,
+        13913
+      ],
+      "body_rows": 7,
+      "args_current": "cls, scope: AuthoringScope | None, inputs: tuple[CollaborationInputRevision, ...]",
+      "args_after_receiver_removal": "scope: AuthoringScope | None, inputs: tuple[CollaborationInputRevision, ...]",
+      "returns": "int",
+      "decorators": [
+        "classmethod"
+      ],
+      "source_sha256": "1cb4cd7703dac6579e3fe564fcf242d313c7b2cef62329c417bbebf8f1a25a77",
+      "AST_sha256": "0f56044b71b14ff3400159d5c30523852c1ae6c780998f4f7d807d997cef283d",
+      "AST_matches_255d": true,
+      "runtime_global_names": [
+        "AuthoringActivity",
+        "AuthoringIntent"
+      ],
+      "annotation_names": [
+        "AuthoringScope",
+        "CollaborationInputRevision",
+        "int",
+        "tuple"
+      ],
+      "recursive_code_objects": 1,
+      "external_refs": 2,
+      "internal_host_attributes": [
+        "cls._final_review_floor"
+      ]
+    },
+    {
+      "old": "StoryRuntime._basis_budget_fingerprint",
+      "proposed_public_name": "basis_budget_fingerprint",
+      "current_lines": [
+        13916,
+        13919
+      ],
+      "body_rows": 4,
+      "args_current": "scope: AuthoringScope | None",
+      "args_after_receiver_removal": "scope: AuthoringScope | None",
+      "returns": "str",
+      "decorators": [
+        "staticmethod"
+      ],
+      "source_sha256": "b661255fcc6fa9992fb15fbc97a2b624a026a4355f941e22c9c94c518c5e62dd",
+      "AST_sha256": "ea827b9ba2df0ac7a8d24d0f1916b047b81682cb0b8f22d4df590ec560783933",
+      "AST_matches_255d": true,
+      "runtime_global_names": [
+        "hashlib",
+        "reply_contract_values"
+      ],
+      "annotation_names": [
+        "AuthoringScope",
+        "str"
+      ],
+      "recursive_code_objects": 1,
+      "external_refs": 4,
+      "internal_host_attributes": []
+    },
+    {
+      "old": "StoryRuntime._resolve_authoring_scope",
+      "proposed_public_name": "resolve_authoring_scope",
+      "current_lines": [
+        13922,
+        13975
+      ],
+      "body_rows": 54,
+      "args_current": "cls, scope: AuthoringScope, inputs: tuple[CollaborationInputRevision, ...], evidence: CollaborationLeadEvidence | None, previous: AuthoringScope | None=None, *, allow_provisional: bool=False, allow_view: bool=False",
+      "args_after_receiver_removal": "scope: AuthoringScope, inputs: tuple[CollaborationInputRevision, ...], evidence: CollaborationLeadEvidence | None, previous: AuthoringScope | None=None, *, allow_provisional: bool=False, allow_view: bool=False",
+      "returns": "AuthoringScope",
+      "decorators": [
+        "classmethod"
+      ],
+      "source_sha256": "9ffa43b9b307c4288d17ee5c125df84835b4eea21bcfd246efd0044045ed2663",
+      "AST_sha256": "d0c713be2d7a3a2643c89371240e5954ed0b929c7447349b3724702e121e4a23",
+      "AST_matches_255d": true,
+      "runtime_global_names": [
+        "ArtifactReviewDomain",
+        "AuthoringActivity",
+        "BackendProtocolError",
+        "dict",
+        "replace",
+        "reply_contract_values",
+        "required_authoring_domains",
+        "set",
+        "tuple",
+        "validation_failure"
+      ],
+      "annotation_names": [
+        "AuthoringScope",
+        "CollaborationInputRevision",
+        "CollaborationLeadEvidence",
+        "bool",
+        "tuple"
+      ],
+      "recursive_code_objects": 2,
+      "external_refs": 4,
+      "internal_host_attributes": []
+    },
+    {
+      "old": "StoryRuntime._authoring_tasks",
+      "proposed_public_name": "authoring_tasks",
+      "current_lines": [
+        14010,
+        14083
+      ],
+      "body_rows": 74,
+      "args_current": "events: tuple[CollaborationEvent, ...]",
+      "args_after_receiver_removal": "events: tuple[CollaborationEvent, ...]",
+      "returns": "dict[str, AuthoringScope]",
+      "decorators": [
+        "staticmethod"
+      ],
+      "source_sha256": "30b680b0c381781512593658392af334ea72a6f671e630d7450ae778adf0bd68",
+      "AST_sha256": "3412cd27604ab9b8c3c0434189d78aa7ef0cbc1331aaf6cf1a2cbed1dd823b74",
+      "AST_matches_255d": true,
+      "runtime_global_names": [
+        "ArtifactApplicationOutcomeKind",
+        "ArtifactApplicationResultPayload",
+        "ArtifactReviewDomain",
+        "ArtifactReviewedProposal",
+        "AuthoringActivity",
+        "BackendProtocolError",
+        "CollaborationLeadJudgmentPayload",
+        "CollaborationLeadTaskTransitionPayload",
+        "CollaborationProposal",
+        "LeadRecommendationRequestPayload",
+        "LeadTaskAction",
+        "authoring_scope_is_view",
+        "confirmation_task_bindings",
+        "dict",
+        "next",
+        "replace",
+        "set",
+        "tuple",
+        "type"
+      ],
+      "annotation_names": [
+        "AuthoringScope",
+        "CollaborationEvent",
+        "dict",
+        "str",
+        "tuple"
+      ],
+      "recursive_code_objects": 5,
+      "external_refs": 14,
+      "internal_host_attributes": []
+    },
+    {
+      "old": "StoryRuntime._completed_authoring_source",
+      "proposed_public_name": "completed_authoring_source",
+      "current_lines": [
+        14325,
+        14409
+      ],
+      "body_rows": 85,
+      "args_current": "scope: AuthoringScope, events: tuple[CollaborationEvent, ...]",
+      "args_after_receiver_removal": "scope: AuthoringScope, events: tuple[CollaborationEvent, ...]",
+      "returns": "tuple[CollaborationProposal, CollaborationEvent, CollaborationHistoryProjection]",
+      "decorators": [
+        "staticmethod"
+      ],
+      "source_sha256": "35eaf7cdeeb9999e774d340f43cff4fb3afdfdeff158a2f1ee93a27146dbd729",
+      "AST_sha256": "7f0a6755c0288c40419bd6093a802adccd8de324e3ff12ba90a60cd077ec75ac",
+      "AST_matches_255d": true,
+      "runtime_global_names": [
+        "AuthoringActivity",
+        "AuthoringIntent",
+        "BackendProtocolError",
+        "CollaborationExecutionResult",
+        "CollaborationLeadSynthesisPayload",
+        "CollaborationProviderCallPayload",
+        "CollaborationProviderCallState",
+        "CollaborationStepState",
+        "CollaborationStepStatePayload",
+        "authoring_capture_identity",
+        "confirmed_authoring_proposals",
+        "document_lineage_cost",
+        "max",
+        "next",
+        "project_collaboration_history",
+        "replace",
+        "reply_contract_values",
+        "reversed",
+        "sum",
+        "tuple",
+        "type"
+      ],
+      "annotation_names": [
+        "AuthoringScope",
+        "CollaborationEvent",
+        "CollaborationHistoryProjection",
+        "CollaborationProposal",
+        "tuple"
+      ],
+      "recursive_code_objects": 10,
+      "external_refs": 4,
+      "internal_host_attributes": []
+    },
+    {
+      "old": "StoryRuntime._official_authoring_scope",
+      "proposed_public_name": "official_authoring_scope",
+      "current_lines": [
+        14747,
+        14748
+      ],
+      "body_rows": 2,
+      "args_current": "scope: AuthoringScope | None",
+      "args_after_receiver_removal": "scope: AuthoringScope | None",
+      "returns": "bool",
+      "decorators": [
+        "staticmethod"
+      ],
+      "source_sha256": "d722683a7d76d85be64ca4891ac7b199ddbf4ec771db7aa3fa26fc329e0f243a",
+      "AST_sha256": "26843bbe95e3663f94a45f31770056a71ab24882c8933c39f21e470c7e04869c",
+      "AST_matches_255d": true,
+      "runtime_global_names": [
+        "AuthoringIntent"
+      ],
+      "annotation_names": [
+        "AuthoringScope",
+        "bool"
+      ],
+      "recursive_code_objects": 1,
+      "external_refs": 2,
+      "internal_host_attributes": []
+    },
+    {
+      "old": "StoryRuntime._stage_required_condition_ids",
+      "proposed_public_name": "stage_required_condition_ids",
+      "current_lines": [
+        15054,
+        15069
+      ],
+      "body_rows": 16,
+      "args_current": "inputs: tuple[CollaborationInputRevision, ...], evidence: CollaborationLeadEvidence | None",
+      "args_after_receiver_removal": "inputs: tuple[CollaborationInputRevision, ...], evidence: CollaborationLeadEvidence | None",
+      "returns": "tuple[str, ...]",
+      "decorators": [
+        "staticmethod"
+      ],
+      "source_sha256": "5f30206af963d988d3096911c83f8657c4d0113969c61c7e707da8b48357a4cc",
+      "AST_sha256": "0410bdd68e7b1b618ea330010d21c581e17d61ba2ec856bb9afd5203409760ef",
+      "AST_matches_255d": true,
+      "runtime_global_names": [
+        "CollaborationEvidenceAcquisition",
+        "CollaborationInputKind",
+        "PREPARATION_INPUT_IDS",
+        "ValueError",
+        "any",
+        "len",
+        "preparation_original_input_ids",
+        "set",
+        "tuple"
+      ],
+      "annotation_names": [
+        "CollaborationInputRevision",
+        "CollaborationLeadEvidence",
+        "str",
+        "tuple"
+      ],
+      "recursive_code_objects": 6,
+      "external_refs": 3,
+      "internal_host_attributes": []
+    },
+    {
+      "old": "StoryRuntime._core_reviewer",
+      "proposed_public_name": "core_reviewer",
+      "current_lines": [
+        16369,
+        16382
+      ],
+      "body_rows": 14,
+      "args_current": "locator: str",
+      "args_after_receiver_removal": "locator: str",
+      "returns": "str | None",
+      "decorators": [
+        "staticmethod"
+      ],
+      "source_sha256": "343979faf692920dfcc4ca70b09c741d842d16f6bb1777416307df0b7f21ff83",
+      "AST_sha256": "fbd9a6a086a6ef385376b59c58a124558eb661bc6d84519b9ae382f2a5e91608",
+      "AST_matches_255d": true,
+      "runtime_global_names": [
+        "Exception",
+        "artifact_domain",
+        "len",
+        "parse_artifact_references",
+        "specialists_for_domains"
+      ],
+      "annotation_names": [
+        "str"
+      ],
+      "recursive_code_objects": 1,
+      "external_refs": 10,
+      "internal_host_attributes": []
+    },
+    {
+      "old": "StoryRuntime._validate_required_reviewers",
+      "proposed_public_name": "validate_required_reviewers",
+      "current_lines": [
+        16277,
+        16309
+      ],
+      "body_rows": 33,
+      "args_current": "self, inputs: tuple[CollaborationInputRevision, ...], assignments: tuple[CollaborationAssignment, ...], stage_plan: SpecialistStagePlan | None=None",
+      "args_after_receiver_removal": "inputs: tuple[CollaborationInputRevision, ...], assignments: tuple[CollaborationAssignment, ...], stage_plan: SpecialistStagePlan | None=None",
+      "returns": "None",
+      "decorators": [],
+      "source_sha256": "df7e556eedfb84b1f80f5ad33a1944d2feb3b6b539f8b5dbbd87145df9ce9010",
+      "AST_sha256": "a158ba4c305cb64d95dc6a76371b22dc1053aa99f2ff5da81299ec01f9c115d1",
+      "AST_matches_255d": true,
+      "runtime_global_names": [
+        "CollaborationInputKind",
+        "ValueError",
+        "any",
+        "frozenset",
+        "stage_is_focused_review",
+        "tuple"
+      ],
+      "annotation_names": [
+        "CollaborationAssignment",
+        "CollaborationInputRevision",
+        "SpecialistStagePlan",
+        "tuple"
+      ],
+      "recursive_code_objects": 5,
+      "external_refs": 2,
+      "internal_host_attributes": [
+        "self._core_reviewer"
+      ]
+    },
+    {
+      "old": "StoryRuntime._validate_final_review_handoff",
+      "proposed_public_name": "validate_final_review_handoff",
+      "current_lines": [
+        14412,
+        14444
+      ],
+      "body_rows": 33,
+      "args_current": "proposal: CollaborationProposal, events: tuple[CollaborationEvent, ...], projection: CollaborationHistoryProjection",
+      "args_after_receiver_removal": "proposal: CollaborationProposal, events: tuple[CollaborationEvent, ...], projection: CollaborationHistoryProjection",
+      "returns": "None",
+      "decorators": [
+        "staticmethod"
+      ],
+      "source_sha256": "bc82476d483a0ad47c5dc5bbad093533e93f098f0de99f4ab8cb5f3c3e0768f1",
+      "AST_sha256": "4b0608f66922d5d5e757e4cf96350dc99eadf2fc6ff49fa8792a07f8e2f1db30",
+      "AST_matches_255d": true,
+      "runtime_global_names": [
+        "AuthoringActivity",
+        "BackendProtocolError",
+        "LeadRecommendationRequestPayload",
+        "authoring_capture_identity",
+        "confirmed_authoring_proposals",
+        "next",
+        "tuple",
+        "type"
+      ],
+      "annotation_names": [
+        "CollaborationEvent",
+        "CollaborationHistoryProjection",
+        "CollaborationProposal",
+        "tuple"
+      ],
+      "recursive_code_objects": 4,
+      "external_refs": 2,
+      "internal_host_attributes": []
+    },
+    {
+      "old": "StoryRuntime._validate_draft_provenance",
+      "proposed_public_name": "validate_draft_provenance",
+      "current_lines": [
+        14447,
+        14517
+      ],
+      "body_rows": 71,
+      "args_current": "scope: AuthoringScope, events: tuple[CollaborationEvent, ...], *, pending_attempt_id: str | None=None, pending_replies: tuple[CollaborationSpecialistReplyPayload, ...]=()",
+      "args_after_receiver_removal": "scope: AuthoringScope, events: tuple[CollaborationEvent, ...], *, pending_attempt_id: str | None=None, pending_replies: tuple[CollaborationSpecialistReplyPayload, ...]=()",
+      "returns": "None",
+      "decorators": [
+        "staticmethod"
+      ],
+      "source_sha256": "58b27450b9b4bb7bf54e991fe17021a6f29622cfa70b2618e164dc3749efee39",
+      "AST_sha256": "88153addbdb6347d5dd36bb146553f8822f6f807616ef3c5d248e1d4582bddc0",
+      "AST_matches_255d": true,
+      "runtime_global_names": [
+        "CollaborationAssignmentDispatchPayload",
+        "CollaborationExecutionResult",
+        "CollaborationProposal",
+        "CollaborationSpecialistAssessment",
+        "CollaborationSpecialistReplyPayload",
+        "SpecialistAssignmentMode",
+        "authoring_capture_identity",
+        "cast",
+        "confirmed_authoring_proposals",
+        "next",
+        "reply_contract_values",
+        "required_drafting_specialists",
+        "set",
+        "str",
+        "type",
+        "validate_authoring_capture_pin",
+        "validation_failure"
+      ],
+      "annotation_names": [
+        "AuthoringScope",
+        "CollaborationEvent",
+        "CollaborationSpecialistReplyPayload",
+        "set",
+        "str",
+        "tuple"
+      ],
+      "recursive_code_objects": 6,
+      "external_refs": 6,
+      "internal_host_attributes": []
+    },
+    {
+      "old": "StoryRuntime._proposal_call_reservations",
+      "proposed_public_name": "proposal_call_reservations",
+      "current_lines": [
+        16312,
+        16366
+      ],
+      "body_rows": 55,
+      "args_current": "*, inputs: tuple[CollaborationInputRevision, ...], assignment_input_ids: tuple[tuple[str, ...], ...], physical_calls_spent: int, synthesis_required: bool=True, authoring_scope: AuthoringScope | None=None",
+      "args_after_receiver_removal": "*, inputs: tuple[CollaborationInputRevision, ...], assignment_input_ids: tuple[tuple[str, ...], ...], physical_calls_spent: int, synthesis_required: bool=True, authoring_scope: AuthoringScope | None=None",
+      "returns": "tuple[tuple[int, ...], int, int]",
+      "decorators": [
+        "staticmethod"
+      ],
+      "source_sha256": "6c50bda278870c1db37dec5e72b8e9d9d5580e4374c2a4af8036f5765c8c5d2f",
+      "AST_sha256": "89f2168d7fca07d4616f87e7c25b653bd97f6be28309a92cb8c1dd45a68a34b7",
+      "AST_matches_255d": true,
+      "runtime_global_names": [
+        "COLLABORATION_PHYSICAL_CALL_LIMIT",
+        "CollaborationInputKind",
+        "CollaborationInputState",
+        "LeadCallBudgetExceeded",
+        "StoryRuntime",
+        "any",
+        "bool",
+        "enumerate",
+        "int",
+        "list",
+        "min",
+        "reply_contract_values",
+        "sum",
+        "tuple"
+      ],
+      "annotation_names": [
+        "AuthoringScope",
+        "CollaborationInputRevision",
+        "bool",
+        "int",
+        "str",
+        "tuple"
+      ],
+      "recursive_code_objects": 5,
+      "external_refs": 4,
+      "internal_host_attributes": [
+        "StoryRuntime._future_authoring_floor"
+      ]
+    },
+    {
+      "old": "StoryRuntime._reference_reservations",
+      "proposed_public_name": "reference_reservations",
+      "current_lines": [
+        16514,
+        16538
+      ],
+      "body_rows": 25,
+      "args_current": "operation: RuntimeReferenceOperation",
+      "args_after_receiver_removal": "operation: RuntimeReferenceOperation",
+      "returns": "tuple[str | None, tuple[MandatoryReferenceReservation, ...]]",
+      "decorators": [
+        "staticmethod"
+      ],
+      "source_sha256": "9eb21fa37516f828654a0247633940cae468cae8d09a2e3ebeeea63f1c6e0368",
+      "AST_sha256": "254d41f2985ede6a4efab0c2feace0c2964ed6a1c714800b56c4752bd74afc65",
+      "AST_matches_255d": true,
+      "runtime_global_names": [
+        "BackendProtocolError",
+        "ContextAuthorityKind",
+        "ContextProvenance",
+        "MandatoryReferenceReservation",
+        "tuple",
+        "writing_artifact_source_id"
+      ],
+      "annotation_names": [
+        "MandatoryReferenceReservation",
+        "RuntimeReferenceOperation",
+        "str",
+        "tuple"
+      ],
+      "recursive_code_objects": 2,
+      "external_refs": 2,
+      "internal_host_attributes": []
+    },
+    {
+      "old": "StoryRuntime._validate_objective_routing",
+      "proposed_public_name": "validate_objective_routing",
+      "current_lines": [
+        12631,
+        12689
+      ],
+      "body_rows": 59,
+      "args_current": "cls, outcome: LeadProviderOutcome, projection: CollaborationHistoryProjection, events: tuple[CollaborationEvent, ...], task_events: tuple[CollaborationEvent, ...]",
+      "args_after_receiver_removal": "outcome: LeadProviderOutcome, projection: CollaborationHistoryProjection, events: tuple[CollaborationEvent, ...], task_events: tuple[CollaborationEvent, ...]",
+      "returns": "None",
+      "decorators": [
+        "classmethod"
+      ],
+      "source_sha256": "7733686fc5e73ad07ed5366ee4c881042d0ec828fc82ff988fd2c4c9d7f9e0e2",
+      "AST_sha256": "731cdb2966f3dacf41f2611dd1f2bda109a2c6cadf89b22ded4c57624fb92ec0",
+      "AST_matches_255d": true,
+      "runtime_global_names": [
+        "ArtifactObjectiveNextStep",
+        "ArtifactObjectivePayload",
+        "ArtifactObjectivePayloadV2",
+        "AuthoringActivity",
+        "CollaborationLeadJudgmentPayload",
+        "CollaborationLeadSynthesisPayload",
+        "LeadObjectiveAction",
+        "any",
+        "next",
+        "reply_contract_values",
+        "type",
+        "validation_failure"
+      ],
+      "annotation_names": [
+        "AuthoringScope",
+        "CollaborationEvent",
+        "CollaborationHistoryProjection",
+        "LeadProviderOutcome",
+        "list",
+        "tuple"
+      ],
+      "recursive_code_objects": 5,
+      "external_refs": 2,
+      "internal_host_attributes": [
+        "cls._authoring_tasks",
+        "cls._resolved_objective_source_ids",
+        "cls._validate_draft_provenance"
+      ]
+    },
+    {
+      "old": "StoryRuntime._resolved_objective_source_ids",
+      "proposed_public_name": "resolved_objective_source_ids",
+      "current_lines": [
+        12839,
+        12874
+      ],
+      "body_rows": 36,
+      "args_current": "outcome: LeadProviderOutcome, projection: CollaborationHistoryProjection, events: tuple[CollaborationEvent, ...], previous: ArtifactObjective | None",
+      "args_after_receiver_removal": "outcome: LeadProviderOutcome, projection: CollaborationHistoryProjection, events: tuple[CollaborationEvent, ...], previous: ArtifactObjective | None",
+      "returns": "tuple[str, ...]",
+      "decorators": [
+        "staticmethod"
+      ],
+      "source_sha256": "b11a9159d444653ee447d5ac47cfd63daf33a379e49e371759ec77b199a17675",
+      "AST_sha256": "8045718c42fa4fb0af0f760ea39a360968814967794027da2f1b8e226af99e3b",
+      "AST_matches_255d": true,
+      "runtime_global_names": [
+        "CollaborationLeadJudgmentPayload",
+        "CollaborationLeadSynthesisPayload",
+        "LeadObjectiveAction",
+        "tuple",
+        "type"
+      ],
+      "annotation_names": [
+        "ArtifactObjective",
+        "CollaborationEvent",
+        "CollaborationHistoryProjection",
+        "LeadProviderOutcome",
+        "str",
+        "tuple"
+      ],
+      "recursive_code_objects": 3,
+      "external_refs": 1,
+      "internal_host_attributes": []
+    },
+    {
+      "old": "StoryRuntime._validate_objective_selection",
+      "proposed_public_name": "validate_objective_selection",
+      "current_lines": [
+        12877,
+        12929
+      ],
+      "body_rows": 53,
+      "args_current": "outcome: LeadProviderOutcome, projection: CollaborationHistoryProjection, candidate: ArtifactReviewCandidate | None",
+      "args_after_receiver_removal": "outcome: LeadProviderOutcome, projection: CollaborationHistoryProjection, candidate: ArtifactReviewCandidate | None",
+      "returns": "None",
+      "decorators": [
+        "staticmethod"
+      ],
+      "source_sha256": "88b48629a7e604ed23aa824cd7726b98058cb449423a34555c56cf27c39d4f29",
+      "AST_sha256": "f821315a21e8d9da3a8f53c859e6c7113199570cb2bb9317a4e314e3c960f406",
+      "AST_matches_255d": true,
+      "runtime_global_names": [
+        "ArtifactObjectiveNextStep",
+        "ArtifactObjectiveState",
+        "ArtifactRenameOperation",
+        "LeadObjectiveAction",
+        "any",
+        "next",
+        "reply_contract_values",
+        "set",
+        "type",
+        "validation_failure"
+      ],
+      "annotation_names": [
+        "ArtifactReviewCandidate",
+        "CollaborationHistoryProjection",
+        "LeadProviderOutcome"
+      ],
+      "recursive_code_objects": 5,
+      "external_refs": 2,
+      "internal_host_attributes": []
+    },
+    {
+      "old": "StoryRuntime._artifact_candidate_for_proposal",
+      "proposed_public_name": "artifact_candidate_for_proposal",
+      "current_lines": [
+        7215,
+        7232
+      ],
+      "body_rows": 18,
+      "args_current": "events: tuple[CollaborationEvent, ...], proposal: CollaborationProposal",
+      "args_after_receiver_removal": "events: tuple[CollaborationEvent, ...], proposal: CollaborationProposal",
+      "returns": "ArtifactReviewCandidatePayload | None",
+      "decorators": [
+        "staticmethod"
+      ],
+      "source_sha256": "583ea62d6dcf34f32a1c98d9ee6fd35cf219fef244bba45fd0e022bc2511316b",
+      "AST_sha256": "41b6e0b6ee4c07ac500ea7430166e2e034bb6c154b2daa21a038019121778a7e",
+      "AST_matches_255d": true,
+      "runtime_global_names": [
+        "ArtifactReviewCandidatePayload",
+        "BackendProtocolError",
+        "cast",
+        "len",
+        "tuple",
+        "type"
+      ],
+      "annotation_names": [
+        "ArtifactReviewCandidatePayload",
+        "CollaborationEvent",
+        "CollaborationProposal",
+        "tuple"
+      ],
+      "recursive_code_objects": 2,
+      "external_refs": 7,
+      "internal_host_attributes": []
+    },
+    {
+      "old": "StoryRuntime._artifact_state_payload",
+      "proposed_public_name": "artifact_state_payload",
+      "current_lines": [
+        13264,
+        13288
+      ],
+      "body_rows": 25,
+      "args_current": "candidate: ArtifactReviewCandidatePayload, state: ArtifactProposalState, *, confirmation_request_id: str | None=None, execution_attempt_id: str | None=None, reviewed_proposal: ArtifactReviewedProposal | None=None",
+      "args_after_receiver_removal": "candidate: ArtifactReviewCandidatePayload, state: ArtifactProposalState, *, confirmation_request_id: str | None=None, execution_attempt_id: str | None=None, reviewed_proposal: ArtifactReviewedProposal | None=None",
+      "returns": "ArtifactProposalStatePayload",
+      "decorators": [
+        "staticmethod"
+      ],
+      "source_sha256": "81533bb56492d34c54e6b377f3e58c4d1a919ad1f267510db78d746203af3962",
+      "AST_sha256": "9dd66d10d1f1ffbc10fa1b7da345ceac6c628f53ef95a66ba61c4c1f6b3953fb",
+      "AST_matches_255d": true,
+      "runtime_global_names": [
+        "ArtifactProposalStatePayload"
+      ],
+      "annotation_names": [
+        "ArtifactProposalState",
+        "ArtifactProposalStatePayload",
+        "ArtifactReviewCandidatePayload",
+        "ArtifactReviewedProposal",
+        "str"
+      ],
+      "recursive_code_objects": 1,
+      "external_refs": 7,
+      "internal_host_attributes": []
+    }
+  ],
+  "shape": {
+    "path": "src/story_writing_agents/lead_preparation/authoring_authority.py",
+    "responsibility": "작성 scope·reviewer/floor·captured-event 권한 판정과 physical-call/reference 예약의 순수 규칙",
+    "public_functions": [
+      "routing_path",
+      "authoring_affected_paths",
+      "has_present_references",
+      "final_review_floor",
+      "future_authoring_floor",
+      "basis_budget_fingerprint",
+      "resolve_authoring_scope",
+      "authoring_tasks",
+      "completed_authoring_source",
+      "official_authoring_scope",
+      "stage_required_condition_ids",
+      "core_reviewer",
+      "validate_required_reviewers",
+      "validate_final_review_handoff",
+      "validate_draft_provenance",
+      "proposal_call_reservations",
+      "reference_reservations",
+      "validate_objective_routing",
+      "resolved_objective_source_ids",
+      "validate_objective_selection",
+      "artifact_candidate_for_proposal",
+      "artifact_state_payload"
+    ],
+    "explicit_all": "새 public 함수 소유 module 직접 소비; root/lead_preparation facade에 재export 추가 불필요",
+    "host_import_expression": "기존 from .lead_preparation import (...) 그룹에 authoring_authority module 추가",
+    "old_host_methods": "원래22 private 정의 제거; forwarding shim/alias method 없음",
+    "receiver_conversion": "5 classmethod 및1 instance-method의 cls/self receiver만 제거;9개 내부 helper 참조를 같은 owner의 공개 함수로 전환. 16 staticmethod는 decorator만 제거한다.",
+    "file_cohesion": "모든 함수가 현재 authoring권한/검토floor·예약과 그 이벤트/DTO projection을 공유하며 내부참조9개가 같은 owner에 남는다. 범용 service/manager/utility layer를 추가하지 않는다.",
+    "size_estimate": "695본문행 + imports/정상 간격으로 대략800~850행 가능. 기계적 축약으로 크기를 맞추지 않으며1000행 초과 예상은 없다. 실제행수는 구현후 확인한다.",
+    "state_resource_owner": "session/provider/map/pin/lock/await/cleanup/workflow는 host와 기존 resource owners에 잔류; 새 mutable owner/DTO/Task/Runtime argument 없음"
+  },
+  "source_preflight_sha256": "68b908f6f22a0e66fa15c641b000a3b6a05fee8c029561fe220b4401ac5a12c9",
+  "annotation_decision": {
+    "result_packet": {
+      "outcome": "read_only_annotation_decision_recorded_no_implementation",
+      "findings": [
+        "기존6344 preflight와 main e7bd11b5의 Git tree가 동일하며 root의 이번 수용 main 기준으로 기록한다.",
+        "_resolved_objective_source_ids의 본문·annotation AST는 그대로 두고 새 공개 owner에서 실제 공개 DTO ArtifactObjective를 conversations.context로부터 명시 import한다. 허용된 공개 API 바인딩 추가이며 기존 private host get_type_hints 미해결 상태와 같다고 주장하지 않는다.",
+        "document_lineage_cost 때문에 이미 같은 context 의존이 있으므로 ArtifactObjective 이름 추가의 세 그래프 간선 증분은0이다.",
+        "_authoring_tasks blocking callback3곳, 특히 callable 조회가 뒤의 await events보다 앞서는 순서와 core_reviewer factory인자2곳의 평가·저장 시점을 보존한다.",
+        "22함수/695본문행은 authoring 권한·review floor·호출/참고자료 예약과 event-derived 판정을 공유하는 domain 공통 owner로 유지한다."
+      ],
+      "changed_inputs": [
+        "외부/tmp 추가 메모만; 원본 preflight 불변"
+      ],
+      "evidence": {
+        "original_preflight": "/tmp/story-refactor-delivery-20261109/S06-988-source-preflight-63446ee4.json",
+        "original_sha256": "68b908f6f22a0e66fa15c641b000a3b6a05fee8c029561fe220b4401ac5a12c9",
+        "git_tree": "0153039955f5613f1f41dc0a16eee2436955da08",
+        "public_DTO_owner": "story_writing_agents.conversations.context.ArtifactObjective",
+        "already_imported_context_member": "document_lineage_cost"
+      },
+      "risks": [
+        "새 공개 API의 annotation 해석 가능성은 기존 private API와 구분하는 의도적 공개 바인딩 추가다. 새 namespace 참조1개의 초기화 비용을0으로 보지 않는다.",
+        "Ready/Draft 및 별도 구현 승인 전 github_planning_gate=pending, 구현0 유지."
+      ],
+      "next_action": "root가 현재main·테스트 예산·native Ready/Draft를 확정할 때까지 대기한다."
+    },
+    "identity": {
+      "role": "runtime_implementer",
+      "mode": "analysis",
+      "github_planning_gate": "pending",
+      "modularity_gate": "required",
+      "repository": "/Users/anonymousanonym/Documents/story-writing-agents",
+      "prior_observation": "63446ee455bfde05d0caaa12bd3b7d171cd1d145",
+      "root_accepted_current_main": "e7bd11b53b9aaa15b3563e2795e8d85956ecc94f",
+      "tree_exact": true,
+      "disposition": "retain_with_reason: 분석자료 보존"
+    },
+    "accepted_annotation_boundary": {
+      "function": "resolved_objective_source_ids",
+      "original_private_method": "StoryRuntime._resolved_objective_source_ids",
+      "source_owner": "src/story_writing_agents/orchestrator.py",
+      "new_owner": "src/story_writing_agents/lead_preparation/authoring_authority.py",
+      "unchanged_annotation": "previous: ArtifactObjective | None",
+      "binding": "from ..conversations.context import ArtifactObjective — 기존 document_lineage_cost와 같은 import 그룹",
+      "body_and_annotation_AST_preserved": true,
+      "old_private_host_annotation_resolution": "기존 static namespace에서 미해결; 실제 get_type_hints는 실행하지 않음",
+      "new_public_owner_annotation_resolution": "실제 공개DTO를 명시 바인딩하는 허용된 공개API 추가",
+      "not_a_host_algorithm_or_state_fix": true
+    },
+    "graphs": {
+      "basis": "6344 preflight의 symbolic import projection; e7bd11b5 tree 동일",
+      "context_edge_already_present_for_all3": true,
+      "increment_for_added_ArtifactObjective_name": {
+        "modules": 0,
+        "complete_edges": 0,
+        "controller_edges": 0,
+        "relative_edges": 0
+      },
+      "projection_unchanged": {
+        "complete": {
+          "modules": 233,
+          "edges": 1197,
+          "added_edges": 18,
+          "cycles_found": []
+        },
+        "controller": {
+          "modules": 233,
+          "edges": 1182,
+          "added_edges": 16,
+          "cycles_found": []
+        },
+        "relative": {
+          "modules": 233,
+          "edges": 1195,
+          "added_edges": 18,
+          "cycles_found": []
+        }
+      },
+      "actual_after_certification": false
+    },
+    "preserved_callback_order": {
+      "authoring_tasks_run_blocking_source_lines": [
+        2988,
+        4861,
+        10361
+      ],
+      "first_site": "callback 조회가 run_blocking 첫 인자에서 먼저 끝난 뒤 두번째 인자의 await _session_authoring_events가 실행된다. 새 owner lookup도 같은 위치에 둔다.",
+      "core_reviewer_factory_keyword_source_lines": [
+        7642,
+        11530
+      ],
+      "factory": "기존 reviewer_for_locator 인자 위치에서 조회하여 같은 factory 생성시점·보유기간을 유지한다. hoist/default cache/새 closure 없음."
+    },
+    "cohesion": "기존22함수/695본문행은 작성 권한·review floor·호출/참고자료 예약과 captured-event 판정을 공유하며 상태나 Runtime전체를 전달받지 않는 동일 도메인 공통 owner다.",
+    "verification": {
+      "immutable_git_objects_and_existing_JSON_only": true,
+      "tracked_source_test_index_docs_changes": 0,
+      "production_or_test_module_imports": 0,
+      "Case_Suite_profile_CI_runs": 0,
+      "Git_GitHub_ref_worktree_mutations": 0,
+      "generated_production_source": 0,
+      "original_preflight_sha_preserved": true
+    }
+  },
+  "source_or_test_implementation": false,
+  "local_Case_Suite_runs": 0,
+  "test_scope": {
+    "minimum_budget": "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_initial_budget_rejection_remains_failure",
+    "focused3": [
+      "tests.test_collaboration_context.CollaborationTransitionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+      "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_initial_budget_rejection_remains_failure",
+      "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_direct_scope_is_required_and_substantive_outcomes_cannot_bypass_routing"
+    ],
+    "expanded4": [
+      "tests.test_codex_backend.CodexBackendTestCase.test_conversation_projects_exact_payload_schema_and_no_artifacts",
+      "tests.test_collaboration_context.CollaborationTransitionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+      "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_initial_budget_rejection_remains_failure",
+      "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_direct_scope_is_required_and_substantive_outcomes_cannot_bypass_routing"
+    ],
+    "additional_graph9": "기존9 graph Case만 숫자/정확집합 재검증; 새Case 아님",
+    "packaging_existing_ID": "tests.test_rag_module_and_packaging_boundary.RagPackagingBoundaryTests.test_temporary_base_and_optional_artifacts_exclude_vendored_source",
+    "semantics": [
+      "budget은 기존 Runtime/workspace/backend fixture 아래 직접 순수 규칙 호출이며 provider turn coverage 아님.",
+      "projection은 captured-event/ObjectiveOwner production projection의 typed/order/history/negative 검증; 실제 provider authority 전체증거 아님.",
+      "routing은 원래 scripted backend와 기록 이력의 실제 host rejection 경계.",
+      "Codex는 기존 실제 factory 입력/declare/consumer 경로. callback 보유/조회와 모든 core reviewer branches를 동일시하지 않음."
+    ],
+    "owner_selection": "new exact source path focused3/expanded4/affected_full=true; actual registered dependency names only, no complete impact-isolation claim"
+  },
+  "planned_API_changes": [
+    {
+      "path": "tests/agent_context/invocation/execution_fixture.py",
+      "reference_count": 1,
+      "reference": "module-level LEAD_CALL_FACTORY positional reviewer argument StoryRuntime._core_reviewer→authoring_authority.core_reviewer",
+      "import_plan": "기존 outcome_decoding package import에서 outcome_decoding 먼저, authoring_authority 뒤에 바인딩; 기존 StoryRuntime import 한 행 삭제",
+      "lookup_lifetime": "기존 module-level factory constructor의 같은 인자 위치에서 1회 조회·저장. factory 추가/Runtime bound-method/새 cache 없음.",
+      "charged_delta_support": -1
+    },
+    {
+      "path": "tests/test_codex_backend.py",
+      "reference_count": 1,
+      "reference": "bound_call 내부 factory의 기존 positional reviewer 함수만 새 owner로 전환",
+      "import_plan": "기존2행 class import→같은 package module import1행 + 즉시 로컬 OrchestrationLeadCallFactory class alias assignment1행. 사용되는 LeadContractError import와 다른 앞선 imports 순서 유지.",
+      "lookup_lifetime": "class lookup은 원래 로컬 import 시점에 1회, bound_call2회에서 기존 local class 재사용; core_reviewer lookup은 각 기존 factory construction 위치. 모듈 attr로 factory class를 두번 늦게 조회하지 않음.",
+      "charged_delta_API": 0,
+      "reserved_credit": {
+        "line": 5347,
+        "module": "story_writing_agents.agent_context.manifest",
+        "unused_aliases": [
+          "ContextAuthorityKind",
+          "ContextPriority",
+          "ContextSemanticChannel",
+          "ContextSourceKind"
+        ],
+        "physical_rows": 1,
+        "Name_annotation_nested_string_eval_locals_consumers": 0,
+        "earlier_unconditional_eager_imports": [
+          "invocation.context_execution.py:100 imports manifest(level2)",
+          "contracts.call_offers.py:12 imports manifest(level2)"
+        ],
+        "other_used_imports_unchanged": true
+      }
+    },
+    {
+      "path": "tests/test_collaboration_context.py",
+      "reference_count": 2,
+      "reference": "기존 local ObjectiveOwner 두 staticmethod RHS를 public validate_objective_selection/resolved_objective_source_ids로 전환; 기존 slot/class/나머지 StoryRuntime3참조 유지",
+      "import_plan": "기존 projection Case의 local StoryRuntime import 인접 위치에 새 module import1행; top-level warmup로 옮기지 않음.",
+      "lookup_lifetime": "같은 local ObjectiveOwner class 생성 시점에서 기존 staticmethod wrapper 두개 유지; 이벤트/owner 객체/production projection 호출 동일.",
+      "charged_delta_test": 1
+    },
+    {
+      "path": "tests/test_lead_orchestration.py",
+      "reference_count": 6,
+      "reference": "기존 budget Case의4 proposal_call_reservations +2 final_review_floor 호출을 실제 module owner로 전환; args/values/exception/asserts/backend fixture 그대로",
+      "import_plan": "기존 lead_preparation package import행의 실제 module 목록에 authoring_authority 추가; 기존 call_rule_factory/reply_contract_values 남김",
+      "charged_delta_test": 0
+    }
+  ],
+  "budget_projection": {
+    "observed_main_split": {
+      "test_lines": 148450,
+      "support_lines": 1431,
+      "legacy_lines": 1550,
+      "effective_lines": 151431
+    },
+    "old_native_conservative_without_fixture_group_or_packaging": 151431,
+    "missing_old_projection_packaging_row": 1,
+    "strict_retarget_only_with_packaging_would_be": 151432,
+    "root_accepted_real_API_consolidation": {
+      "execution_fixture_row19": "outcome_decoding 먼저 + authoring_authority 뒤, 같은package 한 from행",
+      "deleted_row21": "이동 후 Name use0이 되는 StoryRuntime import 한 행",
+      "normal_width_characters": 87,
+      "support_delta": -1,
+      "new_credit_not_needed": true
+    },
+    "deltas": {
+      "collaboration_context_local_actual_owner_import_test": 1,
+      "packaging_new_byte_tuple_path_test": 1,
+      "reserved_Codex_local_unused_manifest_import_test": -1,
+      "execution_fixture_actual_owner_API_support": -1,
+      "LeadOrch_same_package_API": 0,
+      "Codex_module_plus_early_class_alias_two_rows": 0,
+      "graph17_numeric_rows": 0,
+      "RAG_new_member_rows": 0,
+      "provider_forbidden_scan_rows": 0,
+      "new_headers_fixtures_IDreceipt_reader_controller": 0,
+      "owner_manifest_data_code_rows": 0
+    },
+    "net_rows": 0,
+    "projected_after_split": {
+      "test_lines": 148451,
+      "support_lines": 1430,
+      "legacy_lines": 1550,
+      "effective_lines": 151431
+    },
+    "existing_reserved_credit_valid": true,
+    "additional_unused_credit_requested": 0,
+    "not_available_as_credit": "사용 중인 Codex LeadContractError(load5368)는 유지한다. 다른 예약 alias도 모두 제외한다.",
+    "excluded_other_allocations": [
+      "990 Continuation/Hit",
+      "991 PhaseRequest/Citation",
+      "996 MatchKind/Query",
+      "999 Result/Scope",
+      "983 localInteractiveLeadAdapter/LeadGroupPhase",
+      "985 duplicateSet",
+      "984 AdvisoryProgressError"
+    ],
+    "actual_recount_required_after_code": true
+  },
+  "RED_plan": {
+    "status": "static_prediction_hosted_not_executed",
+    "ID": "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_initial_budget_rejection_remains_failure",
+    "before_source": "src/story_writing_agents/orchestrator.py",
+    "before_method": "StoryRuntime._proposal_call_reservations",
+    "after_source": "src/story_writing_agents/lead_preparation/authoring_authority.py",
+    "after_public_method": "proposal_call_reservations",
+    "guard_line_before": 16341,
+    "AST_target": "Compare(Name(minimum_required_calls), Gt(), Name(remaining))",
+    "one_token_operator": "> → >=",
+    "old_negative_inputs": [
+      11,
+      12
+    ],
+    "positive_input": {
+      "physical_calls_spent": 10,
+      "inputs": [],
+      "assignment_input_ids": [
+        [
+          "user_input"
+        ]
+      ],
+      "minimum_required_calls": 2,
+      "remaining": 2,
+      "original_result": [
+        [
+          1
+        ],
+        1,
+        2
+      ]
+    },
+    "expected_flow": "두 기존 거절 subtest는 계속 exact LeadCallBudgetExceeded를 잡는다. equality 입력의 직접 helper 호출7293은 assertRaises 바깥이며 guard >=에서 동일 exception을 raise, 중간 handler/wrapper 없음.",
+    "expected_fingerprint": {
+      "canonical_completed": 1,
+      "errors": 1,
+      "failures": 0,
+      "skip": 0,
+      "subtests_passed_before_error": 2,
+      "exception": "story_writing_agents.runtime_resources.provider_call_accounting.LeadCallBudgetExceeded",
+      "message": "declared preparation and full final review cannot fit the remaining physical-call budget; clarify or freshly propose"
+    },
+    "cleanup_audit": "_LeadBackend 초기 scripts/_all_scripts는 빈 목록, fixture_error None. Case에서 provider를 호출/plan 설정하지 않는다. 원래 cleanup를 유지하며 extra_plan 예상근거 없음; 실제 fingerprint는 hosted확인 필요.",
+    "restoration": "Ready+Draft 이후 ordinary source-only immutable diagnostic ref; source/Case/hash/단일operator receipts, RED별도보존, 원래 immutable source의GREEN 및 current cleanHEAD fullCI. mutant통합 없음.",
+    "controller_or_new_test_support_rows": 0
+  },
+  "init_lifetime_limit": {
+    "checked_tracked_Python": 469,
+    "execution_fixture_consumers": 11,
+    "StoryRuntime_explicit_qualified_or_star_borrows": 0,
+    "module_alias_escape_or_local_namespace_eval": 0,
+    "factory_count_lifetime_change": 0,
+    "old_orchestrator_module_own_eager_body": "imports/declarations plus frozenset/literal metadata; no direct runtime/provider invocation or filesystem mutation observed in own top-level statements.",
+    "real_transitive_initialization_difference": "orchestrator import owns reference_operation_registry import: that module initializes RLock/PID and registers after_in_child callback when supported. Removing explicit fixture dependency can defer this and other host import allocations; do not claim all initialization effects identical.",
+    "registry_pairing": "registry state and its reset registration are in same module; actual Runtime import prepares them together. No existing fixture consumer namespace/at-fork-eager expectation found statically.",
+    "still_not_fully_backend_isolated": "call_rule_factory still imports backend.BoundAgent; removing unused StoryRuntime import is one real dependency reduction, not full backend isolation.",
+    "limits": "No cold-import execution or fork behavior observed now; actual sys.modules/cache/GC/registration timing not certified. Existing fork/reference-registry coverage gaps stay gaps, no newCase invented."
+  },
+  "test_preflight_sha256": "cf0bb91eb9a8283649c0f9bd21ddc04f3515ff27e21149ac76421e63296e3368",
+  "accepted_main": "e7bd11b53b9aaa15b3563e2795e8d85956ecc94f",
+  "planning_gate": "passed",
+  "native_plan_sha256": "0fc41e2b542cb09b1a9706bc8ac34c721fdb94800e5e6a6571d98c944ee4e4eb"
+}
