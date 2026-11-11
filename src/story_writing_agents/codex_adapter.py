@@ -138,7 +138,7 @@ def _reject_duplicate_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     value: dict[str, Any] = {}
     for key, item in pairs:
         if key in value:
-            raise ValueError("duplicate JSON field")
+            raise RuntimeError("duplicate JSON field")
         value[key] = item
     return value
 
