@@ -1,0 +1,6 @@
+{
+  "issue": 991,
+  "base": "e7bd11b53b9aaa15b3563e2795e8d85956ecc94f",
+  "purpose": "현재 main과동일한runtime/test/CI/dependency입력의정상·시간baseline결합",
+  "local_Case_runs": 0
+}
