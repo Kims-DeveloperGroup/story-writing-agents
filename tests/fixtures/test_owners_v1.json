@@ -13603,6 +13603,33 @@
       "affected_full": true
     },
     {
+      "name": "codex-native-context",
+      "boundary": "authority",
+      "paths": [
+        "src/story_writing_agents/codex_native_context.py"
+      ],
+      "depends_on": [],
+      "focused_ids": [
+        "tests.test_advisory_progress_streaming.InteractiveAdvisoryProgressIntegrationTests.test_cancellation_clears_frame_and_does_not_open_nested_scroll_inspector_under_keep_frame"
+      ],
+      "affected_ids": [
+        "tests.test_advisory_progress_streaming.InteractiveAdvisoryProgressIntegrationTests.test_cancellation_clears_frame_and_does_not_open_nested_scroll_inspector_under_keep_frame",
+        "tests.test_advisory_progress_streaming.InteractiveAdvisoryProgressIntegrationTests.test_run_progress_frames_propagates_eof_and_interrupt_without_advisory_error_wrapping",
+        "tests.test_antigravity_parity.AntigravityParityTests.test_public_surface_and_provider_schema_remain_provider_neutral",
+        "tests.test_artifact_application_contracts.ArtifactApplicationBoundaryTests.test_module_graph_matches_accepted_delta",
+        "tests.test_artifact_application_store_recovery.ArtifactApplicationBoundaryTests.test_store_is_sole_persistence_interpreter_and_matches_boundary",
+        "tests.test_artifact_relationship_policy.ArtifactRelationshipBoundaryTests.test_ast_graph_counts_and_cycles_match_accepted_brief",
+        "tests.test_codex_backend.CodexBackendTestCase.test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread",
+        "tests.test_git_external_operation_inspection.GitExternalOperationInspectionTests.test_contract_adapter_exports_and_dependencies_are_exact",
+        "tests.test_interactive_controller.ControllerContractTests.test_direct_import_is_clean_and_package_graph_is_acyclic",
+        "tests.test_rag_module_and_packaging_boundary.RagModuleBoundaryTests.test_inventory_edges_cycles_and_sole_dual_importer_match_the_brief",
+        "tests.test_session_lifecycle.SessionLifecycleContractTests.test_lifecycle_module_is_leaf_and_clean_imports_work",
+        "tests.test_session_recovery_contracts.SessionRecoveryBoundaryTests.test_clean_import_and_exact_dependencies_match_accepted_delta",
+        "tests.test_workspace_session_history.WorkspaceSessionHistoryCompositionTests.test_internal_wrapper_uses_main_root_manifest_and_noncreating_snapshot"
+      ],
+      "affected_full": true
+    },
+    {
       "name": "conversations.event_value_validation",
       "boundary": "pure",
       "paths": [

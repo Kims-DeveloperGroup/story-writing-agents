@@ -1868,6 +1868,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('from .provider_error_artifacts import', (package / 'backend.py').read_text(
             encoding='utf-8'))
         for module_name in (('antigravity_adapter.py', 'codex_adapter.py', 'debug_log.py',
+            'codex_native_context.py',
             'provider_auth.py', 'provider_catalog.py')):
             self.assertNotIn('provider_error_artifacts', (package / module_name).read_text(
                 encoding='utf-8'))

@@ -2,8 +2,8 @@
   "issue": 985,
   "parent": 970,
   "program_parent": 962,
-  "status": "운영과 테스트 이동 완료, 호스팅 검증 중",
-  "accepted_base": "648e5a4e5675001ed2d9aa91aaf400d485356568",
+  "status": "새 기준과 운영·테스트 병합 완료, 호스팅 검증 중",
+  "accepted_base": "7799cf232545e8f9d3deba9ff3f90c716b971bba",
   "source": "src/story_writing_agents/conversations/events.py",
   "planned_owner": "src/story_writing_agents/conversations/event_value_validation.py",
   "purpose": "이벤트 값 검증과 엄격한 JSON 코덱만 같은 호출·오류·직렬화 계약으로 분리한다.",
@@ -267,11 +267,6 @@
     "context": 37,
     "conversations": 235
   },
-  "expected_graph_on_accepted_base": {
-    "modules": 230,
-    "complete_edges": 1161,
-    "controller_edges": 1151
-  },
   "existing_case_ids": [
     "tests.test_collaboration_events.CollaborationWireContractTests.test_duplicate_extra_missing_nonfinite_and_noncanonical_json_are_rejected",
     "tests.test_collaboration_events.CollaborationValueContractTests.test_proposal_closure_budget_and_advisory_invariants_fail_closed"
@@ -295,7 +290,7 @@
     "sha256": {
       "src/story_writing_agents/conversations/events.py": "72c017cf17b85cc1b88d1dc7b52cd25cefb994cfa87ddce32aeed5ad9d062735",
       "src/story_writing_agents/conversations/event_value_validation.py": "1e15fbde8f9ee8edeeda79f0b62febb5fe081194473f6e1cfa2f2e5a4728f0ca",
-      "PYTHON_MODULE_INDEX.md": "ca876b01fddd8cb6191edbdd9e44632ea4acd0a5a9af34fea1551290177c191e"
+      "PYTHON_MODULE_INDEX.md": "1c6ffb3ccd48dacd23a5a7609e38de5d5dfbbeffd8e3c8adc6cd3dfea219ef4c"
     },
     "public_owner_bindings": {
       "_array": "require_array_value",
@@ -339,29 +334,12 @@
     ]
   },
   "observed_graph_on_accepted_base": {
-    "modules": 230,
-    "complete_edges": 1161,
-    "controller_edges": 1150,
-    "relative_only_edges": 1160,
+    "modules": 231,
+    "complete_edges": 1164,
+    "controller_edges": 1153,
+    "relative_only_edges": 1162,
     "nontrivial_cycles": 0,
     "difference": "기존 Controller와 상대 import 전용 검사가 events의 절대 ImportFrom 간선을 제외한다. 검사 해석은 그대로 유지한다."
-  },
-  "normal_before": {
-    "run_id": 42931282910,
-    "attempts": [
-      1,
-      2,
-      3
-    ],
-    "passed_each": 2,
-    "wall_median_seconds": 0.003317617
-  },
-  "red_before": {
-    "run_id": 42931383233,
-    "mutated_source": "conversations/events.py",
-    "line": 5156,
-    "subtest": "index=0",
-    "error": "TypeError: collaboration payload duplicates a field"
   },
   "red_after_planned": {
     "mutated_source": "conversations/event_value_validation.py",
@@ -398,5 +376,70 @@
       "tests.test_workspace_session_history.WorkspaceSessionHistoryCompositionTests.test_internal_wrapper_uses_main_root_manifest_and_noncreating_snapshot",
       "tests.test_rag_module_and_packaging_boundary.RagPackagingBoundaryTests.test_temporary_base_and_optional_artifacts_exclude_vendored_source"
     ]
+  },
+  "historical_validation_on_previous_base": {
+    "accepted_base": "648e5a4e5675001ed2d9aa91aaf400d485356568",
+    "projected_graph": {
+      "modules": 230,
+      "complete_edges": 1161,
+      "controller_edges": 1151
+    },
+    "observed_graph": {
+      "modules": 230,
+      "complete_edges": 1161,
+      "controller_edges": 1150,
+      "relative_only_edges": 1160,
+      "nontrivial_cycles": 0,
+      "difference": "기존 Controller와 상대 import 전용 검사가 events의 절대 ImportFrom 간선을 제외한다. 검사 해석은 그대로 유지한다."
+    },
+    "normal_before": {
+      "run_id": 42931282910,
+      "attempts": [
+        1,
+        2,
+        3
+      ],
+      "passed_each": 2,
+      "wall_median_seconds": 0.003317617
+    },
+    "red_before": {
+      "run_id": 42931383233,
+      "mutated_source": "conversations/events.py",
+      "line": 5156,
+      "subtest": "index=0",
+      "error": "TypeError: collaboration payload duplicates a field"
+    },
+    "after_candidate": "deeb7f3cb689e08779269c6236ee10261a888d90",
+    "normal_after_run": 42933466636,
+    "graph_packaging_after_run": 42933381587,
+    "red_after_run": 42933378675
+  },
+  "current_base_verification": {
+    "accepted_main": "7799cf232545e8f9d3deba9ff3f90c716b971bba",
+    "accepted_tree": "99a8d08ae30d1e014626b96f99170e128843b53b",
+    "baseline_full_run": 42929889224,
+    "production_union_verified": true,
+    "current_source_count": 231,
+    "source_union_digest": "3724871c37805a41b712f66df6ecf245fb53fc40708eccbdb646cd71cedd1f31",
+    "normal_before_run": 42938913848,
+    "normal_before_head": "e017ee6e650f634c9da0a39432551df7d190ed39",
+    "red_before_run": 42938964222,
+    "same_error": "TypeError: collaboration payload duplicates a field",
+    "exact_subtest": "index=0",
+    "merged_test_hashes": {
+      "tests/fixtures/test_owners_v1.json": "1ccabe0ff6d5855a2881df8c72fa3897c584938cbd7eeeeb79eb1e9145246d13",
+      "tests/test_artifact_application_contracts.py": "165957048a0ad2bdbd2f3f6c0528a3a6d1bd9506251752c961fb9f752e833805",
+      "tests/test_artifact_application_store_recovery.py": "eeadbc5208b9aed660b05b0e5e942c7db2bf121b5f968da35eaaafc6a4ebf3b9",
+      "tests/test_artifact_relationship_policy.py": "e701480bfa4f231f32a24728492648fce8760bec7ef0c9f37358ec1c06c7833c",
+      "tests/test_git_external_operation_inspection.py": "0cbd68a1b6c8b6d4172b4d5cc862b972368eab169cd1dc6f37b83fcae88e8e26",
+      "tests/test_rag_module_and_packaging_boundary.py": "e2423e9ba938f1da640574de732d354ffc0246cd2c0c5494428a2d5d8a1c123d",
+      "tests/test_session_recovery_contracts.py": "0bc730ae385c53d1763b393ac2941e0c729b5132787894dde523b5433c8cc609",
+      "tests/test_workspace_session_history.py": "3040e2d93c4777c5004f95c1ab4ecdde82bc88f59bfd4e62b00c8eeb37488a4e",
+      "tests/test_interactive_controller.py": "417041181dcb8f7649178a967f465f0fbc6f437099911cb05afdc5c12d4da43e",
+      "tests/test_session_lifecycle.py": "ce145f2690a648636ebf038f1e65b39e8f9667e3b22a297cd712543979401399"
+    },
+    "current_case_count": 2544,
+    "current_class_groups": 389,
+    "current_source_charge": 151431
   }
 }
