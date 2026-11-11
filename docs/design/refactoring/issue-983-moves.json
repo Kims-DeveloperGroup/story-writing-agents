@@ -3,7 +3,7 @@
   "issue": 983,
   "parent": 968,
   "root_parent": 962,
-  "state": "실제 리뷰 대조 복구 완료, 최신 기준과 운영·테스트 병합 및 재검증 준비",
+  "state": "현재 main 일반 병합 후 기존 경계·테스트 보존 감사 완료, 최종 호스팅 검증 대기",
   "observed_head": "9105b43f28720f8611de27ef656685fbafe7cf03",
   "source_path": "src/story_writing_agents/orchestrator.py",
   "source_sha256": "1f89e987d8ab75d14ecf96aa8f03c3c50e77b9a8afe43bea128cd5f38cef9fc9",
@@ -382,5 +382,26 @@
       "actual_recovery_run": 42942715759,
       "original_request_response_unchanged": true
     }
+  },
+  "final_integration": {
+    "base": "26373d4a44b351b9bf27dfd7b9c46b627b17b772",
+    "previous_head": "22dc896b82b091d0a3886fa85ead6ee4aecaff05",
+    "source_modules": 232,
+    "full_edges": 1179,
+    "controller_edges": 1166,
+    "relative_edges": 1177,
+    "cycles": 0,
+    "canonical_cases": 2544,
+    "class_groups": 389,
+    "test_source_charge": 151431,
+    "retained_code_pairs": 961,
+    "retained_global_name_loads": 6038,
+    "retained_annotations": 1218,
+    "new_unresolved_globals": 0,
+    "baseline_unresolved_preserved": [
+      "SessionContextHistoryChangedError"
+    ],
+    "source_index_and_test_merge_freezes_verified": true,
+    "current_HEAD_full_CI_pending": true
   }
 }

@@ -346,8 +346,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 231)
-        self.assertEqual(len(edges), 1175)
+        self.assertEqual(len(modules), 232)
+        self.assertEqual(len(edges), 1179)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -381,7 +381,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.structured_output_validation",
                 "story_writing_agents.agents",
                 "story_writing_agents.artifact_proposals",
-                "story_writing_agents.errors",
+                "story_writing_agents.conversations.event_value_validation",
                 "story_writing_agents.git.story_commit_contracts",
                 "story_writing_agents.writing_artifacts", "story_writing_agents.authoring_admission",
                 "story_writing_agents.core_document_readiness",
@@ -1189,6 +1189,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 "story_writing_agents/conversations/catalog.py",
                 "story_writing_agents/conversations/context.py",
                 "story_writing_agents/conversations/events.py",
+                "story_writing_agents/conversations/event_value_validation.py",
             )
             workspace_package_paths = (
                 "story_writing_agents/workspace/__init__.py",
