@@ -44,7 +44,6 @@ from story_writing_agents.cli_context import (
 from story_writing_agents.config import ConfigManager
 from story_writing_agents.conversation_search import (
     ReferenceCollaborationHistorySearch,
-    ConversationCitation,
     ConversationSearchHit,
     ConversationSearchResult,
     ConversationSearchScope,
@@ -1773,8 +1772,8 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 231)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 1152)
+        self.assertEqual(len(modules), 234)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 1172)
         self.assertTrue(
             {
                 "story_writing_agents.artifact_proposals",
@@ -7012,7 +7011,6 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
     def test_run_operation_returns_task_result_when_task_completes_after_auth_ready(self) -> None:
         """Verify _run_operation reads authoritative task result if task completes during progress cleanup."""
         import asyncio
-        from story_writing_agents.interactive_controller._lead_policy import InteractiveLeadAdapter
 
         expected_result = object()
 

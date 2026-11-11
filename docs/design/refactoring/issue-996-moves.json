@@ -110,5 +110,40 @@
     "actual_red_failures": 1,
     "actual_red_errors": 0,
     "actual_red_assertion": "Secret absent from emitted_texts"
+  },
+  "current_main_merge_static_snapshot": {
+    "accepted_main": "28dfbf569e0157fbbe51a6c2b1a56b9827f534bc",
+    "prior_head": "01e23e1179a68b27d5ced9142eddfffc07188286",
+    "native_plan_sha256": "6d80a925c3b2bb7cfaad36ef131024fa83f1b2c4b423d9075a531facaf2d38e3",
+    "test_freeze_sha256": "1b4a2ea8d2fb14c18ea37b484cff968921fa0dbc1680af988ce65e2464bddd88",
+    "source234_and_index_preserved": true,
+    "graphs": {
+      "actual_modules": 234,
+      "complete_edges": 1185,
+      "Controller_edges": 1172,
+      "relative_only_edges": 1183,
+      "cycle_back_edges": 0,
+      "three_original_resolvers_and_predicates_unchanged": true,
+      "RAG_existing_pure_equalities": 47,
+      "RAG_mismatches": 0,
+      "both_Codex_event_and_pattern_packaging_literals_retained": true,
+      "incoming_event_value_validation_packaging_and_true_dependency_retained": true,
+      "incoming_outcome_review_contract_importer_retained": true
+    },
+    "budget": {
+      "test_lines": 148450,
+      "counted_support_lines": 1431,
+      "legacy_reserved_lines": 1550,
+      "effective_lines": 151431,
+      "cap": 151431,
+      "headroom": 0,
+      "own_global_MatchKind_Query_credits_preserved": true,
+      "incoming_Citation_PhaseRequest_local_LeadGroupPhase_InteractiveLeadAdapter_and_duplicated_set_credits_preserved": true,
+      "future999_Result_Scope_aliases_retained": true,
+      "unmerged990_SearchHit_alias_retained": true,
+      "new_support_files_line_compression_policy_or_ledger_changes": false
+    },
+    "local_Case_Suite_runs": 0,
+    "current_hosted_after_full_review": "미실행: 정적 결과를 현재 기능·성능 성공으로 대신하지 않는다."
   }
 }

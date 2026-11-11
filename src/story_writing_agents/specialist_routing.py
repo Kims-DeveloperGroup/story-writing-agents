@@ -11,10 +11,10 @@ import unicodedata
 from itertools import combinations, product
 from .structured_output_validation import (
     ValidationFinding,
-    unicode_scalar_classes,
     validation_failure,
     validation_call,
 )
+from .provider_schema_patterns import unicode_scalar_classes
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import PurePosixPath
