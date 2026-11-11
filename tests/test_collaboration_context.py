@@ -419,12 +419,13 @@ class CollaborationTransitionTests(unittest.TestCase):
         from story_writing_agents.conversations.context import _task_scope_digest
         from story_writing_agents.lead_task_transitions import LeadTaskRef
         from story_writing_agents.orchestrator import StoryRuntime, _RecommendationCapability
+        from story_writing_agents.lead_preparation import authoring_authority
         from story_writing_agents.runtime_resources import collaboration_event_journal as event_journal
         class ObjectiveOwner:
             _new_id = staticmethod(event_journal.new_id)
             _draft = staticmethod(event_journal.draft)
-            _validate_objective_selection = staticmethod(StoryRuntime._validate_objective_selection)
-            _resolved_objective_source_ids = staticmethod(StoryRuntime._resolved_objective_source_ids)
+            _validate_objective_selection = staticmethod(authoring_authority.validate_objective_selection)
+            _resolved_objective_source_ids = staticmethod(authoring_authority.resolved_objective_source_ids)
             _build_document_plan = StoryRuntime._build_document_plan
             _objective_drafts = StoryRuntime._objective_drafts
             _document_goal_facts = StoryRuntime._document_goal_facts

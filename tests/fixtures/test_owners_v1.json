@@ -13666,6 +13666,31 @@
         "tests.test_collaboration_events.CollaborationWireContractTests.test_duplicate_extra_missing_nonfinite_and_noncanonical_json_are_rejected"
       ],
       "affected_full": true
+    },
+    {
+      "name": "lead-preparation.authoring_authority",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/lead_preparation/authoring_authority.py"
+      ],
+      "depends_on": [
+        "agent-context.contracts.planning_inputs",
+        "agent-context.sources.capture_values",
+        "lead-preparation.reply_contract_values",
+        "runtime-resources.provider_call_accounting"
+      ],
+      "focused_ids": [
+        "tests.test_collaboration_context.CollaborationTransitionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_initial_budget_rejection_remains_failure",
+        "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_direct_scope_is_required_and_substantive_outcomes_cannot_bypass_routing"
+      ],
+      "affected_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_conversation_projects_exact_payload_schema_and_no_artifacts",
+        "tests.test_collaboration_context.CollaborationTransitionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_initial_budget_rejection_remains_failure",
+        "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_direct_scope_is_required_and_substantive_outcomes_cannot_bypass_routing"
+      ],
+      "affected_full": true
     }
   ],
   "ignored_names": [

@@ -2,7 +2,7 @@
   "schema_version": 1,
   "issue": 988,
   "parent": 968,
-  "phase": "구현 전 Draft 계획",
+  "phase": "구현 동결 시점의 정적 이동 기록",
   "accepted_main_proposed": "e7bd11b53b9aaa15b3563e2795e8d85956ecc94f",
   "source": "src/story_writing_agents/orchestrator.py",
   "owner": "src/story_writing_agents/lead_preparation/authoring_authority.py",
@@ -967,7 +967,7 @@
       "original_preflight_sha_preserved": true
     }
   },
-  "source_or_test_implementation": false,
+  "source_or_test_implementation": true,
   "local_Case_Suite_runs": 0,
   "test_scope": {
     "minimum_budget": "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_initial_budget_rejection_remains_failure",
@@ -1154,5 +1154,45 @@
   "test_preflight_sha256": "cf0bb91eb9a8283649c0f9bd21ddc04f3515ff27e21149ac76421e63296e3368",
   "accepted_main": "e7bd11b53b9aaa15b3563e2795e8d85956ecc94f",
   "planning_gate": "passed",
-  "native_plan_sha256": "0fc41e2b542cb09b1a9706bc8ac34c721fdb94800e5e6a6571d98c944ee4e4eb"
+  "native_plan_sha256": "6a375ce71f37afdb071b7ca29e1f4809d11f77d08d3bd3f32d252e00869a6d08",
+  "freeze_receipts": {
+    "source_freeze_sha256": "a3ddda2890ab1d4642f7a95993ff0dc12796882f407a5616210148d6a2aa62f7",
+    "test_freeze_sha256": "4e711beb2faa8c32cf7405da82ef7db8c94c16d7a355a62c597f1933c86136ff",
+    "owned_hashes": {
+      "src/story_writing_agents/orchestrator.py": "a679b188642771a324d1d35820aa5aabef12c45a3a46f45f30642e505a21d243",
+      "src/story_writing_agents/lead_preparation/authoring_authority.py": "1848b8e76dd3eee4052257b658dcb29210d4e41455ac2f5ea00bfe0724605acb",
+      "PYTHON_MODULE_INDEX.md": "4b726d27eb3815da2772bd8113d0d786867f5a35e47fda8c6ece5d448a23316d",
+      "tests/agent_context/invocation/execution_fixture.py": "8c3c5ea70910ff7bc8dceeae8bde86fbd2625218286d53b727ebadf135c92333",
+      "tests/fixtures/test_owners_v1.json": "9665367c210def7875ffdfa5a5dbc6c508999ccd2b559684b5e2ca681a7e88bf",
+      "tests/test_artifact_application_contracts.py": "9067dcf56fab52d12faba4abb4a4c6f4f02b4e6029a7fff38ab0f7cb270dee21",
+      "tests/test_artifact_application_store_recovery.py": "e75ae9fe5905ea89866f260d0629f96f0b32416db31b6564266d5e707ca09374",
+      "tests/test_artifact_relationship_policy.py": "de0ae1eab1ed30876f212022c97d62265f80df1c2c4eb3e0e038a6407e97e7d8",
+      "tests/test_codex_backend.py": "7b01b4433446810b1b86d7b881ed944d325e194f5964d1b0e71d134916d4b9d2",
+      "tests/test_collaboration_context.py": "b6b09b2213d9bbfd5c8f0a32dff786302462f744c6d871de40878444e0373d84",
+      "tests/test_git_external_operation_inspection.py": "618702640d5a9a6916e6d3d53f63a8e84167e177f2478a0a27b4b8a6ca2aa748",
+      "tests/test_interactive_controller.py": "bb35a61a30f8338faaeaeea98233156c6969403cd865bcba66903c4ae08b1370",
+      "tests/test_lead_orchestration.py": "374bd84f07c4a366c90b2ac69730c508927897ab291002065604ec4dc4845956",
+      "tests/test_rag_module_and_packaging_boundary.py": "0d68010615a76e2912dd587068f11a743a2c2db86ffa8bdb31da74828876df61",
+      "tests/test_session_lifecycle.py": "72c57e78a42b1baa1a4710bcea42fd4e30e3cdde0b82062893b20dd0539c8283",
+      "tests/test_session_recovery_contracts.py": "465169ac8190397fa98a1c488c146215fa0730734f82d6cda54108b2f8c4d2aa",
+      "tests/test_workspace_session_history.py": "bdf66792462eb7d27d351a7969220b4b767e61d4873e4f751ec4a0b492dfa2ec"
+    }
+  },
+  "static_snapshot": {
+    "Cases": 2544,
+    "classes": 389,
+    "fixtures": 65,
+    "TestPython": 148451,
+    "counted_support": 1430,
+    "legacy_reserved": 1550,
+    "charged_source_total": 151431,
+    "modules": 233,
+    "full_edges": 1197,
+    "controller_edges": 1182,
+    "relative_edges": 1195,
+    "nontrivial_cycles": 0,
+    "local_Case_Suite_runs": 0
+  },
+  "callback_lookup_preservation": "CodeX 기존 owner import 한 줄을 이미 eager 초기화된 StoryRuntime 전역 import 바로 뒤로 이동한다. reviewer의 전역 late lookup과 factory class의 기존 local alias 보유 시점, 추가 freevar0을 유지한다. 새 전역 binding 비용0은 주장하지 않는다.",
+  "validation_handoff": "이 문서는 코드 동결 시점의 정적 이동 기록이다. 실제 호스팅 RED/GREEN·성능·최신 main 전체 CI와 리뷰 결과는 PR #1001에서 별도로 검증한다. 정적 결과만으로 기능·성능 통과를 주장하지 않는다."
 }
