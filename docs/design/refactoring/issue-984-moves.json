@@ -177,7 +177,7 @@
   "issue": 984,
   "parent": 969,
   "root_parent": 962,
-  "state": "문서 전용 Draft 준비; 실제 운영·테스트·워크플로 변경 없음",
+  "state": "생산 및 테스트 변경 동결; 현재 후보의 호스팅 검증 예정",
   "github_planning_gate": "passed",
   "native_plan_sha256": "6cdee59efa375421df9e986832fbcbd3705ec330d1e4d3a618011de3b687f426",
   "draft_before_code_required": true,
@@ -194,5 +194,84 @@
       "body_lines": 66,
       "status": "Backlog"
     }
-  ]
+  ],
+  "before_validation": {
+    "normal": {
+      "run": 42925826512,
+      "head": "ad20e7d58241159bb032171d6bb6f3c39aeb1c99",
+      "wall": 153.598073068,
+      "report_sha256": "b106d03ef281e5fb6ad2b605d6f8b134995b2320daa9b8f7aa3c8e09af7aa8af"
+    },
+    "red": {
+      "run": 42925826315,
+      "head": "52dd328a3e5dc42a912ec12d68277d887a5c64e2",
+      "wall": 0.17777440599979855,
+      "report_sha256": "a6bafa5f85cba3680fef64c0e22d746ca1aeae8903efc0843ef9066a862d4fea",
+      "assertion_payload": " None is not an instance of <class 'OSError'>\n",
+      "canonical_id": "tests.test_advisory_progress_streaming.InteractiveAdvisoryProgressIntegrationTests.test_cancellation_clears_frame_and_does_not_open_nested_scroll_inspector_under_keep_frame"
+    }
+  },
+  "production_implementation": {
+    "moved_definitions": 16,
+    "moved_body_rows": 516,
+    "constants": 3,
+    "normalized_AST_matches": 19,
+    "recursive_code_pairs": 88,
+    "capture_changes": 0,
+    "verified_import_bindings": 23,
+    "graph": {
+      "modules": 230,
+      "full_edges": 1160,
+      "controller_edges": 1150,
+      "SCC": 0
+    },
+    "changed_files": {
+      "src/story_writing_agents/codex_adapter.py": {
+        "sha256": "0262accce67fc0131837489d4b3f9f6db57a496d54df4df4d59fcf7f9390c62f",
+        "rows": 1461
+      },
+      "src/story_writing_agents/codex_native_context.py": {
+        "sha256": "47f1f8f844ec73c6ecb35effc1894386e6ff36ce6d1c2f774c7822ef88ea2836",
+        "rows": 597
+      },
+      "PYTHON_MODULE_INDEX.md": {
+        "sha256": "0fa37d8d99f2507d350e1af177cbc57c15e7d75b32c1102ab73d6462d70c4969",
+        "rows": 300
+      }
+    },
+    "local_Case_runs": 0,
+    "local_Suite_runs": 0
+  },
+  "test_implementation": {
+    "test_file_sha256": {
+      "tests/fixtures/test_owners_v1.json": "442da932f18371214ceeca42d5f45817da119dc1674dfaf7926dcbe4b4b1449a",
+      "tests/provider_wire_fixture.py": "aaff1e764789a87928dfb2948f798091acd241cbc324e63a19179a296c417fbc",
+      "tests/test_advisory_progress_streaming.py": "abb534345f47f9e0e901103ba3a9171afeee49d31937b9f5b7f0eca62e99f779",
+      "tests/test_antigravity_parity.py": "755c713c9ef81d32c177e769f84b76dcdd82c83c53cefb9809f16d3f8acabeb6",
+      "tests/test_artifact_application_contracts.py": "843205fc7b1a0a42d5526891a473ff72ccaf17bd14f1e6fb94eb50e88b7a645c",
+      "tests/test_artifact_application_store_recovery.py": "321b7ea5a2a6b26c691f8030cb7b4fb28c6ffce35b76b17eedbf7726e381fe8f",
+      "tests/test_artifact_relationship_policy.py": "cc560ad5c290eeeecadd43bcb8a9bf34494b6d87cdbcb860e9d12302e72246b4",
+      "tests/test_codex_backend.py": "f117f577b2910928da199c33872b8c0bf4881ca1992c5f3fb60368a9e58b48ec",
+      "tests/test_git_external_operation_inspection.py": "3617deabcfabf1b4702c08d7d543336b21edd9c5b8d082f2dcb1c9e2537171d8",
+      "tests/test_interactive_controller.py": "9ed142cedd760815c854a4d5eb4f2a634d6e06ecccd79a6e98b7d750d81a2853",
+      "tests/test_rag_module_and_packaging_boundary.py": "9a3e9e0e828c0a4eeb93ef62f9595f55eec77ff2058cd41bb69899994039f0e7",
+      "tests/test_session_lifecycle.py": "b0584fbbd1267fb9a40232e1979590bd0b9ad35b09310c3c929b5a321cec4d70",
+      "tests/test_session_recovery_contracts.py": "a83d06ede03c9cfd63e9fe75583fcdd116505ba3d8a2d1058dcc794567a6fd64",
+      "tests/test_workspace_session_history.py": "9dccff3d48715812a6bfccac9b553f480cc170d8ba30857368511d9beed32da2"
+    },
+    "freeze_manifest_sha256": "2749cc1f3f4741bcadf8e0ec3191d1bdb4f4113f7eca86c2762599bae7a0f040",
+    "effective_source_charge": 151431,
+    "case_count": 2544,
+    "class_count": 389,
+    "focused_file_ids": 1,
+    "affected": 2544,
+    "graph": [
+      230,
+      1160,
+      1150
+    ],
+    "new_cases": 0,
+    "local_Case_runs": 0,
+    "local_Suite_runs": 0
+  }
 }
