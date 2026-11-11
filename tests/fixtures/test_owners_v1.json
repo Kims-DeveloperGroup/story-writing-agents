@@ -13682,6 +13682,23 @@
         "tests.agent_context.contracts.test_result_validation.StructuredOutputValidationTests.test_union_selects_matching_branch_without_other_branch_noise"
       ],
       "affected_full": true
+    },
+    {
+      "name": "provider-schema-selection",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/provider_schema_selection.py"
+      ],
+      "depends_on": [],
+      "focused_ids": [
+        "tests.agent_context.invocation.test_bound_action_frames.CompactWireDecoderTests.test_schema_is_action_only_and_runtime_correlation_is_exact"
+      ],
+      "affected_ids": [
+        "tests.agent_context.invocation.test_bound_action_frames.CompactWireDecoderTests.test_schema_is_action_only_and_runtime_correlation_is_exact",
+        "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_lead_search_read_json_answer_uses_exact_dynamic_contract_and_limit",
+        "tests.test_codex_backend.CodexBackendTestCase.test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread"
+      ],
+      "affected_full": true
     }
   ],
   "ignored_names": [

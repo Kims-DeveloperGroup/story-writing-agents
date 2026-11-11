@@ -1126,7 +1126,7 @@ def assert_phase_guide(case, request, expected_phase):
     case.assertEqual(rules.count(guides[expected_phase]), 1)
     case.assertEqual(sum(rule.startswith("현재 단계는 Phase ") for rule in rules), 1)
     case.assertNotIn(guides[next(phase for phase in guides if phase is not expected_phase)], rules)
-    from story_writing_agents.provider_wire import SchemaSelectionInput
+    from story_writing_agents.provider_schema_selection import SchemaSelectionInput
     wire = request.payload["response_contract"]["schema_selection"]
     selection = SchemaSelectionInput.from_value(wire)
     case.assertEqual(selection.phase, expected_phase.value)

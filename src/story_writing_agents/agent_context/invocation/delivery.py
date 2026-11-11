@@ -11,7 +11,7 @@ from ...lead_schema_groups import (
     LeadGroupWorkflow,
 )
 from ...provider_adapter import ProviderContextWitness
-from ...provider_wire import SchemaSelectionInput
+from ...provider_schema_selection import SchemaSelectionInput
 from ..accounting import ProviderCallState
 from ..contracts.context_values import (
     digest,
