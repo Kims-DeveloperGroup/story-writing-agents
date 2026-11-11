@@ -20,6 +20,7 @@ import story_writing_agents.conversations as conversations_module
 import story_writing_agents.conversations.catalog as conversation_catalog_module
 import story_writing_agents.conversations.context as conversation_context_module
 import story_writing_agents.conversations.events as conversation_events_module
+import story_writing_agents.conversations.event_vocabulary as conversation_vocabulary_module
 import story_writing_agents.conversation_storage.filesystem as filesystem_module
 import story_writing_agents.workspace as workspace_module
 import story_writing_agents.workspace.core as workspace_core_module
@@ -52,6 +53,7 @@ from tests.helpers import pristine_initialized_workspace
 from tests.collaboration_contract_fixture import (
     COLLABORATION_CONTEXT_EXPORTS,
     COLLABORATION_EVENT_EXPORTS,
+    COLLABORATION_VOCABULARY_EXPORTS,
     CONVERSATION_FACADE_EXPORTS,
 )
 
@@ -111,6 +113,7 @@ _CATALOG_EXPORTS = {
     "normalize_conversation_subject",
 }
 _EVENT_EXPORTS = set(COLLABORATION_EVENT_EXPORTS)
+_VOCABULARY_EXPORTS = set(COLLABORATION_VOCABULARY_EXPORTS)
 _OWNER_ONLY_EVENT_EXPORTS = {"CollaborationLeadGroupTracePayload"}
 _CONTEXT_EXPORTS = set(COLLABORATION_CONTEXT_EXPORTS)
 _ROOT_CONVERSATION_EXPORTS = set(_V1_CONVERSATION_FACADE_EXPORTS).difference(
@@ -854,20 +857,24 @@ class ConversationPackageBoundaryTests(unittest.TestCase):
         self.assertTrue(set(_REVIEW_FACADE_EXPORTS).isdisjoint(vars(story_writing_agents)))
 
         owner_exports = (
-            (conversation_catalog_module, _CATALOG_EXPORTS),
-            (conversation_events_module, _EVENT_EXPORTS),
-            (conversation_context_module, _CONTEXT_EXPORTS),
+            ((conversation_catalog_module, _CATALOG_EXPORTS),),
+            (
+                (conversation_events_module, _EVENT_EXPORTS),
+                (conversation_vocabulary_module, _VOCABULARY_EXPORTS),
+            ),
+            ((conversation_context_module, _CONTEXT_EXPORTS),),
         )
         self.assertTrue(_OWNER_ONLY_EVENT_EXPORTS.isdisjoint(vars(conversations_module)))
-        for owner, expected in owner_exports:
-            with self.subTest(owner=owner.__name__):
-                self.assertEqual(set(owner.__all__), expected)
-                self.assertEqual(len(owner.__all__), len(expected))
-                for name in expected.difference(_OWNER_ONLY_EVENT_EXPORTS):
-                    self.assertIs(
-                        getattr(owner, name),
-                        getattr(conversations_module, name),
-                    )
+        for owner_group in owner_exports:
+            with self.subTest(owner=owner_group[0][0].__name__):
+                for owner, expected in owner_group:
+                    self.assertEqual(set(owner.__all__), expected)
+                    self.assertEqual(len(owner.__all__), len(expected))
+                    for name in expected.difference(_OWNER_ONLY_EVENT_EXPORTS):
+                        self.assertIs(
+                            getattr(owner, name),
+                            getattr(conversations_module, name),
+                        )
 
         for name in _ROOT_CONVERSATION_EXPORTS:
             with self.subTest(root_export=name):
@@ -918,36 +925,43 @@ class ConversationPackageBoundaryTests(unittest.TestCase):
             / "conversations"
         )
         expected_by_file = {
-            "__init__.py": set(),
-            "catalog.py": _CATALOG_EXPORTS,
-            "events.py": _EVENT_EXPORTS | {"build_final_review_evidence"},
-            "context.py": _CONTEXT_EXPORTS | {
-                "document_lineage_cost", "project_document_plan_views", "is_new_task_recommendation_source"},
+            "__init__.py": (("__init__.py", set()),),
+            "catalog.py": (("catalog.py", _CATALOG_EXPORTS),),
+            "events.py": (
+                ("events.py", _EVENT_EXPORTS | {"build_final_review_evidence"}),
+                ("event_vocabulary.py", _VOCABULARY_EXPORTS),
+            ),
+            "context.py": (("context.py", _CONTEXT_EXPORTS | {
+                "document_lineage_cost", "project_document_plan_views", "is_new_task_recommendation_source"}),),
         }
         public_names = set(_CONVERSATION_FACADE_EXPORTS) | _OWNER_ONLY_EVENT_EXPORTS
 
-        for filename, expected in expected_by_file.items():
-            tree = ast.parse(
-                (package / filename).read_text(encoding="utf-8"),
-                filename=filename,
-            )
-            definitions: set[str] = set()
-            for node in tree.body:
-                if isinstance(node, (ast.ClassDef, ast.FunctionDef)):
-                    definitions.add(node.name)
-                elif isinstance(node, ast.Assign):
-                    definitions.update(
-                        target.id
-                        for target in node.targets
-                        if isinstance(target, ast.Name)
-                    )
-                elif isinstance(node, ast.AnnAssign) and isinstance(
-                    node.target,
-                    ast.Name,
-                ):
-                    definitions.add(node.target.id)
-            with self.subTest(filename=filename):
-                self.assertEqual(definitions & public_names, expected)
+        for family, owner_files in expected_by_file.items():
+            prepared = []
+            for filename, expected in owner_files:
+                tree = ast.parse(
+                    (package / filename).read_text(encoding="utf-8"),
+                    filename=filename,
+                )
+                definitions: set[str] = set()
+                for node in tree.body:
+                    if isinstance(node, (ast.ClassDef, ast.FunctionDef)):
+                        definitions.add(node.name)
+                    elif isinstance(node, ast.Assign):
+                        definitions.update(
+                            target.id
+                            for target in node.targets
+                            if isinstance(target, ast.Name)
+                        )
+                    elif isinstance(node, ast.AnnAssign) and isinstance(
+                        node.target,
+                        ast.Name,
+                    ):
+                        definitions.add(node.target.id)
+                prepared.append((definitions, expected))
+            with self.subTest(filename=family):
+                for definitions, expected in prepared:
+                    self.assertEqual(definitions & public_names, expected)
 
     def test_catalog_signatures_and_type_hints_are_unchanged(self) -> None:
         expected_parameters = {

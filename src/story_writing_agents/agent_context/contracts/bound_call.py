@@ -31,9 +31,8 @@ from ...lead_schema_groups import (
     SchemaGroupReselection,
     SchemaGroupSelection,
 )
+from ...provider_schema_selection import LEAD_GROUP_PHASE_GUIDES, SchemaSelectionInput
 from ...provider_wire import (
-    LEAD_GROUP_PHASE_GUIDES,
-    SchemaSelectionInput,
     hoist_schema_definitions,
     normalize_context_action,
     rebase_schema_definitions,

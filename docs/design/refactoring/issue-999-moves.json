@@ -424,10 +424,10 @@
   },
   "test_freeze_sha256": "680ac04130e0363abce3ee13313b09c7aedcb3c6d1b0cfbf9bdb8f8b0693f2ad",
   "test_source_charge": {
-    "test_lines": 148451,
-    "support_lines": 1430,
+    "test_lines": 148448,
+    "support_lines": 1431,
     "legacy_lines": 1550,
-    "effective_lines": 151431
+    "effective_lines": 151429
   },
   "actual_graph": {
     "modules": 232,
@@ -617,37 +617,73 @@
     "실제owner/namespace·초기heap·GC비용0주장금지"
   ],
   "current_main_merge_static_snapshot": {
-    "accepted_main": "28dfbf569e0157fbbe51a6c2b1a56b9827f534bc",
-    "prior_head": "1ba6b48283a4a4175d360466a4803b58bb29a1d5",
-    "native_plan_sha256": "21dd1bcb079ee7c47703b2f00d92c66b98da1eac4fd45c3ec1c63fa8c595264b",
-    "test_freeze_sha256": "89be8c62a6ecb8be276580f1333dd626aaa377dedcfb9c2454c12e74a95fb7c9",
-    "source234_and_index_preserved": true,
+    "accepted_main": "575543b46c34a79b7e4e71f37e5d93cf2f011cc2",
+    "prior_head": "e2cdbad5c1aab384431cceecd57b318c9a2a3dec",
+    "source237_and_index_preserved": true,
     "graphs": {
-      "actual_modules": 234,
-      "actual_complete_edges": 1185,
-      "actual_Controller_edges": 1172,
-      "actual_relative_edges": 1183,
-      "cycle_back_edges": 0,
-      "all_original_readers_and_predicates_unchanged": true,
-      "RAG_existing_pure_equalities": 47,
-      "RAG_mismatches": 0,
-      "both_own_Antigravity_response_and_incoming_pattern_packaging_paths_retained": true,
-      "incoming_outcome_importer_and_already_shared985_event_value_data_preserved": true
+      "source_modules": 237,
+      "complete_edges": 1195,
+      "Controller_edges": 1182,
+      "relative_only_edges": 1193,
+      "cycles": 0
     },
+    "index_rows": 300,
+    "index_sha256": "bc12d400066dbbf4e0351415da2d6c950cd92598df77397f4fd0287e7fa42b5f",
+    "declared_owners": 249,
+    "owner_map_modules": 184,
+    "resolved_test_paths": 10,
+    "auto_source_scan_both_paths_preserved": true,
+    "RAG_static_relations": 56,
     "budget": {
-      "test_lines": 148450,
+      "test_lines": 148448,
       "counted_support_lines": 1431,
       "legacy_reserved_lines": 1550,
-      "effective_lines": 151431,
+      "effective_lines": 151429,
       "cap": 151431,
-      "headroom": 0,
-      "own_Result_Scope_credit_rows_kept_removed": true,
-      "incoming_Citation_PhaseRequest_983_local_LeadGroupPhase_and_InteractiveLeadAdapter_credits_preserved": true,
-      "985_duplicate_set_credit_shared_and_not_double_spent": true,
-      "future996_MatchKind_Query_and990_Hit_aliases_retained": true,
-      "line_compression_helper_logic_externalization_policy_or_ledger_change": false
+      "headroom": 2,
+      "headroom_reserved_issue": 1004,
+      "own_Result_Scope_and_all_main_credits_preserved": true,
+      "additional_line_compression_or_ledger_counter_changes": false
     },
+    "test_freeze_sha256": "bccec74fc51fa70b3c44e340f10d6c4cccb61030b6bd25100037df3e7f420989",
+    "actual_production_audit_sha256": "66ec8f604502219daf43f75855220126fcc22a52ba0bde1eedc71e3fb4b37485",
     "local_Case_Suite_runs": 0,
-    "current_hosted_after_full_review": "미실행: 정적 결과를 현재 기능·성능 성공으로 대신하지 않는다."
-  }
+    "verification_status": "현재source/namespace/정적test통합완료. current575 before/after hosted최소GREEN/정상반복/같은오류RED/전체CI/관리리뷰는별도검증."
+  },
+  "historical_main_merge_static_snapshots": [
+    {
+      "accepted_main": "28dfbf569e0157fbbe51a6c2b1a56b9827f534bc",
+      "prior_head": "1ba6b48283a4a4175d360466a4803b58bb29a1d5",
+      "native_plan_sha256": "21dd1bcb079ee7c47703b2f00d92c66b98da1eac4fd45c3ec1c63fa8c595264b",
+      "test_freeze_sha256": "89be8c62a6ecb8be276580f1333dd626aaa377dedcfb9c2454c12e74a95fb7c9",
+      "source234_and_index_preserved": true,
+      "graphs": {
+        "actual_modules": 234,
+        "actual_complete_edges": 1185,
+        "actual_Controller_edges": 1172,
+        "actual_relative_edges": 1183,
+        "cycle_back_edges": 0,
+        "all_original_readers_and_predicates_unchanged": true,
+        "RAG_existing_pure_equalities": 47,
+        "RAG_mismatches": 0,
+        "both_own_Antigravity_response_and_incoming_pattern_packaging_paths_retained": true,
+        "incoming_outcome_importer_and_already_shared985_event_value_data_preserved": true
+      },
+      "budget": {
+        "test_lines": 148450,
+        "counted_support_lines": 1431,
+        "legacy_reserved_lines": 1550,
+        "effective_lines": 151431,
+        "cap": 151431,
+        "headroom": 0,
+        "own_Result_Scope_credit_rows_kept_removed": true,
+        "incoming_Citation_PhaseRequest_983_local_LeadGroupPhase_and_InteractiveLeadAdapter_credits_preserved": true,
+        "985_duplicate_set_credit_shared_and_not_double_spent": true,
+        "future996_MatchKind_Query_and990_Hit_aliases_retained": true,
+        "line_compression_helper_logic_externalization_policy_or_ledger_change": false
+      },
+      "local_Case_Suite_runs": 0,
+      "current_hosted_after_full_review": "미실행: 정적 결과를 현재 기능·성능 성공으로 대신하지 않는다."
+    }
+  ]
 }

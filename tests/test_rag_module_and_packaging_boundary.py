@@ -346,8 +346,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 234)
-        self.assertEqual(len(edges), 1185)
+        self.assertEqual(len(modules), 237)
+        self.assertEqual(len(edges), 1195)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -355,6 +355,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
         self.assertIsNone(_cycle_witness(modules, edges))
         conversation_dependencies = {
             "story_writing_agents.conversations": {
+                "story_writing_agents.conversations.event_vocabulary",
                 "story_writing_agents.document_plan",
                 "story_writing_agents.editorial_scope",
                 "story_writing_agents.editorial_state",
@@ -369,6 +370,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.errors",
             },
             "story_writing_agents.conversations.events": {
+                "story_writing_agents.conversations.event_vocabulary",
                 "story_writing_agents.document_plan",
                 "story_writing_agents.review_contracts",
                 "story_writing_agents.agent_context",
@@ -389,6 +391,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 'story_writing_agents.agent_context.group_observation',
             },
             "story_writing_agents.conversations.context": {
+                "story_writing_agents.conversations.event_vocabulary",
                 "story_writing_agents.document_plan",
                 "story_writing_agents.authoring_task_lifecycle",
                 "story_writing_agents.review_contracts",
@@ -1170,6 +1173,8 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 requires,
             )
             group_package_paths = (
+            "story_writing_agents/codex_event_decoding.py",
+            "story_writing_agents/provider_schema_selection.py",
             "story_writing_agents/provider_schema_patterns.py",
                 "story_writing_agents/agent_context/group_observation.py",
                 "story_writing_agents/agent_context/group_reporting.py",
@@ -1192,6 +1197,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 "story_writing_agents/conversations/catalog.py",
                 "story_writing_agents/conversations/context.py",
                 "story_writing_agents/conversations/events.py",
+                "story_writing_agents/conversations/event_vocabulary.py",
                 "story_writing_agents/conversations/event_value_validation.py",
             )
             workspace_package_paths = (
@@ -1302,7 +1308,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 from story_writing_agents.agent_exchanges import AgentExchangeScopeKind
                 assert len(story_writing_agents.__all__) == 106
                 assert len(conversations.__all__) == 235
-                assert len(conversation_events.__all__) == 134
+                assert len(conversation_events.__all__) == 97
                 assert len(conversation_context.__all__) == 37
                 assert conversations.CollaborationProposal is conversation_events.CollaborationProposal
                 assert conversations.CollaborationEventStore is conversation_context.CollaborationEventStore
@@ -1568,7 +1574,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 import story_writing_agents.conversations.events as events
                 assert len(story_writing_agents.__all__) == 106
                 assert len(conversations.__all__) == 235
-                assert len(events.__all__) == 134
+                assert len(events.__all__) == 97
                 assert len(context.__all__) == 37
                 assert catalog.ConversationCatalog is conversations.ConversationCatalog
                 assert events.ConversationEvent is conversations.ConversationEvent
