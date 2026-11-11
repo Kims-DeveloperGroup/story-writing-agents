@@ -1,0 +1,6 @@
+{
+  "issue": 985,
+  "draft_pr": 989,
+  "accepted_base": "7799cf232545e8f9d3deba9ff3f90c716b971bba",
+  "purpose": "같은 운영·테스트·워크플로에서 기준 검증을 재실행하기 위한 문서 전용 참조"
+}
