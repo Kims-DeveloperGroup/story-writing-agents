@@ -346,8 +346,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 233)
-        self.assertEqual(len(edges), 1183)
+        self.assertEqual(len(modules), 234)
+        self.assertEqual(len(edges), 1186)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -1170,6 +1170,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 requires,
             )
             group_package_paths = (
+            "story_writing_agents/provider_schema_selection.py",
             "story_writing_agents/provider_schema_patterns.py",
                 "story_writing_agents/agent_context/group_observation.py",
                 "story_writing_agents/agent_context/group_reporting.py",

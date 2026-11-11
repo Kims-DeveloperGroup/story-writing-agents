@@ -25,7 +25,6 @@ from story_writing_agents.agents import (
 from story_writing_agents.consensus import (
     AuthoringIntent,
     CONSENSUS_AUDITORS,
-    ConsensusContinuation,
     ConsensusContinuationMode,
     ConsensusDecision,
     ConsensusInputKind,

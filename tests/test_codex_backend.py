@@ -3426,7 +3426,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
     def _assert_owned_native_context_witness(self, invocation) -> None:
         import sqlite3
         from story_writing_agents import codex_adapter, codex_native_context
-        from story_writing_agents.provider_wire import SchemaSelectionInput
+        from story_writing_agents.provider_schema_selection import SchemaSelectionInput
 
         thread = "11111111-1111-4111-8111-111111111111"
         rollout = "22222222-2222-4222-8222-222222222222"
