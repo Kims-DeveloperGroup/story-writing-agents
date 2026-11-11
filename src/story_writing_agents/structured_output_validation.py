@@ -632,7 +632,7 @@ def compile_schema_pattern(pattern: str) -> re.Pattern[str]:
     cursor = 0
     for index, token, outside in _schema_pattern_tokens(pattern):
         if outside and token == r"\z":
-            pieces.extend((pattern[cursor:index], r"\Z"))
+            pieces.extend((pattern[cursor:index], r"$"))
             cursor = index + 2
     pieces.append(pattern[cursor:])
     return re.compile("".join(pieces))
