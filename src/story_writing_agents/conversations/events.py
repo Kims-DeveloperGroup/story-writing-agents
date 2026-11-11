@@ -5153,7 +5153,7 @@ def _reject_duplicate_fields(pairs: list[tuple[str, object]]) -> dict[str, objec
     result: dict[str, object] = {}
     for key, value in pairs:
         if key in result:
-            raise ValueError("collaboration payload duplicates a field")
+            raise TypeError("collaboration payload duplicates a field")
         result[key] = value
     return result
 
