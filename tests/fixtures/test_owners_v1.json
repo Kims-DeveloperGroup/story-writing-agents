@@ -13628,6 +13628,23 @@
         "tests.test_workspace_session_history.WorkspaceSessionHistoryCompositionTests.test_internal_wrapper_uses_main_root_manifest_and_noncreating_snapshot"
       ],
       "affected_full": true
+    },
+    {
+      "name": "provider-schema-selection",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/provider_schema_selection.py"
+      ],
+      "depends_on": [],
+      "focused_ids": [
+        "tests.agent_context.invocation.test_bound_action_frames.CompactWireDecoderTests.test_schema_is_action_only_and_runtime_correlation_is_exact"
+      ],
+      "affected_ids": [
+        "tests.agent_context.invocation.test_bound_action_frames.CompactWireDecoderTests.test_schema_is_action_only_and_runtime_correlation_is_exact",
+        "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_lead_search_read_json_answer_uses_exact_dynamic_contract_and_limit",
+        "tests.test_codex_backend.CodexBackendTestCase.test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread"
+      ],
+      "affected_full": true
     }
   ],
   "ignored_names": [

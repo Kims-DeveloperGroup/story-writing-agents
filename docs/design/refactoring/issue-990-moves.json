@@ -3,7 +3,7 @@
   "parent": 975,
   "root_parent": 962,
   "accepted_base": "e0381a122153bb3944b83395a86f048a9141c98e",
-  "status": "문서 전용 Draft 준비, 소스와 테스트 구현 전",
+  "status": "기존 클래스·불변 안내와 실제 소비자·테스트 소유자 이동 완료, 호스팅 검증 대기",
   "owner": "src/story_writing_agents/provider_schema_selection.py",
   "moves": [
     "SchemaSelectionInput",
@@ -11,7 +11,7 @@
   ],
   "consumers": [
     "provider_wire",
-    "agent_context.invocation.bound_call",
+    "agent_context.contracts.bound_call",
     "agent_context.invocation.delivery",
     "agent_context.invocation.group_payload"
   ],
@@ -41,5 +41,64 @@
     "source_charge": 151431,
     "test_scenario_change": 0
   },
-  "verification_status": "실제 기존 Case의 이동 전후 정상·동일 오류 RED/GREEN 및 최종 HEAD 전체 CI·성능·관리 리뷰 미실행"
+  "verification_status": "실제 이동 전 정상3회와 RED 확인, 이동 후 정상·같은 오류·그래프 및 최종 HEAD 전체 CI·성능·관리 리뷰 미완료",
+  "draft_pr": 995,
+  "draft_created_at": "2026-11-11T02:57:09Z",
+  "diagnostic_before": {
+    "run": 42949682683,
+    "expected_errors": 1,
+    "expected_failures": 0,
+    "fingerprint": "RuntimeError: schema_selection is not a closed current input",
+    "normal_code_mutation": false
+  },
+  "production": {
+    "owner_rows": 119,
+    "original_body_rows": 106,
+    "class_decorator_rows": 1,
+    "graphs": {
+      "modules": 231,
+      "full_edges": 1163,
+      "controller_edges": 1153,
+      "relative_edges": 1162,
+      "cycles": 0
+    },
+    "retained_code_pairs": 277,
+    "retained_global_loads": 1234,
+    "retained_annotations": 392,
+    "new_missing_globals": 0,
+    "type_hint_checks": 116,
+    "type_hint_errors": 0,
+    "import_lowering_sites": 3,
+    "source_sha256": {
+      "src/story_writing_agents/provider_wire.py": "f38a5a81753cc8f8a16734e5ebee67ff75357190e6c581fd14e1b6f5a25f3b50",
+      "src/story_writing_agents/agent_context/contracts/bound_call.py": "ec1e3fa3ed38335bf29af2105fcfb2fd171494ddec001ba92807eba6e8d662dc",
+      "src/story_writing_agents/agent_context/invocation/delivery.py": "2f9089917046758d04377a58e15e6e9a31b639de235cee6bee09b66c18b0b997",
+      "src/story_writing_agents/agent_context/invocation/group_payload.py": "bed61c640f853db0aa29033962a97eb3da897929c087639e28ad5c3a505029ee",
+      "src/story_writing_agents/provider_schema_selection.py": "cc9d00af0c61a51806e3d07d6128978a79ccf5adff16a0545c855356192355a3",
+      "PYTHON_MODULE_INDEX.md": "83a5ba1e26c8e9c5b5a1aa1142f7aa1099d1e0c49536aecf871b9fb7ec00121c"
+    }
+  },
+  "test_preservation": {
+    "fresh_ids": 2544,
+    "class_groups": 389,
+    "source_charge": 151431,
+    "cases_added": 0,
+    "assertions_inputs_fixtures_lifetimes_preserved": true,
+    "focused_count": 1,
+    "expanded_count": 3,
+    "affected_full": true
+  },
+  "before_validation": {
+    "normal_run": 42949679819,
+    "attempts": [
+      1,
+      2,
+      3
+    ],
+    "passed_each": 3,
+    "red_run": 42949682683,
+    "red_errors": 1,
+    "red_failures": 0,
+    "red_fingerprint": "RuntimeError: schema_selection is not a closed current input"
+  }
 }
