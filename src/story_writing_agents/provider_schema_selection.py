@@ -93,7 +93,7 @@ class SchemaSelectionInput:
         optional = {"catalog", "catalog_id", "active_selection"}
         if (not isinstance(value, Mapping) or not required <= value.keys()
                 or set(value) - required - optional):
-            raise ValueError("schema_selection is not a closed current input")
+            raise RuntimeError("schema_selection is not a closed current input")
         if ("catalog" in value) == ("catalog_id" in value) or value["phase"] == "select" and "active_selection" in value:
             raise ValueError("schema_selection conditional fields are invalid")
         issued, delivery = value["issued_contract"], value["context_delivery"]
