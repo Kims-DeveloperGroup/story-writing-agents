@@ -1,0 +1,289 @@
+{
+  "issue": 985,
+  "parent": 970,
+  "program_parent": 962,
+  "status": "구현 전 기준과 이동 계획",
+  "accepted_base": "648e5a4e5675001ed2d9aa91aaf400d485356568",
+  "source": "src/story_writing_agents/conversations/events.py",
+  "planned_owner": "src/story_writing_agents/conversations/event_value_validation.py",
+  "purpose": "이벤트 값 검증과 엄격한 JSON 코덱만 같은 호출·오류·직렬화 계약으로 분리한다.",
+  "existing_definitions": [
+    {
+      "name": "_validate_positive_integer",
+      "lines": [
+        1837,
+        1847
+      ],
+      "before_AST_sha256": "aa57fc8ef1705e32563c5e80029609d009b3e9b4e22a79d606767c17ffd3b7d0"
+    },
+    {
+      "name": "_canonical_json",
+      "lines": [
+        5117,
+        5128
+      ],
+      "before_AST_sha256": "01a35217437c486c0aad67b114a2d7eeec29b1b043886f332cab6d078b0b0b57"
+    },
+    {
+      "name": "_decode_canonical_json",
+      "lines": [
+        5131,
+        5149
+      ],
+      "before_AST_sha256": "bf0c4c510f27e5a0b37872843970d2a25c904b124bd44b4a6a6ed56c2f8b9cb6"
+    },
+    {
+      "name": "_reject_duplicate_fields",
+      "lines": [
+        5152,
+        5158
+      ],
+      "before_AST_sha256": "0409bbc14bdc57707bab8392c15df27a2dfb676d33f9360fc0ac4f29820023c3"
+    },
+    {
+      "name": "_reject_json_constant",
+      "lines": [
+        5161,
+        5162
+      ],
+      "before_AST_sha256": "5a6d00c16e81e429f4a0ae93aa56aa3e86ec13ddef760e174e92466ba8da2362"
+    },
+    {
+      "name": "_digest_value",
+      "lines": [
+        5165,
+        5166
+      ],
+      "before_AST_sha256": "57b0011ffd3aed0e64f156d5a385516f6a3c56a01ddf7f381a5e872aad388492"
+    },
+    {
+      "name": "_validate_digest",
+      "lines": [
+        7837,
+        7840
+      ],
+      "before_AST_sha256": "18041f72f689ff4dd238999b3fa4afb802ffb8184b6929d360d5578e4bccc3ee"
+    },
+    {
+      "name": "_validate_non_negative_integer",
+      "lines": [
+        7872,
+        7877
+      ],
+      "before_AST_sha256": "08bcbcaa9d6babb0264faf5f5208809abf6379c22af715b38ede8c00db894c12"
+    },
+    {
+      "name": "_validate_exact_tuple",
+      "lines": [
+        7880,
+        7894
+      ],
+      "before_AST_sha256": "efb530179c7f359fae2ad040ba2c5cae91064863bb207a9873a2c2404794a098"
+    },
+    {
+      "name": "_validate_enum_tuple",
+      "lines": [
+        7897,
+        7905
+      ],
+      "before_AST_sha256": "0d6b7398e17ce6757d3342cee3cba8bc70acf419f35ae8c9e21af2114c4782ae"
+    },
+    {
+      "name": "_validate_identifier_tuple",
+      "lines": [
+        7908,
+        7913
+      ],
+      "before_AST_sha256": "b28b700d2b4990312d0b9edd4f61c2cd70ce7700f6f5a767535f87da2280d260"
+    },
+    {
+      "name": "_validate_specialist_tuple",
+      "lines": [
+        7916,
+        7924
+      ],
+      "before_AST_sha256": "5c6b7c2503de6f25f9d82ae748c2b0105b9d39b7b099af290a9fe7f710996581"
+    },
+    {
+      "name": "_require_enum",
+      "lines": [
+        7927,
+        7933
+      ],
+      "before_AST_sha256": "581c86ede24c80fb84d48cc22873ec12ab6331655e2a89ccb79ff346eeca0c41"
+    },
+    {
+      "name": "_require_unique",
+      "lines": [
+        7936,
+        7940
+      ],
+      "before_AST_sha256": "b0310ee3be13e4c9d0a3b5626e6e3f0c2301e293a5be64e544e2a0174c75a741"
+    },
+    {
+      "name": "_object_with_extension",
+      "lines": [
+        7943,
+        7955
+      ],
+      "before_AST_sha256": "9080746e9aa4bf382f84809a7e83edb21ffc6d81f629121fc3ef60692e25be96"
+    },
+    {
+      "name": "_object_with_optional_extensions",
+      "lines": [
+        7958,
+        7973
+      ],
+      "before_AST_sha256": "c1b4ccd049662e8d42e0d033eef59f9554c0756f082df4d8e540b8d8523c4907"
+    },
+    {
+      "name": "_reply_trace_fields",
+      "lines": [
+        7976,
+        7977
+      ],
+      "before_AST_sha256": "c9c392b3e82d981c30d221120542c0eac060dd6917262c60bc9e8793b05af780"
+    },
+    {
+      "name": "_decode_optional_reply_trace",
+      "lines": [
+        7980,
+        7983
+      ],
+      "before_AST_sha256": "3c8924346578441bad05322ffa00b488bbd3c9f219cd081c095c7c659350a809"
+    },
+    {
+      "name": "_object",
+      "lines": [
+        7986,
+        7999
+      ],
+      "before_AST_sha256": "773c1c8c9be0f73245fcb1a17b682c1aff5aa4069c9772cf9a8ec535339ebd6c"
+    },
+    {
+      "name": "_array",
+      "lines": [
+        8002,
+        8010
+      ],
+      "before_AST_sha256": "4213fb3b700772222f8eb0c79f66a4254915f7c5b20ad0dacdef0ba84e020d24"
+    },
+    {
+      "name": "_string",
+      "lines": [
+        8013,
+        8016
+      ],
+      "before_AST_sha256": "a218c3da0f994dc8b5e340af115051b0a04bd07410ecec44373cafcb5a7e3442"
+    },
+    {
+      "name": "_optional_string",
+      "lines": [
+        8019,
+        8022
+      ],
+      "before_AST_sha256": "b94d15774feba6585ed3e81fadeb4089b35f9955ae7b325f9c4dce0472502578"
+    },
+    {
+      "name": "_integer",
+      "lines": [
+        8025,
+        8033
+      ],
+      "before_AST_sha256": "cb36e74d396bb539b5950d88b71fbd9229d9d0ae6772e39634568af435250d8e"
+    },
+    {
+      "name": "_boolean",
+      "lines": [
+        8036,
+        8039
+      ],
+      "before_AST_sha256": "a6dae83368ee22b53f789c4e7040cf93af2bf1ad26d9d423acb9fd1b4c4e63c5"
+    },
+    {
+      "name": "_optional_integer",
+      "lines": [
+        8042,
+        8045
+      ],
+      "before_AST_sha256": "eeaffca4ed03a76f424f587a70b7c2cda9392b1bb28871142bae3e9df634304b"
+    },
+    {
+      "name": "_enum",
+      "lines": [
+        8048,
+        8055
+      ],
+      "before_AST_sha256": "2dc8b2e34fb8a82063e720ec40084b6d07777169bfa073980373227828a74450"
+    },
+    {
+      "name": "_validate_response_invocation",
+      "lines": [
+        8058,
+        8062
+      ],
+      "before_AST_sha256": "b5c2726d4871d88a9eebbec5046cd419a8577f8f60aab0f243b645aa531185b5"
+    },
+    {
+      "name": "_response_invocation_fields",
+      "lines": [
+        8065,
+        8067
+      ],
+      "before_AST_sha256": "2b9e59374ad1e83509bcd7ecb9666fc2750601859114cffbde4aac3a2eec21ad"
+    },
+    {
+      "name": "_validate_identifier",
+      "lines": [
+        8076,
+        8085
+      ],
+      "before_AST_sha256": "d096ad6b19f9d0450d0eb1e84f2d98330807f0f2af0a7d5a1190dd1f13394061"
+    },
+    {
+      "name": "_validate_utc_timestamp",
+      "lines": [
+        8127,
+        8144
+      ],
+      "before_AST_sha256": "f837855769b8d3025b079221f5120b5b44c6fb78c749846c0dee50e95cb72615"
+    },
+    {
+      "name": "_raise_content_free_value_error",
+      "lines": [
+        8147,
+        8155
+      ],
+      "before_AST_sha256": "2b24a726dea919a238376e7f715bb6fe0409938965e5bad3931937759f745b6c"
+    }
+  ],
+  "definition_body_rows": 250,
+  "retained_boundaries": [
+    "_validate_schema_version",
+    "_validate_visible_text"
+  ],
+  "public_exports": {
+    "events": 134,
+    "context": 37,
+    "conversations": 235
+  },
+  "expected_graph_on_accepted_base": {
+    "modules": 230,
+    "complete_edges": 1161,
+    "controller_edges": 1151
+  },
+  "existing_case_ids": [
+    "tests.test_collaboration_events.CollaborationWireContractTests.test_duplicate_extra_missing_nonfinite_and_noncanonical_json_are_rejected",
+    "tests.test_collaboration_events.CollaborationValueContractTests.test_proposal_closure_budget_and_advisory_invariants_fail_closed"
+  ],
+  "diagnostic": {
+    "source": "src/story_writing_agents/conversations/events.py",
+    "line_on_accepted_base": 5156,
+    "old_exception": "ValueError",
+    "diagnostic_exception": "TypeError",
+    "purpose": "기존 중복 JSON 필드 사례가 운영 예외 타입 변경을 검출하는지 확인"
+  },
+  "source_charge_limit": 151431,
+  "existing_legacy_debit": 1550,
+  "verification": "기존 사례만 사용한다. 변경 전후 같은 오류 RED/GREEN, 선택 범위·시간·전체 CI를 따로 확인한다."
+}
