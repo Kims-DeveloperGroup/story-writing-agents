@@ -2,7 +2,7 @@
   "issue": 985,
   "parent": 970,
   "program_parent": 962,
-  "status": "새 기준과 운영·테스트 병합 완료, 호스팅 검증 중",
+  "status": "기존 빠른 검증에서 발견한 남은 클래스의 import 누락 복구 및 재검증 중",
   "accepted_base": "e0381a122153bb3944b83395a86f048a9141c98e",
   "source": "src/story_writing_agents/conversations/events.py",
   "planned_owner": "src/story_writing_agents/conversations/event_value_validation.py",
@@ -288,7 +288,7 @@
     ],
     "owner_rows": 337,
     "sha256": {
-      "src/story_writing_agents/conversations/events.py": "72c017cf17b85cc1b88d1dc7b52cd25cefb994cfa87ddce32aeed5ad9d062735",
+      "src/story_writing_agents/conversations/events.py": "2f329c46f26a8d2f9695305312d78de76246848cd96d17f01b4a2e57823b9171",
       "src/story_writing_agents/conversations/event_value_validation.py": "1e15fbde8f9ee8edeeda79f0b62febb5fe081194473f6e1cfa2f2e5a4728f0ca",
       "PYTHON_MODULE_INDEX.md": "1c6ffb3ccd48dacd23a5a7609e38de5d5dfbbeffd8e3c8adc6cd3dfea219ef4c"
     },
@@ -448,5 +448,23 @@
     "graph_packaging_after_run": 42940059276,
     "red_after_run": 42940285352,
     "normal_three_runs_within_tolerance": true
+  },
+  "retained_global_binding_correction": {
+    "failed_head": "22152102473c66b1c01544d1383a2d6445b275f2",
+    "failed_full_run": 42943045067,
+    "actual_failure": "NameError: re is not defined in retained CollaborationProposalBasis.__post_init__",
+    "existing_import_restored": "re",
+    "remaining_class_reads": [
+      "<module>/CollaborationProposalBasis/__post_init__",
+      "<module>/StoryCommitDecisionPayload/__post_init__",
+      "<module>/StoryCommitResultPayload/__post_init__"
+    ],
+    "retained_global_name_load_operations": 3915,
+    "unresolved_old_and_fixed_live_globals": 0,
+    "annotation_expressions": 903,
+    "test_changes": 0,
+    "original_failure_preserved": true,
+    "known_bad_full_not_passed": true,
+    "existing_minimal_case": "tests.test_collaboration_events.CollaborationWireContractTests.test_unicode_is_not_normalized_and_tampered_digest_is_rejected"
   }
 }

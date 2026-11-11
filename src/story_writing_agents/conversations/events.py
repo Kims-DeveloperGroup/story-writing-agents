@@ -60,6 +60,7 @@ from ..editorial_state import (
 
 import hashlib
 import json
+import re
 from ..structured_output_validation import (
     validation_failure,
     validation_call,
