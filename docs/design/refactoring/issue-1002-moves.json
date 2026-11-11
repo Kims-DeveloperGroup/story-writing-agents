@@ -1524,5 +1524,30 @@
     ],
     "local_Case_Suite_runs": 0,
     "hosted_after_and_full_CI": "미실행: 이 정적 기록은 기능·성능 통과가 아니다."
+  },
+  "hosted_packaging_oracle_correction": {
+    "failed_run": 43031435015,
+    "observed": {
+      "selected": 10,
+      "passed": 9,
+      "failures": 1,
+      "errors": 0
+    },
+    "cause": "기존 패키징 embedded script의 events 공개 이름134 oracle이 새97 소유 경계를 반영하지 못했다. 전체 모듈 AST만 비교한 초기 정적 검사는 문자열 내부 oracle을 검증하지 않았다.",
+    "existing_literal_changes": [
+      [
+        1308,
+        "                assert len(conversation_events.__all__) == 134",
+        "                assert len(conversation_events.__all__) == 97"
+      ],
+      [
+        1574,
+        "                assert len(events.__all__) == 134",
+        "                assert len(events.__all__) == 97"
+      ]
+    ],
+    "new_Cases_or_assertions_or_rows": 0,
+    "same_scenarios_preserved": true,
+    "next": "실패한 기존 packaging Case와 같은 oracle의 기존 wheel/editable Case를 포함한 graph11 hosted 재검증; 실제 통과 전 완료로 판단하지 않는다."
   }
 }
