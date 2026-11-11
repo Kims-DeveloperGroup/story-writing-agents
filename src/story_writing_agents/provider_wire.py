@@ -14,7 +14,12 @@ import hashlib
 import json
 import re
 
-from .provider_schema_selection import LEAD_GROUP_PHASE_GUIDES, SchemaSelectionInput
+from .provider_schema_selection import (
+    LEAD_GROUP_PHASE_GUIDES as _LEAD_GROUP_PHASE_GUIDES,
+    SchemaSelectionInput as _SchemaSelectionInput,
+)
+LEAD_GROUP_PHASE_GUIDES = _LEAD_GROUP_PHASE_GUIDES
+SchemaSelectionInput = _SchemaSelectionInput
 from .structured_output_validation import require_native_schema_projection, schema_rule_fingerprints
 
 WIRE_VERSION = "agent-provider-wire-v11"
