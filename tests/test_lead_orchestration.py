@@ -31,7 +31,7 @@ from typing import Awaitable, Callable
 from unittest import mock
 from story_writing_agents import ReplyTraceOrigin, RuntimeSession, StoryRuntime, Workspace
 from story_writing_agents import orchestrator as orchestrator_module
-from story_writing_agents.lead_preparation import call_rule_factory, reply_contract_values
+from story_writing_agents.lead_preparation import call_rule_factory, outcome_decoding, reply_contract_values
 from story_writing_agents.lead_preparation import response_rules
 from story_writing_agents.agent_context.accounting import ProviderCallAccounting, ProviderCallKind, ProviderCallState, account_provider_payload
 from story_writing_agents.agents import CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR, PLOT_ARCHITECT, SPECIALIST_IDS, behavior_policy_files
@@ -5139,7 +5139,6 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
     async def test_direct_scope_is_required_and_substantive_outcomes_cannot_bypass_routing(
         self,
     ) -> None:
-        from story_writing_agents.lead_schema_groups import LeadGroupPhase
         from tests.agent_context.invocation.execution_fixture import make_group_control as _group_control
         defaults = json.loads(self.control_workspace.path("config/system_defaults.json").read_text(encoding="utf-8"))
         overrides = json.loads(self.control_workspace.path("config/agent_configs.json").read_text(encoding="utf-8"))
@@ -5881,7 +5880,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self.assertEqual(notices, result.validation_details)
         self.assertEqual(project_collaboration_history(history).physical_calls_spent, 2)
         def rejected(value, path, requirement, error=BackendProtocolError):
-            with self.assertRaises(error) as caught: self.runtime._decode_lead_outcome(json.dumps(value))
+            with self.assertRaises(error) as caught: outcome_decoding.decode_lead_outcome(json.dumps(value))
             issues = failure_issues(caught.exception, path="$.action.result")
             self.assertEqual(issues, (f"$.action.result{path}: {requirement}",))
             self.assertNotIn("PRIVATE", repr(issues))
@@ -6559,8 +6558,8 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                 if label == "metadata":
                     fresh.provider_validation_findings = error.provider_validation_findings
                 raise fresh
-            with (mock.patch.object(StoryRuntime, "_decode_lead_outcome", side_effect=reject_decode) as decoder,
-                  mock.patch.object(StoryRuntime, "_lead_outcome_validation_details",
+            with (mock.patch.object(outcome_decoding, "decode_lead_outcome", side_effect=reject_decode) as decoder,
+                  mock.patch.object(outcome_decoding, "lead_outcome_validation_details",
                                     return_value=findings) as diagnostic):
                 result = await self.runtime.lead_turn(self.session_id, conversation_id, "Propose review.")
             self.assertGreaterEqual(decoder.call_count, 1)

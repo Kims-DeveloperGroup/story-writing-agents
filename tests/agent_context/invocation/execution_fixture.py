@@ -16,6 +16,7 @@ from story_writing_agents.agent_context.progress import ContextActionProgressEve
 from story_writing_agents.agents import EXECUTION_SPECIALIST
 from story_writing_agents.conversations import LeadProposalRelation
 from story_writing_agents.lead_provider_contracts import LeadContractError, LeadProviderConstraints
+from story_writing_agents.lead_preparation import outcome_decoding
 from story_writing_agents.lead_preparation.call_rule_factory import OrchestrationLeadCallFactory
 from story_writing_agents.orchestrator import StoryRuntime
 from story_writing_agents.lead_preparation.response_rules import lead_front_result_contract
@@ -112,7 +113,7 @@ def make_validate_lead_result(answer: str, _authorization: object) -> None:
     from story_writing_agents.authoring_task_lifecycle import TaskBindingPlan, bind_task_outcome
     rules = LEAD_CONSTRAINTS.diagnose(answer)
     if rules: raise LeadContractError(rules)
-    StoryRuntime._decode_lead_outcome(json.dumps(bind_task_outcome(json.loads(answer),
+    outcome_decoding.decode_lead_outcome(json.dumps(bind_task_outcome(json.loads(answer),
         TaskBindingPlan(LEAD_SCOPE.task_id, LEAD_SCOPE.task_revision, 'reserved'))))
 
 

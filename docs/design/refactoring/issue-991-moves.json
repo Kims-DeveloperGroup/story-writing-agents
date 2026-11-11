@@ -118,5 +118,133 @@
     "symbol": "ConversationCitation",
     "line_on_accepted_base": 47,
     "purpose": "기존 사용 중인 eager import와 모든 Case를 유지하며 독립 unused 별칭 한 행을 제거해 RAG 기대 경로 한 행을 상쇄"
+  },
+  "current_integration": {
+    "accepted_main": "e7bd11b53b9aaa15b3563e2795e8d85956ecc94f",
+    "prior_delivery_head": "fdf93745260f55f4bac94ea02273abfd5dd7a696",
+    "source_files": 233,
+    "actual_graph": {
+      "head": "fdf93745260f55f4bac94ea02273abfd5dd7a696",
+      "merge_head": "e7bd11b53b9aaa15b3563e2795e8d85956ecc94f",
+      "source_count": 233,
+      "complete_edges": 1183,
+      "controller_edges": 1170,
+      "relative_edges": 1181,
+      "cycles": 0,
+      "complete_minus_controller": [
+        [
+          "story_writing_agents.conversations.events",
+          "story_writing_agents.conversations.event_value_validation"
+        ],
+        [
+          "story_writing_agents.lead_preparation.outcome_decoding",
+          "story_writing_agents.lead_preparation.reply_contract_values"
+        ],
+        [
+          "story_writing_agents.lead_preparation.reply_contract_values",
+          "story_writing_agents.runtime_resources.collaboration_event_journal"
+        ],
+        [
+          "story_writing_agents.lead_preparation.response_rules",
+          "story_writing_agents.lead_preparation.reply_contract_values"
+        ],
+        [
+          "story_writing_agents.orchestrator",
+          "story_writing_agents.lead_preparation.call_rule_factory"
+        ],
+        [
+          "story_writing_agents.orchestrator",
+          "story_writing_agents.lead_preparation.outcome_decoding"
+        ],
+        [
+          "story_writing_agents.orchestrator",
+          "story_writing_agents.lead_preparation.reply_contract_values"
+        ],
+        [
+          "story_writing_agents.orchestrator",
+          "story_writing_agents.lead_preparation.response_rules"
+        ],
+        [
+          "story_writing_agents.orchestrator",
+          "story_writing_agents.runtime_resources.collaboration_event_journal"
+        ],
+        [
+          "story_writing_agents.orchestrator",
+          "story_writing_agents.runtime_resources.reference_operation_registry"
+        ],
+        [
+          "story_writing_agents.orchestrator",
+          "story_writing_agents.runtime_resources.session_worktree_access"
+        ],
+        [
+          "story_writing_agents.runtime_resources.provider_call_accounting",
+          "story_writing_agents.runtime_resources.collaboration_event_journal"
+        ],
+        [
+          "story_writing_agents.runtime_resources.reference_operation_registry",
+          "story_writing_agents.runtime_resources.session_worktree_access"
+        ]
+      ],
+      "complete_minus_relative": [
+        [
+          "story_writing_agents.codex_adapter",
+          "story_writing_agents.codex_native_context"
+        ],
+        [
+          "story_writing_agents.conversations.events",
+          "story_writing_agents.conversations.event_value_validation"
+        ]
+      ],
+      "source233_and_index_match_root_freeze": true,
+      "readers_unchanged": true,
+      "Case_Suite_run_attempts": []
+    },
+    "source_charge": {
+      "test_lines": 148450,
+      "support_lines": 1431,
+      "legacy_lines": 1550,
+      "effective_lines": 151431
+    },
+    "source_union_proof": {
+      "issue": 991,
+      "before_head": "fdf93745260f55f4bac94ea02273abfd5dd7a696",
+      "incoming": "e7bd11b53b9aaa15b3563e2795e8d85956ecc94f",
+      "source_files": 233,
+      "source_index_hashes_verified": 234,
+      "source_union_byte_exact": {
+        "pattern_slice": [
+          "src/story_writing_agents/agent_context/actions.py",
+          "src/story_writing_agents/lead_provider_contracts.py",
+          "src/story_writing_agents/provider_schema_patterns.py",
+          "src/story_writing_agents/specialist_routing.py",
+          "src/story_writing_agents/structured_output_validation.py"
+        ],
+        "integrated_main": [
+          "src/story_writing_agents/conversations/event_value_validation.py",
+          "src/story_writing_agents/conversations/events.py",
+          "src/story_writing_agents/lead_preparation/outcome_decoding.py",
+          "src/story_writing_agents/orchestrator.py"
+        ]
+      },
+      "index_rows": 300,
+      "known_source_conflicts": 0,
+      "at_utc": "2026-11-11T09:27:18.603145+00:00"
+    },
+    "test_merge_freeze_sha256": "54120d7c45009f9566375770b9f2756c1c4dc047ad1f4967e71c98b0582e56f4",
+    "resolved_paths": [
+      "tests/fixtures/test_owners_v1.json",
+      "tests/test_artifact_application_contracts.py",
+      "tests/test_artifact_application_store_recovery.py",
+      "tests/test_artifact_relationship_policy.py",
+      "tests/test_git_external_operation_inspection.py",
+      "tests/test_interactive_controller.py",
+      "tests/test_rag_module_and_packaging_boundary.py",
+      "tests/test_session_lifecycle.py",
+      "tests/test_session_recovery_contracts.py",
+      "tests/test_workspace_session_history.py"
+    ],
+    "scenarios_fixtures_caps_weights_preserved": true,
+    "local_Case_Suite_runs": 0,
+    "current_runtime_full_review_gates": "pending"
   }
 }

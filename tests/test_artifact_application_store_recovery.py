@@ -372,8 +372,8 @@ class ArtifactApplicationBoundaryTests(_ApplicationStoreTestCase):
             self.assertNotIn(private_owner, repository_source)
 
         modules, edges = module_graph(_SOURCE_ROOT)
-        self.assertEqual(len(modules), 231)
-        self.assertEqual(len(edges), 1164)
+        self.assertEqual(len(modules), 233)
+        self.assertEqual(len(edges), 1183)
         store = "story_writing_agents.writing_artifacts._application_store"
         repository = "story_writing_agents.writing_artifacts.repository"
         self.assertEqual(
@@ -381,7 +381,6 @@ class ArtifactApplicationBoundaryTests(_ApplicationStoreTestCase):
             {
                 "story_writing_agents.runtime_state_paths",
                 "story_writing_agents.errors",
-                "story_writing_agents.runtime_state_paths",
                 "story_writing_agents.writing_artifacts._storage",
                 "story_writing_agents.writing_artifacts.application_contracts",
                 "story_writing_agents.writing_artifacts.catalog",
