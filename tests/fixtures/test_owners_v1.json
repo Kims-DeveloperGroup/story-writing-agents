@@ -13601,6 +13601,22 @@
         "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_front_schema_is_minimal_closed_and_provider_strict"
       ],
       "affected_full": true
+    },
+    {
+      "name": "conversations.event_value_validation",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/conversations/event_value_validation.py"
+      ],
+      "depends_on": [],
+      "focused_ids": [
+        "tests.test_collaboration_events.CollaborationWireContractTests.test_duplicate_extra_missing_nonfinite_and_noncanonical_json_are_rejected"
+      ],
+      "affected_ids": [
+        "tests.test_collaboration_events.CollaborationValueContractTests.test_proposal_closure_budget_and_advisory_invariants_fail_closed",
+        "tests.test_collaboration_events.CollaborationWireContractTests.test_duplicate_extra_missing_nonfinite_and_noncanonical_json_are_rejected"
+      ],
+      "affected_full": true
     }
   ],
   "ignored_names": [

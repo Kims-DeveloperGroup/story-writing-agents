@@ -2,7 +2,7 @@
   "issue": 985,
   "parent": 970,
   "program_parent": 962,
-  "status": "구현 전 기준과 이동 계획",
+  "status": "운영과 테스트 이동 완료, 호스팅 검증 중",
   "accepted_base": "648e5a4e5675001ed2d9aa91aaf400d485356568",
   "source": "src/story_writing_agents/conversations/events.py",
   "planned_owner": "src/story_writing_agents/conversations/event_value_validation.py",
@@ -285,5 +285,118 @@
   },
   "source_charge_limit": 151431,
   "existing_legacy_debit": 1550,
-  "verification": "기존 사례만 사용한다. 변경 전후 같은 오류 RED/GREEN, 선택 범위·시간·전체 CI를 따로 확인한다."
+  "verification": "기존 사례만 사용한다. 변경 전후 같은 오류 RED/GREEN, 선택 범위·시간·전체 CI를 따로 확인한다.",
+  "production": {
+    "source_rows_before_after": [
+      8338,
+      8050
+    ],
+    "owner_rows": 337,
+    "sha256": {
+      "src/story_writing_agents/conversations/events.py": "72c017cf17b85cc1b88d1dc7b52cd25cefb994cfa87ddce32aeed5ad9d062735",
+      "src/story_writing_agents/conversations/event_value_validation.py": "1e15fbde8f9ee8edeeda79f0b62febb5fe081194473f6e1cfa2f2e5a4728f0ca",
+      "PYTHON_MODULE_INDEX.md": "ca876b01fddd8cb6191edbdd9e44632ea4acd0a5a9af34fea1551290177c191e"
+    },
+    "public_owner_bindings": {
+      "_array": "require_array_value",
+      "_boolean": "require_boolean_value",
+      "_canonical_json": "canonical_json",
+      "_decode_canonical_json": "decode_canonical_json",
+      "_decode_optional_reply_trace": "decode_optional_reply_trace",
+      "_digest_value": "digest_value",
+      "_enum": "require_enum_value",
+      "_integer": "require_integer_value",
+      "_object": "require_object_fields",
+      "_object_with_extension": "require_object_with_extension",
+      "_object_with_optional_extensions": "require_object_with_optional_extensions",
+      "_optional_integer": "optional_integer_value",
+      "_optional_string": "optional_string_value",
+      "_raise_content_free_value_error": "raise_content_free_value_error",
+      "_reply_trace_fields": "reply_trace_fields",
+      "_require_enum": "require_enum",
+      "_require_unique": "require_unique",
+      "_response_invocation_fields": "response_invocation_fields",
+      "_string": "require_string_value",
+      "_validate_digest": "validate_digest",
+      "_validate_enum_tuple": "validate_enum_tuple",
+      "_validate_exact_tuple": "validate_exact_tuple",
+      "_validate_identifier": "validate_identifier",
+      "_validate_identifier_tuple": "validate_identifier_tuple",
+      "_validate_non_negative_integer": "validate_non_negative_integer",
+      "_validate_positive_integer": "validate_positive_integer",
+      "_validate_response_invocation": "validate_response_invocation",
+      "_validate_specialist_tuple": "validate_specialist_tuple",
+      "_validate_utc_timestamp": "validate_utc_timestamp"
+    },
+    "immutable_values_moved": [
+      "_EnumT",
+      "_SAFE_IDENTIFIER",
+      "_SHA256"
+    ],
+    "private_json_hooks": [
+      "_reject_duplicate_fields",
+      "_reject_json_constant"
+    ]
+  },
+  "observed_graph_on_accepted_base": {
+    "modules": 230,
+    "complete_edges": 1161,
+    "controller_edges": 1150,
+    "relative_only_edges": 1160,
+    "nontrivial_cycles": 0,
+    "difference": "기존 Controller와 상대 import 전용 검사가 events의 절대 ImportFrom 간선을 제외한다. 검사 해석은 그대로 유지한다."
+  },
+  "normal_before": {
+    "run_id": 42931282910,
+    "attempts": [
+      1,
+      2,
+      3
+    ],
+    "passed_each": 2,
+    "wall_median_seconds": 0.003317617
+  },
+  "red_before": {
+    "run_id": 42931383233,
+    "mutated_source": "conversations/events.py",
+    "line": 5156,
+    "subtest": "index=0",
+    "error": "TypeError: collaboration payload duplicates a field"
+  },
+  "red_after_planned": {
+    "mutated_source": "conversations/event_value_validation.py",
+    "line": 80,
+    "exception_token": "ValueError → TypeError",
+    "same_existing_subtest": "index=0"
+  },
+  "test_preservation": {
+    "case_count": 2544,
+    "class_groups": 389,
+    "existing_leaf_tuples_preserved": true,
+    "local_case_runs": 0,
+    "source_charge": {
+      "test_lines": 148451,
+      "support_lines": 1430,
+      "legacy_lines": 1550,
+      "effective_lines": 151431
+    },
+    "focused_existing_cases": 1,
+    "affected_existing_cases": 2544,
+    "source_budget_note": "새 패키징 경로 1행과 같은 문자열 집합의 중복 literal 제거 1행을 상쇄한다. 기존 집합과 assertion은 유지한다.",
+    "focused_existing_ids": [
+      "tests.test_collaboration_events.CollaborationWireContractTests.test_duplicate_extra_missing_nonfinite_and_noncanonical_json_are_rejected"
+    ],
+    "hosted_graph_packaging_ids": [
+      "tests.test_artifact_application_contracts.ArtifactApplicationBoundaryTests.test_module_graph_matches_accepted_delta",
+      "tests.test_artifact_application_store_recovery.ArtifactApplicationBoundaryTests.test_store_is_sole_persistence_interpreter_and_matches_boundary",
+      "tests.test_artifact_relationship_policy.ArtifactRelationshipBoundaryTests.test_ast_graph_counts_and_cycles_match_accepted_brief",
+      "tests.test_git_external_operation_inspection.GitExternalOperationInspectionTests.test_contract_adapter_exports_and_dependencies_are_exact",
+      "tests.test_interactive_controller.ControllerContractTests.test_direct_import_is_clean_and_package_graph_is_acyclic",
+      "tests.test_rag_module_and_packaging_boundary.RagModuleBoundaryTests.test_inventory_edges_cycles_and_sole_dual_importer_match_the_brief",
+      "tests.test_session_lifecycle.SessionLifecycleContractTests.test_lifecycle_module_is_leaf_and_clean_imports_work",
+      "tests.test_session_recovery_contracts.SessionRecoveryBoundaryTests.test_clean_import_and_exact_dependencies_match_accepted_delta",
+      "tests.test_workspace_session_history.WorkspaceSessionHistoryCompositionTests.test_internal_wrapper_uses_main_root_manifest_and_noncreating_snapshot",
+      "tests.test_rag_module_and_packaging_boundary.RagPackagingBoundaryTests.test_temporary_base_and_optional_artifacts_exclude_vendored_source"
+    ]
+  }
 }
