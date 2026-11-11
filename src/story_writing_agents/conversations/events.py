@@ -167,7 +167,7 @@ ARTIFACT_REVIEW_SCHEMA_VERSION = 1
 class CollaborationEventKind(StrEnum):
     """Closed schema-v2 outer event kinds."""
 
-    LEAD_TASK_DECISION = "lead_task_decision"
+    LEAD_TASK_DECISION = 'lead_task_decision_probe'
     LEAD_TASK_TRANSITION = "lead_task_transition"
     LEAD_MATERIAL_CAPTURE = "lead_material_capture"
     LEAD_DISCUSSION = "lead_discussion"
