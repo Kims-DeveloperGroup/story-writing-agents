@@ -1,0 +1,45 @@
+{
+  "issue": 990,
+  "parent": 975,
+  "root_parent": 962,
+  "accepted_base": "e0381a122153bb3944b83395a86f048a9141c98e",
+  "status": "문서 전용 Draft 준비, 소스와 테스트 구현 전",
+  "owner": "src/story_writing_agents/provider_schema_selection.py",
+  "moves": [
+    "SchemaSelectionInput",
+    "LEAD_GROUP_PHASE_GUIDES"
+  ],
+  "consumers": [
+    "provider_wire",
+    "agent_context.invocation.bound_call",
+    "agent_context.invocation.delivery",
+    "agent_context.invocation.group_payload"
+  ],
+  "constraints": [
+    "동작·예외·검증 순서·불변성·카탈로그와 현재 호출 상관 보존",
+    "기존 Case·입력·assertion·fixture·실행 수명 보존",
+    "신규 Case 추가 없음, 실제 회귀 금지, 미세 측정 오차는 승인된 화면 기준으로 조사"
+  ],
+  "test_budget": {
+    "issue": 990,
+    "gross_rows": 2,
+    "credits": [
+      {
+        "path": "tests/test_consensus_story_runtime_bridge.py",
+        "alias": "ConsensusContinuation"
+      },
+      {
+        "path": "tests/test_interactive_controller.py",
+        "alias": "ConversationSearchHit"
+      }
+    ],
+    "not_reused_by": [
+      983,
+      988,
+      991
+    ],
+    "source_charge": 151431,
+    "test_scenario_change": 0
+  },
+  "verification_status": "실제 기존 Case의 이동 전후 정상·동일 오류 RED/GREEN 및 최종 HEAD 전체 CI·성능·관리 리뷰 미실행"
+}
