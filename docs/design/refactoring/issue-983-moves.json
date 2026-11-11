@@ -3,7 +3,7 @@
   "issue": 983,
   "parent": 968,
   "root_parent": 962,
-  "state": "생산 및 테스트 변경 동결; 현재 후보의 호스팅 검증 예정",
+  "state": "실제 리뷰 대조 복구 완료, 최신 기준과 운영·테스트 병합 및 재검증 준비",
   "observed_head": "9105b43f28720f8611de27ef656685fbafe7cf03",
   "source_path": "src/story_writing_agents/orchestrator.py",
   "source_sha256": "1f89e987d8ab75d14ecf96aa8f03c3c50e77b9a8afe43bea128cd5f38cef9fc9",
@@ -228,8 +228,8 @@
     "after": 151431
   },
   "Draft_before_code": true,
-  "accepted_base": "648e5a4e5675001ed2d9aa91aaf400d485356568",
-  "accepted_tree": "0e9f90d272ef6f770d84efa7a24fcbe2a11ad6b5",
+  "accepted_base": "e0381a122153bb3944b83395a86f048a9141c98e",
+  "accepted_tree": "faeaf5243a103cf73858c1cb67902adad0883c9a",
   "github_planning_gate": "passed",
   "native_plan_sha256": "b2ec7c0fa27a190c620806f21edfe451fc390e6e975de492814dd83196867296",
   "draft_before_code_required": true,
@@ -282,9 +282,10 @@
     "recursive_code_pairs": 962,
     "original_import_binding_checks": 44,
     "graph": {
-      "modules": 230,
-      "full_edges": 1172,
-      "controller_edges": 1160,
+      "modules": 231,
+      "full_edges": 1175,
+      "controller_edges": 1163,
+      "relative_only_edges": 1174,
       "SCC": 0
     },
     "new_runtime_capabilities": 0,
@@ -304,7 +305,13 @@
       }
     },
     "local_Case_runs": 0,
-    "local_Suite_runs": 0
+    "local_Suite_runs": 0,
+    "historical_graph_on_initial_base": {
+      "modules": 230,
+      "full_edges": 1172,
+      "controller_edges": 1160,
+      "SCC": 0
+    }
   },
   "test_implementation": {
     "test_file_sha256": {
@@ -331,13 +338,49 @@
     "focused_package_ids": 5,
     "affected": 2544,
     "actual_graph": {
-      "complete_modules": 230,
-      "complete_edges": 1172,
-      "controller_edges": 1160,
-      "Rag_review_contracts_importer_members": 9
+      "complete_modules": 231,
+      "complete_edges": 1175,
+      "controller_edges": 1163,
+      "Rag_review_contracts_importer_members": 9,
+      "relative_only_edges": 1174
     },
     "new_cases": 0,
     "local_Case_runs": 0,
     "local_Suite_runs": 0
+  },
+  "original_accepted_base": "648e5a4e5675001ed2d9aa91aaf400d485356568",
+  "original_accepted_tree": "0e9f90d272ef6f770d84efa7a24fcbe2a11ad6b5",
+  "current_base_merge": {
+    "accepted_main": "e0381a122153bb3944b83395a86f048a9141c98e",
+    "prior_head": "255d9189b8efffcb028540e52cfb80f37acb9965",
+    "source_union_digest": "802a62dd84d41df95db5f570a45df48a30d691100ccf6f2c01a4b8e9edc2598b",
+    "test_hashes": {
+      "tests/test_artifact_application_contracts.py": "7ec3b75ab1d84f1ec58fc88c788bb99e43aa3aea9f29c0d1d9ce936ec8a01c09",
+      "tests/test_artifact_application_store_recovery.py": "55e49f609f9a7cf7089e93c45b1e4173f0c9cafa30433f306331dbb84c94be44",
+      "tests/test_artifact_relationship_policy.py": "7ff044b97bb76f3f61c9e0b303cd1f22fd7af492b25eda56aebe8a10199b979f",
+      "tests/test_git_external_operation_inspection.py": "e4e6fe3429114ec88854444b76dc2bf31e9fa2cbbd1a974b0c37e5acc0727e96",
+      "tests/test_interactive_controller.py": "ab8415389cb497a1f698f0f219c945da1f6a3b6b69f70b143c682a0ef385b336",
+      "tests/test_rag_module_and_packaging_boundary.py": "64f58aa43cbd32120e9fa26e7144ce0a76e13d6630a325a42ac5b3d9cf6bdf72",
+      "tests/test_session_lifecycle.py": "ce145f2690a648636ebf038f1e65b39e8f9667e3b22a297cd712543979401399",
+      "tests/test_session_recovery_contracts.py": "f4599dbc8764e92e108cbbcfd55f3b96c0447fc7abb67babf8a8ea057f927613",
+      "tests/test_workspace_session_history.py": "f8204e29cf972b3ccc24d9704d7b5032419b3921e8d5668979ccae9513e7d3b2",
+      "tests/fixtures/test_owners_v1.json": "22b1f92448af17c45f0b1af5758bd4309cbdb5310bbc6b048dccffb93ada4319"
+    },
+    "source_charge": {
+      "raw": 148450,
+      "support": 1431,
+      "legacy": 1550,
+      "effective": 151431
+    },
+    "current_full_pending": true,
+    "managed_review": {
+      "round": 1,
+      "attempt": 1,
+      "reviewed_base": "648e5a4e5675001ed2d9aa91aaf400d485356568",
+      "reviewed_head": "255d9189b8efffcb028540e52cfb80f37acb9965",
+      "recovered_state_comment": 6784750169,
+      "actual_recovery_run": 42942715759,
+      "original_request_response_unchanged": true
+    }
   }
 }

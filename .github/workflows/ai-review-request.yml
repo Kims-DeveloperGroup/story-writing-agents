@@ -10,11 +10,11 @@ on:
         required: true
         type: number
       operation:
-        description: Request, reconcile a response/UI request, close, or adopt existing history
+        description: Request, reconcile or recover a response, close, or adopt existing history
         required: true
         default: request
         type: choice
-        options: [request, reconcile, close, adopt]
+        options: [request, reconcile, recover, close, adopt]
       expected_round:
         description: Next round for request; current round otherwise; prior count for adopt
         required: true
@@ -108,7 +108,7 @@ jobs:
               } catch { return false; }
             };
             if (!Number.isSafeInteger(number) || number < 1) fail('Invalid PR number.');
-            if (!['request', 'reconcile', 'close', 'adopt'].includes(operation)) fail('Invalid operation.');
+            if (!['request', 'reconcile', 'recover', 'close', 'adopt'].includes(operation)) fail('Invalid operation.');
             if (explicit) {
               if (!Number.isSafeInteger(expected) || expected < 1) fail('expected_round must be positive.');
               for (const username of new Set([context.actor, actor])) {
@@ -218,9 +218,21 @@ jobs:
                 const constraints = state.round >= 3
                   ? 'Only confirmed High/Critical bugs, missing or incorrect agreed requirements, and material defects. Exclude enhancements, Medium feedback, and minor improvements.'
                   : 'Prioritize confirmed defects. Medium feedback is optional and never blocks completion.';
+                const policy = "Follow GITHUB_WORKFLOW.md for severity and verified closure.";
+                const exactScope = request.body.includes(constraints) && request.body.includes(policy);
+                const recovering = operation === 'recover';
+                const recoveryScope = recovering && state.round <= 2 &&
+                  (request.body.includes(constraints) ||
+                    request.body.includes(constraints.replace('feedback is optional', 'feedback optional'))) &&
+                  (request.body.includes(policy) ||
+                    request.body.includes(policy.replace(
+                      ' for severity and verified closure.', ' severity verified closure.')));
+                if (recovering && (exactScope ||
+                    Date.parse(request.updated_at || request.created_at) !== Date.parse(request.created_at))) {
+                  fail('Recovery requires an unedited request with only the documented wording omissions.');
+                }
                 if (request.user?.type !== 'User' ||
-                    !request.body.includes(prompt) || !request.body.includes(constraints) ||
-                    !request.body.includes('Follow GITHUB_WORKFLOW.md for severity and verified closure.') ||
+                    !request.body.includes(prompt) || !(exactScope || recoveryScope) ||
                     !Number.isFinite(Date.parse(request.created_at)) ||
                     !Number.isFinite(Date.parse(request.updated_at || request.created_at)) ||
                     !Number.isFinite(Date.parse(state.opened_at)) || request.id <= state.comment_id ||
@@ -232,6 +244,14 @@ jobs:
                 });
                 if (!['write', 'maintain', 'admin'].includes(permission.permission)) {
                   fail('Codex request author must have repository write access.');
+                }
+                if (recovering) {
+                  const {node} = await github.graphql(
+                    'query($id: ID!) { node(id: $id) { __typename ... on IssueComment { lastEditedAt } } }',
+                    {id: request.node_id});
+                  if (node?.__typename !== 'IssueComment' || node.lastEditedAt !== null) {
+                    fail('Recovery requires an original request with no edit history.');
+                  }
                 }
                 requestInfo = {request_comment_id: request.id, request_author: request.user.login,
                   request_url: request.html_url};
@@ -280,6 +300,7 @@ jobs:
                   clean_response_comment: true, reported_commit: reportedCommit,
                   reviewed_head_sha: state.head_sha};
               }
+              if (operation === 'recover') fail('Recovery requires an authentic commit-bound Codex response comment.');
               if (evidence !== request.html_url) fail('Link the matched Codex request as clean-reaction evidence.');
               const reactions = await github.paginate(github.rest.reactions.listForIssueComment, {
                 owner, repo, comment_id: request.id, per_page: 100,
@@ -307,7 +328,7 @@ jobs:
                 adoption_base_sha: pr.base.sha, outcome: input.outcome});
               return;
             }
-            if (operation === 'close' || operation === 'reconcile') {
+            if (operation === 'close' || operation === 'reconcile' || operation === 'recover') {
               if (!last || expected !== last.round) fail('expected_round must match the existing current round.');
               if (profile !== last.profile) fail('Reconcile/close the original provider before changing selection.');
               if (operation === 'close') {
@@ -317,6 +338,12 @@ jobs:
                 return;
               }
               if (['completed', 'closed'].includes(last.status)) return note('Response already reconciled; request another round only if justified, or close.');
+              if (operation === 'recover' && (
+                  profile !== 'codex' || last.request_mode !== 'personal' ||
+                  last.status !== 'awaiting_ui' || last.round > 2 ||
+                  input.outcome !== 'completed' || input.review_id || pending)) {
+                fail('Recovery requires the awaiting personal Codex attempt in round 1 or 2 and a completed receipt.');
+              }
               if (!['completed', 'failed', 'not_sent'].includes(input.outcome)) fail('Invalid reconciliation outcome.');
               if (pending && input.outcome !== 'completed') fail('A native review request is still outstanding; reconcile its terminal outcome first.');
               if (input.outcome === 'not_sent' && comments.some(comment =>
@@ -325,6 +352,19 @@ jobs:
                 fail('A Codex request was posted; reconcile its actual terminal outcome instead of not_sent.');
               }
               const response = input.outcome === 'completed' ? await verifyResponse(last) : {};
+              if (operation === 'recover') {
+                const originalRequest = comments.find(comment => comment.id === response.request_comment_id);
+                const originalResponse = comments.find(comment => comment.id === response.response_comment_id);
+                if (!originalRequest || !originalResponse) fail('Recovery needs the original request and response.');
+                const {createHash} = require('node:crypto');
+                const bodyHash = comment => createHash('sha256').update(comment.body, 'utf8').digest('hex');
+                response.recovery = {
+                  kind: 'immutable_request_wording',
+                  reservation_comment_id: last.comment_id,
+                  request_body_sha256: bodyHash(originalRequest),
+                  response_body_sha256: bodyHash(originalResponse),
+                };
+              }
               await assertSnapshot();
               await write({...last, ...response, status: input.outcome === 'completed' ? 'completed' : 'failed', outcome: input.outcome});
               return;
