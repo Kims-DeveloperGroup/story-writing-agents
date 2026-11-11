@@ -80,8 +80,8 @@ from .structured_output_validation import (
     schema_fragment_findings,
     SCHEMA_PYTHON_WHITESPACE,
     nonblank_text_rule,
-    unicode_scalar_classes,
 )
+from .provider_schema_patterns import unicode_scalar_classes
 
 
 PREPARATION_INPUT_IDS = ("recommendation_request", "recommendation_decision")

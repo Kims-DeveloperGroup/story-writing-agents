@@ -1194,5 +1194,83 @@
     "local_Case_Suite_runs": 0
   },
   "callback_lookup_preservation": "CodeX 기존 owner import 한 줄을 이미 eager 초기화된 StoryRuntime 전역 import 바로 뒤로 이동한다. reviewer의 전역 late lookup과 factory class의 기존 local alias 보유 시점, 추가 freevar0을 유지한다. 새 전역 binding 비용0은 주장하지 않는다.",
-  "validation_handoff": "이 문서는 코드 동결 시점의 정적 이동 기록이다. 실제 호스팅 RED/GREEN·성능·최신 main 전체 CI와 리뷰 결과는 PR #1001에서 별도로 검증한다. 정적 결과만으로 기능·성능 통과를 주장하지 않는다."
+  "validation_handoff": "이 문서는 코드 동결 시점의 정적 이동 기록이다. 실제 호스팅 RED/GREEN·성능·최신 main 전체 CI와 리뷰 결과는 PR #1001에서 별도로 검증한다. 정적 결과만으로 기능·성능 통과를 주장하지 않는다.",
+  "current_main_merge_static_snapshot": {
+    "accepted_main": "28dfbf569e0157fbbe51a6c2b1a56b9827f534bc",
+    "prior_head": "14cfb16af59f2c56976283f8752c8adac3a9c776",
+    "native_plan_sha256": "3e394486b6b003e18c08f209a8b42439addda3dd09dc9d30ebef11a71625a4c7",
+    "test_freeze_sha256": "a4e3741941b56822063143617b8417cfcb4afc82ac5878d0ddd49969b6278a64",
+    "source234_and_index_preserved": true,
+    "graphs": {
+      "actual_modules": 234,
+      "complete_edges": 1201,
+      "Controller_edges": 1186,
+      "relative_only_edges": 1199,
+      "cycle_back_edges": 0,
+      "all_three_original_readers_and_predicates_unchanged": true,
+      "RAG_existing_pure_equalities": 47,
+      "RAG_mismatches": 0,
+      "both_authoring_and_incoming_patterns_byte_paths_retained": true,
+      "all_incoming983_985_existing_owner_dependency_and_packaging_data_kept": true
+    },
+    "budget": {
+      "test_lines": 148451,
+      "counted_support_lines": 1430,
+      "legacy_reserved_lines": 1550,
+      "effective_lines": 151431,
+      "cap": 151431,
+      "headroom": 0,
+      "own_reserved_Codex_manifest4unused_aliases_single_local_row_credit_preserved": true,
+      "own_execution_fixture_actual_API_unused_StoryRuntime_single_row_credit_preserved": true,
+      "incoming991_PhaseRequest_Citation_credits_preserved": true,
+      "already_common983_985_credits_preserved_not_double_allocated": true,
+      "future996_MatchKind_Query_999_Result_Scope_990_Hit_credits_not_used": true,
+      "no_source_ledger_policy_changes_row_compression_or_logic_externalization": true
+    },
+    "binding_decisions": {
+      "exact_original4_API_files": [
+        "tests/agent_context/invocation/execution_fixture.py",
+        "tests/test_codex_backend.py",
+        "tests/test_collaboration_context.py",
+        "tests/test_lead_orchestration.py"
+      ],
+      "original10_API_qualified_reference_moves_preserved": true,
+      "global_authoring_call_rule_module_import_immediately_after_StoryRuntime_import": true,
+      "existing_OrchestrationLeadCallFactory_local_class_binding_and_holding_point": true,
+      "used_local_LeadContractError_import_retained": true,
+      "callback_reviewer_argument_lookup": "LOAD_GLOBAL authoring_authority / core_reviewer attribute at original point",
+      "callback_freevars_exact_original14cf": [
+        "ActiveDebateSourceAdapter",
+        "ContextInvocationKind",
+        "ContextInvocationRequest",
+        "FocusedConversationSourceAdapter",
+        "LeadContractError",
+        "LeadExplorationConstraints",
+        "LeadProviderConstraints",
+        "LeadResultRuleSeed",
+        "OrchestrationLeadCallFactory",
+        "OwnAgentStateSourceAdapter",
+        "PremiseDecisionConstraints",
+        "WritingArtifactSourceAdapter",
+        "_materials",
+        "definition",
+        "lead_fixture_response",
+        "lead_fixture_result",
+        "payload",
+        "provider",
+        "repository",
+        "response",
+        "schema",
+        "scope",
+        "self",
+        "service",
+        "storage"
+      ],
+      "actual_global_LEAD_CALL_FACTORY_reviewer_identity": true,
+      "execution_fixture_no_StoryRuntime_binding": true,
+      "new_runtime_helper_frames_factories_or_test_instances_added_by_merge": false
+    },
+    "local_Case_Suite_runs": 0,
+    "current_hosted_after_full_review": "미실행: 정적 결과를 현재 기능·성능 성공으로 대신하지 않는다."
+  }
 }
