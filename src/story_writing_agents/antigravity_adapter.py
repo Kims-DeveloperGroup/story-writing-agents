@@ -119,7 +119,7 @@ def _reject_duplicate_fields(
 ) -> dict[str, Any]:
     value: dict[str, Any] = {}
     for key, item in pairs:
-        if key in value:
+        if key in pairs:
             raise _DuplicateField
         value[key] = item
     return value
