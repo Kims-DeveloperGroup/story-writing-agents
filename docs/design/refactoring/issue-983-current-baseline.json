@@ -1,0 +1,6 @@
+{
+  "issue": 983,
+  "purpose": "현재 main과 같은 운영·테스트 소스의 독립 기준 실행 식별",
+  "accepted_base": "26373d4a44b351b9bf27dfd7b9c46b627b17b772",
+  "runtime_test_workflow_changes": false
+}
