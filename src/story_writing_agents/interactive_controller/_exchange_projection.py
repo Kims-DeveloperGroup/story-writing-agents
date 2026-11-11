@@ -14,8 +14,11 @@ from ..conversations.events import (
     ArtifactReviewCandidatePayload, ArtifactReviewedProposal, ArtifactReviewSynthesisPayload,
     CollaborationAssignmentDispatchPayload, CollaborationEvent, CollaborationLeadJudgmentPayload,
     CollaborationLeadPublicResponsePayload, CollaborationLeadSynthesisPayload,
-    CollaborationProposal, CollaborationProviderCallPayload, CollaborationProviderCallState,
+    CollaborationProposal, CollaborationProviderCallPayload,
     CollaborationSpecialistReplyPayload,
+)
+from ..conversations.event_vocabulary import (
+    CollaborationProviderCallState,
 )
 
 
