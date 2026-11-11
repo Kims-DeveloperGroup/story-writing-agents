@@ -1829,14 +1829,14 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(emitted_texts, ["first part"])
 
     def test_codex_adapter_extract_stream_text_ignores_non_string_values(self) -> None:
-        """Verify _extract_stream_text accepts only string text and ignores non-string metadata."""
-        from story_writing_agents.codex_adapter import _extract_stream_text
+        """Verify extract_stream_text accepts only string text and ignores non-string metadata."""
+        from story_writing_agents.codex_event_decoding import extract_stream_text
 
-        self.assertEqual(_extract_stream_text("valid"), "valid")
-        self.assertEqual(_extract_stream_text({"text": "hello"}), "hello")
-        self.assertEqual(_extract_stream_text({"text": 123}), "")
-        self.assertEqual(_extract_stream_text({"content": {"nested": "obj"}}), "")
-        self.assertEqual(_extract_stream_text([{"text": "a"}, {"text": 42}, "b"]), "ab")
+        self.assertEqual(extract_stream_text("valid"), "valid")
+        self.assertEqual(extract_stream_text({"text": "hello"}), "hello")
+        self.assertEqual(extract_stream_text({"text": 123}), "")
+        self.assertEqual(extract_stream_text({"content": {"nested": "obj"}}), "")
+        self.assertEqual(extract_stream_text([{"text": "a"}, {"text": 42}, "b"]), "ab")
 
     async def test_antigravity_adapter_legacy_text_delta_fails_closed_on_non_string_payload(self) -> None:
         """Verify legacy event extractor validates text payload as string before emitting TEXT_DELTA."""
