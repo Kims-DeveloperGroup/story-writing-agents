@@ -13628,6 +13628,26 @@
         "tests.test_workspace_session_history.WorkspaceSessionHistoryCompositionTests.test_internal_wrapper_uses_main_root_manifest_and_noncreating_snapshot"
       ],
       "affected_full": true
+    },
+    {
+      "name": "codex-event-decoding",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/codex_event_decoding.py"
+      ],
+      "depends_on": [],
+      "focused_ids": [
+        "tests.test_adapter_streaming.AdapterStreamingTests.test_codex_adapter_extract_stream_text_ignores_non_string_values",
+        "tests.test_adapter_streaming.AdapterStreamingTests.test_codex_adapter_rejects_duplicate_keys_and_nonfinite_values_in_stream"
+      ],
+      "affected_ids": [
+        "tests.test_adapter_streaming.AdapterStreamingTests.test_codex_adapter_extract_stream_text_ignores_non_string_values",
+        "tests.test_adapter_streaming.AdapterStreamingTests.test_codex_adapter_rejects_conflicting_top_level_and_nested_descriptors",
+        "tests.test_adapter_streaming.AdapterStreamingTests.test_codex_adapter_rejects_duplicate_keys_and_nonfinite_values_in_stream",
+        "tests.test_adapter_streaming.AdapterStreamingTests.test_codex_adapter_streams_status_reasoning_and_message_events",
+        "tests.test_codex_backend.CodexBackendTestCase.test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread"
+      ],
+      "affected_full": true
     }
   ],
   "ignored_names": [

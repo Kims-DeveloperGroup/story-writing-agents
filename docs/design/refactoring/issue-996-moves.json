@@ -3,7 +3,7 @@
   "parent": 969,
   "root_parent": 962,
   "accepted_base": "e0381a122153bb3944b83395a86f048a9141c98e",
-  "status": "문서 전용 Draft 준비, 소스·테스트·진단 변경 전",
+  "status": "기존6함수와 실제 소비자·테스트 소유자 이동 완료, 호스팅 검증 대기",
   "owner": "src/story_writing_agents/codex_event_decoding.py",
   "functions": [
     "reject_duplicate_fields",
@@ -58,5 +58,57 @@
     "source_charge": 151431,
     "test_scenario_change": 0
   },
-  "verification_status": "미실행, 문서 JSON·diff만 검토"
+  "verification_status": "이동 전 정상5개 세 번과 실제 Secret 누출 RED 확인, 이동 후 정상·같은 오류·그래프/패키징·최종 전체 CI·성능·관리 리뷰 대기",
+  "draft_pr": 997,
+  "production": {
+    "leaf_rows": 151,
+    "body_rows": 126,
+    "actual_host_lookup_sites": 15,
+    "lookup_kinds": {
+      "direct": 9,
+      "JSON_callback": 6
+    },
+    "source_count": 231,
+    "full_edges": 1162,
+    "controller_edges": 1152,
+    "relative_edges": 1161,
+    "cycles": 0,
+    "index_rows": 300,
+    "retained_recursive_code": 43,
+    "moved_recursive_code": 10,
+    "global_name_loads": 359,
+    "new_unresolved_global": 0,
+    "type_hint_checks": 29,
+    "type_hint_errors": 0,
+    "source_sha256": {
+      "src/story_writing_agents/codex_adapter.py": "452bf66343d4fdf26a98d2f793320aa46c1f856733519acd2848d37ecd7a94c8",
+      "src/story_writing_agents/codex_event_decoding.py": "0f397eb9fe53365a605bf129f993dd602d383dde9605836dec2e60b491039d16",
+      "PYTHON_MODULE_INDEX.md": "6abff42dcae40b78eeec77561384e45d4356b6337ab1f90ec2aebf61a9429c8d"
+    }
+  },
+  "test_preservation": {
+    "fresh_ids": 2544,
+    "class_groups": 389,
+    "source_charge": 151431,
+    "Case_Suite_local_execution": 0,
+    "new_Cases": 0,
+    "inputs_assertions_fixtures_lifetimes_preserved": true,
+    "owned_test_metadata_paths": 13
+  },
+  "before_validation": {
+    "normal_run": 42955866062,
+    "normal_attempts": [
+      1,
+      2,
+      3
+    ],
+    "passed_each": 5,
+    "ineffective_operator_run": 42955869194,
+    "ineffective_operator": "내부 예외 종류 변경은 기존 invoke의 예외 폐기로 외부 동작이 같아 PASS1이며 RED로 사용하지 않음",
+    "actual_red_run": 42956881365,
+    "actual_red_operator": "duplicate guard RHS value -> pairs",
+    "actual_red_failures": 1,
+    "actual_red_errors": 0,
+    "actual_red_assertion": "Secret absent from emitted_texts"
+  }
 }
