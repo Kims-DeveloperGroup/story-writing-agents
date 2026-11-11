@@ -23,7 +23,7 @@ from story_writing_agents.lead_task_transitions import LeadDiscussionReport
 from story_writing_agents.conversations import CollaborationLeadDiscussionPayload, ArtifactReviewSynthesisPayload
 import story_writing_agents.conversations as conversations
 import story_writing_agents.conversations.context as context_owner
-import story_writing_agents.conversations.events as events_owner
+from story_writing_agents.conversations import events as events_owner, event_vocabulary as vocabulary_owner
 from story_writing_agents import editorial_state as editorial
 from story_writing_agents import core_document_readiness as core_readiness
 from story_writing_agents import lead_exploration as exploration
@@ -108,6 +108,7 @@ from tests.collaboration_contract_fixture import (
     CHARACTER,
     COLLABORATION_CONTEXT_EXPORTS,
     COLLABORATION_EVENT_EXPORTS,
+    COLLABORATION_VOCABULARY_EXPORTS,
     DIGEST_A,
     DIGEST_B,
     GIT,
@@ -1670,9 +1671,11 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
         expected_event_exports = COLLABORATION_EVENT_EXPORTS
         expected_context_exports = COLLABORATION_CONTEXT_EXPORTS
         self.assertEqual(tuple(events_owner.__all__), expected_event_exports)
+        self.assertEqual(tuple(vocabulary_owner.__all__), COLLABORATION_VOCABULARY_EXPORTS)
         self.assertEqual(tuple(context_owner.__all__), expected_context_exports)
         self.assertEqual(len(conversations.__all__), 235)
         self.assertNotIn("__getattr__", vars(events_owner))
+        self.assertNotIn("__getattr__", vars(vocabulary_owner))
         self.assertNotIn("__getattr__", vars(context_owner))
         self.assertNotIn("__getattr__", vars(conversations))
         collaboration_names = {
@@ -1681,7 +1684,7 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
             if name.startswith("Collaboration") or name.startswith("COLLABORATION_")
         }
         self.assertEqual(len(collaboration_names), 75)
-        for owner in (events_owner, context_owner):
+        for owner in (events_owner, vocabulary_owner, context_owner):
             for name in (n for n in owner.__all__ if n not in exploration_names
                          and n != "CollaborationLeadGroupTracePayload"):
                 if name.startswith("Collaboration") or name.startswith("COLLABORATION_"):
@@ -1803,7 +1806,7 @@ import story_writing_agents.conversations as facade
 import story_writing_agents.conversations.context as context
 import story_writing_agents.conversations.events as events
 assert len(facade.__all__) == 235
-assert len(events.__all__) == 134
+assert len(events.__all__) == 97
 assert "CollaborationLeadGroupTracePayload" in events.__all__
 assert "CollaborationLeadGroupTracePayload" not in facade.__all__
 assert not hasattr(facade, "CollaborationLeadGroupTracePayload")
