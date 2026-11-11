@@ -13555,6 +13555,28 @@
       "affected_full": true
     },
     {
+      "name": "lead-preparation.outcome_decoding",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/lead_preparation/outcome_decoding.py",
+        "src/story_writing_agents/lead_preparation",
+        "src/story_writing_agents/lead_preparation/__init__.py"
+      ],
+      "depends_on": [
+        "lead-preparation.reply_contract_values"
+      ],
+      "focused_ids": [
+        "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_lead_search_read_json_answer_uses_exact_dynamic_contract_and_limit",
+        "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_domain_rejection_without_repair_persists_safe_notice"
+      ],
+      "affected_ids": [
+        "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_lead_search_read_json_answer_uses_exact_dynamic_contract_and_limit",
+        "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_domain_rejection_without_repair_persists_safe_notice",
+        "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_untrusted_answer_diagnostic_cannot_publish_private_text"
+      ],
+      "affected_full": true
+    },
+    {
       "name": "lead-preparation.reply_contract_values",
       "boundary": "pure",
       "paths": [
@@ -13626,6 +13648,38 @@
         "tests.test_session_lifecycle.SessionLifecycleContractTests.test_lifecycle_module_is_leaf_and_clean_imports_work",
         "tests.test_session_recovery_contracts.SessionRecoveryBoundaryTests.test_clean_import_and_exact_dependencies_match_accepted_delta",
         "tests.test_workspace_session_history.WorkspaceSessionHistoryCompositionTests.test_internal_wrapper_uses_main_root_manifest_and_noncreating_snapshot"
+      ],
+      "affected_full": true
+    },
+    {
+      "name": "conversations.event_value_validation",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/conversations/event_value_validation.py"
+      ],
+      "depends_on": [],
+      "focused_ids": [
+        "tests.test_collaboration_events.CollaborationWireContractTests.test_duplicate_extra_missing_nonfinite_and_noncanonical_json_are_rejected"
+      ],
+      "affected_ids": [
+        "tests.test_collaboration_events.CollaborationValueContractTests.test_proposal_closure_budget_and_advisory_invariants_fail_closed",
+        "tests.test_collaboration_events.CollaborationWireContractTests.test_duplicate_extra_missing_nonfinite_and_noncanonical_json_are_rejected"
+      ],
+      "affected_full": true
+    },
+    {
+      "name": "provider-schema-patterns",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/provider_schema_patterns.py"
+      ],
+      "depends_on": [],
+      "focused_ids": [
+        "tests.agent_context.contracts.test_result_validation.StructuredOutputValidationTests.test_diagnose_json_text_reports_all_independent_safe_issues"
+      ],
+      "affected_ids": [
+        "tests.agent_context.contracts.test_result_validation.StructuredOutputValidationTests.test_diagnose_json_text_reports_all_independent_safe_issues",
+        "tests.agent_context.contracts.test_result_validation.StructuredOutputValidationTests.test_union_selects_matching_branch_without_other_branch_noise"
       ],
       "affected_full": true
     },

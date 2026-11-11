@@ -2,8 +2,8 @@
   "issue": 990,
   "parent": 975,
   "root_parent": 962,
-  "accepted_base": "e0381a122153bb3944b83395a86f048a9141c98e",
-  "status": "공개 값 연결을 교정해 기존 호출 바이트코드 보존, 현재 교정 HEAD의 호스팅 검증 대기",
+  "accepted_base": "28dfbf569e0157fbbe51a6c2b1a56b9827f534bc",
+  "status": "현재 main 통합 후 코드 동결 시점의 정적 기록",
   "owner": "src/story_writing_agents/provider_schema_selection.py",
   "moves": [
     "SchemaSelectionInput",
@@ -117,5 +117,30 @@
     "old_matched_lifecycle_band": 0.10742175441000029,
     "old_results_retained": true,
     "current_measurements_pending": true
-  }
+  },
+  "original_accepted_base": "e0381a122153bb3944b83395a86f048a9141c98e",
+  "current_merge_snapshot": {
+    "prior_optimized_head": "bab4bc4a54f0dd4f7552724da9da874d003e309a",
+    "incoming_main": "28dfbf569e0157fbbe51a6c2b1a56b9827f534bc",
+    "source_union": "기존bab4최적화5source와현재main source의byte정확합집합",
+    "source_files": 234,
+    "index_rows": 300,
+    "modules": 234,
+    "full_edges": 1186,
+    "controller_edges": 1173,
+    "relative_edges": 1184,
+    "nontrivial_cycles": 0,
+    "Cases": 2544,
+    "classes": 389,
+    "fixtures": 65,
+    "test_lines": 148450,
+    "counted_support": 1431,
+    "legacy_reserved": 1550,
+    "source_charge": 151431,
+    "local_Case_Suite_runs": 0,
+    "test_freeze_sha256": "6fd563a893eeeda9daa1022ae332496fa296ae1f4420f4057c8b4d90f420e039",
+    "production_index_freeze_sha256": "c253ea5a98501dab36503a1281950c3a7f0de0f61303a0ce2517267d4c81293e",
+    "native_plan_sha256": "b37a4f3b599b97efd5c7be46870a1c499cb19e4bfc056350e16624f9c106871e"
+  },
+  "current_verification_handoff": "이 snapshot은실제호스팅전정적기록이다. 현재main의문서전용baseline과병합후HEAD에서기존3Case반복·같은실제RED·경계10개·최종전체CI/시간·관리리뷰를확인한다. 과거e038/1ced실패/고친bab4자료는역사적자료로보존하고현재통과로대체하지않는다."
 }

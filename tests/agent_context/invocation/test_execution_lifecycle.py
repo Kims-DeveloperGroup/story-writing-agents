@@ -12,7 +12,7 @@ from story_writing_agents.agent_context.progress import ContextActionProgressEve
 from story_writing_agents.agents import EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR
 from story_writing_agents.conversations import LeadProposalRelation
 from story_writing_agents.lead_provider_contracts import LeadContractError
-from story_writing_agents.orchestrator import StoryRuntime
+from story_writing_agents.lead_preparation import outcome_decoding
 from story_writing_agents.lead_preparation.response_rules import lead_front_result_contract
 from story_writing_agents.specialist_routing import AuthoringActivity, AuthoringScope
 from tests.test_agent_context_accounting import _expanded_context_payload, _shared_context_payload
@@ -230,7 +230,7 @@ class ContextExecutionLifecycleTests(fixture_execution_fixture.ContextExecutionT
             findings = revised_constraints.diagnose(answer)
             if findings:
                 raise LeadContractError(findings)
-            bound = StoryRuntime._decode_lead_outcome(json.dumps(bind_task_outcome(json.loads(answer),
+            bound = outcome_decoding.decode_lead_outcome(json.dumps(bind_task_outcome(json.loads(answer),
                 TaskBindingPlan(revised_scope.task_id, revised_scope.task_revision, 'reserved'))))
             self.assertEqual((bound.authoring_scope.task_id, bound.authoring_scope.task_revision), ('context-task', 2))
         revised_factory = replace(fixture_execution_fixture.LEAD_CALL_FACTORY, constraints=revised_constraints,
