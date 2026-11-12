@@ -606,7 +606,7 @@ class ConfirmedStepExecution:
                 CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME,
             )
         finally:
-            self._live_execution_markers.discard(marker)
+            self._live_execution_markers.add(marker)
 
     def normalize_history(
         self,
