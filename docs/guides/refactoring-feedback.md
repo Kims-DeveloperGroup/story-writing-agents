@@ -108,33 +108,59 @@ S03 #965는 실행·원장·소스 어댑터의 소유 경계를 분리한다. [
 Draft 이후 검증 지원을 준비하면 생산·기존 Case/fixture·runner 실행의 동등성과 controller/source hash를 별도로 고정한다. 실제 source privacy의 RED/복구 GREEN과 최소/영향/최종 전체 검증은 아직 수행하지 않았다.
 
 
-## Apply·Commit 소유권 이전 준비 — #1006
+## Apply·Commit 소유와 사례 선택 — #1006
 
-[#1006의 상세 계획](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1006#구현-계획)은
-통합 기반 `a231649d001ff30d29f927c6884339ce09e2edc3`의 Apply capability, pending Commit,
-generation pin의 이전·게시·교체·정리와 실제 Commit 결정을 함께 옮기는 전달이다.
-이 절은 구현 전 Draft PR을 위한 준비 기록이며 새 생산 구조나 실행 통과를 뜻하지 않는다.
+[#1006](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1006)은
+검토된 Apply 권한과 pending Commit의 실제 상태·generation pin 수명을
+`artifact_transactions`로 이동한다. 구현 전에는 문서만 담은
+[Draft PR #1009](https://github.com/Kims-DeveloperGroup/story-writing-agents/pull/1009)를 먼저 생성했다.
 
-계획된 소유자는 `artifact_transactions`의 application authority, pending Commit registry,
-Commit decision, prepared Commit resource다. 파일명은 이 책임을 드러낸다.
-Root는 기존 진입점을 구성·위임하고 실제 협력자는 공개 observed/matched 계약을 사용한다.
-같은 pin의 이전, 관측한 동일 pending의 retire, None 선행 close, journal readback,
-lock·implicit await와 예외·취소·정리 순서를 원본에 대응한다.
+`ArtifactApplicationAuthority`는 capability 발급·소비와 Apply·결과 게시를,
+`PendingStoryCommits`는 실제 registry·교체·retire·archive 정리를,
+`StoryCommitDecisions`는 재준비와 Commit·Reject/Revise를 소유한다.
+`PreparedStoryCommit`은 원래 request·service·pin을 보유하며 pin을 None으로 만든 뒤 닫는다.
+Root는 기존 진입점을 구성·위임하고, 두 실제 협력자는 같은 registry를 사용한다.
 
-기존 Apply 6개와 Commit 2개는 각각 `tests/artifact_transactions/test_apply_authority.py`,
-`test_commit_authority.py`의 같은 클래스·메서드로 1:1 옮긴다. 입력·실제 producer·assertion·
-부정 사례·subTest·수치 weight를 보존한다. 두 기존 pin 캡처 구간에서 실제 생성자를
-원본 호출하는 관측을 사용하고, 같은 pin의 실제 여섯 FD 종료 검사를 유지한다.
-테스트 전용 생산 getter를 만들거나 durable 결과만으로 registry 부재를 대신하지 않는다.
+registry의 `observe_for_commit`은 기존 get 한 번과 단락 평가로 관측 객체와 일치 객체를
+구분한다. 닫힌 항목도 감추지 않으므로 등록 부재 검사는 같은 잔류 결함을 검출한다.
+교체는 원래 관측→retire→조건부 install을 보존하며, 성공 시 caller의 local 소유권을
+해제하고 실패 시 기존 finally가 같은 자원을 정리한다. journal readback·lock의
+implicit await·예외와 cleanup note 순서를 바꾸지 않는다.
+
+Application 파일 1025행은 같은 request/tail/secret·pin 이전·게시·finally 불변식의
+한정된 크기 예외다. registry·prepared resource·Commit 결정은 별도 파일로 분리한다.
+공유 결과의 `CollaborationInvocationResult`는 binding과 pin을 실제로 보유한다.
+event 함수와 pin cleanup 함수는 각각 구체적인 별도 모듈에서 원래 본문을 사용한다.
+
+Root의 좁은 의미 함수는 작업별 인자로 전달한다. callback 선택이 작업 진입 시점으로
+앞당겨지고 위임 frame·await와 registry tuple이 추가되므로 비용이 0이라고 가정하지 않는다.
+이미 닫힌 predecessor의 Python 객체 보유는 registry frame 반환 때 끝날 수 있지만,
+명시적인 pin close·map 변경·예외 순서는 보존한다. 실제 회귀는 별도 정상 실행으로 판정한다.
+
+기존 Apply 6개와 Commit 2개는 `tests/artifact_transactions/test_apply_authority.py`,
+`test_commit_authority.py`의 같은 클래스·메서드로 1:1 이동한다. 입력·실제 producer·
+assertion·부정 사례·subTest·수치 weight를 유지한다. 두 기존 pin 캡처 구간에서 실제
+생성자를 원본 호출하는 표준 mock 관측을 사용한다. 실제 registry 부재→pin None→
+여섯 FD 종료 관측을 같은 두 사례가 공유하며 테스트 전용 생산 getter는 추가하지 않는다.
+
+수정한 소유 파일의 선택 목록부터 확인하고 같은 경로로 실행한다.
+
+```bash
+PYTHONPATH=src python -m tests.runner list \
+  --path src/story_writing_agents/artifact_transactions/artifact_application_authority.py \
+  --json /tmp/application-selection.json
+PYTHONPATH=src python -m tests.runner run \
+  --path src/story_writing_agents/artifact_transactions/artifact_application_authority.py \
+  --json /tmp/application-focused.json
+```
+
+이 선택은 전체 통과 증거가 아니다. 공유 Root·공통 계약 변경은 소비자 합집합으로
+확대하며 최종 동일 HEAD의 affected·전체 5 shard와 조정을 유지한다. 동일 오류의
+RED/원본 GREEN과 정상 시간 비교를 구분하고 source·환경·GC·순서·원자료를 보존한다.
 
 이번 전달은 기존 공통 fixture와 실제 Commit의 readiness·review·synthesis 준비를 유지한다.
-약 20개 소비 파일에 걸친 provider·response·Runtime fixture의 별도 소유와 전이 import
-정리는 Parent #968의 미완료 범위다. 도메인 경로 이관만으로 그 의존성이 없어졌다고
-주장하지 않는다. #1007의 Confirm·전문가 실행/복구 구현은 #1006 완료 뒤 진행한다.
-
-집중 검증은 기존 atomic Apply와 inspectable Commit/Reject의 두 사례다. 변경 범위에 따라
-Apply 6개·Commit 2개와 실제 소비자 합집합으로 확대하고, 동일 오류의 RED/복구 GREEN,
-최종 HEAD의 fast·affected·전체 5 shard와 리뷰를 전달 조건으로 삼는다.
-최종 실제 source 계수는 151429 이내로 유지해 #1004에 예약된 2행을 사용하지 않는다.
-legacy 1550행은 출처 증명 없이 공제하지 않으며, 실제 성능 회귀와 미실행을 통과로
-기록하지 않는다. 구현·실행 결과와 현재 base/HEAD는 Draft PR에서 계속 갱신한다.
+약 20개 소비 파일에 걸친 provider·response·Runtime fixture 소유와 전이 import 정리는
+Parent #968의 미완료 범위다. 경로 이동만으로 그 의존성이 없어졌다고 주장하지 않는다.
+#1007의 Confirm·전문가 실행/복구 구현은 #1006 완료 뒤 진행한다.
+테스트 소스는 151429 이내로 유지해 #1004의 예약 2행을 보존하며 legacy 1550행을
+출처 증명 없이 공제하지 않는다. 현재 source·실행·시간·리뷰 상태는 PR에서 확인한다.

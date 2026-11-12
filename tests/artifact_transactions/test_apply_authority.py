@@ -8,15 +8,12 @@ from tests.test_collaboration_events import editorial, editorial_request
 
 from story_writing_agents import lead_exploration as exploration
 
-import os
 import subprocess
 import unittest
-from contextlib import contextmanager
 from dataclasses import replace
 from unittest import mock
 
 from story_writing_agents import StoryRuntime
-from story_writing_agents import orchestrator as orchestrator_module
 from story_writing_agents.git.story_commits import StoryCommitService
 from story_writing_agents.conversations import (
     ArtifactApplicationDecision, ArtifactApplicationDecisionKind,
@@ -33,11 +30,8 @@ from story_writing_agents.writing_artifacts import (
     ArtifactApplicationErrorCode,
     ArtifactApplicationState,
 )
-from story_writing_agents.writing_artifacts._storage import ArtifactRootSecurityError
 from story_writing_agents.writing_artifacts.repository import WritingArtifactRepository
-from story_writing_agents.workspace import initialization as initialization_module
 from story_writing_agents.workspace.initialization import (
-    SessionArtifactGenerationPin,
     provision_session_resources,
 )
 
@@ -320,7 +314,7 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         relationship_before = self.artifact_snapshot()
         relationship_git = self.git_snapshot()
         with mock.patch(
-            "story_writing_agents.orchestrator.validate_artifact_relationships",
+                "story_writing_agents.artifact_transactions.artifact_application_authority.validate_artifact_relationships",
             return_value=mock.sentinel.drifted_relationship,
         ):
             drifted = await self.runtime.decide_artifact_application(

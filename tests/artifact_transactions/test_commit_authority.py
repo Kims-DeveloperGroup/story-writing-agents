@@ -18,6 +18,7 @@ from unittest import mock
 
 from story_writing_agents import StoryRuntime, Workspace
 from story_writing_agents.conversations import context as context_module
+from story_writing_agents.artifact_transactions.prepared_story_commit import PreparedStoryCommit
 from story_writing_agents.agents import LEAD_ORCHESTRATOR
 from story_writing_agents.conversations import (
     ArtifactApplicationDecision,
@@ -38,14 +39,11 @@ from story_writing_agents.conversations import (
 from story_writing_agents.git.process import GitProcessRunner
 from story_writing_agents.git.story_commit_contracts import (
     StoryCommitDecision,
-    StoryCommitError,
-    StoryCommitFailureCode,
-    StoryCommitRecoveryAction,
     StoryCommitState,
 )
 from story_writing_agents.workspace.initialization import provision_session_resources
 
-from tests import test_lead_artifact_application as lead_artifact_application_tests
+from tests.artifact_transactions import test_apply_authority as lead_artifact_application_tests
 from tests.collaboration_contract_fixture import seed_reviewed_artifact
 from tests.helpers import pristine_initialized_workspace
 from tests.provider_wire_fixture import selection_plan, lead_fixture_result, lead_fixture_response
@@ -55,7 +53,6 @@ from tests.test_artifact_proposal_orchestration import (
     _artifact_synthesis_outcome,
     _reference_ids,
 )
-from tests.test_lead_artifact_application import _application_decision
 from tests.test_lead_orchestration import (
     LeadOrchestrationTestCase,
     _LeadBackend,
@@ -217,11 +214,12 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
         self.assertIsNotNone(applied.commit_request)
         return applied
 
-    def pending_commit(self, applied):
+    def pending_commit(self, applied, captured):
         reviewed = applied.request.reviewed_proposal
         key = (reviewed.session_id, reviewed.conversation_id, reviewed.step_id)
-        pending = self.runtime._pending_story_commits[key]
-        pin = pending._generation_pin
+        pending = self.runtime.pending_story_commits.observe_for_commit(key, applied.commit_request)[0]
+        pin = next(call.args[3] for call in captured.call_args_list if call.args[0] is pending)
+        captured.reset_mock()
         self.assertIsNotNone(pin)
         descriptors = pin._pin._descriptors
         self.assertEqual(len(descriptors), 6)
@@ -229,7 +227,8 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
             os.fstat(descriptor)
         return key, pending, pin, descriptors
 
-    def assert_pin_closed(self, pin, descriptors) -> None:
+    def assert_retired_commit(self, key, request, pin, descriptors) -> None:
+        self.assertIsNone(self.runtime.pending_story_commits.observe_for_commit(key, request)[0])
         self.assertIsNone(pin._pin)
         for descriptor in descriptors:
             with self.assertRaises(OSError):
@@ -241,7 +240,7 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
         original_close = type(pins[0]).close
 
         def tracked_close(current):
-            if current in pins:
+            if any(current is pin for pin in pins):
                 calls.append(current)
             return original_close(current)
 
@@ -265,8 +264,10 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
                 )
 
     async def test_request_is_inspectable_and_reject_is_zero_git_mutation(self) -> None:
-        applied = await self.applied_create("Reject commit", seeded=True)
-        key, _pending, pin, descriptors = self.pending_commit(applied)
+        with mock.patch.object(PreparedStoryCommit, "__init__", autospec=True, side_effect=PreparedStoryCommit.__init__) as captured:
+            self.addCleanup(captured.reset_mock)
+            applied = await self.applied_create("Reject commit", seeded=True)
+            key, _pending, pin, descriptors = self.pending_commit(applied, captured)
         request = applied.commit_request
         assert request is not None
         events = self.history(applied.request.reviewed_proposal.conversation_id)
@@ -368,21 +369,12 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
             self.assertEqual(self.history(conversation)[:len(prefix)], prefix)
             self.assertEqual(self.artifact_snapshot(), before_files)
             self.assertEqual(self.session_git_snapshot(), before_git)
-        close_calls = []
-        original_close = type(pin).close
-
-        def tracked_close(current):
-            if current is pin:
-                close_calls.append(current)
-            return original_close(current)
-
-        with mock.patch.object(type(pin), "close", new=tracked_close):
+        with self.track_pin_closes(pin) as close_calls:
             rejected = await self.runtime.decide_story_commit(
                 _commit_decision(applied, StoryCommitDecision.REJECT)
             )
         self.assertEqual(close_calls, [pin])
-        self.assertNotIn(key, self.runtime._pending_story_commits)
-        self.assert_pin_closed(pin, descriptors)
+        self.assert_retired_commit(key, applied.commit_request, pin, descriptors)
         self.assertIs(rejected.outcome.outcome, StoryCommitOutcomeKind.REJECTED)
         self.assertIs(rejected.outcome.result.state, StoryCommitState.REJECTED)
         self.assertEqual(self.artifact_snapshot(), before_files)
@@ -425,8 +417,10 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
     async def test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git(
         self,
     ) -> None:
-        applied = await self.applied_create("Exact commit", readiness=True)
-        key, _pending, pin, descriptors = self.pending_commit(applied)
+        with mock.patch.object(PreparedStoryCommit, "__init__", autospec=True, side_effect=PreparedStoryCommit.__init__) as captured:
+            self.addCleanup(captured.reset_mock)
+            applied = await self.applied_create("Exact commit", readiness=True)
+            key, _pending, pin, descriptors = self.pending_commit(applied, captured)
         request = applied.commit_request
         assert request is not None
         before_head = self.git("rev-parse", "HEAD").strip()
@@ -444,8 +438,7 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
             )
 
         self.assertEqual(close_calls, [pin])
-        self.assertNotIn(key, self.runtime._pending_story_commits)
-        self.assert_pin_closed(pin, descriptors)
+        self.assert_retired_commit(key, applied.commit_request, pin, descriptors)
 
         self.assertIs(committed.outcome.outcome, StoryCommitOutcomeKind.COMMITTED)
         result = committed.outcome.result

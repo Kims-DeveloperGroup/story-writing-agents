@@ -304,7 +304,7 @@ class SpecialistRoutingRuntimeTests(_SpecialistRoutingRuntimeCase):
         self.assertIsNone(result.turn.artifact_application_request)
         synthesis = next(e.payload for e in self.history(conversation) if type(e.payload) is c.CollaborationLeadSynthesisPayload)
         self.assertEqual(synthesis.unresolved_input_ids, ())
-        from tests.test_lead_artifact_application import _application_decision
+        from tests.artifact_transactions.test_apply_authority import _application_decision
         response = _artifact_outcome(
             operations=lambda call, material, *, input_payload: [{"kind": "replace", "evidence_id": _status_id(input_payload, OUTLINE), "new_text": "Synthetic reviewed outline.\n"}],
             evidence_status="empty", evidence_ids=lambda call, material, *, input_payload: [_status_id(input_payload, OUTLINE)],
@@ -510,8 +510,8 @@ class SpecialistRoutingRuntimeTests(_SpecialistRoutingRuntimeCase):
         self.assertTrue(all(agent == LEAD_ORCHESTRATOR for agent, _ in self.backend.call_records))
 
 
-        from tests.test_lead_artifact_application import _application_decision
-        from tests.test_lead_story_commit import _commit_decision
+        from tests.artifact_transactions.test_apply_authority import _application_decision
+        from tests.artifact_transactions.test_commit_authority import _commit_decision
         subprocess.run(['git', 'add', '--', 'core_documents', 'manuscript'], cwd=self.workspace.root, check=True)
         subprocess.run(['git', 'commit', '-m', 'Seed lead commit test fixtures'], cwd=self.workspace.root, check=True, stdout=subprocess.DEVNULL)
         conversation = self.conversation()
@@ -1348,8 +1348,8 @@ class SpecialistRoutingRuntimeTests(_SpecialistRoutingRuntimeCase):
     async def test_draft_integrates_exact_all_role_review_apply_and_storage_parity(self):
         subprocess.run(['git', 'add', '--', 'core_documents', 'manuscript'], cwd=self.workspace.root, check=True)
         subprocess.run(['git', 'commit', '-m', 'Seed lead commit test fixtures'], cwd=self.workspace.root, check=True, stdout=subprocess.DEVNULL)
-        from tests.test_lead_artifact_application import _application_decision
-        from tests.test_lead_story_commit import _commit_decision, StoryCommitDecision
+        from tests.artifact_transactions.test_apply_authority import _application_decision
+        from tests.artifact_transactions.test_commit_authority import _commit_decision, StoryCommitDecision
         from tests.test_artifact_proposal_orchestration import (
             WorkspaceConversationStorageMutationCoordinator, provision_sqlite_conversation_storage,
             transfer_conversation_storage, verify_conversation_storage,
@@ -1720,7 +1720,7 @@ class SpecialistRoutingRuntimeTests(_SpecialistRoutingRuntimeCase):
         expected_readiness_refs = tuple(readiness_snapshot.readiness_ref(row) for row in readiness_snapshot.readiness_heads())
         conversation=self.conversation()
         assessment = asdict(_fixture_assessment())
-        from tests.test_lead_artifact_application import _application_decision
+        from tests.artifact_transactions.test_apply_authority import _application_decision
         before = self.artifact_bytes()
         path = "manuscript/part-01/revised-candidate.md"
         def two_owners(value, material):

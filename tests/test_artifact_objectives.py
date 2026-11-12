@@ -17,8 +17,8 @@ from story_writing_agents.writing_artifacts.repository import WritingArtifactRep
 from tests import test_lead_orchestration as lead
 from tests.provider_wire_fixture import FixedBusinessFactory as _SourceOnlyFactory, selection_plan
 from tests import test_artifact_proposal_orchestration as artifact
-from tests import test_lead_artifact_application as application
-from tests import test_lead_story_commit as commit
+from tests.artifact_transactions import test_apply_authority as application
+from tests.artifact_transactions import test_commit_authority as commit
 from tests.helpers import pristine_initialized_workspace
 
 OUTLINE = "core_documents/global_outline.md"
