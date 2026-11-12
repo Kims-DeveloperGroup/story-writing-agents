@@ -54,7 +54,7 @@ class HistoricalMaterialWorkflowTests(_SpecialistRoutingRuntimeCase):
         from story_writing_agents.conversations import session_context as session_context_module
         self.enterContext(mock.patch.object(session_context_module, "MAX_SESSION_CONTEXT_UTF8_BYTES", 512 * 1024))
         assessment = asdict(_fixture_assessment())
-        from tests.artifact_transactions.test_apply_authority import _application_decision
+        from tests.test_lead_artifact_application_authority import _application_decision
         before = self.artifact_bytes()
         prior = self.conversation("Historical drafting input remains separate from fresh review proof")
         first, _ = await self.finish_draft(prior)

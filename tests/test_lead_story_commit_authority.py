@@ -43,7 +43,7 @@ from story_writing_agents.git.story_commit_contracts import (
 )
 from story_writing_agents.workspace.initialization import provision_session_resources
 
-from tests.artifact_transactions import test_apply_authority as lead_artifact_application_tests
+from tests import test_lead_artifact_application_authority as lead_artifact_application_tests
 from tests.collaboration_contract_fixture import seed_reviewed_artifact
 from tests.helpers import pristine_initialized_workspace
 from tests.provider_wire_fixture import selection_plan, lead_fixture_result, lead_fixture_response

@@ -29,8 +29,8 @@ from tests.collaboration_contract_fixture import (
     contract_batches, measured_batch,
 )
 from tests.test_interactive_terminal_composer import _capability
-from tests.artifact_transactions.test_apply_authority import _application_decision
-from tests.artifact_transactions.test_commit_authority import _commit_decision
+from tests.test_lead_artifact_application_authority import _application_decision
+from tests.test_lead_story_commit_authority import _commit_decision
 from story_writing_agents.conversations import (
     ArtifactReviewDecision,
     ArtifactReviewSynthesisPayload,
@@ -54,7 +54,7 @@ from story_writing_agents.git.story_commit_contracts import StoryCommitDecision
 
 class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
     async def test_runtime_artifact_and_local_commit_events_are_complete_and_safe( self, ) -> None:
-        from tests.artifact_transactions.test_commit_authority import LeadStoryCommitTests
+        from tests.test_lead_story_commit_authority import LeadStoryCommitTests
         from tests.collaboration_contract_fixture import make_batch, store_batch
 
         case = LeadStoryCommitTests("test_request_is_inspectable_and_reject_is_zero_git_mutation")

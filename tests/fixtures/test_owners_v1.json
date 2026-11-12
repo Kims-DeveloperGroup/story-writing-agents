@@ -1402,9 +1402,9 @@
         "context-execution-fixture",
         "tests.test_agent_context_accounting",
         "tests.test_artifact_proposal_orchestration",
-        "tests.artifact_transactions.test_apply_authority",
+        "tests.test_lead_artifact_application_authority",
         "tests.test_lead_orchestration",
-        "tests.artifact_transactions.test_commit_authority",
+        "tests.test_lead_story_commit_authority",
         "tests.test_specialist_routing_runtime"
       ]
     },
@@ -3895,7 +3895,7 @@
         "tests.test_agent_context_accounting",
         "tests.test_artifact_objectives",
         "tests.test_artifact_proposal_orchestration",
-        "tests.artifact_transactions.test_apply_authority",
+        "tests.test_lead_artifact_application_authority",
         "tests.test_lead_orchestration",
         "tests.test_specialist_routing_runtime"
       ]
@@ -3955,9 +3955,9 @@
         "tests.test_artifact_objectives",
         "tests.test_artifact_proposal_orchestration",
         "tests.test_interactive_terminal_composer",
-        "tests.artifact_transactions.test_apply_authority",
+        "tests.test_lead_artifact_application_authority",
         "tests.test_lead_orchestration",
-        "tests.artifact_transactions.test_commit_authority"
+        "tests.test_lead_story_commit_authority"
       ]
     },
     {
@@ -5308,26 +5308,26 @@
       "depends_on": []
     },
     {
-      "name": "tests.artifact_transactions.test_apply_authority",
+      "name": "tests.test_lead_artifact_application_authority",
       "boundary": "existing-cases",
       "paths": [
-        "tests/artifact_transactions/test_apply_authority.py"
+        "tests/test_lead_artifact_application_authority.py"
       ],
       "focused_ids": [
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority"
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority"
       ],
       "affected_ids": [
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority"
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority"
       ],
       "depends_on": [
         "context-execution-fixture",
@@ -5360,9 +5360,9 @@
         "tests.test_artifact_objectives",
         "tests.test_artifact_proposal_orchestration",
         "tests.test_collaboration_events",
-        "tests.artifact_transactions.test_apply_authority",
+        "tests.test_lead_artifact_application_authority",
         "tests.test_lead_orchestration",
-        "tests.artifact_transactions.test_commit_authority",
+        "tests.test_lead_story_commit_authority",
         "tests.test_specialist_routing_runtime"
       ]
     },
@@ -5582,25 +5582,25 @@
       ]
     },
     {
-      "name": "tests.artifact_transactions.test_commit_authority",
+      "name": "tests.test_lead_story_commit_authority",
       "boundary": "existing-cases",
       "paths": [
-        "tests/artifact_transactions/test_commit_authority.py"
+        "tests/test_lead_story_commit_authority.py"
       ],
       "focused_ids": [
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation"
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation"
       ],
       "affected_ids": [
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation"
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation"
       ],
       "depends_on": [
         "context-execution-fixture",
         "tests.test_agent_context_accounting",
         "tests.test_artifact_objectives",
         "tests.test_artifact_proposal_orchestration",
-        "tests.artifact_transactions.test_apply_authority",
+        "tests.test_lead_artifact_application_authority",
         "tests.test_lead_orchestration"
       ]
     },
@@ -6534,9 +6534,9 @@
         "tests.test_artifact_objectives",
         "tests.test_artifact_proposal_orchestration",
         "tests.test_collaboration_events",
-        "tests.artifact_transactions.test_apply_authority",
+        "tests.test_lead_artifact_application_authority",
         "tests.test_lead_orchestration",
-        "tests.artifact_transactions.test_commit_authority"
+        "tests.test_lead_story_commit_authority"
       ]
     },
     {
@@ -13126,17 +13126,17 @@
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_phase_mapping_is_exact_and_finalization_is_read_only",
         "tests.test_git_external_operation_inspection.GitExternalOperationInspectionTests.test_contract_adapter_exports_and_dependencies_are_exact",
         "tests.test_interactive_controller.ControllerContractTests.test_direct_import_is_clean_and_package_graph_is_acyclic",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
         "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_initial_budget_rejection_remains_failure",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_republishing_domain_notice_is_idempotent",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_restored_results_keep_strict_evidence_and_provider_free_compatibility",
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation",
         "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_attached_reference_cancellation_closes_and_releases_for_explicit_retry",
         "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_failure_closure_write_error_keeps_history_gated",
         "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_legacy_bare_prepared_and_submitted_tails_close_only_on_new_input",
@@ -13187,17 +13187,17 @@
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_phase_mapping_is_exact_and_finalization_is_read_only",
         "tests.test_git_external_operation_inspection.GitExternalOperationInspectionTests.test_contract_adapter_exports_and_dependencies_are_exact",
         "tests.test_interactive_controller.ControllerContractTests.test_direct_import_is_clean_and_package_graph_is_acyclic",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
         "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_initial_budget_rejection_remains_failure",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_republishing_domain_notice_is_idempotent",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_restored_results_keep_strict_evidence_and_provider_free_compatibility",
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation",
         "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_attached_reference_cancellation_closes_and_releases_for_explicit_retry",
         "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_failure_closure_write_error_keeps_history_gated",
         "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_legacy_bare_prepared_and_submitted_tails_close_only_on_new_input",
@@ -13230,7 +13230,7 @@
       ],
       "focused_ids": [
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_interrupt_cancels_all_matching_auditors_and_cleans_registry",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect"
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect"
       ],
       "affected_ids": [
         "tests.test_artifact_application_contracts.ArtifactApplicationBoundaryTests.test_module_graph_matches_accepted_delta",
@@ -13248,17 +13248,17 @@
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_phase_mapping_is_exact_and_finalization_is_read_only",
         "tests.test_git_external_operation_inspection.GitExternalOperationInspectionTests.test_contract_adapter_exports_and_dependencies_are_exact",
         "tests.test_interactive_controller.ControllerContractTests.test_direct_import_is_clean_and_package_graph_is_acyclic",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
         "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_initial_budget_rejection_remains_failure",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_republishing_domain_notice_is_idempotent",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_restored_results_keep_strict_evidence_and_provider_free_compatibility",
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation",
         "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_attached_reference_cancellation_closes_and_releases_for_explicit_retry",
         "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_failure_closure_write_error_keeps_history_gated",
         "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_legacy_bare_prepared_and_submitted_tails_close_only_on_new_input",
@@ -13305,17 +13305,17 @@
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_phase_mapping_is_exact_and_finalization_is_read_only",
         "tests.test_git_external_operation_inspection.GitExternalOperationInspectionTests.test_contract_adapter_exports_and_dependencies_are_exact",
         "tests.test_interactive_controller.ControllerContractTests.test_direct_import_is_clean_and_package_graph_is_acyclic",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
         "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_initial_budget_rejection_remains_failure",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_republishing_domain_notice_is_idempotent",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_restored_results_keep_strict_evidence_and_provider_free_compatibility",
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation",
         "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_attached_reference_cancellation_closes_and_releases_for_explicit_retry",
         "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_failure_closure_write_error_keeps_history_gated",
         "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_legacy_bare_prepared_and_submitted_tails_close_only_on_new_input",
@@ -13365,17 +13365,17 @@
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_phase_mapping_is_exact_and_finalization_is_read_only",
         "tests.test_git_external_operation_inspection.GitExternalOperationInspectionTests.test_contract_adapter_exports_and_dependencies_are_exact",
         "tests.test_interactive_controller.ControllerContractTests.test_direct_import_is_clean_and_package_graph_is_acyclic",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
         "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_initial_budget_rejection_remains_failure",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_republishing_domain_notice_is_idempotent",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_restored_results_keep_strict_evidence_and_provider_free_compatibility",
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation",
         "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_attached_reference_cancellation_closes_and_releases_for_explicit_retry",
         "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_failure_closure_write_error_keeps_history_gated",
         "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_legacy_bare_prepared_and_submitted_tails_close_only_on_new_input",
@@ -13428,17 +13428,17 @@
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_phase_mapping_is_exact_and_finalization_is_read_only",
         "tests.test_git_external_operation_inspection.GitExternalOperationInspectionTests.test_contract_adapter_exports_and_dependencies_are_exact",
         "tests.test_interactive_controller.ControllerContractTests.test_direct_import_is_clean_and_package_graph_is_acyclic",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
         "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_initial_budget_rejection_remains_failure",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_republishing_domain_notice_is_idempotent",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_restored_results_keep_strict_evidence_and_provider_free_compatibility",
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation",
         "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_attached_reference_cancellation_closes_and_releases_for_explicit_retry",
         "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_failure_closure_write_error_keeps_history_gated",
         "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_legacy_bare_prepared_and_submitted_tails_close_only_on_new_input",
@@ -13491,17 +13491,17 @@
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_phase_mapping_is_exact_and_finalization_is_read_only",
         "tests.test_git_external_operation_inspection.GitExternalOperationInspectionTests.test_contract_adapter_exports_and_dependencies_are_exact",
         "tests.test_interactive_controller.ControllerContractTests.test_direct_import_is_clean_and_package_graph_is_acyclic",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
         "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_initial_budget_rejection_remains_failure",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_republishing_domain_notice_is_idempotent",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_restored_results_keep_strict_evidence_and_provider_free_compatibility",
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation",
         "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_attached_reference_cancellation_closes_and_releases_for_explicit_retry",
         "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_failure_closure_write_error_keeps_history_gated",
         "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_legacy_bare_prepared_and_submitted_tails_close_only_on_new_input",
@@ -13792,18 +13792,18 @@
         "src/story_writing_agents/artifact_transactions/__init__.py"
       ],
       "focused_ids": [
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation"
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation"
       ],
       "affected_ids": [
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation"
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation"
       ],
       "affected_full": true,
       "depends_on": []
@@ -13815,18 +13815,18 @@
         "src/story_writing_agents/artifact_transactions/artifact_application_authority.py"
       ],
       "focused_ids": [
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect"
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect"
       ],
       "affected_ids": [
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation"
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation"
       ],
       "affected_full": true,
       "depends_on": [
@@ -13851,18 +13851,18 @@
         "src/story_writing_agents/artifact_transactions/pending_story_commits.py"
       ],
       "focused_ids": [
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation"
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation"
       ],
       "affected_ids": [
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation"
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation"
       ],
       "affected_full": true,
       "depends_on": [
@@ -13877,18 +13877,18 @@
         "src/story_writing_agents/artifact_transactions/prepared_story_commit.py"
       ],
       "focused_ids": [
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation"
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation"
       ],
       "affected_ids": [
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation"
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation"
       ],
       "affected_full": true,
       "depends_on": []
@@ -13900,19 +13900,19 @@
         "src/story_writing_agents/artifact_transactions/story_commit_decisions.py"
       ],
       "focused_ids": [
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation"
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation"
       ],
       "affected_ids": [
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation"
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation"
       ],
       "affected_full": true,
       "depends_on": [
@@ -13931,17 +13931,17 @@
         "src/story_writing_agents/collaboration_execution_results.py"
       ],
       "focused_ids": [
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git"
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git"
       ],
       "affected_ids": [
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation"
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation"
       ],
       "affected_full": true,
       "depends_on": []
@@ -13953,18 +13953,18 @@
         "src/story_writing_agents/lead_control_events.py"
       ],
       "focused_ids": [
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation"
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation"
       ],
       "affected_ids": [
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation"
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation"
       ],
       "affected_full": true,
       "depends_on": [
@@ -13979,17 +13979,17 @@
         "src/story_writing_agents/runtime_resources/generation_pin_cleanup.py"
       ],
       "focused_ids": [
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely"
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely"
       ],
       "affected_ids": [
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
-        "tests.artifact_transactions.test_apply_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
-        "tests.artifact_transactions.test_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation"
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation"
       ],
       "affected_full": true,
       "depends_on": []

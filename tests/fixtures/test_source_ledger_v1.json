@@ -423,7 +423,7 @@
             ]
           ],
           "destinations": [
-            "tests/artifact_transactions/test_apply_authority.py"
+            "tests/test_lead_artifact_application_authority.py"
           ],
           "counting": "wholefile moved code counted once via recursive test paths; original fixtures and legacy1550 retained"
         },
@@ -437,7 +437,7 @@
             ]
           ],
           "destinations": [
-            "tests/artifact_transactions/test_commit_authority.py"
+            "tests/test_lead_story_commit_authority.py"
           ],
           "counting": "wholefile moved code counted once via recursive test paths; original fixtures and legacy1550 retained"
         }

@@ -5,12 +5,12 @@ import json
 from pathlib import Path
 
 RECEIPT_PATH = Path(__file__).parent / "fixtures" / "test_id_moves_v1.json"
-RECEIPT_SHA256 = "88ebec49b7228a695fac4c84c01c81ea0ad6d132f0184b75c50a51edf1bdae5c"
+RECEIPT_SHA256 = "2267591a8f0f47713ea3f51cb8ee40581621a09d8eae4a5ad989446f4e6ea5f1"
 ORIGINAL_CAPS_SHA256 = "fc586b3eaa147b4ad4bc06e42e98378c50bd56a9fb09954219c20c45e882b99b"
 S02_CAPS_SHA256 = "b554b945803dd496796fd0bf7cad3201c7f729c37821a90231fc734074576c52"
 S03_CAPS_SHA256 = "7f3bdd0982191c0adef51815ae3445fa4a55c11dfcb5d7574179e0c542b0310c"
 S05_CAPS_SHA256 = "8371eef31044fa33e0ee7e34af17bb3fb03e47556ac1b0f601124d13650b5298"
-EXPECTED_CAPS_SHA256 = "2e1bab408de2c320e118bf89c4c0c38f999efd8e14a921ef10a5b7ee5313d8ed"
+EXPECTED_CAPS_SHA256 = "0caff3ac47db80cd2344dc4ff480358ec9cc09d2ed68d151ffa2e754c100d156"
 ORIGINAL_ID = "tests.test_agent_context_planning.PlanningSurfaceTests.test_exact_dataclass_fields_and_immutability"
 SECOND_ID = "tests.test_agent_context_sources.SourceSurfacePolicyAndValueTests.test_descriptor_snapshot_records_are_exact_immutable_and_content_hidden"
 THIRD_ID = "tests.test_specialist_routing.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip"

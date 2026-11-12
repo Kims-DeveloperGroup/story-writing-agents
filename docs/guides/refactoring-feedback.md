@@ -141,11 +141,15 @@ Root의 좁은 의미 함수와 기존 공개 이벤트 게시 콜백을 작업�
 이미 닫힌 predecessor의 Python 객체 보유는 registry frame 반환 때 끝날 수 있지만,
 명시적인 pin close·map 변경·예외 순서는 보존한다. 실제 회귀는 별도 정상 실행으로 판정한다.
 
-기존 Apply 6개와 Commit 2개는 `tests/artifact_transactions/test_apply_authority.py`,
-`test_commit_authority.py`의 같은 클래스·메서드로 1:1 이동한다. 입력·실제 producer·
+기존 Apply 6개와 Commit 2개는 `tests/test_lead_artifact_application_authority.py`,
+`tests/test_lead_story_commit_authority.py`의 같은 클래스·메서드로 1:1 이동한다. 입력·실제 producer·
 assertion·부정 사례·subTest·수치 weight를 유지한다. 두 기존 pin 캡처 구간에서 실제
 생성자를 원본 호출하는 표준 mock 관측을 사용한다. 실제 registry 부재→pin None→
 여섯 FD 종료 관측을 같은 두 사례가 공유하며 테스트 전용 생산 getter는 추가하지 않는다.
+
+파일 이관 뒤에는 새 ID와 원본 ID를 대응해 실제 발견·serial·hosted 실행 순서를 각각 확인한다.
+같은 단일 클래스 테스트를 경계별 파일로 배치해 원래 순서와 준비 조건을 보존한다.
+파일명 정렬에 따른 순서 변화와 코드의 실제 비용을 구분하며, 전체 시간 증가는 고정 기준으로 조사한다.
 
 수정한 소유 파일의 선택 목록부터 확인하고 같은 경로로 실행한다.
 
