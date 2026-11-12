@@ -3426,8 +3426,8 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
 
     def _assert_owned_native_context_witness(self, invocation) -> None:
         import sqlite3
-        from story_writing_agents import codex_adapter, codex_native_context
-        from story_writing_agents.provider_wire import SchemaSelectionInput
+        from story_writing_agents import codex_event_decoding, codex_native_context
+        from story_writing_agents.provider_schema_selection import SchemaSelectionInput
 
         thread = "11111111-1111-4111-8111-111111111111"
         rollout = "22222222-2222-4222-8222-222222222222"
@@ -3509,7 +3509,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 self.assertIsNotNone(native.witness)
                 self.assertEqual(native.last_token_usage, expected)
             write(records)
-            uninspected = codex_adapter._codex_usage_observation(raw_usage, None, replace(first, context_call_id=None))
+            uninspected = codex_event_decoding.codex_usage_observation(raw_usage, None, replace(first, context_call_id=None))
             self.assertEqual(uninspected.raw, raw_usage)
             self.assertIs(uninspected.scope, ProviderUsageScope.UNKNOWN)
             self.assertEqual(uninspected.source, "codex.turn.completed.usage:context_not_inspected")
@@ -3533,14 +3533,14 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             write(extended)
             total_first, total_second, last_second = ProviderUsage(28997, 195, 0), ProviderUsage(88866, 1411, 0), ProviderUsage(59869, 1216, 0)
             first_observed = SimpleNamespace(witness=witness, usage_pair=(total_first, total_first), previous_usage=None, first_native_turn=True)
-            resumed = codex_adapter._codex_usage_observation(total_first, first_observed, replace(first, thread_id=thread))
+            resumed = codex_event_decoding.codex_usage_observation(total_first, first_observed, replace(first, thread_id=thread))
             self.assertIs(resumed.scope, ProviderUsageScope.SESSION_CUMULATIVE)
             self.assertFalse(resumed.session_start)
             self.assertIsNone(resumed.previous_prefix_ref)
             self.assertIsNone(normalized_provider_usage(resumed))
             second_observed = SimpleNamespace(witness=continued, usage_pair=(total_second, last_second), previous_usage=total_first, first_native_turn=False)
             next_invocation = replace(second, context_witness=witness, context_anchor=witness)
-            recovered = codex_adapter._codex_usage_observation(total_second, second_observed, next_invocation)
+            recovered = codex_event_decoding.codex_usage_observation(total_second, second_observed, next_invocation)
             self.assertEqual(recovered.previous_prefix_ref, resumed.prefix_ref)
             self.assertEqual(normalized_provider_usage(recovered, resumed), last_second)
             for changes, raw, reason in (({"usage_pair": None}, total_second, "usage_missing"),
@@ -3549,11 +3549,11 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     ({"usage_pair": (total_second, total_first)}, total_second, "native_last_mismatch"),
                     ({"witness": replace(continued, settings_digest="0" * 64)}, total_second, "settings_changed")):
                 observed = SimpleNamespace(**{**vars(second_observed), **changes})
-                unavailable = codex_adapter._codex_usage_observation(raw, observed, next_invocation)
+                unavailable = codex_event_decoding.codex_usage_observation(raw, observed, next_invocation)
                 self.assertIs(unavailable.scope, ProviderUsageScope.UNKNOWN)
                 self.assertEqual(unavailable.raw, raw)
                 self.assertEqual(unavailable.source, "codex.turn.completed.usage:" + reason)
-            self.assertIsNone(codex_adapter._codex_usage_observation(None, second_observed, next_invocation))
+            self.assertIsNone(codex_event_decoding.codex_usage_observation(None, second_observed, next_invocation))
             self.assertEqual(continued.file_identity, witness.file_identity)
             self.assertGreater(continued.prefix_utf8_bytes, witness.prefix_utf8_bytes)
             self.assertEqual(hashlib.sha256(path.read_bytes()[:witness.prefix_utf8_bytes]).hexdigest(), witness.prefix_sha256)

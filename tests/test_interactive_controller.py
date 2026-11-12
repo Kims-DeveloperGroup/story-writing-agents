@@ -44,13 +44,6 @@ from story_writing_agents.cli_context import (
 from story_writing_agents.config import ConfigManager
 from story_writing_agents.conversation_search import (
     ReferenceCollaborationHistorySearch,
-    ConversationSearchHit,
-    ConversationSearchMatchKind,
-    ConversationSearchQuery,
-    ConversationSearchResult,
-    ConversationSearchScope,
-    ConversationTranscriptCursor,
-    ConversationTranscriptPage,
 )
 from story_writing_agents.conversation_storage import (
     CONVERSATION_STORAGE_ACTIVATION_STATE_PATH,
@@ -73,16 +66,10 @@ from story_writing_agents.conversations import (
     ArtifactApplicationDecisionKind,
     ArtifactApplicationDecisionResult,
     CollaborationConfirmationDecision,
-    CollaborationEventBatch,
     CollaborationNextAction,
-    CollaborationReadableField,
-    CollaborationReadableFieldKey,
     CollaborationStepState,
-    CONVERSATION_EVENT_SCHEMA_VERSION,
     CONVERSATION_METADATA_SCHEMA_VERSION,
     ConversationCatalog,
-    ConversationEvent,
-    ConversationEventKind,
     ConversationMetadata,
     ConversationStatus,
     LeadDecisionResult,
@@ -94,17 +81,7 @@ from story_writing_agents.conversations import (
 from story_writing_agents.errors import (
     BackendProtocolError,
     ConfigurationError,
-    ConversationExistsError,
     ConversationNotFoundError,
-    SessionExistsError,
-    SessionIdError,
-    SessionAccessBlockedError,
-    SessionNotFoundError,
-    SessionOwnershipUnknownError,
-    SessionPausedError,
-    WorkspaceFormatError,
-    WorkspaceSecurityError,
-    WorkspaceVersionUnsupportedError,
 )
 from story_writing_agents.interactive_controller import InteractiveController
 from story_writing_agents.interactive_commands import ActionKind, InteractiveAction
@@ -131,8 +108,6 @@ from story_writing_agents.interactive_terminal import (
     INTERACTIVE_ERROR_SPECS,
     InteractiveErrorCode,
     InteractiveTerminal,
-    ReferenceInputFailure,
-    ReferenceInputFailureKind,
 )
 from story_writing_agents.provider_auth import (
     AUTH_PROVIDERS,
@@ -1774,8 +1749,8 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 234)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 1186)
+        self.assertEqual(len(modules), 238)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 1198)
         self.assertTrue(
             {
                 "story_writing_agents.artifact_proposals",

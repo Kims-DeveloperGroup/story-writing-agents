@@ -1176,6 +1176,11 @@
       "tests/test_session_lifecycle.py": "72c57e78a42b1baa1a4710bcea42fd4e30e3cdde0b82062893b20dd0539c8283",
       "tests/test_session_recovery_contracts.py": "465169ac8190397fa98a1c488c146215fa0730734f82d6cda54108b2f8c4d2aa",
       "tests/test_workspace_session_history.py": "bdf66792462eb7d27d351a7969220b4b767e61d4873e4f751ec4a0b492dfa2ec"
+    },
+    "after_999": {
+      "source": "f6215af042caaf3c14bbdc525f26c9c150c3f87d1072204359f3cc20577a842d",
+      "production": "5081f8e9fd6e12f5da4b7bbd83085f04cdc36f936424f160b7e45b0020f2f79f",
+      "test": "6100824b0e06b3cac3af6a2ad85ca8ed8f960c664feed9f7318999e511110b68"
     }
   },
   "static_snapshot": {
@@ -1194,39 +1199,46 @@
     "local_Case_Suite_runs": 0
   },
   "callback_lookup_preservation": "CodeX 기존 owner import 한 줄을 이미 eager 초기화된 StoryRuntime 전역 import 바로 뒤로 이동한다. reviewer의 전역 late lookup과 factory class의 기존 local alias 보유 시점, 추가 freevar0을 유지한다. 새 전역 binding 비용0은 주장하지 않는다.",
-  "validation_handoff": "이 문서는 코드 동결 시점의 정적 이동 기록이다. 실제 호스팅 RED/GREEN·성능·최신 main 전체 CI와 리뷰 결과는 PR #1001에서 별도로 검증한다. 정적 결과만으로 기능·성능 통과를 주장하지 않는다.",
+  "validation_handoff": "최신 aebc 기준 변경 전 측정이 진행 중이다. 현재 전달 head의 변경 후 GREEN/RED·정상4개 반복·graph11·전체 CI·관리 리뷰는 후속 실행하며, 정적 동결을 기능·성능 성공으로 대신하지 않는다.",
   "current_main_merge_static_snapshot": {
-    "accepted_main": "28dfbf569e0157fbbe51a6c2b1a56b9827f534bc",
-    "prior_head": "14cfb16af59f2c56976283f8752c8adac3a9c776",
-    "native_plan_sha256": "3e394486b6b003e18c08f209a8b42439addda3dd09dc9d30ebef11a71625a4c7",
-    "test_freeze_sha256": "a4e3741941b56822063143617b8417cfcb4afc82ac5878d0ddd49969b6278a64",
-    "source234_and_index_preserved": true,
+    "accepted_main": "aebc2e527af305a9b77e74a065f9dd76dcb697d2",
+    "prior_head": "8b37bf7e831f58fed34b5216a78869ca83bc25f4",
+    "source238_and_index_preserved": true,
     "graphs": {
-      "actual_modules": 234,
-      "complete_edges": 1201,
-      "Controller_edges": 1186,
-      "relative_only_edges": 1199,
-      "cycle_back_edges": 0,
-      "all_three_original_readers_and_predicates_unchanged": true,
-      "RAG_existing_pure_equalities": 47,
-      "RAG_mismatches": 0,
-      "both_authoring_and_incoming_patterns_byte_paths_retained": true,
-      "all_incoming983_985_existing_owner_dependency_and_packaging_data_kept": true
+      "complete": {
+        "modules": 238,
+        "edges": 1213,
+        "cyclic_back_edges": 0
+      },
+      "Controller_original_reader": {
+        "modules": 238,
+        "edges": 1198,
+        "cyclic_back_edges": 0
+      },
+      "relative_original_reader": {
+        "modules": 238,
+        "edges": 1211,
+        "cyclic_back_edges": 0
+      }
     },
     "budget": {
-      "test_lines": 148451,
-      "counted_support_lines": 1430,
-      "legacy_reserved_lines": 1550,
-      "effective_lines": 151431,
+      "test_lines": 148449,
+      "support_lines": 1430,
+      "legacy_lines": 1550,
+      "effective_lines": 151429,
       "cap": 151431,
-      "headroom": 0,
-      "own_reserved_Codex_manifest4unused_aliases_single_local_row_credit_preserved": true,
-      "own_execution_fixture_actual_API_unused_StoryRuntime_single_row_credit_preserved": true,
-      "incoming991_PhaseRequest_Citation_credits_preserved": true,
-      "already_common983_985_credits_preserved_not_double_allocated": true,
-      "future996_MatchKind_Query_999_Result_Scope_990_Hit_credits_not_used": true,
-      "no_source_ledger_policy_changes_row_compression_or_logic_externalization": true
+      "headroom": 2,
+      "spare2_reserved1004": true
     },
+    "declared_owner_records": 250,
+    "owner_map_modules": 184,
+    "RAG_static_operand_equalities": 56,
+    "current_hosted_after_full_review": "미실행: 정적 결과를 현재 기능·성능 성공으로 대신하지 않는다.",
+    "native_plan_sha256": "ba6a9339d45ed6b293d20323769d9df819d514ae020fa673dd706f5d4e78a196",
+    "source_freeze_sha256": "f6215af042caaf3c14bbdc525f26c9c150c3f87d1072204359f3cc20577a842d",
+    "production_audit_sha256": "5081f8e9fd6e12f5da4b7bbd83085f04cdc36f936424f160b7e45b0020f2f79f",
+    "test_freeze_sha256": "6100824b0e06b3cac3af6a2ad85ca8ed8f960c664feed9f7318999e511110b68",
+    "local_Case_Suite_runs": 0,
     "binding_decisions": {
       "exact_original4_API_files": [
         "tests/agent_context/invocation/execution_fixture.py",
@@ -1269,8 +1281,87 @@
       "actual_global_LEAD_CALL_FACTORY_reviewer_identity": true,
       "execution_fixture_no_StoryRuntime_binding": true,
       "new_runtime_helper_frames_factories_or_test_instances_added_by_merge": false
-    },
-    "local_Case_Suite_runs": 0,
-    "current_hosted_after_full_review": "미실행: 정적 결과를 현재 기능·성능 성공으로 대신하지 않는다."
-  }
+    }
+  },
+  "historical_main_merge_static_snapshots": [
+    {
+      "accepted_main": "28dfbf569e0157fbbe51a6c2b1a56b9827f534bc",
+      "prior_head": "14cfb16af59f2c56976283f8752c8adac3a9c776",
+      "native_plan_sha256": "3e394486b6b003e18c08f209a8b42439addda3dd09dc9d30ebef11a71625a4c7",
+      "test_freeze_sha256": "a4e3741941b56822063143617b8417cfcb4afc82ac5878d0ddd49969b6278a64",
+      "source234_and_index_preserved": true,
+      "graphs": {
+        "actual_modules": 234,
+        "complete_edges": 1201,
+        "Controller_edges": 1186,
+        "relative_only_edges": 1199,
+        "cycle_back_edges": 0,
+        "all_three_original_readers_and_predicates_unchanged": true,
+        "RAG_existing_pure_equalities": 47,
+        "RAG_mismatches": 0,
+        "both_authoring_and_incoming_patterns_byte_paths_retained": true,
+        "all_incoming983_985_existing_owner_dependency_and_packaging_data_kept": true
+      },
+      "budget": {
+        "test_lines": 148451,
+        "counted_support_lines": 1430,
+        "legacy_reserved_lines": 1550,
+        "effective_lines": 151431,
+        "cap": 151431,
+        "headroom": 0,
+        "own_reserved_Codex_manifest4unused_aliases_single_local_row_credit_preserved": true,
+        "own_execution_fixture_actual_API_unused_StoryRuntime_single_row_credit_preserved": true,
+        "incoming991_PhaseRequest_Citation_credits_preserved": true,
+        "already_common983_985_credits_preserved_not_double_allocated": true,
+        "future996_MatchKind_Query_999_Result_Scope_990_Hit_credits_not_used": true,
+        "no_source_ledger_policy_changes_row_compression_or_logic_externalization": true
+      },
+      "binding_decisions": {
+        "exact_original4_API_files": [
+          "tests/agent_context/invocation/execution_fixture.py",
+          "tests/test_codex_backend.py",
+          "tests/test_collaboration_context.py",
+          "tests/test_lead_orchestration.py"
+        ],
+        "original10_API_qualified_reference_moves_preserved": true,
+        "global_authoring_call_rule_module_import_immediately_after_StoryRuntime_import": true,
+        "existing_OrchestrationLeadCallFactory_local_class_binding_and_holding_point": true,
+        "used_local_LeadContractError_import_retained": true,
+        "callback_reviewer_argument_lookup": "LOAD_GLOBAL authoring_authority / core_reviewer attribute at original point",
+        "callback_freevars_exact_original14cf": [
+          "ActiveDebateSourceAdapter",
+          "ContextInvocationKind",
+          "ContextInvocationRequest",
+          "FocusedConversationSourceAdapter",
+          "LeadContractError",
+          "LeadExplorationConstraints",
+          "LeadProviderConstraints",
+          "LeadResultRuleSeed",
+          "OrchestrationLeadCallFactory",
+          "OwnAgentStateSourceAdapter",
+          "PremiseDecisionConstraints",
+          "WritingArtifactSourceAdapter",
+          "_materials",
+          "definition",
+          "lead_fixture_response",
+          "lead_fixture_result",
+          "payload",
+          "provider",
+          "repository",
+          "response",
+          "schema",
+          "scope",
+          "self",
+          "service",
+          "storage"
+        ],
+        "actual_global_LEAD_CALL_FACTORY_reviewer_identity": true,
+        "execution_fixture_no_StoryRuntime_binding": true,
+        "new_runtime_helper_frames_factories_or_test_instances_added_by_merge": false
+      },
+      "local_Case_Suite_runs": 0,
+      "current_hosted_after_full_review": "미실행: 정적 결과를 현재 기능·성능 성공으로 대신하지 않는다."
+    }
+  ],
+  "initial_provenance_scope": "초기 accepted_main·budget_projection·static_snapshot·원 freeze는 e7 구현 이력이다. 현재 값은 current_main_merge_static_snapshot을 따른다."
 }

@@ -63,6 +63,13 @@ from .workspace.session_role_projection import (
     prepare_session_role_projection,
     require_session_role_projection,
 )
+from .antigravity_response_decoding import (
+    reject_duplicate_fields as _reject_duplicate_fields,
+    reject_constant as _reject_constant,
+    finite_float as _finite_float,
+    parse_result as _decode_antigravity_response,
+    malformed_output as _raise_antigravity_malformed_output,
+)
 
 
 _SAFE_CONVERSATION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
@@ -108,32 +115,6 @@ _REQUIRED_HEADLESS_FLAGS = (
 
 CapabilityRun = Callable[..., subprocess.CompletedProcess[bytes]]
 _ExceptionState = tuple[BaseException, Any]
-
-
-class _DuplicateField(ValueError):
-    """Mark an ambiguous provider JSON object without retaining its values."""
-
-
-def _reject_duplicate_fields(
-    pairs: list[tuple[str, Any]],
-) -> dict[str, Any]:
-    value: dict[str, Any] = {}
-    for key, item in pairs:
-        if key in value:
-            raise _DuplicateField
-        value[key] = item
-    return value
-
-
-def _reject_constant(_value: str) -> None:
-    raise ValueError
-
-
-def _finite_float(value: str) -> float:
-    number = float(value)
-    if not math.isfinite(number):
-        raise ValueError
-    return number
 
 
 class _NativeEvidenceUnavailable(ValueError):
@@ -2381,49 +2362,9 @@ class AntigravityAdapter:
             return None
         return ProviderUsage(**counters)
 
-    @staticmethod
-    def _parse_result(stdout: bytes) -> dict[str, Any]:
-        """Decode exactly one strict JSON object with content-free errors."""
+    _parse_result = staticmethod(_decode_antigravity_response)
 
-        invalid_utf8 = False
-        try:
-            text = stdout.decode("utf-8", errors="strict")
-        except UnicodeDecodeError:
-            invalid_utf8 = True
-        if invalid_utf8:
-            raise ProviderInvocationError(
-                "Antigravity CLI result is not valid UTF-8",
-                taint_existing_thread=True,
-            ) from None
-
-        malformed = False
-        try:
-            value = json.loads(
-                text,
-                object_pairs_hook=_reject_duplicate_fields,
-                parse_constant=_reject_constant,
-                parse_float=_finite_float,
-            )
-        except (ValueError, RecursionError, UnicodeError):
-            malformed = True
-        if malformed:
-            raise ProviderInvocationError(
-                "Antigravity CLI returned malformed JSON",
-                taint_existing_thread=True,
-            ) from None
-        if type(value) is not dict:
-            raise ProviderInvocationError(
-                "Antigravity CLI returned a non-object JSON result",
-                taint_existing_thread=True,
-            )
-        return value
-
-    @staticmethod
-    def _malformed_output() -> None:
-        raise ProviderInvocationError(
-            "Antigravity CLI returned malformed structured output",
-            taint_existing_thread=True,
-        )
+    _malformed_output = staticmethod(_raise_antigravity_malformed_output)
 
     def executable_available(self) -> bool:
         """Return whether the configured Antigravity executable resolves."""

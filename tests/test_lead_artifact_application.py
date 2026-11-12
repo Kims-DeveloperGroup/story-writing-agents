@@ -37,9 +37,6 @@ from story_writing_agents.writing_artifacts._storage import ArtifactRootSecurity
 from story_writing_agents.writing_artifacts.repository import WritingArtifactRepository
 from story_writing_agents.workspace import initialization as initialization_module
 from story_writing_agents.workspace.initialization import (
-    SessionArtifactAccess,
-    SessionArtifactBinding,
-    SessionArtifactBindingError,
     SessionArtifactGenerationPin,
     provision_session_resources,
 )

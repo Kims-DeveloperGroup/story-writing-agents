@@ -77,11 +77,8 @@ COLLABORATION_EVENT_EXPORTS = (
     'ArtifactObjectiveCandidateBinding',
     'ArtifactObjectiveFacts',
     'ArtifactObjectiveFactsV2',
-    'ArtifactObjectiveNextStep',
     'ArtifactObjectivePayload',
     'ArtifactObjectivePayloadV2',
-    'ArtifactObjectiveState',
-    'LeadObjectiveAction',
     'LeadObjectiveIntent',
     'LeadRecommendedAction',
     'LeadRecommendationActionKind',
@@ -97,15 +94,10 @@ COLLABORATION_EVENT_EXPORTS = (
     'review_basis_from_dict',
     'review_basis_to_dict',
     'ARTIFACT_REVIEW_SCHEMA_VERSION',
-    'ArtifactApplicationDecisionKind',
     'ArtifactApplicationDecisionPayload',
-    'ArtifactApplicationNextAction',
-    'ArtifactApplicationOutcomeKind',
     'ArtifactApplicationRequestPayload',
     'ArtifactApplicationResultPayload',
     'StoryCommitDecisionPayload',
-    'StoryCommitNextAction',
-    'StoryCommitOutcomeKind',
     'StoryCommitRequestPayload',
     'StoryCommitResultPayload',
     'build_story_commit_request_payload',
@@ -115,37 +107,24 @@ COLLABORATION_EVENT_EXPORTS = (
     'COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES',
     'CONVERSATION_EVENT_SCHEMA_VERSION',
     'CollaborationActor',
-    'CollaborationActorKind',
     'CollaborationAgentProfile',
     'CollaborationAppendError',
-    'CollaborationAppendFailure',
     'CollaborationAppendReceipt',
-    'CollaborationAppendStatus',
     'CollaborationAssignment',
     'CollaborationAssignmentDispatchPayload',
     'CollaborationAssignmentOutcome',
-    'CollaborationAssignmentOutcomeKind',
     'CollaborationBudget',
-    'CollaborationConfirmationDecision',
     'CollaborationConfirmationPayload',
-    'CollaborationDirection',
-    'CollaborationEvidenceAcquisition',
     'CollaborationEvidenceReceipt',
     'CollaborationEvent',
     'CollaborationEventBatch',
     'CollaborationEventDraft',
-    'CollaborationEventKind',
-    'CollaborationExecutionOutcomeKind',
     'CollaborationExecutionResult',
-    'CollaborationInputKind',
     'CollaborationInputRevision',
-    'CollaborationInputState',
     'CollaborationInterruptionPayload',
-    'CollaborationInvocationKind',
     'CollaborationLeadSynthesisPayload',
     'CollaborationLeadEvidence',
     'CollaborationLeadJudgmentPayload',
-    'CollaborationLeadOutcomeFailureCode',
     'CollaborationLeadGroupTracePayload',
     'CollaborationLeadOutcomeFailurePayload',
     'CollaborationLeadExplorationRequestPayload',
@@ -159,32 +138,16 @@ COLLABORATION_EVENT_EXPORTS = (
     'CollaborationPayload',
     'CollaborationProposal',
     'CollaborationProposalBasis',
-    'CollaborationProviderCallKind',
     'CollaborationProviderCallPayload',
-    'CollaborationProviderCallState',
-    'CollaborationSideEffect',
     'CollaborationSpecialistReplyPayload',
-    'CollaborationSpecialistAssessment',
-    'CollaborationStepKind',
-    'CollaborationStepState',
     'CollaborationStepStatePayload',
-    'CollaborationSynthesisOutcomeKind',
     'CollaborationTerminalOutcomePayload',
-    'CollaborationTerminalScope',
     'ConversationEvent',
-    'ConversationEventKind',
     'LeadAssignmentIntent',
-    'LeadOutcomeKind',
-    'LeadOutcomeScope',
-    'LeadEvidenceStatus',
     'LeadProposalIntent',
-    'LeadProposalRelation',
     'LeadProviderOutcome',
-    'ArtifactProposalState',
     'ArtifactProposalStatePayload',
     'ArtifactReviewCandidatePayload',
-    'ArtifactReviewDecision',
-    'ArtifactReviewFailureCode',
     'ArtifactReviewFailurePayload',
     'ArtifactReviewReply',
     'ArtifactReviewSynthesisPayload',
@@ -207,6 +170,46 @@ COLLABORATION_EVENT_EXPORTS = (
     'CollaborationLeadMaterialCapturePayload',
     'CollaborationLeadDiscussionPayload',
     'CollaborationLeadPublicResponsePayload',
+)
+
+COLLABORATION_VOCABULARY_EXPORTS = (
+    'ArtifactObjectiveNextStep',
+    'ArtifactObjectiveState',
+    'LeadObjectiveAction',
+    'ArtifactApplicationDecisionKind',
+    'ArtifactApplicationNextAction',
+    'ArtifactApplicationOutcomeKind',
+    'StoryCommitNextAction',
+    'StoryCommitOutcomeKind',
+    'CollaborationActorKind',
+    'CollaborationAppendFailure',
+    'CollaborationAppendStatus',
+    'CollaborationAssignmentOutcomeKind',
+    'CollaborationConfirmationDecision',
+    'CollaborationDirection',
+    'CollaborationEvidenceAcquisition',
+    'CollaborationEventKind',
+    'CollaborationExecutionOutcomeKind',
+    'CollaborationInputKind',
+    'CollaborationInputState',
+    'CollaborationInvocationKind',
+    'CollaborationLeadOutcomeFailureCode',
+    'CollaborationProviderCallKind',
+    'CollaborationProviderCallState',
+    'CollaborationSideEffect',
+    'CollaborationSpecialistAssessment',
+    'CollaborationStepKind',
+    'CollaborationStepState',
+    'CollaborationSynthesisOutcomeKind',
+    'CollaborationTerminalScope',
+    'ConversationEventKind',
+    'LeadOutcomeKind',
+    'LeadOutcomeScope',
+    'LeadEvidenceStatus',
+    'LeadProposalRelation',
+    'ArtifactProposalState',
+    'ArtifactReviewDecision',
+    'ArtifactReviewFailureCode',
 )
 
 COLLABORATION_CONTEXT_EXPORTS = (
@@ -1266,7 +1269,7 @@ async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_cor
     from story_writing_agents import artifact_proposals as artifacts
     from story_writing_agents.runtime_resources import collaboration_event_journal as event_journal
     from tests.recommendation_fixture import task_assessment
-    from story_writing_agents.conversations import events as payloads
+    from story_writing_agents.conversations import events as payloads, event_vocabulary as vocabulary
     from story_writing_agents.conversations.context import project_collaboration_history
     from story_writing_agents.specialist_routing import (
         AuthoringActivity, AuthoringScope, ReviewBasis, SpecialistAssignmentMode,
@@ -1437,12 +1440,12 @@ async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_cor
                     drafts.append(event_journal.draft(
                         session_id=session_id, conversation_id=conversation_id,
                         turn_id=turn_id, step_id=proposal.step_id,
-                        kind=payloads.CollaborationEventKind.ARTIFACT_REVIEW_SYNTHESIS,
+                        kind=vocabulary.CollaborationEventKind.ARTIFACT_REVIEW_SYNTHESIS,
                         sender=record.sender, recipient=record.recipient,
                         payload=payloads.ArtifactReviewSynthesisPayload(
                             candidate.candidate_id, candidate.candidate_revision, candidate.candidate_digest,
                             proposal.proposal_id, proposal.proposal_revision, proposal.proposal_digest,
-                            payload.execution_attempt_id, payloads.ArtifactReviewDecision.PROPOSE,
+                            payload.execution_attempt_id, vocabulary.ArtifactReviewDecision.PROPOSE,
                             payload.message, "The reviewed changes are suitable.",
                             "Apply only the disclosed paths.", "Fixture review has no provider activity.",
                             payload.reply_event_ids, payload.unresolved_input_ids,
@@ -1452,19 +1455,19 @@ async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_cor
                     drafts.append(event_journal.draft(
                         session_id=session_id, conversation_id=conversation_id,
                         turn_id=identities[TURN_ID], step_id=proposal.step_id,
-                        kind=payloads.CollaborationEventKind.ARTIFACT_REVIEW_CANDIDATE,
+                        kind=vocabulary.CollaborationEventKind.ARTIFACT_REVIEW_CANDIDATE,
                         sender=RUNTIME, recipient=USER, payload=candidate_payload,
                     ))
                 if type(payload) is CollaborationStepStatePayload and payload.state in {
                     CollaborationStepState.AWAITING_CONFIRMATION, CollaborationStepState.RUNNING,
                 }:
-                    state = (payloads.ArtifactProposalState.AWAITING_CONSULTATION_CONFIRMATION
+                    state = (vocabulary.ArtifactProposalState.AWAITING_CONSULTATION_CONFIRMATION
                         if payload.state is CollaborationStepState.AWAITING_CONFIRMATION
-                        else payloads.ArtifactProposalState.REVIEWING)
+                        else vocabulary.ArtifactProposalState.REVIEWING)
                     state_draft = event_journal.draft(
                         session_id=session_id, conversation_id=conversation_id,
                         turn_id=identities[TURN_ID], step_id=proposal.step_id,
-                        kind=payloads.CollaborationEventKind.ARTIFACT_PROPOSAL_STATE,
+                        kind=vocabulary.CollaborationEventKind.ARTIFACT_PROPOSAL_STATE,
                         sender=RUNTIME, recipient=USER,
                         payload=payloads.ArtifactProposalStatePayload(
                             state, candidate.candidate_id, candidate.candidate_revision,
@@ -1478,7 +1481,7 @@ async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_cor
                     else:
                         drafts.append(state_draft)
             receipt = event_journal.append_drafts(sequence, tuple(drafts), append_batch=runtime.append_collaboration_event_batch)
-            if receipt.status is not payloads.CollaborationAppendStatus.APPENDED:
+            if receipt.status is not vocabulary.CollaborationAppendStatus.APPENDED:
                 raise RuntimeError("typed review fixture append did not succeed")
             events = runtime.conversation_storage_services.event_store.read(session_id, conversation_id)
             projection = project_collaboration_history(events)
