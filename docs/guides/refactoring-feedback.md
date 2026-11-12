@@ -95,6 +95,10 @@ ID 이동은 사례 수나 검증 범위를 늘리거나 줄이는 허가가 아
 각 서브이슈는 상세 계획과 브랜치 준비 후 런타임·테스트 코드 편집 전에 DRAFT PR을 만든다. 구현과 검증 결과는 그 PR에 계속 갱신하며, 준비가 끝난 뒤 ready for review로 전환하고 관리 리뷰·같은 head의 전체 CI·수동 squash 종료 절차를 따른다.
 
 helper를 외부 공개 이름으로 옮길 때는 원본 global 참조의 심볼 해석도 비교한다. 같은 이름의 인자·지역 변수·comprehension·closure가 새 이름을 포획하는지 `symtable` 또는 bytecode로 확인한다. 생성 함수에는 `make_scope`, `make_entry`처럼 실제 역할이 드러나고 기존 지역 이름과 겹치지 않는 이름을 쓴다. 함수 내부의 지연 import와 mock patch도 각 실제 소유자에 대응시킨다.
+기존 Root 메서드를 새 객체로 이동할 때는 모든 self 속성의 출처도 확인한다.
+전역 이름과 정규화 AST가 같아도 receiver의 메서드가 존재한다는 뜻은 아니다.
+새 소유자의 필드·메서드와 외부 협력자를 구분하고, 기존 공개 콜백은 실제 호출 지점에
+명시적으로 전달한 뒤 최소 기존 사례로 실행 경로를 확인한다.
 
 검증 순서는 실제 메서드 수집·원본 대응과 정적 import 점검 뒤, 기존 최소 사례·영향 사례·최종 전체 실행으로 이어진다. 확대 실행에서 발견한 이동 오류는 같은 시나리오·assertion·부정 입력을 유지하며 한 묶음으로 교정한다. 실패로 작업량이 줄어든 실행 시간은 성능 비교에서 제외한다.
 
@@ -106,3 +110,65 @@ S03 #965는 실행·원장·소스 어댑터의 소유 경계를 분리한다. [
 승인 기반은 `a18dfc6b3faa8dc326668c77d0da12441be388f8`이며 이 문서 전용 checkpoint의 runtime·테스트·의존 파일은 그 기반과 같다.
 이슈의 상세 계획과 native Ready 확인 뒤 Draft PR을 먼저 생성하고, runtime/test 편집은 그 다음에 시작한다.
 Draft 이후 검증 지원을 준비하면 생산·기존 Case/fixture·runner 실행의 동등성과 controller/source hash를 별도로 고정한다. 실제 source privacy의 RED/복구 GREEN과 최소/영향/최종 전체 검증은 아직 수행하지 않았다.
+
+
+## Apply·Commit 소유와 사례 선택 — #1006
+
+[#1006](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1006)은
+검토된 Apply 권한과 pending Commit의 실제 상태·generation pin 수명을
+`artifact_transactions`로 이동한다. 구현 전에는 문서만 담은
+[Draft PR #1009](https://github.com/Kims-DeveloperGroup/story-writing-agents/pull/1009)를 먼저 생성했다.
+
+`ArtifactApplicationAuthority`는 capability 발급·소비와 Apply·결과 게시를,
+`PendingStoryCommits`는 실제 registry·교체·retire·archive 정리를,
+`StoryCommitDecisions`는 재준비와 Commit·Reject/Revise를 소유한다.
+`PreparedStoryCommit`은 원래 request·service·pin을 보유하며 pin을 None으로 만든 뒤 닫는다.
+Root는 기존 진입점을 구성·위임하고, 두 실제 협력자는 같은 registry를 사용한다.
+
+registry의 `observe_for_commit`은 기존 get 한 번과 단락 평가로 관측 객체와 일치 객체를
+구분한다. 닫힌 항목도 감추지 않으므로 등록 부재 검사는 같은 잔류 결함을 검출한다.
+교체는 원래 관측→retire→조건부 install을 보존하며, 성공 시 caller의 local 소유권을
+해제하고 실패 시 기존 finally가 같은 자원을 정리한다. journal readback·lock의
+implicit await·예외와 cleanup note 순서를 바꾸지 않는다.
+
+Application 파일 1032행은 같은 request/tail/secret·pin 이전·게시·finally 불변식의
+한정된 크기 예외다. registry·prepared resource·Commit 결정은 별도 파일로 분리한다.
+공유 결과의 `CollaborationInvocationResult`는 binding과 pin을 실제로 보유한다.
+event 함수와 pin cleanup 함수는 각각 구체적인 별도 모듈에서 원래 본문을 사용한다.
+
+Root의 좁은 의미 함수와 기존 공개 이벤트 게시 콜백을 작업별 인자로 전달한다. callback 선택이 작업 진입 시점으로
+앞당겨지고 위임 frame·await와 registry tuple이 추가되므로 비용이 0이라고 가정하지 않는다.
+이미 닫힌 predecessor의 Python 객체 보유는 registry frame 반환 때 끝날 수 있지만,
+명시적인 pin close·map 변경·예외 순서는 보존한다. 실제 회귀는 별도 정상 실행으로 판정한다.
+
+기존 Apply 6개와 Commit 2개는 `tests/test_lead_artifact_application_authority.py`,
+`tests/test_lead_story_commit_authority.py`의 같은 클래스·메서드로 1:1 이동한다. 입력·실제 producer·
+assertion·부정 사례·subTest·수치 weight를 유지한다. 두 기존 pin 캡처 구간에서 실제
+생성자를 원본 호출하는 표준 mock 관측을 사용한다. 실제 registry 부재→pin None→
+여섯 FD 종료 관측을 같은 두 사례가 공유하며 테스트 전용 생산 getter는 추가하지 않는다.
+
+파일 이관 뒤에는 새 ID와 원본 ID를 대응해 실제 발견·serial·hosted 실행 순서를 각각 확인한다.
+같은 단일 클래스 테스트를 경계별 파일로 배치해 원래 순서와 준비 조건을 보존한다.
+파일명 정렬에 따른 순서 변화와 코드의 실제 비용을 구분하며, 전체 시간 증가는 고정 기준으로 조사한다.
+
+수정한 소유 파일의 선택 목록부터 확인하고 같은 경로로 실행한다.
+
+```bash
+PYTHONPATH=src python -m tests.runner list \
+  --path src/story_writing_agents/artifact_transactions/artifact_application_authority.py \
+  --json /tmp/application-selection.json
+PYTHONPATH=src python -m tests.runner run \
+  --path src/story_writing_agents/artifact_transactions/artifact_application_authority.py \
+  --json /tmp/application-focused.json
+```
+
+이 선택은 전체 통과 증거가 아니다. 공유 Root·공통 계약 변경은 소비자 합집합으로
+확대하며 최종 동일 HEAD의 affected·전체 5 shard와 조정을 유지한다. 동일 오류의
+RED/원본 GREEN과 정상 시간 비교를 구분하고 source·환경·GC·순서·원자료를 보존한다.
+
+이번 전달은 기존 공통 fixture와 실제 Commit의 readiness·review·synthesis 준비를 유지한다.
+약 20개 소비 파일에 걸친 provider·response·Runtime fixture 소유와 전이 import 정리는
+Parent #968의 미완료 범위다. 경로 이동만으로 그 의존성이 없어졌다고 주장하지 않는다.
+#1007의 Confirm·전문가 실행/복구 구현은 #1006 완료 뒤 진행한다.
+테스트 소스는 151429 이내로 유지해 #1004의 예약 2행을 보존하며 legacy 1550행을
+출처 증명 없이 공제하지 않는다. 현재 source·실행·시간·리뷰 상태는 PR에서 확인한다.

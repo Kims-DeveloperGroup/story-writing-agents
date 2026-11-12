@@ -15,8 +15,8 @@ from story_writing_agents.core_document_readiness import AuthoringTarget
 from tests import test_artifact_objectives as objectives
 from tests import test_artifact_proposal_orchestration as artifact
 from tests import test_lead_orchestration as lead
-from tests import test_lead_artifact_application as application
-from tests import test_lead_story_commit as commit
+from tests import test_lead_artifact_application_authority as application
+from tests import test_lead_story_commit_authority as commit
 from tests.recommendation_fixture import RecommendationCase, action, recommendation, task_assessment
 from tests.test_specialist_routing_runtime import ROSTER
 

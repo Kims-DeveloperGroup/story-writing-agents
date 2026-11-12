@@ -408,6 +408,41 @@
         }
       ],
       "legacy_unresolved_lines": 1550
+    },
+    {
+      "issue": 1006,
+      "origin_commit": "a231649d001ff30d29f927c6884339ce09e2edc3",
+      "origins": [
+        {
+          "source": "tests/test_lead_artifact_application.py",
+          "sha256": "f89d77101ca0cb520a9d9ba0187a47cb7825e9ae01996eb4623e63bd4fa20a93",
+          "source_ranges": [
+            [
+              1,
+              577
+            ]
+          ],
+          "destinations": [
+            "tests/test_lead_artifact_application_authority.py"
+          ],
+          "counting": "wholefile moved code counted once via recursive test paths; original fixtures and legacy1550 retained"
+        },
+        {
+          "source": "tests/test_lead_story_commit.py",
+          "sha256": "c2fc5949ba76354bf98ff4bd614fd4151218b0940ecf70d7b4b673a9589f4f3f",
+          "source_ranges": [
+            [
+              1,
+              585
+            ]
+          ],
+          "destinations": [
+            "tests/test_lead_story_commit_authority.py"
+          ],
+          "counting": "wholefile moved code counted once via recursive test paths; original fixtures and legacy1550 retained"
+        }
+      ],
+      "legacy_unresolved_lines": 1550
     }
   ]
 }

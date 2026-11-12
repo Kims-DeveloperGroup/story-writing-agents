@@ -748,7 +748,7 @@ print(json.dumps([data.hex(), stamps]), flush=True)
             rendered = output.getvalue()
             progress.begin()
             try:
-                with mock.patch.object(StoryRuntime, "_validate_lead_identity"), \
+                with mock.patch.object(StoryRuntime, "validate_lead_identity"), \
                         mock.patch.object(StoryRuntime, "_read_lead_history", new=blocked_history), \
                         self.assertRaisesRegex(BackendProtocolError, "history inspection stopped"):
                     runner.run(progress.run(StoryRuntime.lead_turn(

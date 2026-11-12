@@ -14110,6 +14110,292 @@
           "new": "call_rule_factory.lead_call_contract_factory"
         }
       ]
+    },
+    {
+      "schema_version": 1,
+      "issue": 1006,
+      "origin_commit": "a231649d001ff30d29f927c6884339ce09e2edc3",
+      "original_caps_sha256": "8371eef31044fa33e0ee7e34af17bb3fb03e47556ac1b0f601124d13650b5298",
+      "expected_caps_sha256": "0caff3ac47db80cd2344dc4ff480358ec9cc09d2ed68d151ffa2e754c100d156",
+      "class_moves": [
+        {
+          "source": "tests/test_lead_artifact_application.py",
+          "class": "LeadArtifactApplicationTests",
+          "destination": "tests/test_lead_artifact_application_authority.py"
+        },
+        {
+          "source": "tests/test_lead_story_commit.py",
+          "class": "LeadStoryCommitTests",
+          "destination": "tests/test_lead_story_commit_authority.py"
+        }
+      ],
+      "moves": [
+        {
+          "old_id": "tests.test_lead_artifact_application.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
+          "new_id": "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
+          "subtest_cap": 0,
+          "source": "tests/test_lead_artifact_application.py",
+          "destination": "tests/test_lead_artifact_application_authority.py",
+          "original_file_sha256": "f89d77101ca0cb520a9d9ba0187a47cb7825e9ae01996eb4623e63bd4fa20a93",
+          "original_method_ast_sha256": "cca1275a97dabad29044be7e459bb56fcdeb01f6a68555706afcdfb4c081c23c",
+          "expected_method_ast_sha256": "cca1275a97dabad29044be7e459bb56fcdeb01f6a68555706afcdfb4c081c23c"
+        },
+        {
+          "old_id": "tests.test_lead_artifact_application.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
+          "new_id": "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
+          "subtest_cap": 2,
+          "source": "tests/test_lead_artifact_application.py",
+          "destination": "tests/test_lead_artifact_application_authority.py",
+          "original_file_sha256": "f89d77101ca0cb520a9d9ba0187a47cb7825e9ae01996eb4623e63bd4fa20a93",
+          "original_method_ast_sha256": "7dc87766947ba285141e8bab52fe8c6565e7846a7d3d2e1aaff9014bf845947e",
+          "expected_method_ast_sha256": "7dc87766947ba285141e8bab52fe8c6565e7846a7d3d2e1aaff9014bf845947e"
+        },
+        {
+          "old_id": "tests.test_lead_artifact_application.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
+          "new_id": "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
+          "subtest_cap": 0,
+          "source": "tests/test_lead_artifact_application.py",
+          "destination": "tests/test_lead_artifact_application_authority.py",
+          "original_file_sha256": "f89d77101ca0cb520a9d9ba0187a47cb7825e9ae01996eb4623e63bd4fa20a93",
+          "original_method_ast_sha256": "55c86a845154ca737dd01814f3935dc61e1b341eeeafa13325a887b86afc97bc",
+          "expected_method_ast_sha256": "55c86a845154ca737dd01814f3935dc61e1b341eeeafa13325a887b86afc97bc"
+        },
+        {
+          "old_id": "tests.test_lead_artifact_application.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
+          "new_id": "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
+          "subtest_cap": 0,
+          "source": "tests/test_lead_artifact_application.py",
+          "destination": "tests/test_lead_artifact_application_authority.py",
+          "original_file_sha256": "f89d77101ca0cb520a9d9ba0187a47cb7825e9ae01996eb4623e63bd4fa20a93",
+          "original_method_ast_sha256": "4ed4ea561d7b047c4722820c0a3e2d237020ea1a8aff920894b49c972a7eea46",
+          "expected_method_ast_sha256": "4ed4ea561d7b047c4722820c0a3e2d237020ea1a8aff920894b49c972a7eea46"
+        },
+        {
+          "old_id": "tests.test_lead_artifact_application.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
+          "new_id": "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
+          "subtest_cap": 0,
+          "source": "tests/test_lead_artifact_application.py",
+          "destination": "tests/test_lead_artifact_application_authority.py",
+          "original_file_sha256": "f89d77101ca0cb520a9d9ba0187a47cb7825e9ae01996eb4623e63bd4fa20a93",
+          "original_method_ast_sha256": "0b8fc1f3136bb1f83883ba1dae73ed3d38598af0e17253ceedef53a98e36ce26",
+          "expected_method_ast_sha256": "acc5e9f3f9a48c58d571adfbfe7413289aefa71979e58ae54a9226184a10d412"
+        },
+        {
+          "old_id": "tests.test_lead_artifact_application.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
+          "new_id": "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
+          "subtest_cap": 2,
+          "source": "tests/test_lead_artifact_application.py",
+          "destination": "tests/test_lead_artifact_application_authority.py",
+          "original_file_sha256": "f89d77101ca0cb520a9d9ba0187a47cb7825e9ae01996eb4623e63bd4fa20a93",
+          "original_method_ast_sha256": "6470cb06fed4edaf1e313bbb761240138760edf6ea52fa1c717b991f329d963f",
+          "expected_method_ast_sha256": "6470cb06fed4edaf1e313bbb761240138760edf6ea52fa1c717b991f329d963f"
+        },
+        {
+          "old_id": "tests.test_lead_story_commit.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation",
+          "new_id": "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation",
+          "subtest_cap": 3,
+          "source": "tests/test_lead_story_commit.py",
+          "destination": "tests/test_lead_story_commit_authority.py",
+          "original_file_sha256": "c2fc5949ba76354bf98ff4bd614fd4151218b0940ecf70d7b4b673a9589f4f3f",
+          "original_method_ast_sha256": "0827bac34a5a9468e8f1feb399347c6a5e785dadd481f9ab52108a40ab902778",
+          "expected_method_ast_sha256": "9f21ebb904210f658e33dde770d91eb7bf480d59ee8e236e58f34de4672b8d3e"
+        },
+        {
+          "old_id": "tests.test_lead_story_commit.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
+          "new_id": "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
+          "subtest_cap": 0,
+          "source": "tests/test_lead_story_commit.py",
+          "destination": "tests/test_lead_story_commit_authority.py",
+          "original_file_sha256": "c2fc5949ba76354bf98ff4bd614fd4151218b0940ecf70d7b4b673a9589f4f3f",
+          "original_method_ast_sha256": "064d58d86fc97375920d1f196264094ebb7c0b595e31d933a68f395f3203d54a",
+          "expected_method_ast_sha256": "06f7d7bec9dd9eabb25f80a73ed76931a482592cb36b1302dea4957bc2dc965c"
+        }
+      ],
+      "api_rewrites": [
+        {
+          "path": "tests/test_lead_story_commit_authority.py",
+          "old": "from tests import test_lead_artifact_application as",
+          "new": "from tests import test_lead_artifact_application_authority as",
+          "count": 1
+        },
+        {
+          "path": "tests/test_lead_story_commit_authority.py",
+          "old": "tests.test_lead_artifact_application",
+          "new": "tests.test_lead_artifact_application_authority",
+          "count": 1
+        },
+        {
+          "path": "tests/test_artifact_objectives.py",
+          "old": "from tests import test_lead_artifact_application as",
+          "new": "from tests import test_lead_artifact_application_authority as",
+          "count": 1
+        },
+        {
+          "path": "tests/test_artifact_objectives.py",
+          "old": "from tests import test_lead_story_commit as",
+          "new": "from tests import test_lead_story_commit_authority as",
+          "count": 1
+        },
+        {
+          "path": "tests/test_historical_material_workflow.py",
+          "old": "tests.test_lead_artifact_application",
+          "new": "tests.test_lead_artifact_application_authority",
+          "count": 1
+        },
+        {
+          "path": "tests/test_interactive_collaboration_view.py",
+          "old": "tests.test_lead_artifact_application",
+          "new": "tests.test_lead_artifact_application_authority",
+          "count": 1
+        },
+        {
+          "path": "tests/test_interactive_collaboration_view.py",
+          "old": "tests.test_lead_story_commit",
+          "new": "tests.test_lead_story_commit_authority",
+          "count": 2
+        },
+        {
+          "path": "tests/test_lead_artifact_objectives.py",
+          "old": "from tests import test_lead_artifact_application as",
+          "new": "from tests import test_lead_artifact_application_authority as",
+          "count": 1
+        },
+        {
+          "path": "tests/test_lead_artifact_objectives.py",
+          "old": "from tests import test_lead_story_commit as",
+          "new": "from tests import test_lead_story_commit_authority as",
+          "count": 1
+        },
+        {
+          "path": "tests/test_specialist_routing_runtime.py",
+          "old": "tests.test_lead_artifact_application",
+          "new": "tests.test_lead_artifact_application_authority",
+          "count": 4
+        },
+        {
+          "path": "tests/test_specialist_routing_runtime.py",
+          "old": "tests.test_lead_story_commit",
+          "new": "tests.test_lead_story_commit_authority",
+          "count": 2
+        },
+        {
+          "path": "tests/test_lead_artifact_application_authority.py",
+          "kind": "genuine_unused_whole_import_row",
+          "old": "import os",
+          "new": ""
+        },
+        {
+          "path": "tests/test_lead_artifact_application_authority.py",
+          "kind": "genuine_unused_whole_import_row",
+          "old": "from contextlib import contextmanager",
+          "new": ""
+        },
+        {
+          "path": "tests/test_lead_artifact_application_authority.py",
+          "kind": "genuine_unused_whole_import_row",
+          "old": "from story_writing_agents import orchestrator as orchestrator_module",
+          "new": ""
+        },
+        {
+          "path": "tests/test_lead_artifact_application_authority.py",
+          "kind": "genuine_unused_whole_import_row",
+          "old": "from story_writing_agents.writing_artifacts._storage import ArtifactRootSecurityError",
+          "new": ""
+        },
+        {
+          "path": "tests/test_lead_artifact_application_authority.py",
+          "kind": "genuine_unused_whole_import_row",
+          "old": "from story_writing_agents.workspace import initialization as initialization_module",
+          "new": ""
+        },
+        {
+          "path": "tests/test_lead_artifact_application_authority.py",
+          "kind": "genuine_unused_whole_import_row",
+          "old": "    SessionArtifactGenerationPin,",
+          "new": ""
+        },
+        {
+          "path": "tests/test_lead_story_commit_authority.py",
+          "kind": "genuine_unused_whole_import_row",
+          "old": "    StoryCommitError,",
+          "new": ""
+        },
+        {
+          "path": "tests/test_lead_story_commit_authority.py",
+          "kind": "genuine_unused_whole_import_row",
+          "old": "    StoryCommitFailureCode,",
+          "new": ""
+        },
+        {
+          "path": "tests/test_lead_story_commit_authority.py",
+          "kind": "genuine_unused_whole_import_row",
+          "old": "    StoryCommitRecoveryAction,",
+          "new": ""
+        },
+        {
+          "path": "tests/test_lead_story_commit_authority.py",
+          "kind": "reuse_existing_owner_module_alias",
+          "old": "from tests.test_lead_artifact_application_authority import _application_decision",
+          "new": "lead_artifact_application_tests._application_decision(turn, ArtifactApplicationDecisionKind.APPLY)",
+          "correction": "Original imported function WAS USED. _application_replay is a distinct function; previous unused/shadow classification was wrong."
+        },
+        {
+          "source": "tests/test_lead_story_commit.py",
+          "destination": "tests/test_lead_story_commit_authority.py",
+          "kind": "public_real_constructor_observation",
+          "scope": "only original268-269 and428-429 Apply/capture windows",
+          "old": "pending._generation_pin",
+          "new": "autospec real PreparedStoryCommit.__init__ side_effect original initializer; call.args[0] is actual observed pending -> call.args[3] actual generation_pin",
+          "preserved": "real class/slots/type and original initializer; exact two original Apply/capture windows; reset_mock immediately after pin extraction plus Case cleanup; old FD6/close asserts unchanged"
+        },
+        {
+          "source": "tests/test_lead_story_commit.py",
+          "destination": "tests/test_lead_story_commit_authority.py",
+          "kind": "real_registry_absence_observation",
+          "old": "assertNotIn(key, runtime._pending_story_commits)",
+          "new": "two assert_retired_commit calls inline: public observed is None -> same pin._pin is None -> six real FD failures",
+          "count": 2,
+          "preserved": "original two observations/ordering; new production peer capability, closed registered resource remains visible"
+        },
+        {
+          "source": "tests/test_lead_story_commit.py",
+          "destination": "tests/test_lead_story_commit_authority.py",
+          "kind": "reuse_existing_actual_pin_close_observer",
+          "old": "Reject local close_calls/original_close/tracked_close/mock.patch.object block",
+          "new": "existing track_pin_closes(pin) contextmanager, same actual original close and record-before-close; explicit any(identity) condition",
+          "charged_rows_removed": 6
+        },
+        {
+          "source": "tests/test_lead_artifact_application.py",
+          "destination": "tests/test_lead_artifact_application_authority.py",
+          "kind": "actual_dependency_patch_owner",
+          "old": "story_writing_agents.orchestrator.validate_artifact_relationships",
+          "new": "story_writing_agents.artifact_transactions.artifact_application_authority.validate_artifact_relationships",
+          "count": 1
+        },
+        {
+          "kind": "retirement_helper_inline_correspondence",
+          "source": "tests/test_lead_story_commit.py",
+          "destination": "tests/test_lead_story_commit_authority.py",
+          "count": 2,
+          "helper": "assert_retired_commit(key, original_request, pin, descriptors)",
+          "preserved": "same close-count -> observed absence -> pin None -> FD6 order; three selected observer cleanup source rows retained",
+          "charged_delta": -1
+        },
+        {
+          "kind": "fix_used_helper_global_binding",
+          "source": "tests/test_lead_story_commit.py",
+          "destination": "tests/test_lead_story_commit_authority.py",
+          "helper": "applied_create",
+          "old": "_application_decision(turn, ArtifactApplicationDecisionKind.APPLY)",
+          "new": "lead_artifact_application_tests._application_decision(turn, ArtifactApplicationDecisionKind.APPLY)",
+          "count": 1,
+          "input_order_and_helper_AST_unchanged": true,
+          "existing_patch_sites": 0
+        }
+      ],
+      "genuine_unused_import_rows": 9,
+      "used_import_replaced_by_existing_module_API_rows": 1
     }
   ]
 }
