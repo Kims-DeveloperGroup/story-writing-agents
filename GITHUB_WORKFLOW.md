@@ -67,6 +67,12 @@ components, intended behavior and interface changes, implementation order, relev
 cases, and verification mapped to acceptance criteria. Keep `## Implementation summary`
 brief and the template's verification section current.
 
+Keep issue-specific decisions, material constraints, exceptions, and the mapping from
+planned changes to acceptance criteria explicit. Reference shared workflow and verification
+policies instead of reproducing their full text in every Issue. A policy reference or a
+generic sequence of inspect, implement, test, and merge does not replace the owning
+Issue's detailed plan.
+
 Planning inspects behavior and resolves scope, constraints, criteria, and readiness. Authorized
 planning writes are limited to Issue/Project records and native relationships. Planning ends
 when the detailed plan and metadata are complete, dependencies are unblocked, the executable
@@ -399,6 +405,22 @@ Before creating or substantially updating an Issue, PR, evidence record, or stat
 read the [authoring guide](.agents/skills/github-task-lifecycle/references/issue-pr-authoring.md)
 and its raw template. Preserve every visible heading and the template's meaning. Templates do
 not authorize mutations or replace native relations.
+
+Apply the guide's reader-facing and publication checks to the finished record, not only to
+the selected template. Narrative progress, evidence, decision/question, and completion
+comments are reporting records; account name or template subtype does not exempt them from
+conclusion-first summaries, visible material limits, and an owned next action when needed.
+Retain detailed implementation and verification evidence in the designated sections or links.
+
+Keep evidence applicability separate from outcomes and lifecycle completion. Preserve
+historical observations and make changed applicability and replacement evidence traceable.
+Keep canonical review triggers, request/round markers, and provenance-bound machine records
+in the exact form required by this policy.
+
+These authoring checks do not expand mutation authority, replace native metadata or
+relationships, add an approval checkpoint, or change planning, verification, review, and
+integration gates. Editing a report alone does not require a new check, Issue, PR, review
+request, or review round.
 
 ## Completion and Cleanup
 

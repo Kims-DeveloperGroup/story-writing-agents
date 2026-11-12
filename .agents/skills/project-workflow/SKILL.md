@@ -41,6 +41,12 @@ of duplicating them. The detailed implementation plan lives in the owning Issue'
 `## Implementation plan` section. A standalone `$project-implement` invocation may prepare
 missing planning prerequisites directly; the coordinator still keeps the four stages explicit.
 
+At each handoff, carry a concise account of the current result, material changes since
+the prior handoff, remaining criteria or blockers, and the next owner/action. Link the
+owning Issue for scope and the relevant Evidence for provenance instead of repeating
+the full plan, policy, or execution log. Apply the authoring guide under the active stage's
+authority; this introduces no additional stage or approval checkpoint.
+
 Stop dependent writes for material ambiguity, scope expansion, blocked prerequisites, or
 missing exceptional authority. Do not advance past an unmet stage gate or claim completion
 while required work remains. Report the exact owner/action and preserve successful state.

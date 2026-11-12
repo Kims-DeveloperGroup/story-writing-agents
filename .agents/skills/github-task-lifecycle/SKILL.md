@@ -28,6 +28,12 @@ canonical [planning and implementation boundary](../../../GITHUB_WORKFLOW.md#pla
 keep the summary brief, verify readiness before implementation, and preserve appropriate
 status when resuming.
 
+When checking plan completeness, verify that the Issue contains its own scenarios,
+observable criteria, and component-to-criterion mapping under the authoring guide.
+Shared policy text is supporting context, not a substitute for those details.
+Correct material omissions under the existing planning authority; presentation-only
+improvements do not create a new lifecycle approval gate.
+
 1. Search open and closed Issues; reuse the owning item when possible.
 2. For nontrivial work, verify the Issue body and native Requirement field, native
    hierarchy/dependencies, Project #1 membership, Project Size/Iteration/Status, milestone,
@@ -88,4 +94,7 @@ verify each finding against the current diff, reply with the applied change and 
 rejection rationale, then resolve the thread. Recheck outdated or drifted threads; do not
 resolve findings that still need work.
 
-Report all mutations, failures, preserved state, current head/base, and the next owner/action.
+Lead the report with the supported outcome and remaining work. Distinguish implementation,
+observed verification, review, integration, and closure. Report all mutations, failures,
+preserved state, current head/base, and the next owner/action; link detailed commands,
+artifacts, and reconciliation records without omitting material evidence gaps.
