@@ -5378,6 +5378,7 @@ class StoryRuntime:
             capture_editorial_snapshot=self.capture_editorial_snapshot,
             validate_exact_candidate_reviews=self.validate_exact_candidate_reviews,
             qualify_artifact_final_review=self.qualify_artifact_final_review,
+            append_collaboration_event_batch=self.append_collaboration_event_batch,
         )
 
     async def reprepare_story_commit(
@@ -5389,6 +5390,7 @@ class StoryRuntime:
             request,
             validate_lead_identity=self.validate_lead_identity,
             capture_editorial_snapshot=self.capture_editorial_snapshot,
+            append_collaboration_event_batch=self.append_collaboration_event_batch,
         )
 
     async def decide_story_commit(
@@ -5400,6 +5402,7 @@ class StoryRuntime:
             decision,
             validate_lead_identity=self.validate_lead_identity,
             capture_editorial_snapshot=self.capture_editorial_snapshot,
+            append_collaboration_event_batch=self.append_collaboration_event_batch,
         )
 
     async def _execute_confirmed_step_locked(
@@ -7444,6 +7447,7 @@ class StoryRuntime:
                 validate_exact_candidate_reviews=self.validate_exact_candidate_reviews,
                 qualify_artifact_final_review=self.qualify_artifact_final_review,
                 attach_document_plan=self.attach_document_plan,
+                append_collaboration_event_batch=self.append_collaboration_event_batch,
             )
         next_proposal: CollaborationProposal | None = None
         continuation_exceeds_budget = False

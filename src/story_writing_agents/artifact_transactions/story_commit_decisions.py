@@ -20,6 +20,7 @@ from ..workspace.initialization import (
 )
 from ..runtime_resources import collaboration_event_journal as event_journal
 from ..runtime_resources.session_execution_scopes import SessionExecutionScopes
+from ..conversations import CollaborationAppendReceipt, CollaborationEventBatch
 from ..conversations import (
     ArtifactApplicationOutcomeKind,
     CollaborationActor,
@@ -65,6 +66,9 @@ class StoryCommitDecisions:
         *,
         validate_lead_identity: Callable[[str, str], None],
         capture_editorial_snapshot: Callable[[str], SessionHistorySnapshot],
+        append_collaboration_event_batch: Callable[
+            [CollaborationEventBatch], CollaborationAppendReceipt
+        ],
     ) -> StoryCommitRequestPayload:
         """Prepare one fresh exact Commit request for a known Apply result."""
         if type(request) is not StoryCommitPreparationRequest:
@@ -174,7 +178,7 @@ class StoryCommitDecisions:
                 try:
                     event_journal.append_drafts(
                         events[-1].sequence, (draft,), batch_id=batch_id,
-                                                       append_batch=self.append_collaboration_event_batch,
+                                                       append_batch=append_collaboration_event_batch,
                     )
                 except Exception:
                     observed = self.conversation_storage_services.event_store.read(
@@ -210,6 +214,9 @@ class StoryCommitDecisions:
         *,
         validate_lead_identity: Callable[[str, str], None],
         capture_editorial_snapshot: Callable[[str], SessionHistorySnapshot],
+        append_collaboration_event_batch: Callable[
+            [CollaborationEventBatch], CollaborationAppendReceipt
+        ],
     ) -> StoryCommitDecisionResult:
         """Consume one exact structured decision for the prepared commit tail."""
 
@@ -275,7 +282,7 @@ class StoryCommitDecisions:
                         recipient=event_journal.RUNTIME_ACTOR,
                         payload=decision_payload,
                     ),),
-                    append_batch=self.append_collaboration_event_batch,
+                    append_batch=append_collaboration_event_batch,
                 )
                 decision_consumed = True
                 result = None
@@ -375,7 +382,7 @@ class StoryCommitDecisions:
                             recipient=event_journal.USER_ACTOR,
                             payload=result_payload,
                         ),),
-                        append_batch=self.append_collaboration_event_batch,
+                        append_batch=append_collaboration_event_batch,
                     )
                 except Exception:
                     result_payload = StoryCommitResultPayload(

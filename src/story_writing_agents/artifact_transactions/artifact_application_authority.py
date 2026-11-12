@@ -40,6 +40,7 @@ from ..writing_artifacts import (
 )
 from ..runtime_resources import collaboration_event_journal as event_journal
 from ..runtime_resources.session_execution_scopes import SessionExecutionScopes
+from ..conversations import CollaborationAppendReceipt, CollaborationEventBatch
 from ..conversations import (
     ArtifactApplicationDecision,
     ArtifactApplicationDecisionKind,
@@ -142,6 +143,9 @@ class ArtifactApplicationAuthority:
         capture_editorial_snapshot: Callable[[str], SessionHistorySnapshot],
         validate_exact_candidate_reviews: Callable[[str, CollaborationProposal, ArtifactReviewCandidate, tuple[CollaborationEvent, ...]], None],
         qualify_artifact_final_review: Callable[..., FinalReviewQualification],
+        append_collaboration_event_batch: Callable[
+            [CollaborationEventBatch], CollaborationAppendReceipt
+        ],
     ) -> ArtifactApplicationDecisionResult:
         """Consume one exact structured decision for the current reviewed request."""
 
@@ -221,7 +225,7 @@ class ArtifactApplicationAuthority:
                     recipient=event_journal.RUNTIME_ACTOR,
                     payload=decision_payload,
                 ),),
-                append_batch=self.append_collaboration_event_batch,
+                append_batch=append_collaboration_event_batch,
             )
 
             outcome: ArtifactApplicationOutcomeKind
@@ -529,7 +533,7 @@ class ArtifactApplicationAuthority:
                     try:
                         event_journal.append_drafts(
                             post_decision[-1].sequence, drafts, batch_id=batch_id,
-                                                                append_batch=self.append_collaboration_event_batch,
+                                                                append_batch=append_collaboration_event_batch,
                         )
                         return True
                     except Exception:
@@ -661,6 +665,9 @@ class ArtifactApplicationAuthority:
         validate_exact_candidate_reviews: Callable[[str, CollaborationProposal, ArtifactReviewCandidate, tuple[CollaborationEvent, ...]], None],
         qualify_artifact_final_review: Callable[..., FinalReviewQualification],
         attach_document_plan: Callable[..., LeadTurnResult],
+        append_collaboration_event_batch: Callable[
+            [CollaborationEventBatch], CollaborationAppendReceipt
+        ],
     ) -> LeadTurnResult:
         """Finalize known review facts without granting artifact-write authority."""
 
@@ -972,7 +979,7 @@ class ArtifactApplicationAuthority:
             projection.last_sequence,
             tuple(final_drafts),
             batch_id=event_journal.deterministic_id("b", result_event_id, "finalize"),
-            append_batch=self.append_collaboration_event_batch,
+            append_batch=append_collaboration_event_batch,
         )
         if (
             application_payload is not None

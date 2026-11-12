@@ -95,6 +95,10 @@ ID 이동은 사례 수나 검증 범위를 늘리거나 줄이는 허가가 아
 각 서브이슈는 상세 계획과 브랜치 준비 후 런타임·테스트 코드 편집 전에 DRAFT PR을 만든다. 구현과 검증 결과는 그 PR에 계속 갱신하며, 준비가 끝난 뒤 ready for review로 전환하고 관리 리뷰·같은 head의 전체 CI·수동 squash 종료 절차를 따른다.
 
 helper를 외부 공개 이름으로 옮길 때는 원본 global 참조의 심볼 해석도 비교한다. 같은 이름의 인자·지역 변수·comprehension·closure가 새 이름을 포획하는지 `symtable` 또는 bytecode로 확인한다. 생성 함수에는 `make_scope`, `make_entry`처럼 실제 역할이 드러나고 기존 지역 이름과 겹치지 않는 이름을 쓴다. 함수 내부의 지연 import와 mock patch도 각 실제 소유자에 대응시킨다.
+기존 Root 메서드를 새 객체로 이동할 때는 모든 self 속성의 출처도 확인한다.
+전역 이름과 정규화 AST가 같아도 receiver의 메서드가 존재한다는 뜻은 아니다.
+새 소유자의 필드·메서드와 외부 협력자를 구분하고, 기존 공개 콜백은 실제 호출 지점에
+명시적으로 전달한 뒤 최소 기존 사례로 실행 경로를 확인한다.
 
 검증 순서는 실제 메서드 수집·원본 대응과 정적 import 점검 뒤, 기존 최소 사례·영향 사례·최종 전체 실행으로 이어진다. 확대 실행에서 발견한 이동 오류는 같은 시나리오·assertion·부정 입력을 유지하며 한 묶음으로 교정한다. 실패로 작업량이 줄어든 실행 시간은 성능 비교에서 제외한다.
 
@@ -127,12 +131,12 @@ registry의 `observe_for_commit`은 기존 get 한 번과 단락 평가로 관�
 해제하고 실패 시 기존 finally가 같은 자원을 정리한다. journal readback·lock의
 implicit await·예외와 cleanup note 순서를 바꾸지 않는다.
 
-Application 파일 1025행은 같은 request/tail/secret·pin 이전·게시·finally 불변식의
+Application 파일 1032행은 같은 request/tail/secret·pin 이전·게시·finally 불변식의
 한정된 크기 예외다. registry·prepared resource·Commit 결정은 별도 파일로 분리한다.
 공유 결과의 `CollaborationInvocationResult`는 binding과 pin을 실제로 보유한다.
 event 함수와 pin cleanup 함수는 각각 구체적인 별도 모듈에서 원래 본문을 사용한다.
 
-Root의 좁은 의미 함수는 작업별 인자로 전달한다. callback 선택이 작업 진입 시점으로
+Root의 좁은 의미 함수와 기존 공개 이벤트 게시 콜백을 작업별 인자로 전달한다. callback 선택이 작업 진입 시점으로
 앞당겨지고 위임 frame·await와 registry tuple이 추가되므로 비용이 0이라고 가정하지 않는다.
 이미 닫힌 predecessor의 Python 객체 보유는 registry frame 반환 때 끝날 수 있지만,
 명시적인 pin close·map 변경·예외 순서는 보존한다. 실제 회귀는 별도 정상 실행으로 판정한다.
