@@ -209,7 +209,7 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
             ) if seeded else await self.reviewed_create(subject, new_text=new_text, readiness=readiness)
         )
         applied = await self.runtime.decide_artifact_application(
-            _application_decision(turn, ArtifactApplicationDecisionKind.APPLY)
+            lead_artifact_application_tests._application_decision(turn, ArtifactApplicationDecisionKind.APPLY)
         )
         self.assertIsNotNone(applied.commit_request)
         return applied

@@ -14334,9 +14334,10 @@
         },
         {
           "path": "tests/artifact_transactions/test_commit_authority.py",
-          "kind": "genuine_unused_whole_import_row",
+          "kind": "reuse_existing_owner_module_alias",
           "old": "from tests.artifact_transactions.test_apply_authority import _application_decision",
-          "new": ""
+          "new": "lead_artifact_application_tests._application_decision(turn, ArtifactApplicationDecisionKind.APPLY)",
+          "correction": "Original imported function WAS USED. _application_replay is a distinct function; previous unused/shadow classification was wrong."
         },
         {
           "source": "tests/test_lead_story_commit.py",
@@ -14380,8 +14381,21 @@
           "helper": "assert_retired_commit(key, original_request, pin, descriptors)",
           "preserved": "same close-count -> observed absence -> pin None -> FD6 order; three selected observer cleanup source rows retained",
           "charged_delta": -1
+        },
+        {
+          "kind": "fix_used_helper_global_binding",
+          "source": "tests/test_lead_story_commit.py",
+          "destination": "tests/artifact_transactions/test_commit_authority.py",
+          "helper": "applied_create",
+          "old": "_application_decision(turn, ArtifactApplicationDecisionKind.APPLY)",
+          "new": "lead_artifact_application_tests._application_decision(turn, ArtifactApplicationDecisionKind.APPLY)",
+          "count": 1,
+          "input_order_and_helper_AST_unchanged": true,
+          "existing_patch_sites": 0
         }
-      ]
+      ],
+      "genuine_unused_import_rows": 9,
+      "used_import_replaced_by_existing_module_API_rows": 1
     }
   ]
 }
