@@ -38,6 +38,7 @@ from story_writing_agents.debug_log import DEBUG_LOG_RELATIVE_PATH, WorkspaceDeb
 from story_writing_agents.prompts import PromptAssembler
 from story_writing_agents.interactive_settings import ProviderRouteEntry, commit_prepared_settings_save, load_settings_state, prepare_settings_save, update_agent_backend
 from story_writing_agents.orchestrator import StoryRuntime
+from story_writing_agents.lead_preparation import authoring_authority, call_rule_factory
 from story_writing_agents.provider_execution_workspace import ProviderExecutionWorkspace, mint_provider_execution_workspace
 from story_writing_agents.workspace.initialization import provision_session_resources
 from story_writing_agents.workspace.initialization import SessionArtifactBindingError
@@ -5341,10 +5342,8 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             PremiseDecisionConstraints)
         from story_writing_agents.orchestrator import (
             LeadContractError)
-        from story_writing_agents.lead_preparation.call_rule_factory import (
-            OrchestrationLeadCallFactory)
+        OrchestrationLeadCallFactory = call_rule_factory.OrchestrationLeadCallFactory
         from tests.provider_wire_fixture import lead_fixture_response, lead_fixture_result
-        from story_writing_agents.agent_context.manifest import ContextAuthorityKind, ContextPriority, ContextSemanticChannel, ContextSourceKind
         from tests.agent_context.invocation.execution_fixture import make_material as _material, make_materials as _materials
 
         service = AgentContextService(self.workspace)
@@ -5374,7 +5373,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             factory = OrchestrationLeadCallFactory(
                 LeadProviderConstraints(input_ids=inputs, source_ids=inputs),
                 LeadResultRuleSeed.declare(family, schema), ContextInvocationKind.LEAD.value,
-                definition.language, authorize, StoryRuntime._core_reviewer)
+                definition.language, authorize, authoring_authority.core_reviewer)
             materials = _materials(payload)
             current = service.scope(scope.session_id, scope.subject_kind, scope.subject_id,
                 LEAD_ORCHESTRATOR)

@@ -32,7 +32,7 @@ from unittest import mock
 from story_writing_agents import ReplyTraceOrigin, RuntimeSession, StoryRuntime, Workspace
 from story_writing_agents import orchestrator as orchestrator_module
 from story_writing_agents.lead_preparation import call_rule_factory, outcome_decoding, reply_contract_values
-from story_writing_agents.lead_preparation import response_rules
+from story_writing_agents.lead_preparation import response_rules, authoring_authority
 from story_writing_agents.agent_context.accounting import ProviderCallAccounting, ProviderCallKind, ProviderCallState, account_provider_payload
 from story_writing_agents.agents import CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR, PLOT_ARCHITECT, SPECIALIST_IDS, behavior_policy_files
 from story_writing_agents.conversations import COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES, CollaborationAssignmentDispatchPayload, CollaborationConfirmationDecision, CollaborationExecutionResult, CollaborationLeadSynthesisPayload, CollaborationEventKind, CollaborationInputKind, CollaborationInvocationKind, CollaborationLeadJudgmentPayload, CollaborationLeadOutcomeFailureCode, CollaborationLeadOutcomeFailurePayload, CollaborationMessagePayload, CollaborationNextAction, CollaborationProposal, CollaborationProviderCallPayload, CollaborationProviderCallState, CollaborationSideEffect, CollaborationStepState, LeadOutcomeKind, LeadOutcomeScope, LeadStepDecision, project_collaboration_history
@@ -7287,21 +7287,21 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
         for spent in (11, 12):
             with self.subTest(already_spent=spent):
                 with self.assertRaises(BackendProtocolError) as raised:
-                    self.runtime._proposal_call_reservations(inputs=(), assignment_input_ids=((
+                    authoring_authority.proposal_call_reservations(inputs=(), assignment_input_ids=((
                         'user_input',),), physical_calls_spent=spent)
                 self.assertIs(type(raised.exception), provider_call_accounting.LeadCallBudgetExceeded)
-        limits, synthesis, minimum = self.runtime._proposal_call_reservations(
+        limits, synthesis, minimum = authoring_authority.proposal_call_reservations(
             inputs=(), assignment_input_ids=(("user_input",),), physical_calls_spent=10)
         self.assertEqual((limits, synthesis, minimum), ((1,), 1, 2))
         self.assertEqual(self.backend.calls, [])
         from story_writing_agents.specialist_routing import AuthoringContribution, AuthoringContributionRole, ArtifactReviewDomain
         scope = orchestrator_module.AuthoringScope(activity=orchestrator_module.AuthoringActivity.DRAFT, target_paths=(), domains=(ArtifactReviewDomain.PLOT_STRUCTURE,), interpretation="Exact draft.", task_id="task", task_revision=1, schema_version=3, contributions=(AuthoringContribution(ArtifactReviewDomain.PLOT_STRUCTURE, AuthoringContributionRole.DRAFT_OWNER),))
         reference = orchestrator_module.CollaborationInputRevision("reference", orchestrator_module.CollaborationInputKind.CORE_DOCUMENT, "${core_documents/global_outline.md}", orchestrator_module.CollaborationInputState.PRESENT, "sha256:" + "a" * 64, 1, 2)
-        self.assertEqual(self.runtime._final_review_floor(scope, (), preparation=True), 4)
-        self.assertEqual(self.runtime._final_review_floor(scope, (reference,), preparation=True), 8)
-        self.assertEqual(self.runtime._proposal_call_reservations(inputs=(reference,), assignment_input_ids=(("reference",),), physical_calls_spent=0, authoring_scope=scope), ((2,), 2, 4))
+        self.assertEqual(authoring_authority.final_review_floor(scope, (), preparation=True), 4)
+        self.assertEqual(authoring_authority.final_review_floor(scope, (reference,), preparation=True), 8)
+        self.assertEqual(authoring_authority.proposal_call_reservations(inputs=(reference,), assignment_input_ids=(("reference",),), physical_calls_spent=0, authoring_scope=scope), ((2,), 2, 4))
         with self.assertRaises(provider_call_accounting.LeadCallBudgetExceeded):
-            self.runtime._proposal_call_reservations(inputs=(reference,), assignment_input_ids=(("reference",),), physical_calls_spent=1, authoring_scope=scope)
+            authoring_authority.proposal_call_reservations(inputs=(reference,), assignment_input_ids=(("reference",),), physical_calls_spent=1, authoring_scope=scope)
 
 
 class LeadReferenceFailurePrecedenceTests(LeadOrchestrationTestCase):
