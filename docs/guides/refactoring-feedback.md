@@ -106,3 +106,35 @@ S03 #965는 실행·원장·소스 어댑터의 소유 경계를 분리한다. [
 승인 기반은 `a18dfc6b3faa8dc326668c77d0da12441be388f8`이며 이 문서 전용 checkpoint의 runtime·테스트·의존 파일은 그 기반과 같다.
 이슈의 상세 계획과 native Ready 확인 뒤 Draft PR을 먼저 생성하고, runtime/test 편집은 그 다음에 시작한다.
 Draft 이후 검증 지원을 준비하면 생산·기존 Case/fixture·runner 실행의 동등성과 controller/source hash를 별도로 고정한다. 실제 source privacy의 RED/복구 GREEN과 최소/영향/최종 전체 검증은 아직 수행하지 않았다.
+
+
+## Apply·Commit 소유권 이전 준비 — #1006
+
+[#1006의 상세 계획](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1006#구현-계획)은
+통합 기반 `a231649d001ff30d29f927c6884339ce09e2edc3`의 Apply capability, pending Commit,
+generation pin의 이전·게시·교체·정리와 실제 Commit 결정을 함께 옮기는 전달이다.
+이 절은 구현 전 Draft PR을 위한 준비 기록이며 새 생산 구조나 실행 통과를 뜻하지 않는다.
+
+계획된 소유자는 `artifact_transactions`의 application authority, pending Commit registry,
+Commit decision, prepared Commit resource다. 파일명은 이 책임을 드러낸다.
+Root는 기존 진입점을 구성·위임하고 실제 협력자는 공개 observed/matched 계약을 사용한다.
+같은 pin의 이전, 관측한 동일 pending의 retire, None 선행 close, journal readback,
+lock·implicit await와 예외·취소·정리 순서를 원본에 대응한다.
+
+기존 Apply 6개와 Commit 2개는 각각 `tests/artifact_transactions/test_apply_authority.py`,
+`test_commit_authority.py`의 같은 클래스·메서드로 1:1 옮긴다. 입력·실제 producer·assertion·
+부정 사례·subTest·수치 weight를 보존한다. 두 기존 pin 캡처 구간에서 실제 생성자를
+원본 호출하는 관측을 사용하고, 같은 pin의 실제 여섯 FD 종료 검사를 유지한다.
+테스트 전용 생산 getter를 만들거나 durable 결과만으로 registry 부재를 대신하지 않는다.
+
+이번 전달은 기존 공통 fixture와 실제 Commit의 readiness·review·synthesis 준비를 유지한다.
+약 20개 소비 파일에 걸친 provider·response·Runtime fixture의 별도 소유와 전이 import
+정리는 Parent #968의 미완료 범위다. 도메인 경로 이관만으로 그 의존성이 없어졌다고
+주장하지 않는다. #1007의 Confirm·전문가 실행/복구 구현은 #1006 완료 뒤 진행한다.
+
+집중 검증은 기존 atomic Apply와 inspectable Commit/Reject의 두 사례다. 변경 범위에 따라
+Apply 6개·Commit 2개와 실제 소비자 합집합으로 확대하고, 동일 오류의 RED/복구 GREEN,
+최종 HEAD의 fast·affected·전체 5 shard와 리뷰를 전달 조건으로 삼는다.
+최종 실제 source 계수는 151429 이내로 유지해 #1004에 예약된 2행을 사용하지 않는다.
+legacy 1550행은 출처 증명 없이 공제하지 않으며, 실제 성능 회귀와 미실행을 통과로
+기록하지 않는다. 구현·실행 결과와 현재 base/HEAD는 Draft PR에서 계속 갱신한다.
