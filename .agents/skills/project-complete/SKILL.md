@@ -53,7 +53,11 @@ evidence/status template being used. Preserve all visible headings and meanings.
    closes its parent; parents close only after all required children are integrated.
    Keep failed checks visible and repair authorized post-merge record updates without
    repeating successful operations.
-5. Post or update preserved status/evidence templates when a durable record is useful.
+5. Post or update preserved status/evidence templates when a durable record is useful,
+   such as when integration, closure, remaining criteria, or a blocker materially changes
+   the assessment. State whether the delivery is completing or partial, what is integrated,
+   what remains, and the responsible next action. Keep detailed validation and reconciliation
+   history in Evidence and link it without erasing earlier failures or unresolved limitations.
 
 ## Clean up and finish
 
@@ -66,6 +70,8 @@ evidence/status template being used. Preserve all visible headings and meanings.
 3. Preserve unexpected changes or unverified resources, and report the exact recovery owner
    and next action. Verify absence of resources actually removed; do not claim cleanup passed
    for preserved resources.
-4. Summarize Issue, Project, PR, current base/head, merge SHA, review/integration/closure
-   verification, milestone and branch disposition, cleanup, and residual follow-ups. Report
-   partial failures and preserved state explicitly. Codex Plan Mode remains read-only.
+4. Start with the verified completion or partial-integration result and any unfinished
+   acceptance criteria. Summarize Issue, Project, PR, current base/head, merge SHA,
+   review/integration/closure verification, milestone and branch disposition, cleanup,
+   and residual follow-ups. Report partial failures and preserved state explicitly.
+   Codex Plan Mode remains read-only.
