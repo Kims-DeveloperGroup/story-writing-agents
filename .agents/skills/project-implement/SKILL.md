@@ -37,6 +37,9 @@ exceptions, or destructive cleanup authority.
    [planning and implementation boundary](../../../GITHUB_WORKFLOW.md#planning-and-implementation-boundary).
    Cover affected components, intended behavior/interfaces, order, relevant failure cases,
    and verification against acceptance criteria. Keep the summary brief.
+   Check the resulting Issue against the authoring guide's scenario, criterion, and plan
+   coverage requirements. Reuse valid existing decisions and detail; do not replace them
+   with generic policy text or invent unrequested scope to make the plan appear complete.
 3. Prepare missing native relationships and planning metadata: Project #1 membership,
    type/area labels, native Issue Requirement, Project Size and Iteration, milestone, owner,
    accepted base, dependencies, and status. Keep one delivery unit on one Issue; never create
@@ -73,7 +76,9 @@ exceptions, or destructive cleanup authority.
 
 ## Finish and hand off
 
-Report the Issue/Project and detailed plan link, worktree, branch/native link, accepted base,
+Lead with what is implemented, what observed verification supports, and what remains
+unverified, uncommitted, or unpushed. Identify the affected acceptance criteria and report
+the Issue/Project and detailed plan link, worktree, branch/native link, accepted base,
 current HEAD, verification commands/results and evidence, commit/push state, and preserved
 changes or blockers with their owner/action. Stop before PR creation or review; a standalone
 invocation does not advance to `$project-pr-review`. The full coordinator may continue under

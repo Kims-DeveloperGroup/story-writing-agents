@@ -34,6 +34,10 @@ raw template. Preserve all visible headings and their meanings. Keep dependencie
    Name affected components, intended behavior and interface changes, implementation order,
    relevant failure cases, and verification mapped to acceptance criteria. Keep
    `## Implementation summary` brief and the template's verification section current.
+   Confirm that these details are specific to this delivery unit and that significant
+   planned changes can be traced to its scenarios and acceptance criteria. Keep completed
+   analysis, accepted design decisions, unresolved questions, and future implementation or
+   verification distinguishable; analysis alone is not execution evidence.
 4. Keep one delivery unit on one Issue. Use native sub-Issue/dependency relations only when
    justified. Never create a sole child or wrapper; known children must be at least two
    independently useful, necessary siblings, created and verified together.
@@ -48,9 +52,10 @@ raw template. Preserve all visible headings and their meanings. Keep dependencie
 
 ## Finish and hand off
 
-Report the owning Issue and Project item, the detailed plan's Issue-section link, accepted
-base, verified scope/criteria, readiness metadata and dependencies, gate result, and any
-exceptions or blockers. Stop before branch/worktree creation or implementation. A standalone
-invocation does not advance to `$project-implement`; the full coordinator may continue under
-its existing authority. Workflow planning authority never overrides Codex Plan Mode's
-read-only restriction.
+Start with whether planning is ready or blocked, the agreed outcome, and the next
+owner/action. Report the owning Issue and Project item, the detailed plan's Issue-section
+link, accepted base, verified scope/criteria, readiness metadata and dependencies, gate
+result, and any exceptions or blockers. Stop before branch/worktree creation or
+implementation. A standalone invocation does not advance to `$project-implement`; the full
+coordinator may continue under its existing authority. Workflow planning authority never
+overrides Codex Plan Mode's read-only restriction.
