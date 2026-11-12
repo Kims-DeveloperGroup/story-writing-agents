@@ -172,3 +172,28 @@ Parent #968의 미완료 범위다. 경로 이동만으로 그 의존성이 없�
 #1007의 Confirm·전문가 실행/복구 구현은 #1006 완료 뒤 진행한다.
 테스트 소스는 151429 이내로 유지해 #1004의 예약 2행을 보존하며 legacy 1550행을
 출처 증명 없이 공제하지 않는다. 현재 source·실행·시간·리뷰 상태는 PR에서 확인한다.
+
+### #1007 구현 전 준비 기록
+
+[#1007의 확정 구현 계획](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1007#구현-계획)은
+main `b7dd8d8d`를 기준으로 한다. 이 기록은 구현 전 계획 문서이며 생산 코드와 테스트의
+이동 결과나 수정 후 실행 통과를 의미하지 않는다. 계획 문서 커밋으로 Draft PR을 먼저
+생성한 뒤 실제 구현을 시작한다.
+
+제안한 `lead_execution/lead_step_decisions.py`와 `confirmed_step_execution.py`는 실제
+결정과 Confirm 권한·실행·복구 상태를 각각 소유한다. 19개 helper의 실제 lower owner 또는
+개별 call-local 계약, 발급 뒤의 인자 평가·coroutine 생성 순서와 자원 수명은 이슈에 고정했다.
+기존 dict/set을 같은 객체로 생성자에 이전하며 Root 필드 별칭을 남기지 않는다.
+
+기존 Specialist 실행 20개와 회계 2개 Case를 두 flat 파일로 1:1 이관한다. 최초 4개와
+이를 포함한 확대 합집합 16개를 사용하고, 원래 입력·준비·assertion·부정 조건·subTest와
+전체 natural·분할 serial·hosted 순서를 보존한다. 실제 생성자의 동일 입력 참조로 전체
+marker 정리와 capmap 동일성을 관측하며 다른 Case에 관측 준비를 추가하지 않는다.
+
+기존 계상 대상 예산 테스트의 반복 assertion 23행을 공통 helper 13행과 호출 3행으로
+정리해 필요한 구조 비용 7행을 상쇄한다. 유효 소스는 151,429행, 상한은 151,431행으로
+유지하며 #1004 예약 2행도 보존한다. 실제 guard 입력 20쌍·순서와 기존 cap 4는 그대로다.
+
+수정 전 전체 정상 3회는 같은 source tree와 정확한 성공 attempt·artifact 해시를 확인해
+재사용한다. 구현 후에도 환경·기본 GC·worker/profile·ID/cap·순서의 pairing을 확인한다.
+cold 집중 4개 기준선, 같은 오류 RED/GREEN, 영향 선택과 최종 전체 CI는 별도로 검증한다.
