@@ -5801,7 +5801,7 @@ class StoryRuntime:
                 CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME,
             )
         finally:
-            self._live_execution_markers.discard(marker)
+            self._live_execution_markers.add(marker)
 
     @staticmethod
     def _joined_invocation_result(item: object) -> CollaborationInvocationResult:
