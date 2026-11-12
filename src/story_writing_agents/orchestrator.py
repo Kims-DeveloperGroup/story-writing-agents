@@ -16338,7 +16338,7 @@ class StoryRuntime:
             1 + int(bool(reference_input_ids)) if synthesis_required else 0
         )
         minimum_required_calls = sum(assignment_call_limits) + synthesis_minimum
-        if minimum_required_calls > remaining:
+        if minimum_required_calls >= remaining:
             raise LeadCallBudgetExceeded(
                 "declared preparation and full final review cannot fit the remaining physical-call budget; clarify or freshly propose"
             )
