@@ -346,8 +346,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 237)
-        self.assertEqual(len(edges), 1195)
+        self.assertEqual(len(modules), 238)
+        self.assertEqual(len(edges), 1213)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -1178,6 +1178,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             "story_writing_agents/provider_schema_patterns.py",
                 "story_writing_agents/agent_context/group_observation.py",
                 "story_writing_agents/agent_context/group_reporting.py",
+                "story_writing_agents/lead_preparation/authoring_authority.py",
                 "story_writing_agents/antigravity_response_decoding.py",
             )
             with zipfile.ZipFile(story_wheel) as archive:

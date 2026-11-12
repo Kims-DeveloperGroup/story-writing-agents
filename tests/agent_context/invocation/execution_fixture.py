@@ -16,9 +16,8 @@ from story_writing_agents.agent_context.progress import ContextActionProgressEve
 from story_writing_agents.agents import EXECUTION_SPECIALIST
 from story_writing_agents.conversations import LeadProposalRelation
 from story_writing_agents.lead_provider_contracts import LeadContractError, LeadProviderConstraints
-from story_writing_agents.lead_preparation import outcome_decoding
+from story_writing_agents.lead_preparation import outcome_decoding, authoring_authority
 from story_writing_agents.lead_preparation.call_rule_factory import OrchestrationLeadCallFactory
-from story_writing_agents.orchestrator import StoryRuntime
 from story_writing_agents.lead_preparation.response_rules import lead_front_result_contract
 from story_writing_agents.specialist_routing import AuthoringActivity, AuthoringScope
 from story_writing_agents.conversation_storage import compose_filesystem_conversation_storage
@@ -119,7 +118,7 @@ def make_validate_lead_result(answer: str, _authorization: object) -> None:
 
 LEAD_CALL_FACTORY = OrchestrationLeadCallFactory(LEAD_CONSTRAINTS, lead_front_result_contract(
     LeadProposalRelation.NEW_STEP, (), constraints=LEAD_CONSTRAINTS), ctx_call_offers.ContextInvocationKind.LEAD.
-    value, 'KO', make_validate_lead_result, StoryRuntime._core_reviewer)
+    value, 'KO', make_validate_lead_result, authoring_authority.core_reviewer)
 
 
 LEAD_ANSWER_SCOPE = {"interpretation": "Inspect the declared synthetic scope.", 'activity': 'workflow', 'intent': 'authoring', 'domains': [], 'target_paths':
