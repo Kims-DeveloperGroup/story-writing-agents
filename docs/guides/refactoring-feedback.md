@@ -173,27 +173,41 @@ Parent #968의 미완료 범위다. 경로 이동만으로 그 의존성이 없�
 테스트 소스는 151429 이내로 유지해 #1004의 예약 2행을 보존하며 legacy 1550행을
 출처 증명 없이 공제하지 않는다. 현재 source·실행·시간·리뷰 상태는 PR에서 확인한다.
 
-### #1007 구현 전 준비 기록
+## Confirm 결정과 실행·복구의 변경 범위
 
-[#1007의 확정 구현 계획](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1007#구현-계획)은
-main `b7dd8d8d`를 기준으로 한다. 이 기록은 구현 전 계획 문서이며 생산 코드와 테스트의
-이동 결과나 수정 후 실행 통과를 의미하지 않는다. 계획 문서 커밋으로 Draft PR을 먼저
-생성한 뒤 실제 구현을 시작한다.
+[#1007의 구현 계획](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1007#구현-계획)에
+따라 `lead_execution/lead_step_decisions.py`는 Lead의 Confirm·Reject·Revise 분기를,
+`lead_execution/confirmed_step_execution.py`는 확정 권한의 발급·단일 소비,
+전문가 Task의 취소·join과 실행 표식 정리, 재시작 상태의 정규화를 맡는다.
+`ConfirmedStepExecution`이 기존 권한 dict와 실행 표식 set의 수명을 소유하며,
+Root는 같은 객체의 별칭을 유지하지 않고 소유자의 공개 동작을 호출한다.
+동기 발급 뒤에 원래 실행 coroutine을 즉시 await하는 순서를 유지한다.
+기존 결과·제어 이벤트·문맥 계약 helper는 각 도메인의 기존 소유 모듈로 이동한다.
 
-제안한 `lead_execution/lead_step_decisions.py`와 `confirmed_step_execution.py`는 실제
-결정과 Confirm 권한·실행·복구 상태를 각각 소유한다. 19개 helper의 실제 lower owner 또는
-개별 call-local 계약, 발급 뒤의 인자 평가·coroutine 생성 순서와 자원 수명은 이슈에 고정했다.
-기존 dict/set을 같은 객체로 생성자에 이전하며 Root 필드 별칭을 남기지 않는다.
+기존 Specialist 실행 20개와 회계 2개 사례는 각각
+`tests/test_specialist_orchestration_execution.py`와
+`tests/test_specialist_orchestration_accounting.py`로 1:1 이동한다.
+입력·준비·assertion·부정 조건·subTest와 fixture 수명은 보존한다.
+권한과 실행 표식은 실제 소유자의 생성자를 원본 호출하는 기존 mock 방식으로 관측하며,
+테스트 전용 생산 getter나 Root의 중복 상태를 추가하지 않는다.
+ID 이관표와 owner·가중치·hosted 선택을 함께 바꿔 자연·분할·실행 순서를 보존한다.
 
-기존 Specialist 실행 20개와 회계 2개 Case를 두 flat 파일로 1:1 이관한다. 최초 4개와
-이를 포함한 확대 합집합 16개를 사용하고, 원래 입력·준비·assertion·부정 조건·subTest와
-전체 natural·분할 serial·hosted 순서를 보존한다. 실제 생성자의 동일 입력 참조로 전체
-marker 정리와 capmap 동일성을 관측하며 다른 Case에 관측 준비를 추가하지 않는다.
+실행 정리 책임을 고쳤다면 해당 파일의 선택 목록을 먼저 확인하고 좁은 범위를 실행한다.
 
-기존 계상 대상 예산 테스트의 반복 assertion 23행을 공통 helper 13행과 호출 3행으로
-정리해 필요한 구조 비용 7행을 상쇄한다. 유효 소스는 151,429행, 상한은 151,431행으로
-유지하며 #1004 예약 2행도 보존한다. 실제 guard 입력 20쌍·순서와 기존 cap 4는 그대로다.
+```bash
+PYTHONPATH=src python -m tests.runner list \
+  --path src/story_writing_agents/lead_execution/confirmed_step_execution.py \
+  --json /tmp/confirmed-execution-selection.json
+PYTHONPATH=src python -m tests.runner run \
+  --path src/story_writing_agents/lead_execution/confirmed_step_execution.py \
+  --json /tmp/confirmed-execution-focused.json
+```
 
-수정 전 전체 정상 3회는 같은 source tree와 정확한 성공 attempt·artifact 해시를 확인해
-재사용한다. 구현 후에도 환경·기본 GC·worker/profile·ID/cap·순서의 pairing을 확인한다.
-cold 집중 4개 기준선, 같은 오류 RED/GREEN, 영향 선택과 최종 전체 CI는 별도로 검증한다.
+Root·공유 계약 변경은 실제 소비자의 합집합으로 확대하고 최종 전체 CI를 유지한다.
+[#938](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/938)의 방식에 따라
+같은 취소 표식 오류를 같은 기존 사례가 잡는지 RED/GREEN으로 확인한다.
+정상 시간은 같은 선택·준비·GC·worker·profile 조건의 고정 3회로 비교하며,
+진단 실행은 정상 표본에 섞지 않는다. 오차 경계를 넘긴 값은 원인을 조사하고,
+리팩토링에 따른 실제 추가 작업으로 확인된 회귀는 수정한다.
+구현 후 통과 여부와 원자료는 [#1019의 검증 기록](https://github.com/Kims-DeveloperGroup/story-writing-agents/pull/1019)에서 확인한다.
+공통 fixture와 나머지 Lead synthesis·consensus 분리는 #968의 후속 범위다.

@@ -530,6 +530,19 @@ from .runtime_resources.generation_pin_cleanup import (
     add_generation_pin_cleanup_note,
     close_untransferred_generation_pin,
 )
+from .lead_execution import confirmed_step_execution, lead_step_decisions
+from .collaboration_execution_results import (
+    blocking_lead_result,
+    joined_invocation_result,
+    pending_artifact_operation_result,
+    required_synthesis_result,
+    submitted_lead_outcome_unknown_result,
+)
+from .lead_control_events import (
+    has_unstarted_lead_request,
+    unmatched_lead_call_state,
+)
+from .agent_context.contracts.events import validate_context_event_sink
 
 
 
@@ -708,60 +721,6 @@ def _lead_synthesis_result_contract(
     )
 
 
-class _ConfirmedStepCapability:
-    """Process-local, nonserializable, single-use exact confirmed-step authority."""
-
-    __slots__ = (
-        "_consumed",
-        "_secret",
-        "basis_digest",
-        "proposal_digest",
-        "proposal_id",
-        "proposal_revision",
-        "session_id",
-        "step_id",
-        "tail_event_id",
-        "tail_sequence",
-        "conversation_id",
-    )
-
-    def __init__(
-        self,
-        *,
-        session_id: str,
-        conversation_id: str,
-        step_id: str,
-        proposal_id: str,
-        proposal_revision: int,
-        proposal_digest: str,
-        basis_digest: str,
-        tail_event_id: str,
-        tail_sequence: int,
-    ) -> None:
-        self.session_id = session_id
-        self.conversation_id = conversation_id
-        self.step_id = step_id
-        self.proposal_id = proposal_id
-        self.proposal_revision = proposal_revision
-        self.proposal_digest = proposal_digest
-        self.basis_digest = basis_digest
-        self.tail_event_id = tail_event_id
-        self.tail_sequence = tail_sequence
-        self._secret = bytearray(uuid.uuid4().bytes + uuid.uuid4().bytes)
-        self._consumed = False
-
-    def __repr__(self) -> str:
-        return "_ConfirmedStepCapability(<content hidden>)"
-
-    def __reduce__(self) -> object:
-        raise TypeError("confirmed-step capability cannot be serialized")
-
-    def consume(self) -> None:
-        if self._consumed:
-            raise BackendProtocolError("confirmed-step capability is already consumed")
-        self._consumed = True
-        for index in range(len(self._secret)):
-            self._secret[index] = 0
 
 
 
@@ -911,8 +870,8 @@ class StoryRuntime:
         self._provider_binding_leases = ProviderBindingLeases()
         self._session_execution_scopes = SessionExecutionScopes()
         self._agent_context_service = AgentContextService(self.workspace)
-        self._confirmed_capabilities: dict[
-            tuple[str, str, str], _ConfirmedStepCapability
+        issued_capabilities: dict[
+            tuple[str, str, str], Any
         ] = {}
         self._artifact_application_authority = ArtifactApplicationAuthority(
             self.workspace,
@@ -926,7 +885,19 @@ class StoryRuntime:
             self._session_execution_scopes,
             self.pending_story_commits,
         )
-        self._live_execution_markers: set[tuple[str, str, str, str]] = set()
+        live_executions: set[tuple[str, str, str, str]] = set()
+        self.confirmed_step_execution = confirmed_step_execution.ConfirmedStepExecution(
+            storage=self.conversation_storage_services,
+            issued_capabilities=issued_capabilities,
+            live_executions=live_executions,
+        )
+        del issued_capabilities, live_executions
+        self.lead_step_decisions = lead_step_decisions.LeadStepDecisions(
+            storage=self.conversation_storage_services,
+            scopes=self._session_execution_scopes,
+            context_service=self._agent_context_service,
+            execution=self.confirmed_step_execution,
+        )
         self._consensus_event_store = ConsensusEventStore(self.workspace)
         self._consensus_material_store = ConsensusMaterialStore(self.workspace.root)
         self.consensus = ConsensusRuntimeAdapter(self)
@@ -2751,17 +2722,22 @@ class StoryRuntime:
         if type(decision) is not LeadRecommendationDecision:
             raise TypeError("decision must be a LeadRecommendationDecision")
         await run_blocking(self.validate_lead_identity, decision.session_id, decision.conversation_id)
-        self._validate_context_event_sink(context_event_sink)
-        self._validate_context_event_sink(action_progress_sink)
+        validate_context_event_sink(context_event_sink)
+        validate_context_event_sink(action_progress_sink)
         session_id, conversation_id = decision.session_id, decision.conversation_id
         async with self._session_execution_scopes.lead_session_lifecycle(session_id,
             continuation_factory=self._agent_context_service.session_continuation,
         ), self._session_execution_scopes.conversation_lock(session_id, conversation_id):
             events, projection, failure = (await run_blocking(self._read_lead_history, session_id, conversation_id))
             if failure is not None or events is None or projection is None:
-                return self._blocking_lead_result(session_id, conversation_id,
+                return blocking_lead_result(session_id, conversation_id,
                     CollaborationStepState.RECOVERY_REQUIRED, "Recommendation history requires repair.")
-            normalized = self._normalize_lead_history(session_id, conversation_id, events, projection)
+            normalized = self.confirmed_step_execution.normalize_history(session_id, conversation_id, events, projection,
+                close_failed_attempt=self._close_failed_lead_attempt,
+                finalize_recommendation_failure=self._finalize_recommendation_failure_locked,
+                finalize_known_result=self._finalize_known_result_locked,
+                append_batch=self.append_collaboration_event_batch,
+            )
             if normalized is not None:
                 return normalized
             request = projection.current_recommendation_request
@@ -2908,7 +2884,7 @@ class StoryRuntime:
                     WorkspaceFormatError,
                     WorkspaceSecurityError,
                 ):
-                    return self._blocking_lead_result(
+                    return blocking_lead_result(
                         session_id,
                         conversation_id,
                         CollaborationStepState.RECOVERY_REQUIRED,
@@ -2996,7 +2972,7 @@ class StoryRuntime:
             finalized = self._finalize_recommendation_failure_locked(origin.session_id, origin.conversation_id, capability)
             if finalized is not None:
                 return finalized
-            return self._blocking_lead_result(origin.session_id, origin.conversation_id,
+            return blocking_lead_result(origin.session_id, origin.conversation_id,
                 CollaborationStepState.RECOVERY_REQUIRED, "Recommendation closure requires repair.",
                 turn_id=origin.turn_id, step_id=origin.step_id)
         if result.trace is not None and result.trace.origin is ReplyTraceOrigin.RUNTIME_FALLBACK:
@@ -3006,7 +2982,7 @@ class StoryRuntime:
                 capability,
             )
             if finalized is None:
-                return self._blocking_lead_result(
+                return blocking_lead_result(
                     origin.session_id,
                     origin.conversation_id,
                     CollaborationStepState.RECOVERY_REQUIRED,
@@ -3044,7 +3020,7 @@ class StoryRuntime:
     ) -> LeadTurnResult | None:
         events, projection, failure = self._read_lead_history(session_id, conversation_id)
         if failure is not None or events is None or projection is None:
-            return self._blocking_lead_result(session_id, conversation_id,
+            return blocking_lead_result(session_id, conversation_id,
                 CollaborationStepState.RECOVERY_REQUIRED, "Recommendation closure requires repair.")
         start = projection.current_recommendation_start
         if start is None or projection.current_recommendation_state is not LeadRecommendationState.RUNNING:
@@ -3086,7 +3062,7 @@ class StoryRuntime:
                     WorkspaceFormatError,
                     WorkspaceSecurityError,
                 ):
-                    return self._blocking_lead_result(
+                    return blocking_lead_result(
                         session_id,
                         conversation_id,
                         CollaborationStepState.RECOVERY_REQUIRED,
@@ -3117,7 +3093,7 @@ class StoryRuntime:
                         for invocation in reference_history.invocation_events)
                 )
             if not terminal_proof:
-                return self._blocking_lead_result(session_id, conversation_id,
+                return blocking_lead_result(session_id, conversation_id,
                     CollaborationStepState.RECOVERY_REQUIRED,
                     "The Lead failure is durable, but its exact terminal reference accounting cannot be proved. "
                     "Inspect and repair the operation; this preparation will not be replayed.",
@@ -3159,7 +3135,7 @@ class StoryRuntime:
             projection = project_collaboration_history(events)
             if (projection.next_safe_action in blocked or projection.current_state in {
                     CollaborationStepState.RUNNING, CollaborationStepState.OUTCOME_UNKNOWN, CollaborationStepState.RECOVERY_REQUIRED}
-                    or self._unmatched_lead_call_state(events) is not None or self._has_unstarted_lead_request(events)):
+                    or unmatched_lead_call_state(events) is not None or has_unstarted_lead_request(events)):
                 raise BackendProtocolError(f"Exploration/adoption is blocked by owner conversation {owner}: "
                                            f"{projection.next_safe_action.value}. Resolve or inspect that exact control first.")
 
@@ -3556,7 +3532,7 @@ class StoryRuntime:
             raise TypeError("task control requires an exact LeadTaskDecision")
         session_id, conversation_id = decision.session_id, decision.conversation_id
         await run_blocking(self.validate_lead_identity, session_id, conversation_id)
-        self._validate_context_event_sink(action_progress_sink)
+        validate_context_event_sink(action_progress_sink)
         async with self._session_execution_scopes.lead_session_lifecycle(session_id,
             continuation_factory=self._agent_context_service.session_continuation,
         ), self._session_execution_scopes.conversation_lock(
@@ -3616,7 +3592,7 @@ class StoryRuntime:
             } or projection.next_safe_action in {
                 CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME,
                 CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY,
-            } or self._has_unstarted_lead_request(events):
+            } or has_unstarted_lead_request(events):
                 raise ValueError("inspect and resolve incomplete or uncertain work before task controls")
             pending_operation = projection.next_safe_action in {
                 CollaborationNextAction.SUBMIT_APPLICATION_DECISION,
@@ -3758,7 +3734,7 @@ class StoryRuntime:
             events = self.conversation_storage_services.event_store.read(
                 session_id, conversation_id
             )
-            operation = self._pending_artifact_operation_result(
+            operation = pending_artifact_operation_result(
                 session_id, conversation_id,
                 effective_lead_control_events(events), projection,
             )
@@ -4397,8 +4373,8 @@ class StoryRuntime:
                 assert result.turn is not None
                 return result.turn
         text = self._validate_visible_text(text, label="lead input")
-        self._validate_context_event_sink(context_event_sink)
-        self._validate_context_event_sink(action_progress_sink)
+        validate_context_event_sink(context_event_sink)
+        validate_context_event_sink(action_progress_sink)
         lock = self._session_execution_scopes.conversation_lock(session_id, conversation_id)
         async with self._session_execution_scopes.lead_session_lifecycle(session_id,
             continuation_factory=self._agent_context_service.session_continuation,
@@ -4408,7 +4384,7 @@ class StoryRuntime:
                 conversation_id,
             ))
             if failure is not None:
-                return self._blocking_lead_result(
+                return blocking_lead_result(
                     session_id,
                     conversation_id,
                     CollaborationStepState.RECOVERY_REQUIRED,
@@ -4418,11 +4394,15 @@ class StoryRuntime:
             assert events is not None and projection is not None
             premise_origin = (None if premise_selection is None else
                 self._premise_control_origin(events, premise_selection, text))
-            normalized = self._normalize_lead_history(
+            normalized = self.confirmed_step_execution.normalize_history(
                 session_id,
                 conversation_id,
                 events,
                 projection,
+                close_failed_attempt=self._close_failed_lead_attempt,
+                finalize_recommendation_failure=self._finalize_recommendation_failure_locked,
+                finalize_known_result=self._finalize_known_result_locked,
+                append_batch=self.append_collaboration_event_batch,
             )
             if normalized is not None:
                 if normalized.next_action is not CollaborationNextAction.RETRY_LEAD_TURN:
@@ -4433,14 +4413,18 @@ class StoryRuntime:
                     session_id, conversation_id,
                 ))
                 if failure is not None or events is None or projection is None:
-                    return self._blocking_lead_result(
+                    return blocking_lead_result(
                         session_id, conversation_id,
                         CollaborationStepState.RECOVERY_REQUIRED,
                         "Lead recovery could not be verified in authoritative history.",
                     )
 
-            remaining_recovery = self._normalize_lead_history(
+            remaining_recovery = self.confirmed_step_execution.normalize_history(
                 session_id, conversation_id, events, projection,
+                close_failed_attempt=self._close_failed_lead_attempt,
+                finalize_recommendation_failure=self._finalize_recommendation_failure_locked,
+                finalize_known_result=self._finalize_known_result_locked,
+                append_batch=self.append_collaboration_event_batch,
             ) if normalized is not None else None
             if remaining_recovery is not None:
                 return remaining_recovery
@@ -4692,8 +4676,8 @@ class StoryRuntime:
         text = self._validate_visible_text(text, label="specialist advisory")
         if authoring_scope is None or authoring_scope.activity is AuthoringActivity.WORKFLOW:
             raise ValueError("specialist advisory requires explicit authoring scope; ask the Lead to interpret this work")
-        self._validate_context_event_sink(context_event_sink)
-        self._validate_context_event_sink(action_progress_sink)
+        validate_context_event_sink(context_event_sink)
+        validate_context_event_sink(action_progress_sink)
         if self.backend is None:
             raise BackendProtocolError("specialist advisory requires an AgentBackend")
         async with self._session_execution_scopes.conversation_lock(session_id, conversation_id):
@@ -4702,18 +4686,22 @@ class StoryRuntime:
                 conversation_id,
             ))
             if failure is not None:
-                return self._blocking_lead_result(
+                return blocking_lead_result(
                     session_id,
                     conversation_id,
                     CollaborationStepState.RECOVERY_REQUIRED,
                     "Authoritative collaboration history is invalid; repair it before continuing.",
                 )
             assert events is not None and projection is not None
-            normalized = self._normalize_lead_history(
+            normalized = self.confirmed_step_execution.normalize_history(
                 session_id,
                 conversation_id,
                 events,
                 projection,
+                close_failed_attempt=self._close_failed_lead_attempt,
+                finalize_recommendation_failure=self._finalize_recommendation_failure_locked,
+                finalize_known_result=self._finalize_known_result_locked,
+                append_batch=self.append_collaboration_event_batch,
             )
             if normalized is not None:
                 return normalized
@@ -4920,451 +4908,20 @@ class StoryRuntime:
         *,
         action_progress_sink: ContextActionProgressSink | None = None,
     ) -> LeadDecisionResult:
-        """Apply one exact structured decision to the authoritative request tail."""
-
-        if type(decision) is not LeadStepDecision:
-            raise TypeError("decision must be a LeadStepDecision")
-        self._validate_context_event_sink(action_progress_sink)
-        await run_blocking(self.validate_lead_identity, decision.session_id, decision.conversation_id)
-        lock = self._session_execution_scopes.conversation_lock(
-            decision.session_id,
-            decision.conversation_id,
+        return await self.lead_step_decisions.decide_lead_step(
+            decision,
+            action_progress_sink=action_progress_sink,
+            close_failed_attempt=self._close_failed_lead_attempt,
+            finalize_known_result=self._finalize_known_result_locked,
+            persist_results=self._persist_collaboration_results_locked,
+            run_provider=self._run_lead_provider_locked,
+            run_synthesis=self._run_lead_synthesis,
+            run_specialist=self._run_specialist_assignment,
+            validate_proposal_authority=self._validate_current_proposal_authority,
+            append_batch=self.append_collaboration_event_batch,
+            capture_snapshot=self.capture_editorial_snapshot,
+            validate_identity=self.validate_lead_identity,
         )
-        async with self._session_execution_scopes.lead_session_lifecycle(decision.session_id,
-            continuation_factory=self._agent_context_service.session_continuation,
-        ), lock:
-            events = self.conversation_storage_services.event_store.read(
-                decision.session_id,
-                decision.conversation_id,
-            )
-            if any(type(event.payload) is CollaborationExplorationAdoptionPayload for event in events):
-                (await run_blocking(self.capture_editorial_snapshot, decision.session_id)).validate_exploration_adoptions(decision.conversation_id)
-            projection = project_collaboration_history(events)
-            if (projection.next_safe_action is CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME
-                    and any(type(event.payload) is CollaborationProviderCallPayload
-                            and event.payload.invocation_kind is CollaborationInvocationKind.LEAD_DISCUSSION
-                            for event in events)):
-                raise ValueError("unresolved discussion allows inspection only")
-            proposal = projection.current_proposal
-            if (
-                projection.current_artifact_application_request is not None
-                and projection.next_safe_action in {
-                    CollaborationNextAction.SUBMIT_APPLICATION_DECISION,
-                    CollaborationNextAction.SUBMIT_COMMIT_DECISION,
-                    CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME,
-                    CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY,
-                }
-            ):
-                raise ValueError(
-                    "lead decision is blocked by an unresolved artifact or Commit boundary"
-                )
-            if (
-                proposal is None
-                or projection.current_state
-                not in {
-                    CollaborationStepState.AWAITING_CONFIRMATION,
-                    CollaborationStepState.RECONFIRMATION_REQUIRED,
-                }
-                or not events
-            ):
-                raise ValueError("lead decision has no authoritative pending request")
-            control_events = effective_lead_control_events(events)
-            request_event = control_events[-1]
-            request_payload = request_event.payload
-            if type(request_payload) is not CollaborationStepStatePayload or (
-                request_payload.state
-                not in {
-                    CollaborationStepState.AWAITING_CONFIRMATION,
-                    CollaborationStepState.RECONFIRMATION_REQUIRED,
-                }
-            ):
-                raise ValueError("lead decision request is not the exact history tail")
-            exact = (
-                decision.confirmation_request_id
-                == request_payload.confirmation_request_id
-                and decision.session_id == request_event.session_id
-                and decision.conversation_id == request_event.conversation_id
-                and decision.step_id == request_event.step_id == proposal.step_id
-                and decision.proposal_id == proposal.proposal_id
-                and decision.proposal_revision == proposal.proposal_revision
-                and decision.proposal_digest == proposal.proposal_digest
-            )
-            if not exact:
-                raise ValueError("lead decision does not match the authoritative tail")
-            if decision.kind is CollaborationConfirmationDecision.REVISE and proposal.premise_decision is not None:
-                turn = LeadTurnResult(decision.session_id, decision.conversation_id,
-                    request_event.turn_id, proposal.step_id,
-                    LeadOutcomeKind.PROPOSAL if projection.current_state is CollaborationStepState.AWAITING_CONFIRMATION else LeadOutcomeKind.RECOMMENDATION,
-                    "This analysis question remains pending and unchanged. Reject it, then send a fresh message to change the question or sources. Already resolved USER inputs may use ordinary direct authoring; no provider was called.",
-                    proposal, projection.current_state, request_payload.confirmation_request_id,
-                    CollaborationNextAction.SUBMIT_CONFIRMATION, proposal.basis.evidence)
-                return LeadDecisionResult(decision.session_id, decision.conversation_id,
-                    proposal.step_id, decision.kind, proposal, turn)
-            artifact_candidate = projection.current_artifact_candidate
-            if decision.kind is CollaborationConfirmationDecision.CONFIRM:
-                try:
-                    self._validate_current_proposal_authority(
-                        session_id=decision.session_id,
-                        events=events,
-                        projection=projection,
-                        proposal=proposal,
-                    )
-                except (
-                    SessionArtifactBindingError,
-                    WorkspaceFormatError,
-                    WorkspaceSecurityError,
-                ):
-                    return LeadDecisionResult(
-                        decision.session_id,
-                        decision.conversation_id,
-                        decision.step_id,
-                        decision.kind,
-                        proposal,
-                        self._blocking_lead_result(
-                            decision.session_id,
-                            decision.conversation_id,
-                            CollaborationStepState.RECOVERY_REQUIRED,
-                            "The proposal's exact session artifact resources are "
-                            "unavailable. Repair them before confirming; no "
-                            "provider work was started.",
-                            step_id=decision.step_id,
-                        ),
-                    )
-                except BackendProtocolError:
-                    if artifact_candidate is None:
-                        raise
-                    turn_id = event_journal.new_id("t")
-                    confirmation = event_journal.draft(
-                        session_id=decision.session_id,
-                        conversation_id=decision.conversation_id,
-                        turn_id=turn_id,
-                        step_id=decision.step_id,
-                        kind=CollaborationEventKind.CONFIRMATION,
-                        sender=event_journal.USER_ACTOR,
-                        recipient=event_journal.RUNTIME_ACTOR,
-                        payload=CollaborationConfirmationPayload(
-                            confirmation_request_id=(decision.confirmation_request_id),
-                            confirmation_request_event_id=request_event.event_id,
-                            proposal_id=proposal.proposal_id,
-                            proposal_revision=proposal.proposal_revision,
-                            proposal_digest=proposal.proposal_digest,
-                            decision=decision.kind,
-                        ),
-                    )
-                    event_journal.append_drafts(
-                        projection.last_sequence,
-                        (
-                            confirmation,
-                            event_journal.draft(
-                                session_id=decision.session_id,
-                                conversation_id=decision.conversation_id,
-                                turn_id=turn_id,
-                                step_id=decision.step_id,
-                                kind=(CollaborationEventKind.ARTIFACT_PROPOSAL_STATE),
-                                sender=event_journal.RUNTIME_ACTOR,
-                                recipient=event_journal.USER_ACTOR,
-                                payload=authoring_authority.artifact_state_payload(
-                                    artifact_candidate,
-                                    ArtifactProposalState.STALE,
-                                ),
-                            ),
-                            event_journal.draft(
-                                session_id=decision.session_id,
-                                conversation_id=decision.conversation_id,
-                                turn_id=turn_id,
-                                step_id=decision.step_id,
-                                kind=CollaborationEventKind.STEP_STATE,
-                                sender=event_journal.RUNTIME_ACTOR,
-                                recipient=event_journal.USER_ACTOR,
-                                payload=CollaborationStepStatePayload(
-                                    state=CollaborationStepState.SUPERSEDED,
-                                    proposal_id=proposal.proposal_id,
-                                    proposal_revision=proposal.proposal_revision,
-                                    proposal_digest=proposal.proposal_digest,
-                                ),
-                            ),
-                        ),
-                        append_batch=self.append_collaboration_event_batch,
-                    )
-                    stale_turn = LeadTurnResult(
-                        decision.session_id,
-                        decision.conversation_id,
-                        turn_id,
-                        decision.step_id,
-                        LeadOutcomeKind.RECOMMENDATION,
-                        "The exact artifact candidate became stale before review. "
-                        "No provider was called and no artifact was changed.",
-                        None,
-                        CollaborationStepState.SUPERSEDED,
-                        None,
-                        CollaborationNextAction.CONTINUE_WITH_LEAD,
-                        proposal.basis.evidence,
-                        ArtifactProposalResult(
-                            ArtifactProposalState.STALE,
-                            artifact_candidate,
-                        ),
-                    )
-                    return LeadDecisionResult(
-                        decision.session_id,
-                        decision.conversation_id,
-                        decision.step_id,
-                        decision.kind,
-                        proposal,
-                        stale_turn,
-                    )
-
-            turn_id = event_journal.new_id("t")
-            confirmation = event_journal.draft(
-                session_id=decision.session_id,
-                conversation_id=decision.conversation_id,
-                turn_id=turn_id,
-                step_id=decision.step_id,
-                kind=CollaborationEventKind.CONFIRMATION,
-                sender=event_journal.USER_ACTOR,
-                recipient=event_journal.RUNTIME_ACTOR,
-                payload=CollaborationConfirmationPayload(
-                    confirmation_request_id=decision.confirmation_request_id,
-                    confirmation_request_event_id=request_event.event_id,
-                    proposal_id=proposal.proposal_id,
-                    proposal_revision=proposal.proposal_revision,
-                    proposal_digest=proposal.proposal_digest,
-                    decision=decision.kind,
-                ),
-            )
-            resulting_state = {
-                CollaborationConfirmationDecision.CONFIRM: (
-                    CollaborationStepState.CONFIRMED
-                ),
-                CollaborationConfirmationDecision.REJECT: (
-                    CollaborationStepState.REJECTED
-                ),
-                CollaborationConfirmationDecision.REVISE: (
-                    CollaborationStepState.SUPERSEDED
-                ),
-            }[decision.kind]
-            state_event = event_journal.draft(
-                session_id=decision.session_id,
-                conversation_id=decision.conversation_id,
-                turn_id=turn_id,
-                step_id=decision.step_id,
-                kind=CollaborationEventKind.STEP_STATE,
-                sender=event_journal.RUNTIME_ACTOR,
-                recipient=event_journal.USER_ACTOR,
-                payload=CollaborationStepStatePayload(
-                    state=resulting_state,
-                    proposal_id=proposal.proposal_id,
-                    proposal_revision=proposal.proposal_revision,
-                    proposal_digest=proposal.proposal_digest,
-                ),
-            )
-            drafts: tuple[CollaborationEventDraft, ...]
-            artifact_decision: CollaborationEventDraft | None = None
-            if artifact_candidate is not None and decision.kind is not (
-                CollaborationConfirmationDecision.CONFIRM
-            ):
-                artifact_decision = event_journal.draft(
-                    session_id=decision.session_id,
-                    conversation_id=decision.conversation_id,
-                    turn_id=turn_id,
-                    step_id=decision.step_id,
-                    kind=CollaborationEventKind.ARTIFACT_PROPOSAL_STATE,
-                    sender=event_journal.RUNTIME_ACTOR,
-                    recipient=event_journal.USER_ACTOR,
-                    payload=authoring_authority.artifact_state_payload(
-                        artifact_candidate,
-                        (
-                            ArtifactProposalState.REJECTED
-                            if decision.kind is CollaborationConfirmationDecision.REJECT
-                            else ArtifactProposalState.SUPERSEDED
-                        ),
-                    ),
-                )
-            if decision.kind is CollaborationConfirmationDecision.REVISE:
-                assert decision.revision_request is not None
-                drafts = (
-                    confirmation,
-                    event_journal.draft(
-                        session_id=decision.session_id,
-                        conversation_id=decision.conversation_id,
-                        turn_id=turn_id,
-                        step_id=decision.step_id,
-                        kind=CollaborationEventKind.MESSAGE,
-                        sender=event_journal.USER_ACTOR,
-                        recipient=event_journal.LEAD_ACTOR,
-                        payload=CollaborationMessagePayload(decision.revision_request),
-                    ),
-                    *((artifact_decision,) if artifact_decision is not None else ()),
-                    state_event,
-                )
-            else:
-                drafts = (
-                    confirmation,
-                    *((artifact_decision,) if artifact_decision is not None else ()),
-                    state_event,
-                )
-            task_transition_event_id = None
-            if decision.kind is CollaborationConfirmationDecision.REVISE and proposal.authoring_scope is not None:
-                source = next((item for item in projection.available_tasks
-                               if (item.ref.task_id, item.ref.task_revision) == (
-                                   proposal.authoring_scope.task_id, proposal.authoring_scope.task_revision,
-                               )), None)
-                if source is None:
-                    raise BackendProtocolError("revision requires the exact retained task source")
-                revision_message = next(item for item in drafts
-                                        if type(item.payload) is CollaborationMessagePayload
-                                        and item.sender.kind is CollaborationActorKind.USER)
-                transition = event_journal.draft(
-                    session_id=decision.session_id, conversation_id=decision.conversation_id,
-                    turn_id=turn_id, step_id=decision.step_id,
-                    kind=CollaborationEventKind.LEAD_TASK_TRANSITION,
-                    sender=event_journal.RUNTIME_ACTOR, recipient=event_journal.USER_ACTOR,
-                    payload=CollaborationLeadTaskTransitionPayload(LeadTaskTransitionReceipt(
-                        origin_event_id=confirmation.event_id, origin_kind="revise_decision",
-                        origin_message_event_id=revision_message.event_id,
-                        action=LeadTaskAction.RESUME, source_task_ref=source.ref,
-                        target_task_id=source.ref.task_id, target_task_revision=source.ref.task_revision + 1,
-                        planning_step_id=decision.step_id,
-                    )),
-                )
-                task_transition_event_id = transition.event_id
-                drafts += (transition,)
-            event_journal.append_drafts(projection.last_sequence, drafts,
-                append_batch=self.append_collaboration_event_batch,
-            )
-
-            if decision.kind is CollaborationConfirmationDecision.CONFIRM:
-                persisted = self.conversation_storage_services.event_store.read(
-                    decision.session_id,
-                    decision.conversation_id,
-                )
-                tail = persisted[-1]
-                capability = _ConfirmedStepCapability(
-                    session_id=decision.session_id,
-                    conversation_id=decision.conversation_id,
-                    step_id=proposal.step_id,
-                    proposal_id=proposal.proposal_id,
-                    proposal_revision=proposal.proposal_revision,
-                    proposal_digest=proposal.proposal_digest,
-                    basis_digest=reply_contract_values.proposal_basis_digest(proposal),
-                    tail_event_id=tail.event_id,
-                    tail_sequence=tail.sequence,
-                )
-                self._confirmed_capabilities[
-                    (
-                        decision.session_id,
-                        decision.conversation_id,
-                        decision.step_id,
-                    )
-                ] = capability
-                completed_turn = await self._execute_confirmed_step_locked(
-                    session_id=decision.session_id,
-                    conversation_id=decision.conversation_id,
-                    proposal=proposal,
-                    capability=capability,
-                    action_progress_sink=action_progress_sink,
-                )
-                return LeadDecisionResult(
-                    decision.session_id,
-                    decision.conversation_id,
-                    decision.step_id,
-                    decision.kind,
-                    proposal,
-                    completed_turn,
-                )
-            if decision.kind is CollaborationConfirmationDecision.REJECT:
-                self._confirmed_capabilities.pop(
-                    (
-                        decision.session_id,
-                        decision.conversation_id,
-                        decision.step_id,
-                    ),
-                    None,
-                )
-                rejected_turn = LeadTurnResult(
-                    decision.session_id,
-                    decision.conversation_id,
-                    turn_id,
-                    decision.step_id,
-                    LeadOutcomeKind.RECOMMENDATION,
-                    "The proposed collaboration was rejected. I will continue with you directly.",
-                    None,
-                    CollaborationStepState.REJECTED,
-                    None,
-                    CollaborationNextAction.CONTINUE_WITH_LEAD,
-                    None,
-                    (
-                        None
-                        if artifact_candidate is None
-                        else ArtifactProposalResult(
-                            ArtifactProposalState.REJECTED,
-                            artifact_candidate,
-                        )
-                    ),
-                )
-                return LeadDecisionResult(
-                    decision.session_id,
-                    decision.conversation_id,
-                    decision.step_id,
-                    decision.kind,
-                    proposal,
-                    rejected_turn,
-                )
-
-            assert decision.revision_request is not None
-            retained_references = " ".join(
-                item.locator
-                for item in proposal.basis.inputs
-                if item.kind
-                in {
-                    CollaborationInputKind.CORE_DOCUMENT,
-                    CollaborationInputKind.MANUSCRIPT,
-                    CollaborationInputKind.WRITING_ARTIFACT,
-                }
-            )
-            provider_text = decision.revision_request
-            if retained_references:
-                provider_text = f"{provider_text}\n{retained_references}"
-            try:
-                revised_turn = await self._run_lead_provider_locked(
-                    session_id=decision.session_id,
-                    conversation_id=decision.conversation_id,
-                    turn_id=turn_id,
-                    step_id=decision.step_id,
-                    text=provider_text,
-                    expected_relation=LeadProposalRelation.REVISE_PENDING,
-                    previous_proposal=proposal,
-                    context_event_sink=None,
-                    action_progress_sink=action_progress_sink,
-                    user_source_text=decision.revision_request,
-
-                    task_transition_event_id=task_transition_event_id,
-                )
-            except BaseException as failure:
-                self._close_failed_lead_attempt(
-                    decision.session_id, decision.conversation_id, failure=failure,
-                    turn_id=turn_id, step_id=decision.step_id,
-                )
-                raise
-            if (
-                (artifact_candidate is not None
-                and revised_turn.artifact_proposal is None
-                and revised_turn.recommendation_request is None and revised_turn.kind is not LeadOutcomeKind.DISCUSSION)
-            ):
-                revised_turn = replace(
-                    revised_turn,
-                    artifact_proposal=ArtifactProposalResult(
-                        ArtifactProposalState.SUPERSEDED,
-                        artifact_candidate,
-                    ),
-                )
-            return LeadDecisionResult(
-                decision.session_id,
-                decision.conversation_id,
-                decision.step_id,
-                decision.kind,
-                proposal,
-                revised_turn,
-            )
 
     async def decide_artifact_application(
         self,
@@ -5405,450 +4962,8 @@ class StoryRuntime:
             append_collaboration_event_batch=self.append_collaboration_event_batch,
         )
 
-    async def _execute_confirmed_step_locked(
-        self,
-        *,
-        session_id: str,
-        conversation_id: str,
-        proposal: CollaborationProposal,
-        capability: _ConfirmedStepCapability,
-        action_progress_sink: ContextActionProgressSink | None,
-    ) -> LeadTurnResult:
-        """Consume exact start authority and finish one confirmed provider round."""
 
-        events = self.conversation_storage_services.event_store.read(
-            session_id,
-            conversation_id,
-        )
-        projection = project_collaboration_history(events)
-        if (
-            projection.current_state is not CollaborationStepState.CONFIRMED
-            or projection.current_proposal != proposal
-            or not events
-            or not self._capability_matches(capability, proposal, events[-1])
-        ):
-            raise BackendProtocolError(
-                "confirmed collaboration authority no longer matches the durable tail"
-            )
-        key = (session_id, conversation_id, proposal.step_id)
-        try:
-            self._validate_current_proposal_authority(
-                session_id=session_id,
-                events=events,
-                projection=projection,
-                proposal=proposal,
-            )
-        except (
-            SessionArtifactBindingError,
-            WorkspaceFormatError,
-            WorkspaceSecurityError,
-        ):
-            if self._confirmed_capabilities.get(key) is not capability:
-                raise BackendProtocolError(
-                    "confirmed collaboration capability is absent"
-                )
-            capability.consume()
-            self._confirmed_capabilities.pop(key, None)
-            turn_id = event_journal.new_id("t")
-            artifact_candidate = authoring_authority.artifact_candidate_for_proposal(
-                events,
-                proposal,
-            )
-            artifact_recovery = (
-                ()
-                if artifact_candidate is None
-                else (
-                    event_journal.draft(
-                        session_id=session_id,
-                        conversation_id=conversation_id,
-                        turn_id=turn_id,
-                        step_id=proposal.step_id,
-                        kind=CollaborationEventKind.ARTIFACT_PROPOSAL_STATE,
-                        sender=event_journal.RUNTIME_ACTOR,
-                        recipient=event_journal.USER_ACTOR,
-                        payload=authoring_authority.artifact_state_payload(
-                            artifact_candidate,
-                            ArtifactProposalState.RECOVERY_REQUIRED,
-                        ),
-                    ),
-                )
-            )
-            event_journal.append_drafts(
-                projection.last_sequence,
-                (
-                    *artifact_recovery,
-                    event_journal.draft(
-                        session_id=session_id,
-                        conversation_id=conversation_id,
-                        turn_id=turn_id,
-                        step_id=proposal.step_id,
-                        kind=CollaborationEventKind.STEP_STATE,
-                        sender=event_journal.RUNTIME_ACTOR,
-                        recipient=event_journal.USER_ACTOR,
-                        payload=CollaborationStepStatePayload(
-                            state=CollaborationStepState.RECOVERY_REQUIRED,
-                            proposal_id=proposal.proposal_id,
-                            proposal_revision=proposal.proposal_revision,
-                            proposal_digest=proposal.proposal_digest,
-                        ),
-                    ),
-                ),
-                append_batch=self.append_collaboration_event_batch,
-            )
-            return self._blocking_lead_result(
-                session_id,
-                conversation_id,
-                CollaborationStepState.RECOVERY_REQUIRED,
-                "The confirmed step could not revalidate its exact session "
-                "artifact resources. Repair them before continuing; no provider "
-                "work was started or replayed.",
-                turn_id=turn_id,
-                step_id=proposal.step_id,
-            )
-        if self._confirmed_capabilities.get(key) is not capability:
-            raise BackendProtocolError("confirmed collaboration capability is absent")
-        capability.consume()
-        self._confirmed_capabilities.pop(key, None)
 
-        attempt_id = event_journal.deterministic_id(
-            "x",
-            proposal.proposal_id,
-            str(proposal.proposal_revision),
-            proposal.proposal_digest,
-        )
-        turn_id = event_journal.deterministic_id("t", attempt_id, "execution")
-        dispatches = tuple(
-            event_journal.draft_with_id(
-                event_id=event_journal.deterministic_id(
-                    "e", attempt_id, assignment.assignment_id, "dispatch"
-                ),
-                session_id=session_id,
-                conversation_id=conversation_id,
-                turn_id=turn_id,
-                step_id=proposal.step_id,
-                kind=CollaborationEventKind.ASSIGNMENT_DISPATCH,
-                sender=event_journal.RUNTIME_ACTOR,
-                recipient=CollaborationActor(
-                    CollaborationActorKind.SPECIALIST,
-                    assignment.specialist_id,
-                ),
-                payload=CollaborationAssignmentDispatchPayload(
-                    proposal_id=proposal.proposal_id,
-                    proposal_revision=proposal.proposal_revision,
-                    proposal_digest=proposal.proposal_digest,
-                    execution_attempt_id=attempt_id,
-                    assignment=assignment,
-                ),
-            )
-            for assignment in proposal.assignments
-        )
-        running = event_journal.draft_with_id(
-            event_id=event_journal.deterministic_id("e", attempt_id, "running"),
-            session_id=session_id,
-            conversation_id=conversation_id,
-            turn_id=turn_id,
-            step_id=proposal.step_id,
-            kind=CollaborationEventKind.STEP_STATE,
-            sender=event_journal.RUNTIME_ACTOR,
-            recipient=event_journal.USER_ACTOR,
-            payload=CollaborationStepStatePayload(
-                state=CollaborationStepState.RUNNING,
-                proposal_id=proposal.proposal_id,
-                proposal_revision=proposal.proposal_revision,
-                proposal_digest=proposal.proposal_digest,
-                execution_attempt_id=attempt_id,
-            ),
-        )
-        artifact_candidate = authoring_authority.artifact_candidate_for_proposal(events, proposal)
-        artifact_running = (
-            ()
-            if artifact_candidate is None
-            else (
-                event_journal.draft_with_id(
-                    event_id=event_journal.deterministic_id(
-                        "e", attempt_id, "artifact_reviewing"
-                    ),
-                    session_id=session_id,
-                    conversation_id=conversation_id,
-                    turn_id=turn_id,
-                    step_id=proposal.step_id,
-                    kind=CollaborationEventKind.ARTIFACT_PROPOSAL_STATE,
-                    sender=event_journal.RUNTIME_ACTOR,
-                    recipient=event_journal.USER_ACTOR,
-                    payload=authoring_authority.artifact_state_payload(
-                        artifact_candidate,
-                        ArtifactProposalState.REVIEWING,
-                        execution_attempt_id=attempt_id,
-                    ),
-                ),
-            )
-        )
-        event_journal.append_drafts(
-            projection.last_sequence,
-            (*artifact_running, running, *dispatches),
-            batch_id=event_journal.deterministic_id("b", attempt_id, "start"),
-            append_batch=self.append_collaboration_event_batch,
-        )
-        marker = (session_id, conversation_id, proposal.step_id, attempt_id)
-        self._live_execution_markers.add(marker)
-        try:
-            tasks = tuple(
-                asyncio.create_task(
-                    self._run_specialist_assignment(
-                        session_id=session_id,
-                        conversation_id=conversation_id,
-                        turn_id=turn_id,
-                        proposal=proposal,
-                        attempt_id=attempt_id,
-                        assignment=assignment,
-                        dispatch_event_id=dispatch.event_id,
-                        events=events,
-                        action_progress_sink=action_progress_sink,
-                    ),
-                    name=(
-                        f"collaboration:{assignment.specialist_id}:"
-                        f"{assignment.assignment_id}"
-                    ),
-                )
-                for assignment, dispatch in zip(
-                    proposal.assignments,
-                    dispatches,
-                    strict=True,
-                )
-            )
-            try:
-                joined = await asyncio.gather(*tasks, return_exceptions=True)
-            except asyncio.CancelledError as cancellation:
-                for task in tasks:
-                    if not task.done():
-                        task.cancel()
-                joined = await asyncio.gather(*tasks, return_exceptions=True)
-                results = tuple(self._joined_invocation_result(item) for item in joined)
-                try:
-                    self._persist_collaboration_results_locked(
-                        session_id=session_id,
-                        conversation_id=conversation_id,
-                        turn_id=turn_id,
-                        proposal=proposal,
-                        attempt_id=attempt_id,
-                        assignment_results=results,
-                        synthesis_result=None,
-                    )
-                except BaseException as persistence_failure:
-                    cancellation.add_note(
-                        "collaboration cancellation persistence failed: "
-                        f"{type(persistence_failure).__name__}"
-                    )
-                raise cancellation
-            results = tuple(self._joined_invocation_result(item) for item in joined)
-
-            synthesis_result: CollaborationInvocationResult | None = None
-            if (
-                all(item.failure is None for item in results)
-                and proposal.step_kind
-                is CollaborationStepKind.LEAD_SPECIALIST_CONSULTATION
-            ):
-                replies = tuple(item.value for item in results)
-                if not all(
-                    type(item) is CollaborationSpecialistReplyPayload
-                    for item in replies
-                ):
-                    raise BackendProtocolError(
-                        "successful specialist result is not typed"
-                    )
-                try:
-                    synthesis_result = self._required_synthesis_result(
-                        await self._run_lead_synthesis(
-                            session_id=session_id,
-                            conversation_id=conversation_id,
-                            turn_id=turn_id,
-                            proposal=proposal,
-                            attempt_id=attempt_id,
-                            replies=cast(
-                                tuple[CollaborationSpecialistReplyPayload, ...],
-                                replies,
-                            ),
-                            events=events,
-                            action_progress_sink=action_progress_sink,
-                        )
-                    )
-                except Exception as failure:
-                    synthesis_result = self._required_synthesis_result(
-                        self._joined_invocation_result(failure)
-                    )
-            current_task = asyncio.current_task()
-            if current_task is not None and current_task.cancelling():
-                cancellation = asyncio.CancelledError()
-                try:
-                    self._persist_collaboration_results_locked(
-                        session_id=session_id,
-                        conversation_id=conversation_id,
-                        turn_id=turn_id,
-                        proposal=proposal,
-                        attempt_id=attempt_id,
-                        assignment_results=results,
-                        synthesis_result=synthesis_result,
-                    )
-                except BaseException as persistence_failure:
-                    cancellation.add_note(
-                        "collaboration cancellation persistence failed: "
-                        f"{type(persistence_failure).__name__}"
-                    )
-                raise cancellation
-            self._persist_collaboration_results_locked(
-                session_id=session_id,
-                conversation_id=conversation_id,
-                turn_id=turn_id,
-                proposal=proposal,
-                attempt_id=attempt_id,
-                assignment_results=results,
-                synthesis_result=synthesis_result,
-            )
-            persisted = self.conversation_storage_services.event_store.read(
-                session_id,
-                conversation_id,
-            )
-            finalized_projection = project_collaboration_history(persisted)
-            authentication_failure = next(
-                (
-                    item.failure for item in (
-                        *results,
-                        *((synthesis_result,) if synthesis_result is not None else ()),
-                    )
-                    if isinstance(item.failure, ProviderAuthenticationRequiredError)
-                ),
-                None,
-            )
-            premise_result = finalized_projection.execution_result
-            if (
-                proposal.premise_decision is not None
-                and proposal.authoring_scope is None
-                and proposal.basis.evidence is not None
-                and proposal.basis.evidence.scope is LeadOutcomeScope.PREMISE_ANALYSIS
-                and finalized_projection.current_proposal == proposal
-                and finalized_projection.current_step_id == proposal.step_id
-                and premise_result is not None
-                and (
-                    premise_result.proposal_id,
-                    premise_result.proposal_revision,
-                    premise_result.proposal_digest,
-                ) == (
-                    proposal.proposal_id,
-                    proposal.proposal_revision,
-                    proposal.proposal_digest,
-                )
-                and premise_result.execution_attempt_id == attempt_id
-                and finalized_projection.current_state is {
-                    CollaborationExecutionOutcomeKind.SUCCEEDED: CollaborationStepState.COMPLETED,
-                    CollaborationExecutionOutcomeKind.FAILED: CollaborationStepState.FAILED,
-                    CollaborationExecutionOutcomeKind.CANCELLED: CollaborationStepState.INTERRUPTED,
-                }.get(premise_result.overall_outcome)
-                and any(
-                    event.event_id == finalized_projection.execution_result_event_id
-                    and event.step_id == proposal.step_id
-                    and type(event.payload) is CollaborationExecutionResult
-                    and event.payload is premise_result
-                    for event in persisted
-                )
-                and (
-                    premise_result.overall_outcome is not CollaborationExecutionOutcomeKind.SUCCEEDED
-                    or (
-                        finalized_projection.premise_report is not None
-                        and finalized_projection.premise_report.spec == proposal.premise_decision
-                        and finalized_projection.premise_report_event_id == premise_result.synthesis_result_event_id
-                        and finalized_projection.premise_report_event_id in premise_result.visible_exchange_event_ids
-                    )
-                )
-            ):
-                finalized = self._finalize_known_result_locked(
-                    session_id,
-                    persisted,
-                    finalized_projection,
-                )
-                if authentication_failure is not None:
-                    raise authentication_failure
-                return finalized
-            if (
-                finalized_projection.current_state is CollaborationStepState.RUNNING
-                or finalized_projection.current_recommendation_state
-                is LeadRecommendationState.PENDING
-            ):
-                finalized = self._finalize_known_result_locked(
-                    session_id,
-                    persisted,
-                    finalized_projection,
-                )
-                if authentication_failure is not None:
-                    raise authentication_failure
-                return finalized
-            if finalized_projection.current_state is not (
-                CollaborationStepState.OUTCOME_UNKNOWN
-            ):
-                raise BackendProtocolError("execution did not reach a durable result")
-            if authentication_failure is not None:
-                raise authentication_failure
-            return LeadTurnResult(
-                session_id,
-                conversation_id,
-                turn_id,
-                proposal.step_id,
-                LeadOutcomeKind.RECOMMENDATION,
-                "A submitted provider outcome is uncertain. Inspect and resolve it; "
-                "the runtime will not replay the attempt.",
-                None,
-                CollaborationStepState.OUTCOME_UNKNOWN,
-                None,
-                CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME,
-            )
-        finally:
-            self._live_execution_markers.discard(marker)
-
-    @staticmethod
-    def _joined_invocation_result(item: object) -> CollaborationInvocationResult:
-        """Preserve safely knowable facts from one joined assignment task."""
-
-        if type(item) is CollaborationInvocationResult:
-            return item
-        if not isinstance(item, BaseException):
-            item = BackendProtocolError(
-                "specialist task returned an invalid invocation result"
-            )
-        facts = context_provider_failure_facts(item)
-        return CollaborationInvocationResult(
-            None,
-            len(facts.submitted_accountings),
-            item,
-            facts.submission_uncertain,
-        )
-
-    @staticmethod
-    def _required_synthesis_result(item: object) -> CollaborationInvocationResult:
-        """Fail closed when mandatory synthesis has no exact typed result."""
-
-        if type(item) is not CollaborationInvocationResult:
-            return CollaborationInvocationResult(
-                None,
-                0,
-                BackendProtocolError(
-                    "mandatory consultation synthesis returned no invocation result"
-                ),
-            )
-        if item.failure is None and type(item.value) not in {
-            LeadSynthesisResult,
-            ArtifactSynthesisResult,
-        }:
-            return CollaborationInvocationResult(
-                None,
-                item.submitted_physical_calls,
-                BackendProtocolError(
-                    "mandatory consultation synthesis returned no typed payload"
-                ),
-                item.submission_uncertain,
-                item.artifact_binding,
-                item.generation_pin,
-                provider_invocation_id=item.provider_invocation_id,
-            )
-        return item
 
     async def _run_specialist_assignment(
         self,
@@ -7017,7 +6132,7 @@ class StoryRuntime:
             and proposal.step_kind is CollaborationStepKind.LEAD_SPECIALIST_CONSULTATION
             and proposal.budget.synthesis_max_physical_calls > 0
         ):
-            synthesis_result = self._required_synthesis_result(synthesis_result)
+            synthesis_result = required_synthesis_result(synthesis_result)
         uncertain = any(item.submission_uncertain for item in assignment_results) or (
             synthesis_result is not None and synthesis_result.submission_uncertain
         )
@@ -8180,424 +7295,9 @@ class StoryRuntime:
             return None, None, failure
 
 
-    def _normalize_lead_history(
-        self,
-        session_id: str,
-        conversation_id: str,
-        events: tuple[CollaborationEvent, ...],
-        projection: CollaborationHistoryProjection,
-    ) -> LeadTurnResult | None:
-        if (projection.next_safe_action is CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME
-                and any(type(event.payload) is CollaborationProviderCallPayload
-                        and event.payload.invocation_kind is CollaborationInvocationKind.LEAD_DISCUSSION
-                        for event in events)):
-            return self._blocking_lead_result(
-                session_id, conversation_id, CollaborationStepState.OUTCOME_UNKNOWN,
-                "A discussion call has no known durable closure. Inspect its exact history before controls or calls.",
-                step_id=projection.current_step_id, turn_id=projection.current_turn_id,
-            )
-        operation_result = self._pending_artifact_operation_result(
-            session_id, conversation_id, events, projection,
-        )
-        if operation_result is not None:
-            return operation_result
-        if projection.current_recommendation_state is LeadRecommendationState.RUNNING:
-            start = projection.current_recommendation_start
-            assert start is not None
-            start_event = next(event for event in events if event.event_id == start.start_event_id)
-            origin_calls = tuple(event for event in events
-                if event.turn_id == start_event.turn_id and event.step_id == start_event.step_id
-                and type(event.payload) is CollaborationProviderCallPayload)
-            if not origin_calls:
-                self._close_failed_lead_attempt(session_id, conversation_id,
-                    turn_id=start_event.turn_id, step_id=start_event.step_id)
-            finalized = self._finalize_recommendation_failure_locked(session_id, conversation_id)
-            if finalized is not None:
-                return finalized
-            return self._blocking_lead_result(session_id, conversation_id,
-                CollaborationStepState.OUTCOME_UNKNOWN,
-                "The recommendation preparation has no reliable closed result. Inspect its exact history; it will not be replayed.",
-                turn_id=start_event.turn_id, step_id=start_event.step_id)
-        if (
-            projection.next_safe_action is CollaborationNextAction.RETRY_LEAD_TURN
-            and (self._has_unstarted_lead_request(events)
-                 or self._unmatched_lead_call_state(events) is not None)
-        ):
-            recovered = self._close_failed_lead_attempt(session_id, conversation_id)
-            if recovered is not None:
-                return recovered
-        if self._has_unstarted_lead_request(events):
-            return self._blocking_lead_result(
-                session_id,
-                conversation_id,
-                CollaborationStepState.RECOVERY_REQUIRED,
-                "A durable user request has no provider-preparation or lead-outcome "
-                "marker. Inspect and repair the request before continuing; it will "
-                "not be replayed automatically.",
-                step_id=projection.current_step_id,
-                turn_id=projection.current_turn_id,
-            )
-        if (
-            projection.current_proposal is None
-            and projection.current_state is CollaborationStepState.OUTCOME_UNKNOWN
-            and projection.next_safe_action
-            is CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME
-        ):
-            return self._submitted_lead_outcome_unknown_result(
-                session_id,
-                conversation_id,
-                step_id=projection.current_step_id,
-                turn_id=projection.current_turn_id,
-            )
-        if (
-            self._unmatched_lead_call_state(events)
-            is CollaborationProviderCallState.PREPARED
-        ):
-            return self._blocking_lead_result(
-                session_id,
-                conversation_id,
-                CollaborationStepState.RECOVERY_REQUIRED,
-                "A provider call may have crossed the boundary without a durable "
-                "lead outcome; inspect and repair authoritative history before "
-                "continuing.",
-                step_id=projection.current_step_id,
-                turn_id=projection.current_turn_id,
-            )
-        operation_result = self._pending_artifact_operation_result(
-            session_id, conversation_id, events, projection,
-        )
-        if operation_result is not None:
-            return operation_result
-        state = projection.current_state
-        proposal = projection.current_proposal
-        if state is CollaborationStepState.CONFIRMED:
-            if proposal is None or not events:
-                return self._blocking_lead_result(
-                    session_id,
-                    conversation_id,
-                    CollaborationStepState.RECOVERY_REQUIRED,
-                    "Confirmed history is incomplete and requires repair.",
-                    step_id=projection.current_step_id,
-                    turn_id=projection.current_turn_id,
-                )
-            key = (session_id, conversation_id, proposal.step_id)
-            capability = self._confirmed_capabilities.get(key)
-            tail = events[-1]
-            if capability is not None and self._capability_matches(
-                capability,
-                proposal,
-                tail,
-            ):
-                return LeadTurnResult(
-                    session_id,
-                    conversation_id,
-                    tail.turn_id,
-                    proposal.step_id,
-                    LeadOutcomeKind.RECOMMENDATION,
-                    "The confirmed collaboration step is ready for the runtime's "
-                    "separately owned execution phase.",
-                    proposal,
-                    CollaborationStepState.CONFIRMED,
-                    None,
-                    CollaborationNextAction.START_OR_RECONFIRM,
-                    evidence=proposal.basis.evidence,
-                )
-            self._confirmed_capabilities.pop(key, None)
-            request_id = event_journal.new_id("c")
-            turn_id = event_journal.new_id("t")
-            reconfirmation = event_journal.draft(
-                session_id=session_id,
-                conversation_id=conversation_id,
-                turn_id=turn_id,
-                step_id=proposal.step_id,
-                kind=CollaborationEventKind.STEP_STATE,
-                sender=event_journal.RUNTIME_ACTOR,
-                recipient=event_journal.USER_ACTOR,
-                payload=CollaborationStepStatePayload(
-                    state=CollaborationStepState.RECONFIRMATION_REQUIRED,
-                    proposal_id=proposal.proposal_id,
-                    proposal_revision=proposal.proposal_revision,
-                    proposal_digest=proposal.proposal_digest,
-                    confirmation_request_id=request_id,
-                ),
-            )
-            event_journal.append_drafts(projection.last_sequence, (reconfirmation,),
-                append_batch=self.append_collaboration_event_batch,
-            )
-            return LeadTurnResult(
-                session_id,
-                conversation_id,
-                turn_id,
-                proposal.step_id,
-                LeadOutcomeKind.RECOMMENDATION,
-                "The prior confirmation lost its process-local start authority. " +
-                ("Regenerate this legacy proposal with an explicit authoring scope before confirming."
-                 if proposal.authoring_scope is None else
-                 "Reconfirm, reject, or revise the unchanged proposal."),
-                proposal,
-                CollaborationStepState.RECONFIRMATION_REQUIRED,
-                request_id,
-                CollaborationNextAction.SUBMIT_CONFIRMATION,
-                evidence=proposal.basis.evidence,
-            )
-        if state is CollaborationStepState.RUNNING:
-            if proposal is None or projection.execution_attempt_id is None:
-                return self._blocking_lead_result(
-                    session_id,
-                    conversation_id,
-                    CollaborationStepState.RECOVERY_REQUIRED,
-                    "Running history is incomplete and requires repair.",
-                    step_id=projection.current_step_id,
-                    turn_id=projection.current_turn_id,
-                )
-            marker = (
-                session_id,
-                conversation_id,
-                proposal.step_id,
-                projection.execution_attempt_id,
-            )
-            if projection.execution_result is not None:
-                return self._finalize_known_result_locked(
-                    session_id,
-                    events,
-                    projection,
-                )
-            if marker in self._live_execution_markers:
-                return LeadTurnResult(
-                    session_id,
-                    conversation_id,
-                    projection.current_turn_id or event_journal.new_id("t"),
-                    proposal.step_id,
-                    LeadOutcomeKind.RECOMMENDATION,
-                    "The collaboration step is still owned by a live runtime "
-                    "execution; wait for its durable result.",
-                    None,
-                    CollaborationStepState.RUNNING,
-                    None,
-                    CollaborationNextAction.NONE,
-                )
-            turn_id = event_journal.new_id("t")
-            interruption = event_journal.draft(
-                session_id=session_id,
-                conversation_id=conversation_id,
-                turn_id=turn_id,
-                step_id=proposal.step_id,
-                kind=CollaborationEventKind.INTERRUPTION,
-                sender=event_journal.RUNTIME_ACTOR,
-                recipient=event_journal.USER_ACTOR,
-                payload=CollaborationInterruptionPayload(
-                    projection.execution_attempt_id,
-                    "Runtime authority was lost after work may have started; the "
-                    "attempt will not be replayed.",
-                ),
-            )
-            unknown = event_journal.draft(
-                session_id=session_id,
-                conversation_id=conversation_id,
-                turn_id=turn_id,
-                step_id=proposal.step_id,
-                kind=CollaborationEventKind.STEP_STATE,
-                sender=event_journal.RUNTIME_ACTOR,
-                recipient=event_journal.USER_ACTOR,
-                payload=CollaborationStepStatePayload(
-                    state=CollaborationStepState.OUTCOME_UNKNOWN,
-                    proposal_id=proposal.proposal_id,
-                    proposal_revision=proposal.proposal_revision,
-                    proposal_digest=proposal.proposal_digest,
-                    execution_attempt_id=projection.execution_attempt_id,
-                ),
-            )
-            event_journal.append_drafts(projection.last_sequence, (interruption, unknown),
-                append_batch=self.append_collaboration_event_batch,
-            )
-            return LeadTurnResult(
-                session_id,
-                conversation_id,
-                turn_id,
-                proposal.step_id,
-                LeadOutcomeKind.RECOMMENDATION,
-                "External work may have happened. Inspect and resolve the outcome; "
-                "the runtime will not replay it.",
-                None,
-                CollaborationStepState.OUTCOME_UNKNOWN,
-                None,
-                CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME,
-            )
-        if state is CollaborationStepState.OUTCOME_UNKNOWN:
-            return self._blocking_lead_result(
-                session_id,
-                conversation_id,
-                state,
-                "External work may have happened. Inspect and resolve the outcome "
-                "before proposing new work.",
-                step_id=projection.current_step_id,
-                turn_id=projection.current_turn_id,
-            )
-        if state is CollaborationStepState.RECOVERY_REQUIRED:
-            return self._blocking_lead_result(
-                session_id,
-                conversation_id,
-                state,
-                "Authoritative collaboration history requires repair before normal "
-                "collaboration can continue.",
-                step_id=projection.current_step_id,
-                turn_id=projection.current_turn_id,
-            )
-        return None
 
-    def _pending_artifact_operation_result(
-        self,
-        session_id: str,
-        conversation_id: str,
-        events: tuple[CollaborationEvent, ...],
-        projection: CollaborationHistoryProjection,
-    ) -> LeadTurnResult | None:
-        if projection.current_artifact_application_request is None:
-            return None
-        action = projection.next_safe_action
-        if action in {
-            CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME,
-            CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY,
-        }:
-            return self._blocking_lead_result(
-                session_id, conversation_id,
-                (CollaborationStepState.RECOVERY_REQUIRED
-                 if action is CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY
-                 else CollaborationStepState.OUTCOME_UNKNOWN),
-                "An artifact or Commit boundary needs inspection before ordinary "
-                "work can continue. Its existing records will not be replayed.",
-                turn_id=projection.current_turn_id, step_id=projection.current_step_id,
-            )
-        if action is CollaborationNextAction.SUBMIT_COMMIT_DECISION:
-            return LeadTurnResult(
-                session_id, conversation_id, events[-1].turn_id, events[-1].step_id,
-                LeadOutcomeKind.RECOMMENDATION,
-                "The exact local Commit request is still awaiting your structured decision.",
-                None, CollaborationStepState.COMPLETED, None, action,
-                story_commit_request=projection.current_story_commit_request,
-            )
-        if action is CollaborationNextAction.REPREPARE_COMMIT_REQUEST:
-            result = projection.current_artifact_application_result
-            result_events = tuple(
-                event
-                for event in events
-                if event.kind is CollaborationEventKind.ARTIFACT_APPLICATION_RESULT
-                and event.payload == result
-                and event.step_id == events[-1].step_id
-            )
-            if result is None or len(result_events) != 1:
-                return self._blocking_lead_result(
-                    session_id,
-                    conversation_id,
-                    CollaborationStepState.RECOVERY_REQUIRED,
-                    "The exact Apply result is unavailable for Commit preparation.",
-                    turn_id=projection.current_turn_id,
-                    step_id=projection.current_step_id,
-                )
-            return LeadTurnResult(
-                session_id,
-                conversation_id,
-                events[-1].turn_id,
-                events[-1].step_id,
-                LeadOutcomeKind.RECOMMENDATION,
-                "The Apply result is known, but there is no current Commit "
-                "request. Reprepare one exact request before Commit.",
-                None,
-                CollaborationStepState.COMPLETED,
-                None,
-                action,
-                story_commit_preparation_request=StoryCommitPreparationRequest(
-                    session_id=session_id,
-                    conversation_id=conversation_id,
-                    step_id=events[-1].step_id,
-                    application_result_event_id=result_events[0].event_id,
-                    application_id=result.application_id,
-                    application_request_digest=result.application_request_digest,
-                    tail_event_id=events[-1].event_id,
-                ),
-            )
-        if action is CollaborationNextAction.SUBMIT_APPLICATION_DECISION:
-            request = projection.current_artifact_application_request
-            candidate = projection.current_artifact_candidate
-            if candidate is None:
-                return self._blocking_lead_result(
-                    session_id, conversation_id, CollaborationStepState.RECOVERY_REQUIRED,
-                    "The pending Apply request has no exact current candidate.",
-                    turn_id=projection.current_turn_id, step_id=projection.current_step_id,
-                )
-            return LeadTurnResult(
-                session_id, conversation_id, events[-1].turn_id, events[-1].step_id,
-                LeadOutcomeKind.RECOMMENDATION,
-                "The exact artifact Apply request is still awaiting your structured decision.",
-                None, CollaborationStepState.COMPLETED, None, action,
-                artifact_proposal=ArtifactProposalResult(
-                    ArtifactProposalState.REVIEWED, candidate, request.reviewed_proposal,
-                ),
-                artifact_application_request=request,
-            )
-        return None
 
-    def _blocking_lead_result(
-        self,
-        session_id: str,
-        conversation_id: str,
-        state: CollaborationStepState,
-        message: str,
-        *,
-        step_id: str | None = None,
-        turn_id: str | None = None,
-    ) -> LeadTurnResult:
-        next_action = {
-            CollaborationStepState.OUTCOME_UNKNOWN: (
-                CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME
-            ),
-            CollaborationStepState.RECOVERY_REQUIRED: (
-                CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY
-            ),
-        }.get(state, CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY)
-        result_state = (
-            state
-            if state
-            in {
-                CollaborationStepState.OUTCOME_UNKNOWN,
-                CollaborationStepState.RECOVERY_REQUIRED,
-            }
-            else CollaborationStepState.RECOVERY_REQUIRED
-        )
-        return LeadTurnResult(
-            session_id,
-            conversation_id,
-            turn_id or event_journal.new_id("t"),
-            step_id or event_journal.new_id("s"),
-            LeadOutcomeKind.RECOMMENDATION,
-            message,
-            None,
-            result_state,
-            None,
-            next_action,
-        )
 
-    def _submitted_lead_outcome_unknown_result(
-        self,
-        session_id: str,
-        conversation_id: str,
-        *,
-        step_id: str | None,
-        turn_id: str | None,
-    ) -> LeadTurnResult:
-        """Return the stable non-replay result for one unmatched submitted call."""
-
-        return self._blocking_lead_result(
-            session_id,
-            conversation_id,
-            CollaborationStepState.OUTCOME_UNKNOWN,
-            "The Lead provider call was submitted, but no reliable result was "
-            "recorded. Do not retry or replay it; authoritative state is "
-            "preserved. Inspect and resolve the outcome, or create and focus "
-            "another conversation for intentionally distinct work.",
-            step_id=step_id,
-            turn_id=turn_id,
-        )
 
     async def _run_lead_provider_locked(
         self,
@@ -8621,7 +7321,7 @@ class StoryRuntime:
             WorkspaceFormatError,
             WorkspaceSecurityError,
         ):
-            return self._blocking_lead_result(
+            return blocking_lead_result(
                 session_id,
                 cast(str, arguments["conversation_id"]),
                 CollaborationStepState.RECOVERY_REQUIRED,
@@ -11770,7 +10470,7 @@ class StoryRuntime:
             WorkspaceFormatError,
             WorkspaceSecurityError,
         ):
-            return self._blocking_lead_result(
+            return blocking_lead_result(
                 session_id,
                 conversation_id,
                 CollaborationStepState.RECOVERY_REQUIRED,
@@ -11820,7 +10520,7 @@ class StoryRuntime:
             session_id, conversation_id,
         )
         if history_failure is not None or events is None or projection is None:
-            return self._blocking_lead_result(
+            return blocking_lead_result(
                 session_id, conversation_id, CollaborationStepState.RECOVERY_REQUIRED,
                 "The failed Lead attempt could not be verified in authoritative history.",
                 turn_id=turn_id, step_id=step_id,
@@ -11883,7 +10583,7 @@ class StoryRuntime:
             session_id, conversation_id,
         )
         if history_failure is not None or events is None or projection is None:
-            return self._blocking_lead_result(
+            return blocking_lead_result(
                 session_id, conversation_id, CollaborationStepState.RECOVERY_REQUIRED,
                 "The Lead attempt could not be closed in authoritative history.",
                 turn_id=turn_id, step_id=step_id,
@@ -12012,7 +10712,7 @@ class StoryRuntime:
                 append_batch=self.append_collaboration_event_batch,
             )
         except Exception:
-            return self._blocking_lead_result(
+            return blocking_lead_result(
                 session_id,
                 conversation_id,
                 CollaborationStepState.RECOVERY_REQUIRED,
@@ -14932,24 +13632,6 @@ class StoryRuntime:
             execution_fingerprint=self.backend.execution_profile_fingerprint(agent_id),
         )
 
-    @classmethod
-    def _capability_matches(
-        cls,
-        capability: _ConfirmedStepCapability,
-        proposal: CollaborationProposal,
-        tail: CollaborationEvent,
-    ) -> bool:
-        return bool(
-            capability.session_id == tail.session_id
-            and capability.conversation_id == tail.conversation_id
-            and capability.step_id == proposal.step_id == tail.step_id
-            and capability.proposal_id == proposal.proposal_id
-            and capability.proposal_revision == proposal.proposal_revision
-            and capability.proposal_digest == proposal.proposal_digest
-            and capability.basis_digest == reply_contract_values.proposal_basis_digest(proposal)
-            and capability.tail_event_id == tail.event_id
-            and capability.tail_sequence == tail.sequence
-        )
 
     @staticmethod
     def _active_recommendation_origin(
@@ -14969,128 +13651,7 @@ class StoryRuntime:
             return None
         return origin
 
-    @staticmethod
-    def _has_unstarted_lead_request(
-        events: tuple[CollaborationEvent, ...],
-    ) -> bool:
-        """Detect any durable request lacking a later same-turn invocation marker."""
 
-        settled_origin_ids: set[str] = set()
-        settled_controls = {
-            event.event_id for event in events
-            if type(event.payload) is CollaborationPremiseDecisionPayload
-            and event.payload.selection.action in {PremiseDecisionAction.REJECT, PremiseDecisionAction.DEFER}
-            and event.sender == event_journal.USER_ACTOR and event.recipient == event_journal.LEAD_ACTOR
-        }
-        if settled_controls:
-            current_report_event = None
-            message_origins = {}
-            for event in events:
-                if (
-                    type(event.payload) is CollaborationLeadSynthesisPayload
-                    and event.payload.premise_report is not None
-                ):
-                    current_report_event = event
-                elif (
-                    type(event.payload) is CollaborationMessagePayload
-                    and event.sender == event_journal.USER_ACTOR and event.recipient == event_journal.LEAD_ACTOR
-                ):
-                    key = (
-                        event.session_id, event.conversation_id, event.turn_id, event.step_id, event.batch_id,
-                    )
-                    message_origins.setdefault(key, []).append(event)
-                elif event.event_id in settled_controls and current_report_event is not None:
-                    selection = event.payload.selection
-                    report = current_report_event.payload.premise_report
-                    origins = message_origins.get(
-                        (
-                            event.session_id, event.conversation_id, event.turn_id,
-                            event.step_id, event.batch_id,
-                        ), (),
-                    )
-                    if (
-                        len(origins) == 1
-                        and origins[0].sequence < event.sequence
-                        and (current_report_event.session_id, current_report_event.conversation_id)
-                        == (event.session_id, event.conversation_id)
-                        and report.source_conversation_id == event.conversation_id
-                        and (
-                            selection.source_conversation_id, selection.report_event_id,
-                            selection.report_digest, selection.question_id,
-                        ) == (
-                            event.conversation_id, current_report_event.event_id,
-                            report.report_digest, report.spec.question_id,
-                        )
-                    ):
-                        settled_origin_ids.add(origins[0].event_id)
-        marked_turns: set[str] = set()
-        for control in events:
-            if type(control.payload) is not CollaborationLeadTaskTransitionPayload:
-                continue
-            receipt = control.payload.receipt
-            if receipt.action not in {LeadTaskAction.HOLD, LeadTaskAction.DISCARD}:
-                continue
-            origin = next((event for event in events if event.event_id == receipt.origin_event_id), None)
-            if origin is not None and type(origin.payload) is CollaborationLeadTaskDecisionPayload and (
-                origin.session_id, origin.conversation_id, origin.turn_id, origin.step_id, origin.batch_id,
-            ) == (control.session_id, control.conversation_id, control.turn_id, control.step_id, control.batch_id):
-                if receipt.origin_message_event_id is not None:
-                    settled_origin_ids.add(receipt.origin_message_event_id)
-        for event in reversed(events):
-            if event.event_id in settled_origin_ids:
-                continue
-            if (
-                (
-                    type(event.payload) is CollaborationProviderCallPayload
-                    and event.payload.invocation_kind
-                    is CollaborationInvocationKind.LEAD
-                )
-                or (
-                    event.kind is CollaborationEventKind.MESSAGE
-                    and event.sender == event_journal.LEAD_ACTOR
-                    and event.recipient == event_journal.USER_ACTOR
-                    and type(event.payload) is CollaborationLeadJudgmentPayload
-                )
-                or type(event.payload) in {CollaborationLeadOutcomeFailurePayload, CollaborationLeadExplorationResultPayload, CollaborationLeadDiscussionPayload}
-            ):
-                marked_turns.add(event.turn_id)
-                continue
-            if (
-                ((type(event.payload) is CollaborationMessagePayload
-                  and event.sender == event_journal.USER_ACTOR and event.recipient == event_journal.LEAD_ACTOR)
-                 or type(event.payload) is LeadRecommendationStartedPayload)
-                and event.turn_id not in marked_turns
-            ):
-                return True
-        return False
-
-    @staticmethod
-    def _unmatched_lead_call_state(
-        events: tuple[CollaborationEvent, ...],
-    ) -> CollaborationProviderCallState | None:
-        """Return the strongest durable state of an unmatched Lead provider call."""
-
-        completed_invocations: set[tuple[str, str]] = set()
-        prepared = False
-        for event in reversed(events):
-            correlation = (event.step_id, event.turn_id)
-            if (
-                event.kind is CollaborationEventKind.MESSAGE
-                and event.sender == event_journal.LEAD_ACTOR
-                and event.recipient == event_journal.USER_ACTOR
-                and type(event.payload) is CollaborationLeadJudgmentPayload
-            ) or type(event.payload) in {CollaborationLeadOutcomeFailurePayload, CollaborationLeadExplorationResultPayload, CollaborationLeadDiscussionPayload}:
-                completed_invocations.add(correlation)
-                continue
-            if (
-                type(event.payload) is CollaborationProviderCallPayload
-                and event.payload.invocation_kind in {CollaborationInvocationKind.LEAD, CollaborationInvocationKind.LEAD_EXPLORATION, CollaborationInvocationKind.LEAD_DISCUSSION}
-                and correlation not in completed_invocations
-            ):
-                if event.payload.state is CollaborationProviderCallState.SUBMITTED:
-                    return CollaborationProviderCallState.SUBMITTED
-                prepared = True
-        return CollaborationProviderCallState.PREPARED if prepared else None
 
     def validate_lead_identity(
         self,
@@ -15118,21 +13679,6 @@ class StoryRuntime:
             raise ValueError(f"{label} exceeds the visible text limit")
         return value
 
-    @staticmethod
-    def _validate_context_event_sink(
-        sink: Callable[[ContextExecutionEvent], None] | None,
-    ) -> None:
-        if sink is None:
-            return
-        call = getattr(sink, "__call__", None)
-        if (
-            not callable(sink)
-            or inspect.iscoroutinefunction(sink)
-            or inspect.isasyncgenfunction(sink)
-            or inspect.iscoroutinefunction(call)
-            or inspect.isasyncgenfunction(call)
-        ):
-            raise TypeError("context_event_sink must be a synchronous callable")
 
     async def _invoke_context_with_recovery(
         self, request: ContextInvocationRequest, provider: AccountingContextProvider,

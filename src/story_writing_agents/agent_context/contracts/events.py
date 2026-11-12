@@ -19,6 +19,7 @@ from dataclasses import (
     field,
 )
 from enum import StrEnum
+import inspect
 
 
 class ContextExecutionEventKind(StrEnum):
@@ -266,3 +267,19 @@ __all__ = [
     'ContextExecutionEvent',
     'ContextExecutionEventSink',
 ]
+
+
+def validate_context_event_sink(
+    sink: Callable[[ContextExecutionEvent], None] | None,
+) -> None:
+    if sink is None:
+        return
+    call = getattr(sink, "__call__", None)
+    if (
+        not callable(sink)
+        or inspect.iscoroutinefunction(sink)
+        or inspect.isasyncgenfunction(sink)
+        or inspect.iscoroutinefunction(call)
+        or inspect.isasyncgenfunction(call)
+    ):
+        raise TypeError("context_event_sink must be a synchronous callable")

@@ -14396,6 +14396,247 @@
       ],
       "genuine_unused_import_rows": 9,
       "used_import_replaced_by_existing_module_API_rows": 1
+    },
+    {
+      "schema_version": 1,
+      "issue": 1007,
+      "origin_commit": "b7dd8d8d986d92aad22aad8db44e0ad0d02a4a68",
+      "original_caps_sha256": "0caff3ac47db80cd2344dc4ff480358ec9cc09d2ed68d151ffa2e754c100d156",
+      "expected_caps_sha256": "ce4382b4bac0778363a7ea7ca90c5c81be63c89077b23abcc4dedbbc170167d9",
+      "class_moves": [
+        {
+          "source": "tests/test_specialist_orchestration.py",
+          "class": "SpecialistExecutionAcceptanceTests",
+          "destination": "tests/test_specialist_orchestration_execution.py"
+        },
+        {
+          "source": "tests/test_specialist_orchestration.py",
+          "class": "SpecialistAccountingAcceptanceTests",
+          "destination": "tests/test_specialist_orchestration_accounting.py"
+        }
+      ],
+      "moves": [
+        {
+          "old_id": "tests.test_specialist_orchestration.SpecialistAccountingAcceptanceTests.test_local_reference_and_search_answer_count_only_provider_calls",
+          "new_id": "tests.test_specialist_orchestration_accounting.SpecialistAccountingAcceptanceTests.test_local_reference_and_search_answer_count_only_provider_calls",
+          "subtest_cap": 0,
+          "source": "tests/test_specialist_orchestration.py",
+          "destination": "tests/test_specialist_orchestration_accounting.py",
+          "original_file_sha256": "87b094bc0b234b78e9959176703e6daf3c1ea9d640d3dc8368ec8122b991745a",
+          "original_method_ast_sha256": "599fbb1a392141b05f3dcc4a302b99802dbdef54aef9811fe91e5af3ce2de5ed",
+          "expected_method_ast_sha256": "b4efd51e4b28805af669ac6afa2c19d5a41863690765b195ef8e158950689af6"
+        },
+        {
+          "old_id": "tests.test_specialist_orchestration.SpecialistAccountingAcceptanceTests.test_result_persistence_failure_cleans_marker_after_provider_completion",
+          "new_id": "tests.test_specialist_orchestration_accounting.SpecialistAccountingAcceptanceTests.test_result_persistence_failure_cleans_marker_after_provider_completion",
+          "subtest_cap": 0,
+          "source": "tests/test_specialist_orchestration.py",
+          "destination": "tests/test_specialist_orchestration_accounting.py",
+          "original_file_sha256": "87b094bc0b234b78e9959176703e6daf3c1ea9d640d3dc8368ec8122b991745a",
+          "original_method_ast_sha256": "1310a5caf98d1dea4384f3732bc31917cc03d404b204043986deb52efde4e262",
+          "expected_method_ast_sha256": "f76eeb089137d91293380f8140efb1767300c53088a2827dbaf2d13b5bbfba30"
+        },
+        {
+          "old_id": "tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_assignment_failure_joins_siblings_and_skips_synthesis",
+          "new_id": "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_assignment_failure_joins_siblings_and_skips_synthesis",
+          "subtest_cap": 0,
+          "source": "tests/test_specialist_orchestration.py",
+          "destination": "tests/test_specialist_orchestration_execution.py",
+          "original_file_sha256": "87b094bc0b234b78e9959176703e6daf3c1ea9d640d3dc8368ec8122b991745a",
+          "original_method_ast_sha256": "89d14f436be5d22eb7eb7532eefed9f47d8b87966e1cb0dc46bdec81e9d87f71",
+          "expected_method_ast_sha256": "e02a11f3ccb41d5d915537fea81c9e979f25ed90ccee3d12bf9dfed9f251ab65"
+        },
+        {
+          "old_id": "tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_concurrent_duplicate_domain_and_schema_reports_keep_call_order",
+          "new_id": "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_concurrent_duplicate_domain_and_schema_reports_keep_call_order",
+          "subtest_cap": 0,
+          "source": "tests/test_specialist_orchestration.py",
+          "destination": "tests/test_specialist_orchestration_execution.py",
+          "original_file_sha256": "87b094bc0b234b78e9959176703e6daf3c1ea9d640d3dc8368ec8122b991745a",
+          "original_method_ast_sha256": "5b353296eacd290c694e06463e46701188715405b23bdceb3dfe19fe1e36110f",
+          "expected_method_ast_sha256": "b4eb76d64c9e88a1440f263860d2ff9407978a4c382670384b83902544435050"
+        },
+        {
+          "old_id": "tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_confirm_starts_one_atomic_dispatch_batch_then_runs_three_in_parallel",
+          "new_id": "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_confirm_starts_one_atomic_dispatch_batch_then_runs_three_in_parallel",
+          "subtest_cap": 0,
+          "source": "tests/test_specialist_orchestration.py",
+          "destination": "tests/test_specialist_orchestration_execution.py",
+          "original_file_sha256": "87b094bc0b234b78e9959176703e6daf3c1ea9d640d3dc8368ec8122b991745a",
+          "original_method_ast_sha256": "93bc3d6136dcb9c997fc0ff9815105f2ca1f54463eb57f124e78da90bf13265e",
+          "expected_method_ast_sha256": "50d641e05142c374c545ac30165025d88ed3b318f74d886ef94095864c8235b5"
+        },
+        {
+          "old_id": "tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_domain_rejection_details_survive_restarted_finalization",
+          "new_id": "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_domain_rejection_details_survive_restarted_finalization",
+          "subtest_cap": 2,
+          "source": "tests/test_specialist_orchestration.py",
+          "destination": "tests/test_specialist_orchestration_execution.py",
+          "original_file_sha256": "87b094bc0b234b78e9959176703e6daf3c1ea9d640d3dc8368ec8122b991745a",
+          "original_method_ast_sha256": "a792324ea35cc94a9ea741e3792a0ab4e2c0b7794f1b5b1d91de2669939426c8",
+          "expected_method_ast_sha256": "df8beb9161faf26a43b17c77e7fa55212ce0c3da0033b2c9fccc1e5aee81b0f5"
+        },
+        {
+          "old_id": "tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_execution_delivers_only_each_assignments_ordered_reference_subset",
+          "new_id": "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_execution_delivers_only_each_assignments_ordered_reference_subset",
+          "subtest_cap": 0,
+          "source": "tests/test_specialist_orchestration.py",
+          "destination": "tests/test_specialist_orchestration_execution.py",
+          "original_file_sha256": "87b094bc0b234b78e9959176703e6daf3c1ea9d640d3dc8368ec8122b991745a",
+          "original_method_ast_sha256": "bc277a1e3f7d8304a858b9b553678eec0f1db295b4517ae5074f3c8d0ba8536d",
+          "expected_method_ast_sha256": "04df15aa5b366e3da895728490ce59baa24f861b85b2f530b6b2ed7fd2d2edc3"
+        },
+        {
+          "old_id": "tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_failed_specialist_retries_transient_validation_publication",
+          "new_id": "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_failed_specialist_retries_transient_validation_publication",
+          "subtest_cap": 0,
+          "source": "tests/test_specialist_orchestration.py",
+          "destination": "tests/test_specialist_orchestration_execution.py",
+          "original_file_sha256": "87b094bc0b234b78e9959176703e6daf3c1ea9d640d3dc8368ec8122b991745a",
+          "original_method_ast_sha256": "7f0ac171f027f6d245296af3fba59b54970d7d5ada4a1ee67b2104129918449b",
+          "expected_method_ast_sha256": "74e711220d34c1d647daead8ad0c7472800fe6d6b3430dabea1c18eb519dd0ab"
+        },
+        {
+          "old_id": "tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_invalid_specialist_shapes_repair_then_fall_back_without_halting",
+          "new_id": "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_invalid_specialist_shapes_repair_then_fall_back_without_halting",
+          "subtest_cap": 3,
+          "source": "tests/test_specialist_orchestration.py",
+          "destination": "tests/test_specialist_orchestration_execution.py",
+          "original_file_sha256": "87b094bc0b234b78e9959176703e6daf3c1ea9d640d3dc8368ec8122b991745a",
+          "original_method_ast_sha256": "89ae25cbceb7ec65ffddb2ec7b4d3072aaf2cdf073aa2cc664ebad23cdebf683",
+          "expected_method_ast_sha256": "f59ec4b21c0a01aca196bf420b25ca986a769e4e7ecb8262981afc744e5abe99"
+        },
+        {
+          "old_id": "tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_one_and_two_assignments_run_with_exact_parallel_width",
+          "new_id": "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_one_and_two_assignments_run_with_exact_parallel_width",
+          "subtest_cap": 2,
+          "source": "tests/test_specialist_orchestration.py",
+          "destination": "tests/test_specialist_orchestration_execution.py",
+          "original_file_sha256": "87b094bc0b234b78e9959176703e6daf3c1ea9d640d3dc8368ec8122b991745a",
+          "original_method_ast_sha256": "cf979755629335ab2c0501b66059ad361c09da23f98b8c8828073f4f98ce4410",
+          "expected_method_ast_sha256": "c51fb9b0bbf3e4055162e1ec0ffb5c0dca05028687afdfd7f5d50412066e8615"
+        },
+        {
+          "old_id": "tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_outer_cancellation_joins_tasks_persists_terminals_and_cleans_marker",
+          "new_id": "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_outer_cancellation_joins_tasks_persists_terminals_and_cleans_marker",
+          "subtest_cap": 0,
+          "source": "tests/test_specialist_orchestration.py",
+          "destination": "tests/test_specialist_orchestration_execution.py",
+          "original_file_sha256": "87b094bc0b234b78e9959176703e6daf3c1ea9d640d3dc8368ec8122b991745a",
+          "original_method_ast_sha256": "a6fedabe571d6c31bf81166dbb4b32ff237a22baf009c33a1916e3cf6227f5ca",
+          "expected_method_ast_sha256": "acc736c56b0f5df124020a7831ad9d6e2bbaf2caa686af2c12c1a67372fcea51"
+        },
+        {
+          "old_id": "tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_persistent_validation_publication_failure_keeps_result_unknown",
+          "new_id": "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_persistent_validation_publication_failure_keeps_result_unknown",
+          "subtest_cap": 0,
+          "source": "tests/test_specialist_orchestration.py",
+          "destination": "tests/test_specialist_orchestration_execution.py",
+          "original_file_sha256": "87b094bc0b234b78e9959176703e6daf3c1ea9d640d3dc8368ec8122b991745a",
+          "original_method_ast_sha256": "2fa93130a31da960247aa88bb4625ce02b78772c59468be16d6a01311a99f1a8",
+          "expected_method_ast_sha256": "1df59f6e6632c91ada44a480ef25dd95b337f3c73f4a5114edf647f0e165b464"
+        },
+        {
+          "old_id": "tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_provider_free_advisory_confirms_one_specialist_without_synthesis_or_chain",
+          "new_id": "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_provider_free_advisory_confirms_one_specialist_without_synthesis_or_chain",
+          "subtest_cap": 0,
+          "source": "tests/test_specialist_orchestration.py",
+          "destination": "tests/test_specialist_orchestration_execution.py",
+          "original_file_sha256": "87b094bc0b234b78e9959176703e6daf3c1ea9d640d3dc8368ec8122b991745a",
+          "original_method_ast_sha256": "eb8861ddc03bd05cfa68ec84f8d117878b4d29dbadaa5d2bba593c29cc59bc33",
+          "expected_method_ast_sha256": "7c1120b4bd9da7d46c280ba02bc619901ba147726fc6d0f262258d885b037e95"
+        },
+        {
+          "old_id": "tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_recovered_reply_retries_transient_validation_publication",
+          "new_id": "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_recovered_reply_retries_transient_validation_publication",
+          "subtest_cap": 2,
+          "source": "tests/test_specialist_orchestration.py",
+          "destination": "tests/test_specialist_orchestration_execution.py",
+          "original_file_sha256": "87b094bc0b234b78e9959176703e6daf3c1ea9d640d3dc8368ec8122b991745a",
+          "original_method_ast_sha256": "18ed88fcadd9ef1fb5c2d80b680c392699e55523314964acf963b96d323407be",
+          "expected_method_ast_sha256": "fc0c87bcaddb466ea8b93c44e8c94d9252e1320820c96242cdae9282817ac85b"
+        },
+        {
+          "old_id": "tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_restarted_finalization_restores_only_this_execution_diagnostics",
+          "new_id": "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_restarted_finalization_restores_only_this_execution_diagnostics",
+          "subtest_cap": 0,
+          "source": "tests/test_specialist_orchestration.py",
+          "destination": "tests/test_specialist_orchestration_execution.py",
+          "original_file_sha256": "87b094bc0b234b78e9959176703e6daf3c1ea9d640d3dc8368ec8122b991745a",
+          "original_method_ast_sha256": "e651f50c5a2bc4b5ae4d2a93e09989076f1700151fcbceb0be653e673d6681a4",
+          "expected_method_ast_sha256": "8779f3cc2e06c4a423fa86038da97a31d31bdc988111fa0317f34c5d789d78dd"
+        },
+        {
+          "old_id": "tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_second_round_uses_reply_events_fresh_authority_and_cannot_chain_again",
+          "new_id": "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_second_round_uses_reply_events_fresh_authority_and_cannot_chain_again",
+          "subtest_cap": 0,
+          "source": "tests/test_specialist_orchestration.py",
+          "destination": "tests/test_specialist_orchestration_execution.py",
+          "original_file_sha256": "87b094bc0b234b78e9959176703e6daf3c1ea9d640d3dc8368ec8122b991745a",
+          "original_method_ast_sha256": "5f1b8a07edd4cbbe24a70e21e909714766a32e1082216e3e4badbe400c3e0d58",
+          "expected_method_ast_sha256": "d2619c714ac9652b3c10440e07bd7c91e35774c0290ade466a7d4aae70a04f2e"
+        },
+        {
+          "old_id": "tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_specialist_and_synthesis_validation_details_are_private_and_correlated",
+          "new_id": "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_specialist_and_synthesis_validation_details_are_private_and_correlated",
+          "subtest_cap": 0,
+          "source": "tests/test_specialist_orchestration.py",
+          "destination": "tests/test_specialist_orchestration_execution.py",
+          "original_file_sha256": "87b094bc0b234b78e9959176703e6daf3c1ea9d640d3dc8368ec8122b991745a",
+          "original_method_ast_sha256": "0485fc3b33276658859974d4aca324f732acc56b858e2d7ab24948694cf7d479",
+          "expected_method_ast_sha256": "3657654596d1e9807894cfca8509291e6e20c66b6b92c0e5e94a74d2c1bf2962"
+        },
+        {
+          "old_id": "tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_start_append_failure_makes_zero_specialist_calls_and_leaks_no_marker",
+          "new_id": "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_start_append_failure_makes_zero_specialist_calls_and_leaks_no_marker",
+          "subtest_cap": 0,
+          "source": "tests/test_specialist_orchestration.py",
+          "destination": "tests/test_specialist_orchestration_execution.py",
+          "original_file_sha256": "87b094bc0b234b78e9959176703e6daf3c1ea9d640d3dc8368ec8122b991745a",
+          "original_method_ast_sha256": "f1692b88806b3b8e702933de97a04741e84f3e00f57cdeabadd4e181a5bbf0eb",
+          "expected_method_ast_sha256": "53414045a5fe469e914108bffcc7a79f7964e4d5339bdff475c5fdf38c4c17d4"
+        },
+        {
+          "old_id": "tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_submitted_uncertainty_enters_unknown_and_never_replays",
+          "new_id": "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_submitted_uncertainty_enters_unknown_and_never_replays",
+          "subtest_cap": 0,
+          "source": "tests/test_specialist_orchestration.py",
+          "destination": "tests/test_specialist_orchestration_execution.py",
+          "original_file_sha256": "87b094bc0b234b78e9959176703e6daf3c1ea9d640d3dc8368ec8122b991745a",
+          "original_method_ast_sha256": "47314f2d3846a4a2be98fe0889c727828b4ef4e73b9d6d669e79297c0ea6a3e0",
+          "expected_method_ast_sha256": "8678666ae3e33c7984e1cc7a81d61e0c2bdd020eb047bff396e35c49fc7e891e"
+        },
+        {
+          "old_id": "tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_synthesis_cancellation_preserves_specialist_result_and_never_reruns_it",
+          "new_id": "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_synthesis_cancellation_preserves_specialist_result_and_never_reruns_it",
+          "subtest_cap": 0,
+          "source": "tests/test_specialist_orchestration.py",
+          "destination": "tests/test_specialist_orchestration_execution.py",
+          "original_file_sha256": "87b094bc0b234b78e9959176703e6daf3c1ea9d640d3dc8368ec8122b991745a",
+          "original_method_ast_sha256": "52b0f4d1cee2ea3582d22f87aa6d9bdf5e4577333e40d33810e7cdf452384621",
+          "expected_method_ast_sha256": "2030985c7e16ca6ef9db9f542eca75afda616ed3e8299f3a8b284ee653ecfd41"
+        },
+        {
+          "old_id": "tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_synthesis_contract_is_semantic_and_runtime_derives_attribution",
+          "new_id": "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_synthesis_contract_is_semantic_and_runtime_derives_attribution",
+          "subtest_cap": 0,
+          "source": "tests/test_specialist_orchestration.py",
+          "destination": "tests/test_specialist_orchestration_execution.py",
+          "original_file_sha256": "87b094bc0b234b78e9959176703e6daf3c1ea9d640d3dc8368ec8122b991745a",
+          "original_method_ast_sha256": "e32045750ad22a53a82c2074aa09bfb0e3b7cc3c0e614338a3d1c188d7ce1896",
+          "expected_method_ast_sha256": "432d1cf688a4451e233ad3b3c910c13a700d34f9562d1634299dba0a958e0a45"
+        },
+        {
+          "old_id": "tests.test_specialist_orchestration.SpecialistExecutionAcceptanceTests.test_synthesis_derives_non_supporting_inputs_locally",
+          "new_id": "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_synthesis_derives_non_supporting_inputs_locally",
+          "subtest_cap": 0,
+          "source": "tests/test_specialist_orchestration.py",
+          "destination": "tests/test_specialist_orchestration_execution.py",
+          "original_file_sha256": "87b094bc0b234b78e9959176703e6daf3c1ea9d640d3dc8368ec8122b991745a",
+          "original_method_ast_sha256": "0f983a2e136a70eba716ef9c300a15196c8b9028743bb41cd7adafa34c7b64a4",
+          "expected_method_ast_sha256": "82bec9a8c6195d91c1f12c0bf0f757a70dc100e541c8b40db098953801be714d"
+        }
+      ]
     }
   ]
 }
