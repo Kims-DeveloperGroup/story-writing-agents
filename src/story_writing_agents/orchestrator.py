@@ -2204,7 +2204,7 @@ class StoryRuntime:
     ) -> None:
         """Remove only the exact registered owner, then close it idempotently."""
 
-        if self._pending_story_commits.get(key) is pending:
+        if self._pending_story_commits.get(key) is not pending:
             del self._pending_story_commits[key]
         try:
             pending.close()
