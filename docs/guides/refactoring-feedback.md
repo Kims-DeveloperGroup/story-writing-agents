@@ -288,6 +288,13 @@ worker 조건으로 비교하며 진단 실행과 섞지 않는다. 변경 전 �
 허용 범위를 먼저 고정하고 초과 원인을 조사한다. 리팩토링 때문에 실제로
 느려진 결과는 실패다. 고정 범위 안이라는 이유만으로 자동 통과시키지 않는다.
 
+예산·partition 검증은 runner의 fresh census가 만든 실제 전체 collection을
+실행 소유자의 공개 API로 받아 사용한다. 같은 실행에서 두 번째로 구성한
+객체가 필요한 시나리오가 아니라면 기존 원본의 ID·정렬·객체 관계를 유지해
+재사용한다. 전달이 없는 실행은 기존 discovery로 돌아가며, 원본의
+full/subset provenance·fixture 수명·source binding을 바꾸거나 가짜 inventory를
+대신 넣지 않는다.
+
 이슈별 승인 소스 +60행은 현재151456→151516에만 배정한다. Case/subTest·시간·
 worker 한도와 별도 이슈의 승인량은 늘리지 않는다. 구현 전 문서 전용
 [Draft PR #1029](https://github.com/Kims-DeveloperGroup/story-writing-agents/pull/1029)를

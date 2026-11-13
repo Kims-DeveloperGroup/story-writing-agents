@@ -6,7 +6,7 @@ import sys
 from typing import Callable, Iterable, Sequence, TextIO
 from tests import suite_policy
 from tests.local_ci_state import LocalCIError, snapshot
-from .contracts import RUNNER_NAME, RunnerError, SCHEMA_VERSION
+from .contracts import CanonicalCollection, RUNNER_NAME, RunnerError, SCHEMA_VERSION
 from .collection import discover_canonical
 from .selection import policy_select
 from .evidence import manifest, write_json
@@ -187,7 +187,7 @@ def main(argv: Sequence[str] | None = None, *, owner_catalogue=None) -> int:
             if args.json:
                 write_json(args.json, report)
             return 0 if report["outcome"] == "success" else 1
-        execution = execute(selection, stream=sys.stderr, failfast=args.failfast)
+        execution = execute(selection, stream=sys.stderr, failfast=args.failfast, source_collection=canonical if isinstance(canonical, CanonicalCollection) else None)
         report = run_report(
             canonical,
             selection,

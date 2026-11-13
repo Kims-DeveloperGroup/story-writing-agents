@@ -356,7 +356,7 @@ class SuiteBudgetTests(unittest.TestCase):
         self.assertEqual(runner_profile.hosted_launch_order((ids[-1], ids[0])), (ids[0], ids[-1]))
         drift = runner_contracts.CanonicalCollection(cases, (*ids, *runner_profile.HOSTED_MIXED_SERIAL_IDS, ids[0].rsplit(".", 1)[0] + ".test_unreviewed"))
         self.assertRaises(runner_contracts.RunnerError, runner_hosted.hosted_partition, drift, drift)
-        real = runner_collection.discover_canonical()
+        real = runner_execution.source_collection_for(self) or runner_collection.discover_canonical()
         real_serial, real_scheduled = runner_hosted.hosted_partition(real, real)
         self.assertEqual(real_scheduled, ids)
         self.assertEqual(set(real_serial.ids) & set(runner_profile.HOSTED_MIXED_SERIAL_IDS), set(runner_profile.HOSTED_MIXED_SERIAL_IDS))

@@ -114,6 +114,11 @@ Case 검증15행·기존 historical ceiling 복원1행을 더해 실측 raw14847
 영수증 파일의 무결성 검사는 유지하며, 사전 계산 값 자체에 승인 권한을 주지 않는다.
 Fixture 준비는 기존 역방향 검증에서 확인한 legacy·게시 전 cap-map을 함께 받아
 중복 파일 해석만 공유한다. Case 준비2행 감소와 support2행 증가를 모두 위 비용에 계상한다.
+예산 Case의 실제 전체 collection은 기존 fresh census로 준비한다. Runner는 이
+원래 객체를 실행 결과의 수명 안에서 공개 API로 전달하며, Case는 같은 partition
+검증에 재사용한다. 전달이 없는 실행은 기존 discovery를 수행한다. 전역 cache나
+테스트 내용의 도구 이관 없이 중복 구성만 제거하고, full/subset provenance와
+원래 객체·fixture·정리 수명 및 모든 assertion을 유지한다.
 기존 Case·assertion·부정 입력·fixture 수명, weight와 실행 정책 및 worker 한도는
 유지한다. 클래스 분리에 따른 기존 hosted 대상162개의 재분할은 각 소스의
 고정 manifest로 검증한다. 실제 추가량이60행을 넘으면 범위와 근거를 다시

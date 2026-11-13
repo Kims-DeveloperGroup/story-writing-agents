@@ -196,7 +196,7 @@ def hosted_execute(canonical, selected, options, *, slowest, stream):
             raise RunnerError("hosted method work grant exhausted before serial traversal")
         signal.setitimer(signal.ITIMER_REAL, work_deadline - time.monotonic())
         if serial.ids:
-            execution = execute(serial, stream=stream)
+            execution = execute(serial, stream=stream, source_collection=canonical if isinstance(canonical, CanonicalCollection) else None)
             report = run_report(canonical, serial, execution, slowest=0)
             if execution.interrupted or report["unexecuted_ids"] or report["totals"]["completed"] != len(serial.ids):
                 errors.append("serial traversal interrupted or incomplete")
