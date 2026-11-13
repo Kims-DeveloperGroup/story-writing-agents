@@ -256,15 +256,40 @@ source와 Evidence를 확인한다. 구현 전 Draft는 문서 전용 commit으�
 별도 +60행 배정과 섞지 않는다. 구현은 Development-linked 문서 전용 Draft PR을
 확인한 뒤 시작했다.
 
-### 결과 게시 owner 분리 착수 계획 — #1020
+### 협업 결과 게시 경계와 첫 검증 #1020
 
-이 절은 구현 전 Draft PR을 위한 계획 기록이다. 제안
-`lead_execution/collaboration_result_publication.py`의 실제 owner와 테스트 이관은
-아직 구현하지 않았다. [#1020의 수락 계획](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1020#구현-계획)은
-storage-only owner에 게시 본문을 옮기고 기존 append callback과 두 명시적 port를
-전달한다. 실제 read/append/추천·pin finally·바깥 marker 정리 위치는 보존한다.
+`lead_execution/collaboration_result_publication.py`의
+`CollaborationResultPublication`은 동기 결과 게시와 합성 generation pin 정리를
+맡는다. 같은 storage 객체만 보관하며, Root는 공개 진입 시점에 선택한 read·append·
+추천 준비 동작을 호출별 인자로 전달한다. 실제 이벤트 조회·추가·추천 준비와
+pin finally, 바깥 실행 표식 정리의 위치는 보존한다. 호출 도중 Root 메서드를
+교체하는 임의의 사용 방식까지 호환한다고 주장하지 않는다.
 
-기존 네 Case를 1:1 이동하고 실제 producer·fixture·assertion·부정/취소를 유지한다.
-승인된 테스트 소스 +60행만 현재 151456에서 151516으로 배정하며 Case/subTest·시간·
-worker 한도는 바꾸지 않는다. 코드 수정 전에 문서 전용 Draft를 먼저 확인하고,
-이후 실제 source/graph/receipt·같은 오류·정상 시간·최종 CI의 관측을 구분해 기록한다.
+게시 코드를 수정하면 기존 실제 저장 실패를 다루는 첫 Case부터 실행한다.
+네 Case는 입력·준비·assertion·부정/취소 조건을 유지하며 새 소유자 테스트로
+1:1 이동했다. 이 첫 Case 하나가 모든 취소·실패 경로를 덮지는 않는다.
+
+```bash
+PYTHONPATH=src python -m tests.runner run \
+  --id tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_result_persistence_failure_cleans_marker_after_provider_completion \
+  --json /tmp/collaboration-publication-first.json
+```
+
+게시 모듈의 변경은 [#1020의 기존 8개 기능 사례와 구조 검증 범위](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1020#구현-계획)로
+확대한다. Root나 전달 계약·공유 helper의 변경은 실제 소비자 합집합을 확인하고
+전체 CI를 유지한다. 새 테스트를 추가하거나 준비·resource 수명을 줄여 시간을
+만들지 않는다. `event_journal`의 실제 모듈 patch와 공개 소유자의 내부 게시
+메서드 spy는 기존 실패·예산 거절 관측을 유지한다.
+
+[#938](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/938)의 접근에
+따라 최종 결과 batch를 생략하는 같은 오류가 같은 기존 Case에서 RED가 되고,
+정상 소스에서 GREEN이 되는지 전후에 확인한다. 정상 3회는 같은 선택·준비·GC·
+worker 조건으로 비교하며 진단 실행과 섞지 않는다. 변경 전 개별·원본 합산·전체
+허용 범위를 먼저 고정하고 초과 원인을 조사한다. 리팩토링 때문에 실제로
+느려진 결과는 실패다. 고정 범위 안이라는 이유만으로 자동 통과시키지 않는다.
+
+이슈별 승인 소스 +60행은 현재151456→151516에만 배정한다. Case/subTest·시간·
+worker 한도와 별도 이슈의 승인량은 늘리지 않는다. 구현 전 문서 전용
+[Draft PR #1029](https://github.com/Kims-DeveloperGroup/story-writing-agents/pull/1029)를
+생성·확인했다. 실제 source/graph/receipt, 같은 오류, 정상 시간과 최종 CI의
+관측 결과 및 남은 검증은 이 PR의 검증 기록에서 확인한다.

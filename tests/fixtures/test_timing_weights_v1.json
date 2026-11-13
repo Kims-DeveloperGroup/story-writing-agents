@@ -140,6 +140,7 @@
     "tests.test_collaboration_events.CollaborationPackageBoundaryTests": 16466296,
     "tests.test_collaboration_events.CollaborationValueContractTests": 177044,
     "tests.test_collaboration_events.CollaborationWireContractTests": 343832,
+    "tests.test_collaboration_result_publication.CollaborationResultPublicationTests": 902075618,
     "tests.test_consensus_deadlock_continuation.ConsensusDeadlockContinuationTests": 235820,
     "tests.test_consensus_event_store.ConsensusEventStoreTests": 999360,
     "tests.test_consensus_event_store.DurableConsensusRestartTests": 3994140,
@@ -357,8 +358,8 @@
     "tests.test_session_transition_assessment.SessionTransitionAssessmentTests": 193564,
     "tests.test_smoke_cli.SmokeExplicitWorkspaceTests": 2144632,
     "tests.test_smoke_cli.SmokeHelpAndTemporaryTests": 14701548,
-    "tests.test_specialist_orchestration_accounting.SpecialistAccountingAcceptanceTests": 987123132,
-    "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests": 2723427016,
+    "tests.test_specialist_orchestration_accounting.SpecialistAccountingAcceptanceTests": 493561566,
+    "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests": 2314912964,
     "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests": 5740806985,
     "tests.test_sqlite_collaboration_event_store.SQLiteCollaborationEventStoreFirstSliceTests": 28567492,
     "tests.test_sqlite_conversation_storage.SQLiteArchiveTests": 12161840,
@@ -392,6 +393,6 @@
     "tests.test_writing_artifacts.SecureStorageTests": 3725752
   },
   "policy_version": 2,
-  "provenance": "Issue938 estimated four-worker wall-equivalent occupancy: measured terminal per-method durations, serial4x/hosted1x, Decimal half-up microseconds per method with minimum1us. Isolated Front measured cost excluded; existing equal-share extraction normalized with W=R+floor(R/(n-1)). Existing class-LPT/isolation/FIFO/profile/limits unchanged. Mixed historical source/environment observations plus four explicitly source/environment-qualified PASS override reports; not CPU costs, causal speedup, actual model acceptance or a future/full-CI pass. Qualification: N historical source-qualified actual PASS and unchanged helper semantics; C actual pure contract PASS; A/B require complete current split-body PASS. Metadata estimates never credit as full-CI passes.",
+  "provenance": "Issue938 estimated four-worker wall-equivalent occupancy: measured terminal per-method durations, serial4x/hosted1x, Decimal half-up microseconds per method with minimum1us. Isolated Front measured cost excluded; existing equal-share extraction normalized with W=R+floor(R/(n-1)). Existing class-LPT/isolation/FIFO/profile/limits unchanged. Mixed historical source/environment observations plus four explicitly source/environment-qualified PASS override reports; not CPU costs, causal speedup, actual model acceptance or a future/full-CI pass. Qualification: N historical source-qualified actual PASS and unchanged helper semantics; C actual pure contract PASS; A/B require complete current split-body PASS. Metadata estimates never credit as full-CI passes. Issue1020 exact four-case owner move: freeze each touched original class pool into quotient/remainder canonical per-ID shares, remainder assigned to earlier original canonical IDs; transfer those fixed shares to exact new IDs and conserve every original pool. Source metadata estimate only, never causal performance or CI pass evidence.",
   "schema_version": 1
 }

@@ -14637,6 +14637,77 @@
           "expected_method_ast_sha256": "82bec9a8c6195d91c1f12c0bf0f757a70dc100e541c8b40db098953801be714d"
         }
       ]
+    },
+    {
+      "schema_version": 1,
+      "issue": 1020,
+      "origin_commit": "a1fba1a38327de3c5e7427bec4366a588bb62ba1",
+      "original_caps_sha256": "ce4382b4bac0778363a7ea7ca90c5c81be63c89077b23abcc4dedbbc170167d9",
+      "expected_caps_sha256": "52d0575e721cf829d7ca7cc0409cd28861ac1db33b587b684d4611aff6df728c",
+      "class_moves": [
+        {
+          "source": "tests/test_specialist_orchestration_accounting.py",
+          "class": "SpecialistAccountingAcceptanceTests",
+          "destination": "tests/test_collaboration_result_publication.py",
+          "destination_class": "CollaborationResultPublicationTests",
+          "methods": [
+            "test_result_persistence_failure_cleans_marker_after_provider_completion"
+          ]
+        },
+        {
+          "source": "tests/test_specialist_orchestration_execution.py",
+          "class": "SpecialistExecutionAcceptanceTests",
+          "destination": "tests/test_collaboration_result_publication.py",
+          "destination_class": "CollaborationResultPublicationTests",
+          "methods": [
+            "test_persistent_validation_publication_failure_keeps_result_unknown",
+            "test_synthesis_cancellation_preserves_specialist_result_and_never_reruns_it",
+            "test_confirm_starts_one_atomic_dispatch_batch_then_runs_three_in_parallel"
+          ]
+        }
+      ],
+      "moves": [
+        {
+          "old_id": "tests.test_specialist_orchestration_accounting.SpecialistAccountingAcceptanceTests.test_result_persistence_failure_cleans_marker_after_provider_completion",
+          "new_id": "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_result_persistence_failure_cleans_marker_after_provider_completion",
+          "subtest_cap": 0,
+          "source": "tests/test_specialist_orchestration_accounting.py",
+          "destination": "tests/test_collaboration_result_publication.py",
+          "original_file_sha256": "34dfae2ecb256b970b81fe37fabfe68c4de019a4320a007a6e425f729ca1a8dc",
+          "original_method_ast_sha256": "19d6b76a76ae97341fdf36ad5020b1ac45411d7028444d78bc9ed6b0fa30bd57",
+          "expected_method_ast_sha256": "75172c5702dc5e166e9123d7c428cd97daa5f42e42efdd8a49a7b9d5df51576a"
+        },
+        {
+          "old_id": "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_persistent_validation_publication_failure_keeps_result_unknown",
+          "new_id": "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_persistent_validation_publication_failure_keeps_result_unknown",
+          "subtest_cap": 0,
+          "source": "tests/test_specialist_orchestration_execution.py",
+          "destination": "tests/test_collaboration_result_publication.py",
+          "original_file_sha256": "03ed7a59987a10c9a0cde00c47d4a2e74280dbe39b6e458d6268b90273f3d6f0",
+          "original_method_ast_sha256": "de23a1ad13e177672aec17df26264baa888b05b4d58a9acbf526f3d5f9766e50",
+          "expected_method_ast_sha256": "de23a1ad13e177672aec17df26264baa888b05b4d58a9acbf526f3d5f9766e50"
+        },
+        {
+          "old_id": "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_synthesis_cancellation_preserves_specialist_result_and_never_reruns_it",
+          "new_id": "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_synthesis_cancellation_preserves_specialist_result_and_never_reruns_it",
+          "subtest_cap": 0,
+          "source": "tests/test_specialist_orchestration_execution.py",
+          "destination": "tests/test_collaboration_result_publication.py",
+          "original_file_sha256": "03ed7a59987a10c9a0cde00c47d4a2e74280dbe39b6e458d6268b90273f3d6f0",
+          "original_method_ast_sha256": "9bf4d990e6f986367f91753344d2102fcd4e29ea6b99396ad7d0953192f1be03",
+          "expected_method_ast_sha256": "9bf4d990e6f986367f91753344d2102fcd4e29ea6b99396ad7d0953192f1be03"
+        },
+        {
+          "old_id": "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_confirm_starts_one_atomic_dispatch_batch_then_runs_three_in_parallel",
+          "new_id": "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_confirm_starts_one_atomic_dispatch_batch_then_runs_three_in_parallel",
+          "subtest_cap": 0,
+          "source": "tests/test_specialist_orchestration_execution.py",
+          "destination": "tests/test_collaboration_result_publication.py",
+          "original_file_sha256": "03ed7a59987a10c9a0cde00c47d4a2e74280dbe39b6e458d6268b90273f3d6f0",
+          "original_method_ast_sha256": "7f647e0debce5ad224a0378940c87e0045e89ba1c9425abcaa8d10b4bafbcb3c",
+          "expected_method_ast_sha256": "7f647e0debce5ad224a0378940c87e0045e89ba1c9425abcaa8d10b4bafbcb3c"
+        }
+      ]
     }
   ]
 }

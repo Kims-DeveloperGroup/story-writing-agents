@@ -24,6 +24,7 @@ from ..collaboration_execution_results import (
 )
 from ..conversation_storage.contracts import ConversationStorageServices
 from ..conversations import (
+    CollaborationEventDraft,
     ArtifactProposalState,
     CollaborationActor,
     CollaborationActorKind,
@@ -155,6 +156,8 @@ class ConfirmedStepExecution:
         run_specialist: Callable[..., Coroutine[Any, Any, CollaborationInvocationResult]],
         run_synthesis: Callable[..., Coroutine[Any, Any, CollaborationInvocationResult]],
         persist_results: Callable[..., None],
+        read_events: Callable[[str, str], tuple[CollaborationEvent, ...]],
+        prepare_recommendation_request: Callable[..., CollaborationEventDraft],
         finalize_known_result: Callable[
             [str, tuple[CollaborationEvent, ...], CollaborationHistoryProjection], LeadTurnResult,
         ],
@@ -189,6 +192,8 @@ class ConfirmedStepExecution:
             run_specialist=run_specialist,
             run_synthesis=run_synthesis,
             persist_results=persist_results,
+            read_events=read_events,
+            prepare_recommendation_request=prepare_recommendation_request,
             finalize_known_result=finalize_known_result,
         )
 
@@ -215,6 +220,8 @@ class ConfirmedStepExecution:
         run_specialist: Callable[..., Coroutine[Any, Any, CollaborationInvocationResult]],
         run_synthesis: Callable[..., Coroutine[Any, Any, CollaborationInvocationResult]],
         persist_results: Callable[..., None],
+        read_events: Callable[[str, str], tuple[CollaborationEvent, ...]],
+        prepare_recommendation_request: Callable[..., CollaborationEventDraft],
         finalize_known_result: Callable[
             [str, tuple[CollaborationEvent, ...], CollaborationHistoryProjection], LeadTurnResult,
         ],
@@ -438,6 +445,9 @@ class ConfirmedStepExecution:
                         attempt_id=attempt_id,
                         assignment_results=results,
                         synthesis_result=None,
+                        read_events=read_events,
+                        append_batch=append_batch,
+                        prepare_recommendation_request=prepare_recommendation_request,
                     )
                 except BaseException as persistence_failure:
                     cancellation.add_note(
@@ -493,6 +503,9 @@ class ConfirmedStepExecution:
                         attempt_id=attempt_id,
                         assignment_results=results,
                         synthesis_result=synthesis_result,
+                        read_events=read_events,
+                        append_batch=append_batch,
+                        prepare_recommendation_request=prepare_recommendation_request,
                     )
                 except BaseException as persistence_failure:
                     cancellation.add_note(
@@ -508,6 +521,9 @@ class ConfirmedStepExecution:
                 attempt_id=attempt_id,
                 assignment_results=results,
                 synthesis_result=synthesis_result,
+                read_events=read_events,
+                append_batch=append_batch,
+                prepare_recommendation_request=prepare_recommendation_request,
             )
             persisted = self._storage.event_store.read(
                 session_id,

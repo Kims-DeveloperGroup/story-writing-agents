@@ -93,6 +93,27 @@ Case 검증15행·기존 historical ceiling 복원1행을 더해 실측 raw14847
 미승인 #1022 배정은 이 전이에 전용하지 않는다. 실제 추가량이25행을 넘으면
 추가 권한을 추정하지 않고 범위와 비용을 다시 확인한다.
 
+## #1020의 협업 결과 게시 분리 소스 배정
+
+사용자가 별도로 승인한 #1020 소스 +60행만 현재 main `a1fba1a3`의
+**151456→151516** 전이에 적용한다. 원 승인 기준151431→151491의 증가량60을
+#1005의 별도 승인25행이 이미 반영된 기준에 적용하며, 예약2행이나 다른 이슈의
+배정을 더하지 않는다. raw148470 + 청구 support1436 + 미확인 legacy1550에서
+기존4개 Case의 실제 이동·준비 코드와 불필요 import 제거21행, 패키징 검증1행,
+모듈 경계 검증15행, 기존 예산 정책 Case 검증20행, ID 이동 검증 support3행으로
+raw148527 + support1439 + legacy1550 =151516을 청구한다.
+
+2544개 ID와 subTest 상한 합8690은 유지한다. 실제4개 Case만 1:1 이동하며
+전체 cap-map digest는 `ce4382b4bac0778363a7ea7ca90c5c81be63c89077b23abcc4dedbbc170167d9`에서
+`52d0575e721cf829d7ca7cc0409cd28861ac1db33b587b684d4611aff6df728c`로 바뀐다.
+이 정확한 소스 전이와 폐쇄된4개 ID 이동, schema1 및 18000/3600초가 모두
+일치해야 허용한다. 인접 기준·상한, 소스만 증가한 동일 최종 ID 구성,
+누락·추가 ID, cap·기존 이동 이력·schema·시간 변경은 거절한다.
+기존 Case·assertion·부정 입력·fixture 수명, weight와 실행 정책 및 worker 한도는
+유지한다. 클래스 분리에 따른 기존 hosted 대상162개의 재분할은 각 소스의
+고정 manifest로 검증한다. 실제 추가량이60행을 넘으면 범위와 근거를 다시
+확인하며, #1022의 미승인 배정이나 다른 이슈의 승인량을 전용하지 않는다.
+
 ## Maintainer-approved source allocation
 
 Issue #881 permits the exact source-ceiling transition from **142474 to 142604** under

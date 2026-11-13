@@ -96,6 +96,8 @@ class LeadStepDecisions:
         run_specialist: Callable[..., Coroutine[Any, Any, CollaborationInvocationResult]],
         run_synthesis: Callable[..., Coroutine[Any, Any, CollaborationInvocationResult]],
         persist_results: Callable[..., None],
+        read_events: Callable[[str, str], tuple[CollaborationEvent, ...]],
+        prepare_recommendation_request: Callable[..., CollaborationEventDraft],
         finalize_known_result: Callable[
             [str, tuple[CollaborationEvent, ...], CollaborationHistoryProjection], LeadTurnResult,
         ],
@@ -428,6 +430,8 @@ class LeadStepDecisions:
                     run_specialist=run_specialist,
                     run_synthesis=run_synthesis,
                     persist_results=persist_results,
+                    read_events=read_events,
+                    prepare_recommendation_request=prepare_recommendation_request,
                     finalize_known_result=finalize_known_result,
                 )
                 return LeadDecisionResult(

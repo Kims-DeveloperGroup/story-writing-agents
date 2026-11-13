@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest.mock import Mock, call, patch
 
 from tests import suite_budget, suite_policy
-from tests.id_moves import historical_feedback_caps
+from tests.id_moves import historical_feedback_caps, load_receipt
 from tests.runner import contracts as runner_contracts
 from tests.runner import collection as runner_collection
 from tests.runner import selection as runner_selection
@@ -248,6 +248,11 @@ class SuiteBudgetTests(unittest.TestCase):
 
         migrated = suite_budget.load_budget(Path(__file__).with_name("fixtures") / "test_budget_v1.json")
         source_current = dict(migrated, subtest_caps=dict(migrated["subtest_caps"]))
+        publication_current = source_current
+        publication_base = dict(publication_current, max_test_source_lines=151456, subtest_caps=dict(publication_current["subtest_caps"]))
+        for move in load_receipt()[-1]["moves"]:
+            publication_base["subtest_caps"][move["old_id"]] = publication_base["subtest_caps"].pop(move["new_id"])
+        source_current = publication_base
         migrated["max_test_source_lines"] = 151431
         migrated["subtest_caps"] = historical_feedback_caps(migrated["subtest_caps"])
         expected_additions = {
@@ -320,10 +325,25 @@ class SuiteBudgetTests(unittest.TestCase):
         ):
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(source_current, subtest_caps=caps), source_base)
         self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, source_current, dict(source_base, subtest_caps={**source_base["subtest_caps"], matrix_id: 2}))
+        publication_current["max_test_source_lines"] = 151516
+        self.assertIsNone(suite_budget.check_monotonic(publication_current, publication_base))
+        self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, publication_current, dict(publication_current, max_test_source_lines=151456))
+        for old, limit in ((151455, 151516), (151457, 151516), (151456, 151515), (151456, 151517)):
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(publication_current, max_test_source_lines=limit), dict(publication_base, max_test_source_lines=old))
+        for field, value in (("schema_version", 2), ("max_sequential_wall_seconds", 18001), ("max_shard_wall_seconds", 3601)):
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(publication_current, **{field: value}), publication_base)
+        for caps in (
+            {key: value for key, value in publication_current["subtest_caps"].items() if key != zero_id},
+            {**publication_current["subtest_caps"], "tests.unreviewed.Case.test_extra": 0},
+            {**publication_current["subtest_caps"], matrix_id: 2},
+            {**publication_current["subtest_caps"], matrix_id: 0},
+        ):
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(publication_current, subtest_caps=caps), publication_base)
+        self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, publication_current, dict(publication_base, subtest_caps={**publication_base["subtest_caps"], matrix_id: 2}))
         ids = runner_profile.HOSTED_METHOD_IDS
         self.assertEqual(runner_evidence.manifest(ids)["digest"],
-                         'sha256:a4f0ca5a29a0a54f9306287458acf5d7ba9145b060fede38938f7e333f8e2803')
-        self.assertEqual((len(ids), len({value.rsplit(".", 1)[0] for value in ids})), (162, 21))
+                         'sha256:ba11e8ce2f3741fcb9cbcaf85998ec7b9fcc760783df7cd55ef1b75f4fc487c6')
+        self.assertEqual((len(ids), len({value.rsplit(".", 1)[0] for value in ids})), (162, 22))
         cases = tuple(SimpleNamespace(id=lambda identifier=value: identifier) for value in (*ids, *runner_profile.HOSTED_MIXED_SERIAL_IDS, "unreviewed.test"))
         canonical = runner_contracts.CanonicalCollection(cases, (*ids, *runner_profile.HOSTED_MIXED_SERIAL_IDS, "unreviewed.test"))
         serial, scheduled = runner_hosted.hosted_partition(canonical, canonical)
@@ -332,7 +352,7 @@ class SuiteBudgetTests(unittest.TestCase):
                                              (suite_policy.ISOLATED_TEST_ID,))
         serial, scheduled = runner_hosted.hosted_partition(canonical, isolated)
         self.assertEqual((serial.ids, scheduled), ((), (suite_policy.ISOLATED_TEST_ID,)))
-        launch_digest = 'sha256:7f682c623382fc476bd731bc1def62f8cc6dc35aa5da7d71ae2dd68f5d8619e4'
+        launch_digest = 'sha256:207d64f53b88140bc68c64ee852197efbdbe6979b6a5b91eb9c7250da56b4fdd'
         self.assertEqual(runner_evidence.manifest(runner_profile.hosted_launch_order(ids))["digest"], launch_digest)
         self.assertEqual(runner_profile.hosted_launch_order(ids[::-1]), runner_profile.hosted_launch_order(ids))
         self.assertEqual(runner_profile.hosted_launch_order((ids[-1], ids[0])), (ids[0], ids[-1]))
@@ -344,10 +364,10 @@ class SuiteBudgetTests(unittest.TestCase):
         self.assertEqual(set(real_serial.ids) & set(runner_profile.HOSTED_MIXED_SERIAL_IDS), set(runner_profile.HOSTED_MIXED_SERIAL_IDS))
         self.assertFalse(set(real_scheduled) & set(runner_profile.HOSTED_MIXED_SERIAL_IDS))
         self.assertIn("tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip", real_serial.ids)
-        self.assertEqual(len(runner_profile.HOSTED_MIXED_SERIAL_IDS), 8)
+        self.assertEqual(len(runner_profile.HOSTED_MIXED_SERIAL_IDS), 9)
         missing = runner_contracts.CanonicalCollection(cases, (*ids[:-1], *runner_profile.HOSTED_MIXED_SERIAL_IDS))
         self.assertRaises(runner_contracts.RunnerError, runner_hosted.hosted_partition, missing, missing)
-        args = SimpleNamespace(command="run", hosted_methods='audited-162-v6', hosted_deadline_epoch=time.time()+3500,
+        args = SimpleNamespace(command="run", hosted_methods='audited-162-v7', hosted_deadline_epoch=time.time()+3500,
                                shard="1/5", id=[], module=[], tier=[], failfast=False, json="report.json")
         env = dict(GITHUB_ACTIONS="true", TEST_RUN_DEADLINE=str(time.time()+4500),
                    TEST_JOB_DEADLINE=str(time.time()+4500))
@@ -400,7 +420,7 @@ class SuiteBudgetTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             paths = self._reports(directory, (0, 0)); rows = self.report_data
-            metadata = {"version": 1, "mode": "hosted-whole-method", "profile": 'audited-162-v6',
+            metadata = {"version": 1, "mode": "hosted-whole-method", "profile": 'audited-162-v7',
                         "profile_manifest": runner_evidence.manifest(runner_profile.HOSTED_METHOD_IDS),
                         "capacity": 2, "peak_children": 0, "work_deadline_epoch": 10000.0,
                         "cleanup_deadline_epoch": 10030.0, "launch_manifest": runner_evidence.manifest(()),
