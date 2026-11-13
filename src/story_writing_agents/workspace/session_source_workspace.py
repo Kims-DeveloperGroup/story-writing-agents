@@ -575,7 +575,7 @@ class SessionSourceWorkspace(Workspace):
         if (
             not stat.S_ISREG(opened.st_mode)
             or not stat.S_ISREG(named.st_mode)
-            or opened.st_nlink != 1
+            or opened.st_nlink == 1
             or named.st_nlink != 1
             or identity != (named.st_dev, named.st_ino)
             or opened.st_mode != named.st_mode
