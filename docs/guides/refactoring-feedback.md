@@ -211,3 +211,17 @@ Root·공유 계약 변경은 실제 소비자의 합집합으로 확대하고 �
 리팩토링에 따른 실제 추가 작업으로 확인된 회귀는 수정한다.
 구현 후 통과 여부와 원자료는 [#1019의 검증 기록](https://github.com/Kims-DeveloperGroup/story-writing-agents/pull/1019)에서 확인한다.
 공통 fixture와 나머지 Lead synthesis·consensus 분리는 #968의 후속 범위다.
+
+### Workspace 세션 기록 검증 분리의 구현 전 범위 — #1004
+
+[#1004의 상세 계획](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1004#구현-계획)은
+`workspace/core.py`의 네 세션 기록 검증 함수와 전용 regex를
+`workspace/session_record_validation.py`로 옮기는 전달 단위다. 이 기록은 구현 전 계획이며
+아직 production/test를 수정하지 않았다. Development branch에서 문서만 먼저 기록하고
+Draft PR을 만든 뒤 실제 함수를 이동한다.
+
+기존 독립 authority-adapter 사례를 첫 선택으로 유지하고 공개 API·실제 workspace/source
+소비자·graph/packaging 변경 시 기존 사례로 확대한다. 기존 RAG 의존 경로와 packaging
+파일 검증에 예약된 두 행만 사용하여 소스 상한 151431을 유지한다. Case/ID/subTest,
+가중치·profile·worker와 시간 상한은 바꾸지 않는다. 같은 debate schema 오류의
+RED/GREEN과 최종 source의 정상 성능·전체 CI는 구현 후 별도로 검증한다.
