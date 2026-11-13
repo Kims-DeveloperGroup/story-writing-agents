@@ -38,7 +38,10 @@ def validate_collection_provenance(value, *, require_fresh=False):
 
 def source_snapshot() -> dict[str, object]:
     try:
-        return snapshot(Path(__file__).resolve().parents[2])
+        captured_source_inputs = snapshot(Path(__file__).resolve().parents[2])
+        captured_source_path = Path(os.environ["RUNNER_TEMP"]) / ("source-input-snapshot-" + str(captured_source_inputs["digest"]).split(":")[-1] + ".json")
+        captured_source_path.write_text(json.dumps(captured_source_inputs, sort_keys=True), encoding="utf-8")
+        return captured_source_inputs
     except LocalCIError as error:
         raise RunnerError(f"cannot capture test source: {error}") from error
 

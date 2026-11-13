@@ -782,6 +782,7 @@ jobs:
             ${{ runner.temp }}/fast-control.json
             ${{ runner.temp }}/feedback-probe*
             ${{ runner.temp }}/gc-diagnostic*
+            ${{ runner.temp }}/source-input-snapshot-*.json
             ${{ runner.temp }}/case-profile-*
             ${{ runner.temp }}/fast-exit-code.txt
             ${{ runner.temp }}/fast-selection-argv.txt
