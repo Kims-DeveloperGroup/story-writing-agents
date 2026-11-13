@@ -507,7 +507,8 @@
           "counting": "Exactly four existing method bodies moved once. Existing fixture helpers reused from original test owners; no newCase/subTest/scenario; legacy1550 retained."
         }
       ],
-      "legacy_unresolved_lines": 1550
+      "legacy_unresolved_lines": 1550,
+      "counting": "Issue 1020 approved +60 lines: raw test source +55 and counted support +5; current raw148525 + support1441 + legacy1550 = 151516. Four method moves, all assertions/scenarios, and immutable origins remain unchanged."
     }
   ]
 }

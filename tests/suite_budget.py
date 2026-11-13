@@ -124,7 +124,8 @@ def check_monotonic(current: dict[str, Any], base: dict[str, Any]) -> None:
             and base["schema_version"] == current["schema_version"] == 1
             and tuple(base[name] for name in time_fields) == tuple(current[name] for name in time_fields) == (18000, 3600)
             and len(base["subtest_caps"]) == len(current["subtest_caps"]) == 2544
-            and sum(base["subtest_caps"].get(key) != cap for key, cap in current["subtest_caps"].items()) == 4
+            and sum(base["subtest_caps"].values()) == sum(current["subtest_caps"].values()) == 8690
+            and base["subtest_caps"].keys() != current["subtest_caps"].keys()
             and (base_digest := caps_digest(base["subtest_caps"])) == "ce4382b4bac0778363a7ea7ca90c5c81be63c89077b23abcc4dedbbc170167d9"
             and (current_digest := caps_digest(current["subtest_caps"])) == "52d0575e721cf829d7ca7cc0409cd28861ac1db33b587b684d4611aff6df728c"
         ):

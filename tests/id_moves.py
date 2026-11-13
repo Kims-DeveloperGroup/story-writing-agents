@@ -79,13 +79,13 @@ def remap_base_caps(current: dict[str, int], base: dict[str, int], *, digests: t
         raise ValueError("canonical move adds, drops, or changes cases")
     return result
 
-def historical_feedback_caps(current: dict[str, int]) -> dict[str, int]:
+def historical_feedback_caps(current: dict[str, int], *, with_publication_base: bool = False) -> dict[str, int] | tuple[dict[str, int], dict[str, int] | None]:
     """Restore only the existing Issue 938 fixture's original owner keys."""
     digest = caps_digest(current)
     ends = [stage[3] for stage in STAGES]
     if digest not in ends:
         raise ValueError("historical fixture differs approved current inventory")
-    result = dict(current)
+    result, publication_base = dict(current), None
     for stage in reversed(load_receipt()[:ends.index(digest) + 1]):
         for move in stage["moves"]:
             old, new, cap = move["old_id"], move["new_id"], move["subtest_cap"]
@@ -94,4 +94,6 @@ def historical_feedback_caps(current: dict[str, int]) -> dict[str, int]:
             result[old] = result.pop(new)
         if caps_digest(result) != stage["original_caps_sha256"]:
             raise ValueError("historical fixture differs original full inventory")
-    return result
+        if with_publication_base and stage["original_caps_sha256"] == S07_CAPS_SHA256:
+            publication_base = dict(result)
+    return (result, publication_base) if with_publication_base else result

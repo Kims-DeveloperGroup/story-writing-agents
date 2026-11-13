@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest.mock import Mock, call, patch
 
 from tests import suite_budget, suite_policy
-from tests.id_moves import historical_feedback_caps, load_receipt
+from tests.id_moves import historical_feedback_caps
 from tests.runner import contracts as runner_contracts
 from tests.runner import collection as runner_collection
 from tests.runner import selection as runner_selection
@@ -249,12 +249,10 @@ class SuiteBudgetTests(unittest.TestCase):
         migrated = suite_budget.load_budget(Path(__file__).with_name("fixtures") / "test_budget_v1.json")
         source_current = dict(migrated, subtest_caps=dict(migrated["subtest_caps"]))
         publication_current = source_current
-        publication_base = dict(publication_current, max_test_source_lines=151456, subtest_caps=dict(publication_current["subtest_caps"]))
-        for move in load_receipt()[-1]["moves"]:
-            publication_base["subtest_caps"][move["old_id"]] = publication_base["subtest_caps"].pop(move["new_id"])
+        migrated["subtest_caps"], publication_caps = historical_feedback_caps(migrated["subtest_caps"], with_publication_base=True)
+        publication_base = dict(publication_current, max_test_source_lines=151456, subtest_caps=publication_caps)
         source_current = publication_base
         migrated["max_test_source_lines"] = 151431
-        migrated["subtest_caps"] = historical_feedback_caps(migrated["subtest_caps"])
         expected_additions = {
             'tests.test_historical_material_workflow.HistoricalMaterialWorkflowTests.test_prior_draft_and_rejected_response_remain_input_only_in_new_task': 0,
             'tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart': 0,
