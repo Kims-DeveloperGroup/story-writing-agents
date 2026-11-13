@@ -736,7 +736,7 @@ jobs:
         if: inputs.compare_feedback_baseline == true && needs.classify.outputs.affected_only == 'true'
         uses: actions/checkout@v4
         with:
-          ref: 45cf084f0d28eb5926863e90509e5f14bbd3497e
+          ref: 37f5242507a42c71aeebe6282505bbdb49c23f78
           submodules: recursive
           path: .feedback-baseline
       - name: 같은 환경에서 수정 전 RED와 GREEN 측정
