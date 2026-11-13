@@ -443,6 +443,28 @@
         }
       ],
       "legacy_unresolved_lines": 1550
+    },
+    {
+      "issue": 1007,
+      "origin_commit": "b7dd8d8d986d92aad22aad8db44e0ad0d02a4a68",
+      "origins": [
+        {
+          "source": "tests/test_specialist_orchestration.py",
+          "sha256": "87b094bc0b234b78e9959176703e6daf3c1ea9d640d3dc8368ec8122b991745a",
+          "source_ranges": [
+            [
+              1,
+              1141
+            ]
+          ],
+          "destinations": [
+            "tests/test_specialist_orchestration_accounting.py",
+            "tests/test_specialist_orchestration_execution.py"
+          ],
+          "counting": "Original class/helper bodies counted once via recursive test paths. Existing identical _payloads reuses tests.test_lead_orchestration._event_payloads; legacy1550 retained."
+        }
+      ],
+      "legacy_unresolved_lines": 1550
     }
   ]
 }

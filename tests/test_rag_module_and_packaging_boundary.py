@@ -346,8 +346,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 246)
-        self.assertEqual(len(edges), 1267)
+        self.assertEqual(len(modules), 249)
+        self.assertEqual(len(edges), 1307)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -925,7 +925,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         self.assertEqual({target for source, target in edges if source == "story_writing_agents.blocking_work"}, set())
         self.assertEqual({source for source, target in edges if target == "story_writing_agents.blocking_work"},
                          {"story_writing_agents.codex_native_context", "story_writing_agents.orchestrator",
-                          "story_writing_agents.lead_preparation.call_rule_factory"})
+                          "story_writing_agents.lead_preparation.call_rule_factory",
+                        "story_writing_agents.lead_execution.lead_step_decisions"})
 
     def test_supported_module_surfaces_do_not_expand_the_root_facade(self) -> None:
         self.assertEqual(len(story_writing_agents.__all__), 106)
@@ -1187,6 +1188,8 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             "story_writing_agents/lead_control_events.py",
             "story_writing_agents/runtime_resources/generation_pin_cleanup.py",
                 "story_writing_agents/antigravity_response_decoding.py",
+            "story_writing_agents/lead_execution/confirmed_step_execution.py",
+            "story_writing_agents/lead_execution/lead_step_decisions.py",
             )
             with zipfile.ZipFile(story_wheel) as archive:
                 for package_path in group_package_paths:
@@ -1208,6 +1211,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 "story_writing_agents/conversations/events.py",
                 "story_writing_agents/conversations/event_vocabulary.py",
                 "story_writing_agents/conversations/event_value_validation.py",
+                "story_writing_agents/lead_execution/__init__.py",
             )
             workspace_package_paths = (
                 "story_writing_agents/workspace/__init__.py",

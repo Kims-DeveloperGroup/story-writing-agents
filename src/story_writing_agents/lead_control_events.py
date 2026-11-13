@@ -19,6 +19,18 @@ from .conversations import (
     CollaborationStepStatePayload,
     project_collaboration_history,
 )
+from .conversations import (
+    CollaborationInvocationKind,
+    CollaborationLeadJudgmentPayload,
+    CollaborationLeadSynthesisPayload,
+    CollaborationLeadTaskDecisionPayload,
+    LeadRecommendationStartedPayload,
+)
+from .conversations.events import (
+    CollaborationLeadExplorationResultPayload,
+    CollaborationPremiseDecisionPayload,
+)
+from .lead_premise_decisions import PremiseDecisionAction
 
 
 def effective_lead_control_events(
@@ -88,3 +100,126 @@ def terminal_state_draft(
             ),
         ),
     )
+
+
+def has_unstarted_lead_request(
+    events: tuple[CollaborationEvent, ...],
+) -> bool:
+    """Detect any durable request lacking a later same-turn invocation marker."""
+
+    settled_origin_ids: set[str] = set()
+    settled_controls = {
+        event.event_id for event in events
+        if type(event.payload) is CollaborationPremiseDecisionPayload
+        and event.payload.selection.action in {PremiseDecisionAction.REJECT, PremiseDecisionAction.DEFER}
+        and event.sender == event_journal.USER_ACTOR and event.recipient == event_journal.LEAD_ACTOR
+    }
+    if settled_controls:
+        current_report_event = None
+        message_origins = {}
+        for event in events:
+            if (
+                type(event.payload) is CollaborationLeadSynthesisPayload
+                and event.payload.premise_report is not None
+            ):
+                current_report_event = event
+            elif (
+                type(event.payload) is CollaborationMessagePayload
+                and event.sender == event_journal.USER_ACTOR and event.recipient == event_journal.LEAD_ACTOR
+            ):
+                key = (
+                    event.session_id, event.conversation_id, event.turn_id, event.step_id, event.batch_id,
+                )
+                message_origins.setdefault(key, []).append(event)
+            elif event.event_id in settled_controls and current_report_event is not None:
+                selection = event.payload.selection
+                report = current_report_event.payload.premise_report
+                origins = message_origins.get(
+                    (
+                        event.session_id, event.conversation_id, event.turn_id,
+                        event.step_id, event.batch_id,
+                    ), (),
+                )
+                if (
+                    len(origins) == 1
+                    and origins[0].sequence < event.sequence
+                    and (current_report_event.session_id, current_report_event.conversation_id)
+                    == (event.session_id, event.conversation_id)
+                    and report.source_conversation_id == event.conversation_id
+                    and (
+                        selection.source_conversation_id, selection.report_event_id,
+                        selection.report_digest, selection.question_id,
+                    ) == (
+                        event.conversation_id, current_report_event.event_id,
+                        report.report_digest, report.spec.question_id,
+                    )
+                ):
+                    settled_origin_ids.add(origins[0].event_id)
+    marked_turns: set[str] = set()
+    for control in events:
+        if type(control.payload) is not CollaborationLeadTaskTransitionPayload:
+            continue
+        receipt = control.payload.receipt
+        if receipt.action not in {LeadTaskAction.HOLD, LeadTaskAction.DISCARD}:
+            continue
+        origin = next((event for event in events if event.event_id == receipt.origin_event_id), None)
+        if origin is not None and type(origin.payload) is CollaborationLeadTaskDecisionPayload and (
+            origin.session_id, origin.conversation_id, origin.turn_id, origin.step_id, origin.batch_id,
+        ) == (control.session_id, control.conversation_id, control.turn_id, control.step_id, control.batch_id):
+            if receipt.origin_message_event_id is not None:
+                settled_origin_ids.add(receipt.origin_message_event_id)
+    for event in reversed(events):
+        if event.event_id in settled_origin_ids:
+            continue
+        if (
+            (
+                type(event.payload) is CollaborationProviderCallPayload
+                and event.payload.invocation_kind
+                is CollaborationInvocationKind.LEAD
+            )
+            or (
+                event.kind is CollaborationEventKind.MESSAGE
+                and event.sender == event_journal.LEAD_ACTOR
+                and event.recipient == event_journal.USER_ACTOR
+                and type(event.payload) is CollaborationLeadJudgmentPayload
+            )
+            or type(event.payload) in {CollaborationLeadOutcomeFailurePayload, CollaborationLeadExplorationResultPayload, CollaborationLeadDiscussionPayload}
+        ):
+            marked_turns.add(event.turn_id)
+            continue
+        if (
+            ((type(event.payload) is CollaborationMessagePayload
+              and event.sender == event_journal.USER_ACTOR and event.recipient == event_journal.LEAD_ACTOR)
+             or type(event.payload) is LeadRecommendationStartedPayload)
+            and event.turn_id not in marked_turns
+        ):
+            return True
+    return False
+
+
+def unmatched_lead_call_state(
+    events: tuple[CollaborationEvent, ...],
+) -> CollaborationProviderCallState | None:
+    """Return the strongest durable state of an unmatched Lead provider call."""
+
+    completed_invocations: set[tuple[str, str]] = set()
+    prepared = False
+    for event in reversed(events):
+        correlation = (event.step_id, event.turn_id)
+        if (
+            event.kind is CollaborationEventKind.MESSAGE
+            and event.sender == event_journal.LEAD_ACTOR
+            and event.recipient == event_journal.USER_ACTOR
+            and type(event.payload) is CollaborationLeadJudgmentPayload
+        ) or type(event.payload) in {CollaborationLeadOutcomeFailurePayload, CollaborationLeadExplorationResultPayload, CollaborationLeadDiscussionPayload}:
+            completed_invocations.add(correlation)
+            continue
+        if (
+            type(event.payload) is CollaborationProviderCallPayload
+            and event.payload.invocation_kind in {CollaborationInvocationKind.LEAD, CollaborationInvocationKind.LEAD_EXPLORATION, CollaborationInvocationKind.LEAD_DISCUSSION}
+            and correlation not in completed_invocations
+        ):
+            if event.payload.state is CollaborationProviderCallState.SUBMITTED:
+                return CollaborationProviderCallState.SUBMITTED
+            prepared = True
+    return CollaborationProviderCallState.PREPARED if prepared else None

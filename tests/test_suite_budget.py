@@ -60,6 +60,20 @@ class SuiteBudgetTests(unittest.TestCase):
             Path(path).write_text(json.dumps(value), encoding="utf-8")
         return paths
 
+    def _assert_source_limit_neighbors_rejected(self, current, base):
+        """Reject the original four adjacent source-floor/limit pairs."""
+        original_floor = base["max_test_source_lines"]
+        accepted_limit = current["max_test_source_lines"]
+        for old, limit in (
+            (original_floor - 1, accepted_limit), (original_floor + 1, accepted_limit),
+            (original_floor, accepted_limit - 1), (original_floor, accepted_limit + 1),
+        ):
+            with self.assertRaises(suite_budget.BudgetError):
+                suite_budget.check_monotonic(
+                    dict(current, max_test_source_lines=limit),
+                    dict(base, max_test_source_lines=old),
+                )
+
     def test_new_id_increased_subtests_and_relaxed_time_are_rejected(self) -> None:
         hourly = dict(self.budget, max_sequential_wall_seconds=18000, max_shard_wall_seconds=3600)
         self.assertIsNone(suite_budget.check_monotonic(hourly, self.budget))
@@ -91,34 +105,14 @@ class SuiteBudgetTests(unittest.TestCase):
         observation_source = dict(wire_source, max_test_source_lines=146667)
         for origin in (source, wire_source):
             self.assertIsNone(suite_budget.check_monotonic(observation_source, origin))
-            for old, limit in ((origin["max_test_source_lines"] - 1, 146667),
-                               (origin["max_test_source_lines"] + 1, 146667),
-                               (origin["max_test_source_lines"], 146667 - 1),
-                               (origin["max_test_source_lines"], 146667 + 1)):
-                with self.assertRaises(suite_budget.BudgetError):
-                    suite_budget.check_monotonic(
-                        dict(observation_source, max_test_source_lines=limit),
-                        dict(origin, max_test_source_lines=old))
+            self._assert_source_limit_neighbors_rejected(observation_source, origin)
         native_source = dict(observation_source, max_test_source_lines=146829)
         for origin in (source, observation_source):
             self.assertIsNone(suite_budget.check_monotonic(native_source, origin))
-            for old, limit in ((origin["max_test_source_lines"] - 1, 146829),
-                               (origin["max_test_source_lines"] + 1, 146829),
-                               (origin["max_test_source_lines"], 146829 - 1),
-                               (origin["max_test_source_lines"], 146829 + 1)):
-                with self.assertRaises(suite_budget.BudgetError):
-                    suite_budget.check_monotonic(
-                        dict(native_source, max_test_source_lines=limit),
-                        dict(origin, max_test_source_lines=old))
+            self._assert_source_limit_neighbors_rejected(native_source, origin)
         continuity_source = dict(native_source, max_test_source_lines=147338)
         self.assertIsNone(suite_budget.check_monotonic(continuity_source, native_source))
-        for old, limit in ((146828, continuity_source["max_test_source_lines"]),
-                           (146830, continuity_source["max_test_source_lines"]),
-                           (146829, continuity_source["max_test_source_lines"] - 1),
-                           (146829, continuity_source["max_test_source_lines"] + 1)):
-            with self.assertRaises(suite_budget.BudgetError):
-                suite_budget.check_monotonic(dict(continuity_source, max_test_source_lines=limit),
-                                             dict(native_source, max_test_source_lines=old))
+        self._assert_source_limit_neighbors_rejected(continuity_source, native_source)
         preliminary_source = dict(continuity_source, max_test_source_lines=148667)
         self.assertIsNone(suite_budget.check_monotonic(preliminary_source, continuity_source))
         for old, limit in ((147337, 148667),
@@ -312,7 +306,7 @@ class SuiteBudgetTests(unittest.TestCase):
         import os, sys, time
         ids = runner_profile.HOSTED_METHOD_IDS
         self.assertEqual(runner_evidence.manifest(ids)["digest"],
-                         'sha256:bae2cbeecf8adb390fef035f2be3d51df511033d4046691b988cfb6283ddf912')
+                         'sha256:a4f0ca5a29a0a54f9306287458acf5d7ba9145b060fede38938f7e333f8e2803')
         self.assertEqual((len(ids), len({value.rsplit(".", 1)[0] for value in ids})), (162, 21))
         cases = tuple(Mock(id=Mock(return_value=value)) for value in (*ids, *runner_profile.HOSTED_MIXED_SERIAL_IDS, "unreviewed.test"))
         canonical = runner_contracts.CanonicalCollection(cases, (*ids, *runner_profile.HOSTED_MIXED_SERIAL_IDS, "unreviewed.test"))
@@ -322,7 +316,7 @@ class SuiteBudgetTests(unittest.TestCase):
                                              (suite_policy.ISOLATED_TEST_ID,))
         serial, scheduled = runner_hosted.hosted_partition(canonical, isolated)
         self.assertEqual((serial.ids, scheduled), ((), (suite_policy.ISOLATED_TEST_ID,)))
-        launch_digest = 'sha256:4f5188035e3d25c9126afba6dd90dab3a93a1c45ccfdaa9b2ffe026516e96a1d'
+        launch_digest = 'sha256:7f682c623382fc476bd731bc1def62f8cc6dc35aa5da7d71ae2dd68f5d8619e4'
         self.assertEqual(runner_evidence.manifest(runner_profile.hosted_launch_order(ids))["digest"], launch_digest)
         self.assertEqual(runner_profile.hosted_launch_order(ids[::-1]), runner_profile.hosted_launch_order(ids))
         self.assertEqual(runner_profile.hosted_launch_order((ids[-1], ids[0])), (ids[0], ids[-1]))

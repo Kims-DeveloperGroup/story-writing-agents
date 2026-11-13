@@ -17,7 +17,6 @@ import json
 from story_writing_agents.lead_schema_groups import LeadGroupPhase
 import story_writing_agents.lead_task_transitions as task
 from story_writing_agents import provider_wire as wire
-from story_writing_agents.conversations.events import COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES
 import pickle
 import subprocess
 import tempfile
@@ -31,6 +30,7 @@ from typing import Awaitable, Callable
 from unittest import mock
 from story_writing_agents import ReplyTraceOrigin, RuntimeSession, StoryRuntime, Workspace
 from story_writing_agents import orchestrator as orchestrator_module
+from story_writing_agents.lead_execution import confirmed_step_execution as confirmed_execution
 from story_writing_agents.lead_preparation import call_rule_factory, outcome_decoding, reply_contract_values
 from story_writing_agents.lead_preparation import response_rules, authoring_authority
 from story_writing_agents.agent_context.accounting import ProviderCallAccounting, ProviderCallKind, ProviderCallState, account_provider_payload
@@ -987,6 +987,19 @@ def _whole_book_assessment(call, answer, *, offered_inputs, logical_transform: C
     answer["action"]["result"] = { "response_type": "core_document_readiness_assessment",
         "response_text": answer["action"]["result"]["message"], "writing_task_scope": None, "core_document_assessment": core_readiness.assessment_to_dict(assessment), }
     return json.dumps(answer, ensure_ascii=False)
+
+
+def _capture_execution_inputs(initialize, *args, **kwargs):
+    with mock.patch.object(
+        confirmed_execution.ConfirmedStepExecution, "__init__", autospec=True,
+        side_effect=confirmed_execution.ConfirmedStepExecution.__init__,
+    ) as constructor:
+        try:
+            result = initialize(*args, **kwargs)
+            arguments = constructor.call_args.kwargs
+            return result, arguments["issued_capabilities"], arguments["live_executions"]
+        finally:
+            constructor.reset_mock()
 
 
 class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
@@ -5846,6 +5859,9 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
 
 
 class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
+    def setUp(self) -> None:
+        self._execution_inputs = _capture_execution_inputs(super().setUp)
+
     async def test_domain_rejection_without_repair_persists_safe_notice(self) -> None:
         conversation_id = self.conversation("Direct lead domain rejection")
         self.backend.enqueue(_visible_outcome("answer", ""), control_plan=selection_plan("answer.workflow"))
@@ -5974,7 +5990,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self.assertEqual(project_collaboration_history(history).physical_calls_spent, 3)
 
     async def _leave_genuine_confirmation_before_dispatch(self, proposed) -> None:
-        with (mock.patch.object(self.runtime, '_execute_confirmed_step_locked',
+        with (mock.patch.object(confirmed_execution.ConfirmedStepExecution, '_execute_confirmed_step_locked',
             side_effect=RuntimeError('test stopped before specialist dispatch'))):
             with self.assertRaisesRegex(RuntimeError, "test stopped before specialist dispatch"):
                 await self._decide(proposed, CollaborationConfirmationDecision.CONFIRM)
@@ -6031,7 +6047,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         await self._leave_genuine_confirmation_before_dispatch(proposed)
         history = self.history(conversation_id)
         calls = len(self.backend.calls)
-        capabilities = dict(self.runtime._confirmed_capabilities)
+        capabilities = dict(self._execution_inputs[1])
         for _ in range(2):
             restored = await self.runtime.lead_turn(self.session_id, conversation_id, 'Inspect the confirmed step.')
             self.assertIs(restored.state, CollaborationStepState.CONFIRMED)
@@ -6041,7 +6057,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             self.assertIsNone(restored.confirmation_request_id)
             self.assertEqual(self.history(conversation_id), history)
             self.assertEqual(len(self.backend.calls), calls)
-            self.assertEqual(self.runtime._confirmed_capabilities, capabilities)
+            self.assertEqual(self._execution_inputs[1], capabilities)
 
     async def test_restored_results_keep_strict_evidence_and_provider_free_compatibility(self) -> None:
         from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF, _fixture_assessment
@@ -6967,7 +6983,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self.assertEqual(self.backend.calls, [])
 
     def test_capability_is_private_nonserializable_and_single_use(self) -> None:
-        capability = orchestrator_module._ConfirmedStepCapability(session_id='session', conversation_id='conversation',
+        capability = confirmed_execution._ConfirmedStepCapability(session_id='session', conversation_id='conversation',
             step_id='step', proposal_id='proposal', proposal_revision=1, proposal_digest='sha256:' + '1' * 64,
             basis_digest='sha256:' + '2' * 64, tail_event_id='tail', tail_sequence=1)
         self.assertNotIn("1" * 64, repr(capability))
