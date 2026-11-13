@@ -346,8 +346,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 250)
-        self.assertEqual(len(edges), 1309)
+        self.assertEqual(len(modules), 251)
+        self.assertEqual(len(edges), 1315)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -467,6 +467,14 @@ class RagModuleBoundaryTests(unittest.TestCase):
                     {target for edge_source, target in edges if edge_source == source},
                     expected,
                 )
+        self.assertEqual({target for source, target in edges if source == "story_writing_agents.workspace.session_source_workspace"}, {
+            "story_writing_agents.workspace.core",
+            "story_writing_agents.workspace.initialization",
+            "story_writing_agents.workspace.session_record_validation",
+            "story_writing_agents.agents",
+            "story_writing_agents.errors",
+            "story_writing_agents.models",
+        })
         git_dependencies = {
             "story_writing_agents.git": {'story_writing_agents.git.adapter', 'story_writing_agents.git.contracts'},
             "story_writing_agents.git.contracts": set(),
@@ -592,7 +600,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.conversation_storage.selection",
                 "story_writing_agents.conversation_storage.sqlite",
                 "story_writing_agents.conversation_storage.sqlite_database",
-                "story_writing_agents.orchestrator",
+                "story_writing_agents.workspace.session_source_workspace",
                 "story_writing_agents.workspace",
             },
         )
@@ -1192,6 +1200,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             "story_writing_agents/lead_execution/confirmed_step_execution.py",
             "story_writing_agents/lead_execution/lead_step_decisions.py",
             "story_writing_agents/workspace/session_record_validation.py",
+            "story_writing_agents/workspace/session_source_workspace.py",
             )
             with zipfile.ZipFile(story_wheel) as archive:
                 for package_path in group_package_paths:

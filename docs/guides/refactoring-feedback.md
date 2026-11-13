@@ -231,3 +231,27 @@ Root·공유 계약 변경은 실제 소비자의 합집합으로 확대하고 �
 상한은 바꾸지 않는다. 실제 같은 debate schema 오류 RED/GREEN·정상 성능·최종 전체
 CI는 [출처 PR](https://github.com/Kims-DeveloperGroup/story-writing-agents/pull/1023)의
 source와 Evidence를 확인한다. 구현 전 Draft는 문서 전용 commit으로 먼저 생성했다.
+
+
+### FD로 제한된 세션 소스 Workspace — #1005
+
+`workspace/session_source_workspace.py`는 `SessionSourceWorkspace`와 전용 상수
+다섯 개를 소유한다. 실제 소비자인 orchestrator의 기존 factory 다섯 호출은
+같은 인자를 전달한다. Workspace 상속과 공개 세션 기록 검증 함수를
+유지하며 FD open/verify/read/close, binding/root identity와 예외 순서는 바꾸지 않는다.
+
+첫 기존 선택은
+`tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_minimal_reference_answer_needs_no_provider_correction`다.
+기존 10개 assertion과 실제 준비·정리를 유지한다. binding/source 공유 변경은
+[#1005의 기존 6개 선택과 영향 범위](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1005#구현-계획)로
+확대한다. 첫 사례만으로 inode·hardlink·race·secondary-close 모든 부정 경로를
+직접 덮는다고 주장하지 않는다. 같은 regular-file guard 오류의 전후 RED/GREEN과
+최종 전체 CI·개별/합산/전체 정상 시간은
+[PR #1026의 검증 기록](https://github.com/Kims-DeveloperGroup/story-writing-agents/pull/1026)에서
+실제 실행·미실행을 구분한다.
+
+이슈별 승인 소스 +25행은 모듈·패키징 9행과 기존 예산 정책 검증 16행에 한정한다.
+현재 151,431→151,456행 전이이며 Case/subTest·시간·worker 한도는 늘리지 않는다.
+[#1020](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1020)의
+별도 +60행 배정과 섞지 않는다. 구현은 Development-linked 문서 전용 Draft PR을
+확인한 뒤 시작했다.

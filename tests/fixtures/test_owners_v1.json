@@ -14145,6 +14145,28 @@
       ],
       "affected_full": true,
       "depends_on": []
+    },
+    {
+      "name": "workspace.session-source-workspace",
+      "boundary": "source-authority",
+      "paths": [
+        "src/story_writing_agents/workspace/session_source_workspace.py"
+      ],
+      "focused_ids": [
+        "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_minimal_reference_answer_needs_no_provider_correction"
+      ],
+      "affected_ids": [
+        "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_minimal_reference_answer_needs_no_provider_correction",
+        "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_direct_search_read_answer_uses_bounded_history_without_proposal",
+        "tests.test_specialist_orchestration_accounting.SpecialistAccountingAcceptanceTests.test_local_reference_and_search_answer_count_only_provider_calls",
+        "tests.test_lead_orchestration.LeadDecisionAuthorityTests.test_reference_drift_blocks_confirmation_without_calls",
+        "tests.test_lead_orchestration.LeadReferenceFailurePrecedenceTests.test_primary_reference_and_capacity_errors_are_not_reclassified",
+        "tests.test_workspace_and_config.WorkspaceContractTests.test_workspace_facade_exports_and_signatures_are_exact"
+      ],
+      "affected_full": true,
+      "depends_on": [
+        "workspace.session-record-validation"
+      ]
     }
   ],
   "ignored_names": [

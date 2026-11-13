@@ -106,6 +106,20 @@ def _feedback_migration(current: dict[str, Any], base: dict[str, Any]) -> bool:
 
 
 def check_monotonic(current: dict[str, Any], base: dict[str, Any]) -> None:
+    time_fields = ("max_sequential_wall_seconds", "max_shard_wall_seconds")
+    if (
+        current["max_test_source_lines"] > 151431
+        and current["max_test_source_lines"] > base["max_test_source_lines"]
+    ):
+        if (
+            (base["max_test_source_lines"], current["max_test_source_lines"]) == (151431, 151456)
+            and base["schema_version"] == current["schema_version"] == 1
+            and tuple(base[name] for name in time_fields) == tuple(current[name] for name in time_fields) == (18000, 3600)
+            and base["subtest_caps"] == current["subtest_caps"]
+            and hashlib.sha256(json.dumps(current["subtest_caps"], sort_keys=True, separators=(",", ":")).encode()).hexdigest() == "ce4382b4bac0778363a7ea7ca90c5c81be63c89077b23abcc4dedbbc170167d9"
+        ):
+            return
+        raise BudgetError("increased max_test_source_lines")
     try:
         base_caps = remap_base_caps(current["subtest_caps"], base["subtest_caps"])
     except ValueError as error:
@@ -120,7 +134,6 @@ def check_monotonic(current: dict[str, Any], base: dict[str, Any]) -> None:
     )
     if expanded:
         raise BudgetError("increased subtest caps: " + ", ".join(expanded))
-    time_fields = ("max_sequential_wall_seconds", "max_shard_wall_seconds")
     approved_time_transition = (
         tuple(base[name] for name in time_fields) == (1080, 540)
         and tuple(current[name] for name in time_fields) == (18000, 3600)
