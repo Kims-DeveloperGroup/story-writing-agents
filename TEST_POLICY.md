@@ -13,7 +13,7 @@
 합집합으로 한 번만 더한다. 원본 commit·hash·범위로 이동 출처를 추적한다. 기존
 미확인 보조 코드 **1,550행**은 중복·종료가 입증되기 전까지 유지한다. 기존 범용
 러너·queue·reporting 도구 전체를 새로 청구하는 범위 확대는 하지 않으며, 테스트
-내용을 도구로 옮겨 비용을 누락시키는 것은 금지한다. 상한 **151,431행**은 유지한다.
+내용을 도구로 옮겨 비용을 누락시키는 것은 금지한다. 이슈별 승인 배정을 포함한 현행 상한은 **151,456행**이다.
 
 개발 반복에서는 최소 유효 focused 선택을 사용하고, 공유 계약·fixture·상태·권한
 변경은 필요한 실제 소비자와 host 경계로 확대한다. 영향이 불명확하면 전체를 선택한다.
@@ -53,7 +53,7 @@ complete workflow shares a 75-minute deadline, including setup and shutdown.
 
 승인된 파일·클래스 이동은 원본 ID와 실제 새 모듈 ID의 일대일 대응으로 검증한다. 이동 전후의 전체 사례 수, 메서드와 assertion·부정 입력, fixture 수명, 각 사례의 subTest cap과 수치 weight를 보존한다. 이동하지 않은 ID도 그대로 유지한다. 등록되지 않은 ID·중복 대상·누락 원본과 시나리오 추가는 계속 거절한다.
 
-대응 기록은 승인 기반의 소스 hash·원본 범위와 새 소유자를 연결한다. 소스 비용은 이동 코드와 추출 support를 중복 없이 계상하며 기존 미확인 1,550행과 전체 상한 151,431행을 유지한다. 옛 테스트 경로용 shim, `Case.__module__` 또는 `id()` 위장으로 이동 사실을 숨기지 않는다. 이 규칙은 런타임 저장 형식의 이행·호환 기능을 추가하지 않는다.
+대응 기록은 승인 기반의 소스 hash·원본 범위와 새 소유자를 연결한다. 소스 비용은 이동 코드와 추출 support를 중복 없이 계상하며 기존 미확인 1,550행과 전체 상한 151,456행을 유지한다. 옛 테스트 경로용 shim, `Case.__module__` 또는 `id()` 위장으로 이동 사실을 숨기지 않는다. 이 규칙은 런타임 저장 형식의 이행·호환 기능을 추가하지 않는다.
 
 ## Scope rule
 
@@ -79,6 +79,19 @@ complete workflow shares a 75-minute deadline, including setup and shutdown.
   policy change with measured cost and an explicit exception to the monotonic
   gate. Otherwise, extend an existing representative case or replace a more
   expensive check while respecting the current inventory.
+
+## #1005의 세션 소스 Workspace 분리 소스 배정
+
+사용자가 승인한 #1005 소스 +25행만 정확한 **151431→151456** 전이에 적용한다.
+선행 #1004 통합 main `7c9d930d`의 raw148445 + 청구 support1436 +
+미확인 legacy1550 =151431에서, 새 모듈·패키징 검증9행과 기존 예산 정책
+Case 검증15행·기존 historical ceiling 복원1행을 더해 실측 raw148470을 청구한다.
+같은 2544개 전체 cap mapping과 digest, schema1, 18000/3600초가 일치해야
+소스 전이만 허용한다. 인접한 기준·상한이나 schema·시간·ID/subTest 변경은 거절한다.
+기존 준비·assertion·부정·fixture 수명과 worker/profile/weight/receipt는 유지한다.
+이미 소비한 #1004 예약2행은 다시 더하지 않는다. 별도 승인 #1020의 +60행과
+미승인 #1022 배정은 이 전이에 전용하지 않는다. 실제 추가량이25행을 넘으면
+추가 권한을 추정하지 않고 범위와 비용을 다시 확인한다.
 
 ## Maintainer-approved source allocation
 

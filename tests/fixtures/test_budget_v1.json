@@ -1,7 +1,7 @@
 {
   "max_sequential_wall_seconds": 18000,
   "max_shard_wall_seconds": 3600,
-  "max_test_source_lines": 151431,
+  "max_test_source_lines": 151456,
   "schema_version": 1,
   "subtest_caps": {
     "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_binding_rejects_scope_identity_reference_order_and_unpaired_facts": 0,

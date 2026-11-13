@@ -461,7 +461,7 @@ from .specialist_routing import (
     validate_specialist_routing,
 )
 from .workspace import Workspace
-from .workspace.core import SessionSourceWorkspace
+from .workspace.session_source_workspace import SessionSourceWorkspace
 from .workspace.initialization import (
     SessionArtifactAccess,
     SessionArtifactBinding,

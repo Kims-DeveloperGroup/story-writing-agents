@@ -156,6 +156,14 @@ def check_monotonic(current: dict[str, Any], base: dict[str, Any]) -> None:
             and tuple(base[name] for name in time_fields) == (18000, 3600)
             and all(current[key] == base[key] for key in (*time_fields, "subtest_caps"))):
         approved_increases.add("max_test_source_lines")
+    if (
+        (base["max_test_source_lines"], current["max_test_source_lines"]) == (151431, 151456)
+        and base["schema_version"] == current["schema_version"] == 1
+        and tuple(base[name] for name in time_fields) == tuple(current[name] for name in time_fields) == (18000, 3600)
+        and base["subtest_caps"] == current["subtest_caps"]
+        and hashlib.sha256(json.dumps(current["subtest_caps"], sort_keys=True, separators=(",", ":")).encode()).hexdigest() == "ce4382b4bac0778363a7ea7ca90c5c81be63c89077b23abcc4dedbbc170167d9"
+    ):
+        approved_increases.add("max_test_source_lines")
     for name in (*time_fields, "max_test_source_lines"):
         if current[name] > base[name] and name not in approved_increases:
             raise BudgetError(f"increased {name}")

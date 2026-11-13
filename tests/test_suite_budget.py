@@ -247,6 +247,8 @@ class SuiteBudgetTests(unittest.TestCase):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
         migrated = suite_budget.load_budget(Path(__file__).with_name("fixtures") / "test_budget_v1.json")
+        source_current = dict(migrated, subtest_caps=dict(migrated["subtest_caps"]))
+        migrated["max_test_source_lines"] = 151431
         migrated["subtest_caps"] = historical_feedback_caps(migrated["subtest_caps"])
         expected_additions = {
             'tests.test_historical_material_workflow.HistoricalMaterialWorkflowTests.test_prior_draft_and_rejected_response_remain_input_only_in_new_task': 0,
@@ -304,6 +306,20 @@ class SuiteBudgetTests(unittest.TestCase):
 
         from types import SimpleNamespace
         import os, sys, time
+        source_base = dict(source_current, max_test_source_lines=151431)
+        self.assertIsNone(suite_budget.check_monotonic(source_current, source_base))
+        self._assert_source_limit_neighbors_rejected(source_current, source_base)
+        for field, value in (("schema_version", 2), ("max_sequential_wall_seconds", 18001), ("max_shard_wall_seconds", 3601)):
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(source_current, **{field: value}), source_base)
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, source_current, dict(source_base, **{field: value}))
+        for caps in (
+            {key: value for key, value in source_current["subtest_caps"].items() if key != zero_id},
+            {**source_current["subtest_caps"], "tests.unreviewed.Case.test_extra": 0},
+            {**source_current["subtest_caps"], matrix_id: 2},
+            {**source_current["subtest_caps"], matrix_id: 0},
+        ):
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(source_current, subtest_caps=caps), source_base)
+        self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, source_current, dict(source_base, subtest_caps={**source_base["subtest_caps"], matrix_id: 2}))
         ids = runner_profile.HOSTED_METHOD_IDS
         self.assertEqual(runner_evidence.manifest(ids)["digest"],
                          'sha256:a4f0ca5a29a0a54f9306287458acf5d7ba9145b060fede38938f7e333f8e2803')
