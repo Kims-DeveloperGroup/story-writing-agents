@@ -230,10 +230,10 @@ generation facts bracket both checks. This owner never mutates Git for role proj
 Responsibility: validate workspace schema/security, initialize workspaces, derive runtime
 state paths, manage session lifecycle, and assess/reconcile recovery transitions.
 
-- `workspace`, `workspace.core`, `workspace.schema`, `workspace.initialization`, `workspace.session_role_projection`, `workspace._policy_baselines`, `runtime_state_paths`, `session_lifecycle`
+- `workspace`, `workspace.core`, `workspace.session_record_validation`, `workspace.schema`, `workspace.initialization`, `workspace.session_role_projection`, `workspace._policy_baselines`, `runtime_state_paths`, `session_lifecycle`
 - `session_recovery`, `session_recovery.contracts`, `session_recovery.transition_assessment`, `session_recovery.reconciliation`
 
-`workspace.core` owns path validation and session source/configuration views; `initialization` owns creation,
+`workspace.core` owns path validation and session source/configuration views; `session_record_validation` owns pure agent/debate record checks and depends only on error contracts; `initialization` owns creation,
 session artifact bindings, guarded repositories, and opaque generation-pin composition. Views borrow retained session
 roots through bounded owner contracts. `schema` owns schema-v2 validation and current initializer defaults; `_policy_baselines` retains immutable published bytes for exact initialization compatibility.
 The binding calls the Git owner's index and effective-ignore proof after exclusion preparation
