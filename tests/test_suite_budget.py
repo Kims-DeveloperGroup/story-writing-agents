@@ -324,10 +324,10 @@ class SuiteBudgetTests(unittest.TestCase):
         self.assertEqual(runner_evidence.manifest(ids)["digest"],
                          'sha256:a4f0ca5a29a0a54f9306287458acf5d7ba9145b060fede38938f7e333f8e2803')
         self.assertEqual((len(ids), len({value.rsplit(".", 1)[0] for value in ids})), (162, 21))
-        cases = tuple(Mock(id=Mock(return_value=value)) for value in (*ids, *runner_profile.HOSTED_MIXED_SERIAL_IDS, "unreviewed.test"))
+        cases = tuple(SimpleNamespace(id=lambda identifier=value: identifier) for value in (*ids, *runner_profile.HOSTED_MIXED_SERIAL_IDS, "unreviewed.test"))
         canonical = runner_contracts.CanonicalCollection(cases, (*ids, *runner_profile.HOSTED_MIXED_SERIAL_IDS, "unreviewed.test"))
         serial, scheduled = runner_hosted.hosted_partition(canonical, canonical)
-        self.assertEqual((serial.tests, scheduled), (cases[len(ids):], ids))
+        self.assertEqual((tuple(map(id, serial.tests)), scheduled), (tuple(map(id, cases[len(ids):])), ids))
         isolated = runner_contracts.CanonicalCollection((cases[ids.index(suite_policy.ISOLATED_TEST_ID)],),
                                              (suite_policy.ISOLATED_TEST_ID,))
         serial, scheduled = runner_hosted.hosted_partition(canonical, isolated)
