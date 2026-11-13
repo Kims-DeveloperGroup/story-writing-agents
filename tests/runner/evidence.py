@@ -40,7 +40,29 @@ def source_snapshot() -> dict[str, object]:
     try:
         captured_source_inputs = snapshot(Path(__file__).resolve().parents[2])
         captured_source_path = Path(os.environ["RUNNER_TEMP"]) / ("source-input-snapshot-" + str(captured_source_inputs["digest"]).split(":")[-1] + ".json")
-        captured_source_path.write_text(json.dumps(captured_source_inputs, sort_keys=True), encoding="utf-8")
+        captured_bytecode_metadata = {}
+        for captured_name, captured_value in captured_source_inputs["inputs"].items():
+            if not captured_name.endswith(".pyc"):
+                continue
+            captured_cache = Path(__file__).resolve().parents[2] / captured_name
+            captured_raw = captured_cache.read_bytes()
+            captured_python = captured_cache.parent.parent / (captured_cache.name.split(".cpython-")[0] + ".py")
+            captured_python_raw = captured_python.read_bytes()
+            captured_bytecode_metadata[captured_name] = {
+                "snapshot_record": captured_value,
+                "full_sha256": hashlib.sha256(captured_raw).hexdigest(),
+                "header_hex": captured_raw[:16].hex(),
+                "magic_hex": captured_raw[:4].hex(),
+                "flags": int.from_bytes(captured_raw[4:8], "little"),
+                "header_timestamp_seconds": int.from_bytes(captured_raw[8:12], "little"),
+                "header_source_size": int.from_bytes(captured_raw[12:16], "little"),
+                "payload_sha256": hashlib.sha256(captured_raw[16:]).hexdigest(),
+                "source_name": str(captured_python.relative_to(Path(__file__).resolve().parents[2])),
+                "source_sha256": hashlib.sha256(captured_python_raw).hexdigest(),
+                "source_mtime_seconds": int(captured_python.stat().st_mtime),
+                "source_bytes": len(captured_python_raw),
+            }
+        captured_source_path.write_text(json.dumps({"snapshot": captured_source_inputs, "bytecode_metadata": captured_bytecode_metadata}, sort_keys=True), encoding="utf-8")
         return captured_source_inputs
     except LocalCIError as error:
         raise RunnerError(f"cannot capture test source: {error}") from error
