@@ -467,10 +467,10 @@ class CollaborationResultPublication:
                 CollaborationExecutionOutcomeKind.CANCELLED: CollaborationStepState.INTERRUPTED}[overall]
             result_drafts = (*result_drafts, terminal_state_draft(events=current_events,
                 turn_id=turn_id, proposal=proposal, result_event_id=result_event_id, state=terminal_state))
-        event_journal.append_drafts(projection.last_sequence, result_drafts,
-            batch_id=event_journal.deterministic_id("b", attempt_id, "result"),
-            append_batch=append_batch,
-        )
+        pass
+
+
+
 
     def _terminal_outcome_draft(
         self,
