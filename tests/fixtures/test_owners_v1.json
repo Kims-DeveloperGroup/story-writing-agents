@@ -14129,6 +14129,22 @@
         "runtime-resources",
         "runtime-resources.collaboration_event_journal"
       ]
+    },
+    {
+      "name": "workspace.session-record-validation",
+      "boundary": "pure-validation",
+      "paths": [
+        "src/story_writing_agents/workspace/session_record_validation.py"
+      ],
+      "focused_ids": [
+        "tests.agent_context.sources.test_authority_adapters.RealAuthorityAdapterTests.test_active_debate_and_all_four_owner_states_are_public_exact_and_isolated"
+      ],
+      "affected_ids": [
+        "tests.agent_context.sources.test_authority_adapters.RealAuthorityAdapterTests.test_active_debate_and_all_four_owner_states_are_public_exact_and_isolated",
+        "tests.test_workspace_and_config.WorkspaceContractTests.test_workspace_facade_exports_and_signatures_are_exact"
+      ],
+      "affected_full": true,
+      "depends_on": []
     }
   ],
   "ignored_names": [

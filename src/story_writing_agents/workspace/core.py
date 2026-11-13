@@ -53,7 +53,12 @@ from .schema import (
 )
 
 
-_SAFE_REFERENCE_OPERATION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
+from .session_record_validation import (
+    validate_agent_state_entry,
+    validate_debate_state,
+    validate_debate_result,
+    require_debate_ownership,
+)
 _SESSION_SOURCE_MAX_FILE_BYTES = 8 * 1024 * 1024
 _SESSION_SOURCE_MAX_DIRECTORY_ENTRIES = 8192
 _SESSION_SOURCE_MAX_AGENT_STATE_BYTES = 8 * 1024 * 1024
@@ -307,7 +312,7 @@ class Workspace:
         """Persist one validated outcome beneath its owning agent directory."""
 
         try:
-            self._validate_agent_state_entry(entry.to_dict())
+            validate_agent_state_entry(entry.to_dict())
         except TypeError as exc:
             raise WorkspaceFormatError("invalid agent state entry") from exc
         relative = self._agent_state_relative(
@@ -360,7 +365,7 @@ class Workspace:
             ):
                 try:
                     raw = json.loads(line)
-                    value = self._validate_agent_state_entry(raw)
+                    value = validate_agent_state_entry(raw)
                     if (
                         value["agent_id"] != agent_id
                         or value["session_id"] != session
@@ -445,7 +450,7 @@ class Workspace:
             raise DebateExistsError(
                 f"debate already exists: {session}/{debate}"
             ) from exc
-        return self._validate_debate_state(state)
+        return validate_debate_state(state)
 
     def transition_debate(
         self,
@@ -506,7 +511,7 @@ class Workspace:
                 "error": error,
             }
         )
-        validated = self._validate_debate_state(state)
+        validated = validate_debate_state(state)
         self.write_json(relative, validated)
         return validated
 
@@ -673,15 +678,15 @@ class Workspace:
         relative = self._debate_relative(session, debate, ".result.json")
         target = self.path(relative)
         result = (
-            self._validate_debate_result(self.read_json(relative))
+            validate_debate_result(self.read_json(relative))
             if target.exists()
             else None
         )
         state = self._read_debate_state(session, debate)
         if result is not None:
-            self._require_debate_ownership(result, session, debate, "result")
+            require_debate_ownership(result, session, debate, "result")
         if state is not None:
-            self._require_debate_ownership(state, session, debate, "state")
+            require_debate_ownership(state, session, debate, "state")
         messages = self.read_debate_messages(session, debate)
         if result is not None:
             status = result["status"]
@@ -791,35 +796,6 @@ class Workspace:
         state_directory = AGENT_STATE_DIRECTORIES[agent_id]
         return f"agent_states/{state_directory}/debates/{session}/{debate}.jsonl"
 
-    @staticmethod
-    def _validate_agent_state_entry(value: Any) -> dict[str, Any]:
-        expected = {
-            "agent_id",
-            "session_id",
-            "debate_id",
-            "phase",
-            "round",
-            "revision",
-            "kind",
-            "content",
-            "timestamp",
-        }
-        if not isinstance(value, dict) or set(value) != expected:
-            raise TypeError("agent state has an invalid schema")
-        string_fields = expected.difference({"round"})
-        if any(not isinstance(value[field], str) for field in string_fields):
-            raise TypeError("agent state string field has an invalid type")
-        round_number = value["round"]
-        if (
-            isinstance(round_number, bool)
-            or not isinstance(round_number, int)
-            or round_number < 0
-        ):
-            raise TypeError("agent state round must be a non-negative integer")
-        if len(value["content"]) > 4096:
-            raise TypeError("agent state content exceeds 4096 characters")
-        return dict(value)
-
     def _read_debate_state(
         self, session_id: str, debate_id: str
     ) -> dict[str, Any] | None:
@@ -827,126 +803,7 @@ class Workspace:
         target = self.path(relative)
         if not target.exists():
             return None
-        return self._validate_debate_state(self.read_json(relative))
-
-    @staticmethod
-    def _validate_debate_state(value: Any) -> dict[str, Any]:
-        expected = {
-            "schema_version",
-            "session_id",
-            "debate_id",
-            "input_kind",
-            "status",
-            "terminal",
-            "owner_token",
-            "created_at",
-            "updated_at",
-            "revision_id",
-            "rounds_completed",
-            "error",
-        }
-        if not isinstance(value, dict) or set(value) != expected:
-            raise WorkspaceFormatError("debate state has an invalid schema")
-        string_fields = {
-            "session_id",
-            "debate_id",
-            "input_kind",
-            "status",
-            "owner_token",
-            "created_at",
-            "updated_at",
-        }
-        if any(not isinstance(value[field], str) for field in string_fields):
-            raise WorkspaceFormatError("debate state has an invalid string field")
-        if value["schema_version"] != 1:
-            raise WorkspaceFormatError("unsupported debate state schema version")
-        if not isinstance(value["terminal"], bool):
-            raise WorkspaceFormatError("debate state terminal must be boolean")
-        if (
-            isinstance(value["rounds_completed"], bool)
-            or not isinstance(value["rounds_completed"], int)
-            or value["rounds_completed"] < 0
-        ):
-            raise WorkspaceFormatError(
-                "debate state rounds_completed must be non-negative"
-            )
-        if value["revision_id"] is not None and not isinstance(
-            value["revision_id"], str
-        ):
-            raise WorkspaceFormatError("debate state revision_id is invalid")
-        if value["error"] is not None and not isinstance(value["error"], str):
-            raise WorkspaceFormatError("debate state error is invalid")
-        return dict(value)
-
-    @staticmethod
-    def _validate_debate_result(value: Any) -> dict[str, Any]:
-        expected = {
-            "session_id",
-            "debate_id",
-            "input_kind",
-            "status",
-            "revision_id",
-            "rounds_completed",
-            "final_candidate",
-            "latest_candidate",
-            "manuscript_path",
-            "core_updates",
-            "error",
-            "action_required",
-        }
-        if not isinstance(value, dict) or frozenset(value) not in {
-            frozenset(expected),
-            frozenset((*expected, "reference_operation_id")),
-        }:
-            raise WorkspaceFormatError("debate result has an invalid schema")
-        required_strings = {"session_id", "debate_id", "input_kind", "status"}
-        if any(not isinstance(value[field], str) for field in required_strings):
-            raise WorkspaceFormatError("debate result has an invalid string field")
-        nullable_strings = {
-            "revision_id",
-            "final_candidate",
-            "latest_candidate",
-            "manuscript_path",
-            "error",
-            "action_required",
-        }
-        if any(
-            value[field] is not None and not isinstance(value[field], str)
-            for field in nullable_strings
-        ):
-            raise WorkspaceFormatError("debate result has an invalid optional field")
-        if "reference_operation_id" in value and (
-            type(value["reference_operation_id"]) is not str
-            or _SAFE_REFERENCE_OPERATION_ID.fullmatch(value["reference_operation_id"])
-            is None
-        ):
-            raise WorkspaceFormatError(
-                "debate result reference_operation_id is invalid"
-            )
-        rounds = value["rounds_completed"]
-        if isinstance(rounds, bool) or not isinstance(rounds, int) or rounds < 0:
-            raise WorkspaceFormatError("debate result rounds_completed is invalid")
-        updates = value["core_updates"]
-        if not isinstance(updates, list) or any(
-            not isinstance(item, str) for item in updates
-        ):
-            raise WorkspaceFormatError("debate result core_updates is invalid")
-        return dict(value)
-
-    @staticmethod
-    def _require_debate_ownership(
-        value: Mapping[str, Any],
-        session_id: str,
-        debate_id: str,
-        label: str,
-    ) -> None:
-        if (
-            value.get("session_id") != session_id
-            or value.get("debate_id") != debate_id
-        ):
-            raise WorkspaceFormatError(
-                f"debate {label} identity does not match its path"
-            )
+        return validate_debate_state(self.read_json(relative))
 
     @staticmethod
     def _serialize_debate_context_snapshot(
@@ -1878,7 +1735,7 @@ class SessionSourceWorkspace(Workspace):
                         retained_records += 1
                         try:
                             raw = json.loads(line)
-                            value = self._validate_agent_state_entry(raw)
+                            value = validate_agent_state_entry(raw)
                             if (
                                 value["agent_id"] != agent_id
                                 or value["session_id"] != session
@@ -1970,22 +1827,22 @@ class SessionSourceWorkspace(Workspace):
                     result = (
                         None
                         if result_text is None
-                        else self._validate_debate_result(json.loads(result_text))
+                        else validate_debate_result(json.loads(result_text))
                     )
                     state = (
                         None
                         if state_text is None
-                        else self._validate_debate_state(json.loads(state_text))
+                        else validate_debate_state(json.loads(state_text))
                     )
                     if result is not None:
-                        self._require_debate_ownership(
+                        require_debate_ownership(
                             result,
                             session,
                             debate,
                             "result",
                         )
                     if state is not None:
-                        self._require_debate_ownership(
+                        require_debate_ownership(
                             state,
                             session,
                             debate,

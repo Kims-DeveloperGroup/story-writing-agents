@@ -211,3 +211,23 @@ Root·공유 계약 변경은 실제 소비자의 합집합으로 확대하고 �
 리팩토링에 따른 실제 추가 작업으로 확인된 회귀는 수정한다.
 구현 후 통과 여부와 원자료는 [#1019의 검증 기록](https://github.com/Kims-DeveloperGroup/story-writing-agents/pull/1019)에서 확인한다.
 공통 fixture와 나머지 Lead synthesis·consensus 분리는 #968의 후속 범위다.
+
+### Workspace 세션 기록 검증의 공개 소유자 — #1004
+
+`workspace/session_record_validation.py`는 agent state·debate state/result·ownership
+검증 네 함수를 소유한다. Workspace와 SessionSourceWorkspace의 기존 13호출은
+공개 함수를 직접 사용하며 원래 입력·오류·검사 순서와 regex pattern/flags를 유지한다.
+
+이 파일만 수정한 개발 반복의 첫 선택은
+`tests.agent_context.sources.test_authority_adapters.RealAuthorityAdapterTests.test_active_debate_and_all_four_owner_states_are_public_exact_and_isolated`다.
+공개 facade/signature 확인은 기존
+`tests.test_workspace_and_config.WorkspaceContractTests.test_workspace_facade_exports_and_signatures_are_exact`로 확대한다.
+이 두 ID는 명시된 동작 선택이며 현재 `affected_full=true`이므로 formal affected 선택은
+전체 2544개다. 첫 사례가 result validator·regex의 모든 부정 분기를 덮거나 이 두 사례가
+전체 영향 검증을 대신한다고 주장하지 않는다. 공유 core/error 변경도 소비자 범위로 확대한다.
+
+기존 RAG 의존 경로와 packaging source-byte 검증에 예약 두 행을 사용해 테스트 소스
+151431행과 기존 상한을 유지한다. Case/ID/subTest, 가중치·profile·worker와 시간
+상한은 바꾸지 않는다. 실제 같은 debate schema 오류 RED/GREEN·정상 성능·최종 전체
+CI는 [출처 PR](https://github.com/Kims-DeveloperGroup/story-writing-agents/pull/1023)의
+source와 Evidence를 확인한다. 구현 전 Draft는 문서 전용 commit으로 먼저 생성했다.
