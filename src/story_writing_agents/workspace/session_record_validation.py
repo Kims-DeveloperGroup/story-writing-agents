@@ -72,7 +72,7 @@ def validate_debate_state(value: Any) -> dict[str, Any]:
     }
     if any(not isinstance(value[field], str) for field in string_fields):
         raise WorkspaceFormatError("debate state has an invalid string field")
-    if value["schema_version"] != 1:
+    if value["schema_version"] == 1:
         raise WorkspaceFormatError("unsupported debate state schema version")
     if not isinstance(value["terminal"], bool):
         raise WorkspaceFormatError("debate state terminal must be boolean")
