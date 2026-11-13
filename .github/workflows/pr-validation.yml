@@ -695,7 +695,7 @@ jobs:
             runner=(.venv/bin/python -m cProfile -o "$RUNNER_TEMP/case-profile-current.prof" -m tests.runner run "${selector[@]}" --json "$RUNNER_TEMP/case-profile-current.json")
           fi
           set +e
-          timeout --signal=INT --kill-after=30s "${test_seconds}s" env PYTHONPATH=src "${runner[@]}" 2>&1 | tee "$RUNNER_TEMP/fast.log"
+          timeout --signal=INT --kill-after=30s "${test_seconds}s" env PYTHONPATH=src strace -f -ttt -T -e trace=process,chdir -o "$RUNNER_TEMP/case-process-trace.log" "${runner[@]}" 2>&1 | tee "$RUNNER_TEMP/fast.log"
           test_statuses=("${PIPESTATUS[@]}")
           test_status=${test_statuses[0]}
           if (( test_status == 0 && test_statuses[1] != 0 )); then test_status=${test_statuses[1]}; fi
@@ -783,6 +783,7 @@ jobs:
             ${{ runner.temp }}/feedback-probe*
             ${{ runner.temp }}/gc-diagnostic*
             ${{ runner.temp }}/case-profile-*
+            ${{ runner.temp }}/case-process-trace.log
             ${{ runner.temp }}/fast-exit-code.txt
             ${{ runner.temp }}/fast-selection-argv.txt
             ${{ runner.temp }}/runner-hardware-fast.json
