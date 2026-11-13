@@ -255,3 +255,16 @@ source와 Evidence를 확인한다. 구현 전 Draft는 문서 전용 commit으�
 [#1020](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1020)의
 별도 +60행 배정과 섞지 않는다. 구현은 Development-linked 문서 전용 Draft PR을
 확인한 뒤 시작했다.
+
+### 결과 게시 owner 분리 착수 계획 — #1020
+
+이 절은 구현 전 Draft PR을 위한 계획 기록이다. 제안
+`lead_execution/collaboration_result_publication.py`의 실제 owner와 테스트 이관은
+아직 구현하지 않았다. [#1020의 수락 계획](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1020#구현-계획)은
+storage-only owner에 게시 본문을 옮기고 기존 append callback과 두 명시적 port를
+전달한다. 실제 read/append/추천·pin finally·바깥 marker 정리 위치는 보존한다.
+
+기존 네 Case를 1:1 이동하고 실제 producer·fixture·assertion·부정/취소를 유지한다.
+승인된 테스트 소스 +60행만 현재 151456에서 151516으로 배정하며 Case/subTest·시간·
+worker 한도는 바꾸지 않는다. 코드 수정 전에 문서 전용 Draft를 먼저 확인하고,
+이후 실제 source/graph/receipt·같은 오류·정상 시간·최종 CI의 관측을 구분해 기록한다.
