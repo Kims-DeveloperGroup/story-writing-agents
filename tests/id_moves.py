@@ -53,17 +53,17 @@ def load_receipt() -> list[dict]:
             raise ValueError("canonical move receipt is not bijective")
     return stages
 
-def remap_base_caps(current: dict[str, int], base: dict[str, int]) -> dict[str, int]:
-    """Rekey only exact approved full inventories, never current case IDs."""
+def remap_base_caps(current: dict[str, int], base: dict[str, int], *, digests: tuple[str, str] | None = None) -> dict[str, int]:
+    """Rekey exact approved inventories; digests are hints and every resulting stage is independently verified."""
     if ORIGINAL_ID in current or (ORIGINAL_ID not in base and SECOND_ID not in base and THIRD_ID not in base and FOURTH_ID not in base and FIFTH_ID not in base and SIXTH_ID not in base) or current == base:
         return base
-    base_digest = caps_digest(base)
+    base_digest = caps_digest(base) if digests is None else digests[0]
     before = [stage[2] for stage in STAGES]
     if base_digest not in before:
         return base
     start = before.index(base_digest)
     ends = [stage[3] for stage in STAGES]
-    current_digest = caps_digest(current)
+    current_digest = caps_digest(current) if digests is None else digests[1]
     if current_digest not in ends or ends.index(current_digest) < start:
         raise ValueError("canonical inventory differs approved move target")
     result = dict(base)
