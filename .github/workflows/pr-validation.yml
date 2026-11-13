@@ -736,7 +736,7 @@ jobs:
         if: inputs.compare_feedback_baseline == true && needs.classify.outputs.affected_only == 'true'
         uses: actions/checkout@v4
         with:
-          ref: 45cf084f0d28eb5926863e90509e5f14bbd3497e
+          ref: 1e19108a74b0da2e0062b6052a197c70ef787cc8
           submodules: recursive
           path: .feedback-baseline
       - name: 같은 환경에서 수정 전 RED와 GREEN 측정
@@ -750,7 +750,7 @@ jobs:
           cd .feedback-baseline
           baseline_ids=()
           while IFS= read -r identifier; do
-            baseline_ids+=(--id "$identifier")
+            baseline_ids+=(--id "${identifier/tests.test_specialist_orchestration_accounting.SpecialistAccountingAcceptanceTests.test_result_persistence_failure_cleans_marker_after_provider_completion/tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_result_persistence_failure_cleans_marker_after_provider_completion}")
           done <<< "$AFFECTED_IDS"
           baseline_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))
           if (( baseline_seconds > 3150 )); then baseline_seconds=3150; fi
