@@ -46,6 +46,10 @@ other major components and tradeoffs that matter to the reader.}}
 
 ## Verification
 
+<!-- For required design work, link current contract/source/Figma comparison, changed
+node IDs and visual/structural evidence; identify stale inputs or remaining gaps.
+See docs/design/figma-workflow.md. Omit design artifacts for unrelated work. -->
+
 {{Results mapped to scenarios/criteria, with exact runtime IDs or named static checks.}}
 
 **Review selection:** {{One of copilot-lite, copilot-balanced, codex; matching selector label.}}

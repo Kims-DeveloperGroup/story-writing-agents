@@ -25,6 +25,11 @@ Follow [GITHUB_WORKFLOW.md](../../../GITHUB_WORKFLOW.md),
 [authoring guide](../github-task-lifecycle/references/issue-pr-authoring.md) and each raw
 PR, evidence, or status template being used. Preserve all visible headings and meanings.
 
+For design-related scope, apply only this stage's conditional handoff in the
+[Figma workflow](../../../docs/design/figma-workflow.md#project-handoffs).
+Root decides applicability; ordinary development skips Figma and designer work.
+This adds no lifecycle authority or extra approval stage.
+
 ## Verify prerequisites and open the PR
 
 1. Inspect the owning Issue's accepted scope and detailed plan, Project item, accepted base,

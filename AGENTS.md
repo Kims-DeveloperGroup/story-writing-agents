@@ -35,6 +35,7 @@ worktree creation or tracked-file edits. Load `$github-task-lifecycle` and follo
 | Test scope, inventory, and time budget | [TEST_POLICY.md](TEST_POLICY.md). |
 | Explicit Project stages | Root loads `$project-plan`, `$project-implement`, `$project-pr-review`, or `$project-complete` only on invocation or under the coordinator; authority and phase boundaries are in [GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md). Subagents never use these skills. |
 | Explicit end-to-end Project workflow | Root loads `$project-workflow` only when the user invokes it; it coordinates the four stages. Subagents never use it. |
+| Design work and Figma | [Figma workflow](docs/design/figma-workflow.md): Root selects applicable design work; use `designer` only for scoped design ownership. |
 | Development delegation | Keep `.codex/agents/` separate from `config/agents/`; load `$subagent-routing` before delegation. Agent profiles define role behavior. |
 | Structural Python work | Route through `$subagent-routing`; use [PYTHON_MODULARITY_POLICY.md](.codex/agents/runtime_implementer/PYTHON_MODULARITY_POLICY.md). |
 | Commits and dependencies | [COMMIT_POLICY.md](COMMIT_POLICY.md) and [DEPENDENCY_POLICY.md](DEPENDENCY_POLICY.md). |

@@ -24,6 +24,11 @@ Follow [GITHUB_WORKFLOW.md](../../../GITHUB_WORKFLOW.md),
 [authoring guide](../github-task-lifecycle/references/issue-pr-authoring.md) and each raw
 template. Preserve all visible Issue, PR, evidence, and status-comment headings and semantics.
 
+For design-related scope, apply only this stage's conditional handoff in the
+[Figma workflow](../../../docs/design/figma-workflow.md#project-handoffs).
+Root decides applicability; ordinary development skips Figma and designer work.
+This adds no lifecycle authority or extra approval stage.
+
 ## Coordinate the stages
 
 Load each independent skill when its stage is reached. The active invocation supplies the

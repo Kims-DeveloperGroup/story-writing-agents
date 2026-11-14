@@ -72,6 +72,8 @@ that matches your task.
 
 ## Design and operations
 
+- [Figma design workflow and source map](design/figma-workflow.md)
+
 - [Current system design](design/overview.md)
 - [Session lifecycle](design/session-lifecycle.md)
 - [Agent-context internals](design/agent-context.md)

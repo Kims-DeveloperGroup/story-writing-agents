@@ -23,6 +23,11 @@ Before authoring records, read the
 raw template. Preserve all visible headings and their meanings. Keep dependencies subject to
 [DEPENDENCY_POLICY.md](../../../DEPENDENCY_POLICY.md); invocation grants no policy exception.
 
+For design-related scope, apply only this stage's conditional handoff in the
+[Figma workflow](../../../docs/design/figma-workflow.md#project-handoffs).
+Root decides applicability; ordinary development skips Figma and designer work.
+This adds no lifecycle authority or extra approval stage.
+
 ## Prepare the plan
 
 1. Inspect current behavior, the user's objective, scope, constraints, acceptance criteria,

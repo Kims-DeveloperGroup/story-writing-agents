@@ -596,6 +596,10 @@ authoring target.
 
 ## Development
 
+Design-related contributor work follows the [Figma workflow](docs/design/figma-workflow.md).
+Root selects scoped designer/Figma work only when UI, interaction, or design-system
+changes require it; ordinary development keeps its existing path.
+
 패키지 리팩토링의 사례 분해·선택 검증·시간 비교는
 [개발 피드백과 검증](docs/guides/refactoring-feedback.md)을 따른다.
 
