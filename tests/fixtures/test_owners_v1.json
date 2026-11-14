@@ -14244,7 +14244,12 @@
         "tests.test_provider_response_mapping.ProviderResponseMappingTests.test_all_wire_values_have_stable_golden_hashes_and_round_trip"
       ],
       "depends_on": [
-        "provider-response-contract-fixture"
+        "context-execution-fixture",
+        "provider-response-contract-fixture",
+        "tests.test_agent_context_accounting",
+        "tests.test_artifact_objectives",
+        "tests.test_artifact_proposal_orchestration",
+        "tests.test_lead_orchestration"
       ]
     },
     {
