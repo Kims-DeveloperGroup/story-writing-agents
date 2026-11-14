@@ -1304,7 +1304,7 @@ class ConversationCase:
         from story_writing_agents.prompts import PromptAssembler
         from story_writing_agents.provider_adapter import ProviderInvocation, ProviderInvocationError
         from story_writing_agents.workspace.initialization import compose_session_artifact_binding
-        from story_writing_agents.provider_wire import add_contract_guidance, describe_schema
+        from story_writing_agents.provider_contract_guidance import add_contract_guidance, describe_schema
         schema = describe_schema({"type": "object", "additionalProperties": False,
             "description": "Complete the diagnostic request with a supports_proposal specialist result and brief nonempty response_text.",
             "properties": {"agent_action": {"type": "object", "additionalProperties": False,

@@ -38,7 +38,7 @@ from ..conversations.events import (
     CollaborationExplorationAdoptionPayload,
 )
 from ..editorial_state import editorial_ref_to_dict
-from ..provider_wire import project_result_schema
+from ..provider_schema_projection import project_result_schema
 from ..structured_output_validation import validation_failure
 from dataclasses import asdict
 from typing import cast

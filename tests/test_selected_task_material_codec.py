@@ -4,7 +4,7 @@ import unittest
 from story_writing_agents.lead_task_transitions import (
     LeadMaterialCapture, LeadMaterialKind, LeadMaterialRef, selected_task_materials_to_dict,
 )
-from story_writing_agents.provider_wire import project_runtime_object
+from story_writing_agents.provider_request_mapping import project_runtime_object
 
 
 class SelectedTaskMaterialCodecTests(unittest.TestCase):

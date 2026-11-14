@@ -14708,6 +14708,55 @@
           "expected_method_ast_sha256": "7f647e0debce5ad224a0378940c87e0045e89ba1c9425abcaa8d10b4bafbcb3c"
         }
       ]
+    },
+    {
+      "schema_version": 1,
+      "issue": 998,
+      "origin_commit": "65ad7c277d1da5ad7b1cab931f48364607067d67",
+      "original_caps_sha256": "52d0575e721cf829d7ca7cc0409cd28861ac1db33b587b684d4611aff6df728c",
+      "expected_caps_sha256": "2823d24a5e6436e5b6fbe2356047375707e88c3e73c5f784011e8efa37e30fe5",
+      "class_moves": [
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "class": "LeadSchemaFactoringTests",
+          "destination": "tests/test_provider_schema_projection.py",
+          "destination_class": "ProviderSchemaProjectionTests",
+          "methods": [
+            "test_small_factoring_annotations_and_owner_refs_are_exact"
+          ]
+        },
+        {
+          "source": "tests/test_collaboration_events.py",
+          "class": "CollaborationWireContractTests",
+          "destination": "tests/test_provider_response_mapping.py",
+          "destination_class": "ProviderResponseMappingTests",
+          "methods": [
+            "test_all_wire_values_have_stable_golden_hashes_and_round_trip"
+          ]
+        }
+      ],
+      "moves": [
+        {
+          "old_id": "tests.test_lead_orchestration.LeadSchemaFactoringTests.test_small_factoring_annotations_and_owner_refs_are_exact",
+          "new_id": "tests.test_provider_schema_projection.ProviderSchemaProjectionTests.test_small_factoring_annotations_and_owner_refs_are_exact",
+          "subtest_cap": 0,
+          "source": "tests/test_lead_orchestration.py",
+          "destination": "tests/test_provider_schema_projection.py",
+          "original_file_sha256": "f3014b00d0f1ba4717d14a4e076236601f35d7d17067cc542d26356806f022c5",
+          "original_method_ast_sha256": "b9a556f548034c5ecac367e4d8692ed2e91defc791f49fa93aed0f8468749ba3",
+          "expected_method_ast_sha256": "bbaf328e2fa52618d5fa73c917c833320ed17ecdf972cd14d227561815412af7"
+        },
+        {
+          "old_id": "tests.test_collaboration_events.CollaborationWireContractTests.test_all_wire_values_have_stable_golden_hashes_and_round_trip",
+          "new_id": "tests.test_provider_response_mapping.ProviderResponseMappingTests.test_all_wire_values_have_stable_golden_hashes_and_round_trip",
+          "subtest_cap": 4,
+          "source": "tests/test_collaboration_events.py",
+          "destination": "tests/test_provider_response_mapping.py",
+          "original_file_sha256": "3437176ec97122a899680b709d40e962ec39181b1363b7788e53b39e75f7d15d",
+          "original_method_ast_sha256": "9f738e84cb166488d29ce508ffb07e2a719997f9e819967102656537a8a5da21",
+          "expected_method_ast_sha256": "90570fe605504d25190dd09b80b2c4677482f5498722ae4230d2ff331881c511"
+        }
+      ]
     }
   ]
 }

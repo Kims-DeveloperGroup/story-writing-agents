@@ -145,11 +145,9 @@ from ...errors import ProviderAuthenticationRequiredError
 from ...lead_schema_groups import LeadGroupPhase
 from ...provider_adapter import NativeContextCheck
 from ...provider_auth_recovery import authentication_replay, request_authentication
-from ...provider_wire import (
-    BUILTIN_RESULT_CONTRACT_IDS,
-    diagnostic_to_wire,
-    project_lead_scope_diagnostic,
-)
+from ...provider_message_catalog import BUILTIN_RESULT_CONTRACT_IDS
+from ...provider_contract_guidance import diagnostic_to_wire
+from ...provider_schema_projection import project_lead_scope_diagnostic
 from ...structured_output_validation import (
     ContractRejection,
     DomainValidationRule,

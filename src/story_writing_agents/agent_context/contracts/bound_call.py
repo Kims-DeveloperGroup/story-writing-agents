@@ -32,12 +32,12 @@ from ...lead_schema_groups import (
     SchemaGroupSelection,
 )
 from ...provider_schema_selection import LEAD_GROUP_PHASE_GUIDES, SchemaSelectionInput
-from ...provider_wire import (
+from ...provider_schema_projection import (
     hoist_schema_definitions,
-    normalize_context_action,
     rebase_schema_definitions,
     require_schema_projection,
 )
+from ...provider_response_mapping import normalize_context_action
 from ...structured_output_validation import (
     BoundContract,
     ContractOwner,

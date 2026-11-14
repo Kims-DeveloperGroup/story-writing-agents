@@ -5,7 +5,7 @@ from __future__ import annotations
 from .agent_context.accounting import ProviderUsageObservation, ProviderUsageScope
 from .structured_output_validation import strict_json_member_text
 
-from .provider_wire import common_contract_guide
+from .provider_contract_guidance import common_contract_guide
 
 import asyncio
 import hashlib

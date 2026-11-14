@@ -4,7 +4,7 @@ from story_writing_agents.agent_context.invocation import context_execution as o
 from story_writing_agents.agent_context.ledger import record_values as owner_record_values
 from story_writing_agents.agent_context.sources import session_history as owner_session_history
 from tests.provider_wire_fixture import selection_plan
-from story_writing_agents.provider_wire import project_context_payload
+from story_writing_agents.provider_request_mapping import project_context_payload
 import hashlib
 from story_writing_agents.conversations import encode_collaboration_event
 from tests.test_collaboration_events import editorial, editorial_request

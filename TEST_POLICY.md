@@ -13,7 +13,7 @@
 합집합으로 한 번만 더한다. 원본 commit·hash·범위로 이동 출처를 추적한다. 기존
 미확인 보조 코드 **1,550행**은 중복·종료가 입증되기 전까지 유지한다. 기존 범용
 러너·queue·reporting 도구 전체를 새로 청구하는 범위 확대는 하지 않으며, 테스트
-내용을 도구로 옮겨 비용을 누락시키는 것은 금지한다. 이슈별 승인 배정을 포함한 현행 상한은 **151,516행**이다.
+내용을 도구로 옮겨 비용을 누락시키는 것은 금지한다. 이슈별 승인 배정을 포함한 현행 상한은 **151,686행**이다.
 
 개발 반복에서는 최소 유효 focused 선택을 사용하고, 공유 계약·fixture·상태·권한
 변경은 필요한 실제 소비자와 host 경계로 확대한다. 영향이 불명확하면 전체를 선택한다.
@@ -79,6 +79,18 @@ complete workflow shares a 75-minute deadline, including setup and shutdown.
   policy change with measured cost and an explicit exception to the monotonic
   gate. Otherwise, extend an existing representative case or replace a more
   expensive check while respecting the current inventory.
+
+## #998의 공급자 계약 소유자 분리 소스 배정
+
+사용자 대화의 `승인`과 [#998 승인 기록](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/998#issuecomment-6872085271)에 따라 이 이슈 source **+170행**만 정확한 **151516→151686** 전이에 적용한다. #1021의 별도378행이나 미승인 #1022 배정과 합산하지 않는다. 이후 다른 main에서 적용하면 실제 source·cap·역사 checkpoint 비용을 다시 확인하며 자동 증액하지 않는다.
+
+선행 #1020 통합 main `65ad7c27`의 raw148525 + 등록 support1441 + legacy1550에서, 기존 두 Case의 전체1:1 이동과 필수 경계·정책 검증을 위해 **raw+127/support+43**을 배정한다. 구성은 test layout·support50, 중복을 제외한 import5, 새 graph 계약85·기존 기대 set3, packaging5, 이동·정책22행이다. 새 support36행에는 기존 raw helper33행을 중복 없이 한 번 이동하며 legacy1550을 절감하지 않는다. 실제 최종 counter는 raw148652 + support1484 + legacy1550 =151686을 넘지 않아야 한다.
+
+기존2544개 ID 중 원본 schema95행·response146행 두 Case만1:1 이동하며 cap0/4 및 전체 cap합8690, schema1,18000/3600초, worker profile/상한을 유지한다. 정확한 이전 cap52d0575e…→새 cap2823d24a… 전이와 닫힌 source receipt를 검증한다. stage/hash·default API·기존 opt-in2값과 원래 모든 부정 입력을 보존하고, 새 before998 checkpoint는 명시적 opt-in3값으로만 제공한다. 범용 `suite_budget.py`의 승인 전이 guard16행과 legacy 예외 호출부의 필요조건 guard6행은 기존 범용 도구 계상 범위 밖으로 실제 비용을 별도 공개하며 테스트 내용을 그 도구로 옮기지 않는다. 검증된 JSONBudget의 source-pair·schema·시간 필요조건을 기존 비교식 그대로 먼저 확인하고, 후보는 원문이 보존된 전체 권한 검사를 거친다. 실패한 cap 타입 순회13행은 제거하며 정상 cold 선택3회에서 재현한 지연은 기록으로 보존한다.
+
+실제 factoring 함수와 설명 공유 함수를 해당 도메인 소유자로 이동하고 기존 공개 경로를 유지한다. 새 graph edge1행은 이번 PR의 신규 testmodule docstring1행만 제거해 상쇄한다. 기존 도메인 import의 header 이동은 원래 준비 단계의 보존이며, 인위적 warmup·clock 변경 없이 import/collection·Case·전체 CLI 비용을 함께 기록하고 동일 cold 선택과 최종 전체 검증을 다시 수행한다.
+
+카탈로그의 빠른 첫 검증은 기존 selected-material Case의 literal `input_source_id` deep equality이며 전체 catalog·typed decode·비JSON 복구·giant의 확대를 대신하지 않는다. 같은 source 결함의 실제 RED/GREEN·최종 source의 정상 전체 CI·각 메서드/원본합산/전체 시간과 source/cap/graph/packaging을 검증한다. 이 배정은 기능·외부 format·저장 의미 변경이나 실제 성능 회귀를 허용하지 않는다. 실제 source/행 형식이 계획을 넘으면 검증 삭제·누락·임의 증액 없이 재계획한다.
 
 ## #1005의 세션 소스 Workspace 분리 소스 배정
 

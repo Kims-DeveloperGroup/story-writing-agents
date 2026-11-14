@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ...provider_wire import (
+from ...provider_schema_projection import (
     hoist_schema_definitions,
     project_action_schema,
 )

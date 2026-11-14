@@ -346,13 +346,99 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 252)
-        self.assertEqual(len(edges), 1327)
+        self.assertEqual(len(modules), 256)
+        self.assertEqual(len(edges), 1353)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._core', 'story_writing_agents.agent_context.contracts.events'), edges)
         self.assertIsNone(_cycle_witness(modules, edges))
+        provider_dependencies = {
+            'story_writing_agents.provider_contract_guidance': (
+                {
+                    'story_writing_agents.provider_message_catalog',
+                    'story_writing_agents.provider_schema_selection',
+                    'story_writing_agents.structured_output_validation',
+                },
+                {
+                    'story_writing_agents.agent_context.invocation.context_execution',
+                    'story_writing_agents.agent_context.invocation.group_payload',
+                    'story_writing_agents.agent_context.payload.actions',
+                    'story_writing_agents.agent_context.payload.context',
+                    'story_writing_agents.antigravity_adapter',
+                    'story_writing_agents.backend',
+                    'story_writing_agents.codex_adapter',
+                    'story_writing_agents.lead_provider_contracts',
+                    'story_writing_agents.prompts',
+                    'story_writing_agents.provider_request_mapping',
+                    'story_writing_agents.provider_schema_projection',
+                },
+            ),
+            'story_writing_agents.provider_message_catalog': (
+                set(),
+                {
+                    'story_writing_agents.agent_context.actions',
+                    'story_writing_agents.agent_context.contracts.context_values',
+                    'story_writing_agents.agent_context.invocation.context_execution',
+                    'story_writing_agents.agent_context.payload.actions',
+                    'story_writing_agents.backend',
+                    'story_writing_agents.lead_provider_contracts',
+                    'story_writing_agents.prompts',
+                    'story_writing_agents.provider_contract_guidance',
+                    'story_writing_agents.provider_request_mapping',
+                    'story_writing_agents.provider_response_mapping',
+                    'story_writing_agents.provider_schema_projection',
+                },
+            ),
+            'story_writing_agents.provider_request_mapping': (
+                {
+                    'story_writing_agents.agent_task_projection',
+                    'story_writing_agents.provider_contract_guidance',
+                    'story_writing_agents.provider_message_catalog',
+                    'story_writing_agents.provider_schema_selection',
+                },
+                {
+                    'story_writing_agents.agent_context.actions',
+                    'story_writing_agents.agent_context.invocation.group_payload',
+                    'story_writing_agents.agent_context.payload.context',
+                    'story_writing_agents.backend',
+                },
+            ),
+            'story_writing_agents.provider_response_mapping': (
+                {
+                    'story_writing_agents.provider_message_catalog',
+                },
+                {
+                    'story_writing_agents.agent_context.contracts.bound_call',
+                    'story_writing_agents.agent_context.payload.actions',
+                    'story_writing_agents.backend',
+                    'story_writing_agents.lead_provider_contracts',
+                    'story_writing_agents.orchestrator',
+                    'story_writing_agents.runtime_resources.provider_call_accounting',
+                },
+            ),
+            'story_writing_agents.provider_schema_projection': (
+                {
+                    'story_writing_agents.provider_contract_guidance',
+                    'story_writing_agents.provider_message_catalog',
+                    'story_writing_agents.structured_output_validation',
+                },
+                {
+                    'story_writing_agents.agent_context.contracts.action_schema',
+                    'story_writing_agents.agent_context.contracts.bound_call',
+                    'story_writing_agents.agent_context.invocation.context_execution',
+                    'story_writing_agents.backend',
+                    'story_writing_agents.lead_preparation.reply_contract_values',
+                    'story_writing_agents.lead_provider_contracts',
+                    'story_writing_agents.orchestrator',
+                },
+            ),
+        }
+        for name, (outgoing, incoming) in provider_dependencies.items():
+            self.assertEqual({target for origin, target in edges if origin == name}, outgoing)
+            self.assertEqual({origin for origin, target in edges if target == name}, incoming)
+        self.assertNotIn("story_writing_agents.provider_wire", modules)
+
         conversation_dependencies = {
             "story_writing_agents.conversations": {
                 "story_writing_agents.conversations.event_vocabulary",
@@ -738,7 +824,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
             {
                 'story_writing_agents.agent_context.contracts.planning_inputs',
                 'story_writing_agents.agent_context.manifest',
-                'story_writing_agents.provider_wire',
+                'story_writing_agents.provider_message_catalog',
+                'story_writing_agents.provider_request_mapping',
                 'story_writing_agents.provider_schema_patterns',
                 'story_writing_agents.structured_output_validation',
             },
@@ -809,7 +896,9 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 'story_writing_agents.lead_schema_groups',
                 'story_writing_agents.provider_adapter',
                 'story_writing_agents.provider_auth_recovery',
-                'story_writing_agents.provider_wire',
+                'story_writing_agents.provider_contract_guidance',
+                'story_writing_agents.provider_message_catalog',
+                'story_writing_agents.provider_schema_projection',
                 'story_writing_agents.structured_output_validation',
                 'story_writing_agents.workspace',
             },
@@ -1217,6 +1306,11 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             "story_writing_agents/lead_execution/collaboration_result_publication.py",
             "story_writing_agents/workspace/session_record_validation.py",
             "story_writing_agents/workspace/session_source_workspace.py",
+            'story_writing_agents/provider_contract_guidance.py',
+            'story_writing_agents/provider_message_catalog.py',
+            'story_writing_agents/provider_request_mapping.py',
+            'story_writing_agents/provider_response_mapping.py',
+            'story_writing_agents/provider_schema_projection.py',
             )
             with zipfile.ZipFile(story_wheel) as archive:
                 for package_path in group_package_paths:
