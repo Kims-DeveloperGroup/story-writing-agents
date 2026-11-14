@@ -87,7 +87,7 @@ INPUT_FIELDS = {
     "preparation_kind": "proposal_drafting_action_type", "preparation_objective_id": "document_change_request_id",
     "preparation_targets": "confirmed_target_artifact_paths", "preparation_specialists": "confirmed_specialist_ids",
     "recommendation_only": "proposal_drafting_recommendation_only",
-    "required_input_ids": "required_input_source_ids", "input_id": "input_source_id",
+    "required_input_ids": "required_input_source_ids", "input_id": "s13_wrong_input_source_id",
     "offered_assignment_input_ids": "available_assignment_input_source_ids",
     "offered_source_ids": "available_proposal_drafting_source_ids", "runtime_input_ids": "runtime_input_source_ids",
     "scope": "writing_task_scope", "task_revision": "task_revision", "query": "search_query",
