@@ -14757,6 +14757,85 @@
           "expected_method_ast_sha256": "90570fe605504d25190dd09b80b2c4677482f5498722ae4230d2ff331881c511"
         }
       ]
+    },
+    {
+      "schema_version": 1,
+      "issue": 1021,
+      "origin_commit": "8e730b3e8f5b092d34e8d249da56a1275fc3ded4",
+      "original_caps_sha256": "2823d24a5e6436e5b6fbe2356047375707e88c3e73c5f784011e8efa37e30fe5",
+      "expected_caps_sha256": "d9bd3023ba2ac0c68de7f8fb8de964f5e528db92a43e9a48a176445cee8bd28f",
+      "class_moves": [
+        {
+          "source": "tests/test_specialist_orchestration_execution.py",
+          "class": "SpecialistExecutionAcceptanceTests",
+          "destination": "tests/test_known_result_finalization.py",
+          "destination_class": "KnownResultRecoveryTests",
+          "methods": [
+            "test_restarted_finalization_restores_only_this_execution_diagnostics",
+            "test_domain_rejection_details_survive_restarted_finalization"
+          ]
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "class": "LeadBudgetFinalizationTests",
+          "destination": "tests/test_known_result_finalization.py",
+          "destination_class": "KnownResultBudgetTests",
+          "methods": [
+            "test_unaffordable_continuation_finalizes_exact_result_without_authority"
+          ]
+        },
+        {
+          "source": "tests/test_artifact_proposal_orchestration.py",
+          "class": "ArtifactProposalOrchestrationTests",
+          "destination": "tests/test_known_result_finalization.py",
+          "destination_class": "KnownResultAssessmentTests",
+          "methods": [
+            "test_all_assessments_are_preserved_and_partial_failure_never_reviews"
+          ]
+        }
+      ],
+      "moves": [
+        {
+          "old_id": "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_restarted_finalization_restores_only_this_execution_diagnostics",
+          "new_id": "tests.test_known_result_finalization.KnownResultRecoveryTests.test_restarted_finalization_restores_only_this_execution_diagnostics",
+          "subtest_cap": 0,
+          "source": "tests/test_specialist_orchestration_execution.py",
+          "destination": "tests/test_known_result_finalization.py",
+          "original_file_sha256": "86bc8e93955597e3ecf82ed9c79af291844111593221f5e8d612eefe5e1e199c",
+          "original_method_ast_sha256": "87f46a4661d6498084e06bed4bfcaa0ae1af74cf50a30b3694f4fe9b5dfe4b28",
+          "expected_method_ast_sha256": "2f5c48a5a7572d3f127209c3be83639eea7dc78063bf9f2d5e673af461a93449"
+        },
+        {
+          "old_id": "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_domain_rejection_details_survive_restarted_finalization",
+          "new_id": "tests.test_known_result_finalization.KnownResultRecoveryTests.test_domain_rejection_details_survive_restarted_finalization",
+          "subtest_cap": 2,
+          "source": "tests/test_specialist_orchestration_execution.py",
+          "destination": "tests/test_known_result_finalization.py",
+          "original_file_sha256": "86bc8e93955597e3ecf82ed9c79af291844111593221f5e8d612eefe5e1e199c",
+          "original_method_ast_sha256": "1433375cac6e36905bf714db0b641adf30a19616dd0476f5a22484cef40ca92f",
+          "expected_method_ast_sha256": "14ba91267295e1e170f5e802bc1850198f4ede146c6e29bb185a6c5ab66a382a"
+        },
+        {
+          "old_id": "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_unaffordable_continuation_finalizes_exact_result_without_authority",
+          "new_id": "tests.test_known_result_finalization.KnownResultBudgetTests.test_unaffordable_continuation_finalizes_exact_result_without_authority",
+          "subtest_cap": 0,
+          "source": "tests/test_lead_orchestration.py",
+          "destination": "tests/test_known_result_finalization.py",
+          "original_file_sha256": "593b9f22524819ee494570fd36b5af02d2df92ceea7462898dd66f775961a9ce",
+          "original_method_ast_sha256": "c6c7fecf2170ce34c466dcc519d5e879d9da22380f902195a767c30803fe1ba2",
+          "expected_method_ast_sha256": "1077d8ec1bac8bacff0c15d9486c0bf35e43d31991172ac7ba9f14d865eade4c"
+        },
+        {
+          "old_id": "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_all_assessments_are_preserved_and_partial_failure_never_reviews",
+          "new_id": "tests.test_known_result_finalization.KnownResultAssessmentTests.test_all_assessments_are_preserved_and_partial_failure_never_reviews",
+          "subtest_cap": 6,
+          "source": "tests/test_artifact_proposal_orchestration.py",
+          "destination": "tests/test_known_result_finalization.py",
+          "original_file_sha256": "13c9e98dbe24a53556db2f14f5c655030b10153d035738ae8bf4c9ca2ad4355b",
+          "original_method_ast_sha256": "1ed8b2da4330606410c3f9b7e57f39d0cc633c3a0dfd0469e1f8966bf14a154b",
+          "expected_method_ast_sha256": "91098bb4eb50f7995a367d0feaa9ccc49b579e92b3df61de3a13765c4b62e897"
+        }
+      ]
     }
   ]
 }

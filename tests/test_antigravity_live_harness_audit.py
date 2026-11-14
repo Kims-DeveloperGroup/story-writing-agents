@@ -411,7 +411,7 @@ class LiveHarnessAuditTests(unittest.TestCase):
         from story_writing_agents import conversations as contracts
         from story_writing_agents.specialist_routing import ArtifactReviewDomain, AuthoringActivity
         from tests.recommendation_fixture import RecommendationCase, action, recommendation, task_assessment
-        from tests.test_lead_orchestration import _live_scope
+        from tests.test_lead_orchestration import lead_fixture_authoring_scope
 
         runtime_case = RecommendationCase()
         self.addCleanup(runtime_case.doCleanups)
@@ -421,7 +421,7 @@ class LiveHarnessAuditTests(unittest.TestCase):
         runtime_case.backend.enqueue(recommendation(message=spec['candidate_text'],
             recommended_action=action(kind='prepare_consultation', purpose='Prepare a separately confirmed chronology review.', instruction='Prepare a Plot REVIEW proposal for the supplied finished outline.'),
             authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=("bounded chronology review",)),
-            authoring_scope=lambda call: _live_scope(call, activity="review",
+            authoring_scope=lambda call: lead_fixture_authoring_scope(call, activity="review",
                 domains=("plot_structure",), paths=("core_documents/global_outline.md",))), control_plan=selection_plan('prepare.consultation.authoring'))
         observer = SimpleNamespace(calls=[])
         turns = []

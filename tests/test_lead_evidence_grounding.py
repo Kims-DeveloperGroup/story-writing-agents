@@ -16,7 +16,7 @@ from story_writing_agents.agents import EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR,
 from story_writing_agents.conversations import CollaborationAppendError, CollaborationEvidenceAcquisition, CollaborationEvidenceReceipt, CollaborationEventKind, CollaborationInputKind, CollaborationInputState, CollaborationInvocationKind, CollaborationLeadEvidence, CollaborationLeadJudgmentPayload, CollaborationLeadOutcomeFailureCode, CollaborationLeadOutcomeFailurePayload, CollaborationNextAction, CollaborationProviderCallKind, CollaborationStepState, LeadEvidenceStatus, LeadOutcomeKind, LeadOutcomeScope, collaboration_proposal_digest, encode_collaboration_event, validate_collaboration_candidate_batch
 from story_writing_agents.errors import BackendProtocolError
 from story_writing_agents.writing_artifacts import ReferenceAuthorizationErrorCode, ReferenceOperationFailure
-from tests.test_lead_orchestration import LeadOrchestrationTestCase, _LeadBackend, _LeadContextProvider, _confirmed_premise, _decision, _live_scope, _provider_envelope, _specialist_outcome, _submitted_calls, _synthesis_outcome, _visible_outcome
+from tests.test_lead_orchestration import LeadOrchestrationTestCase, _LeadBackend, _LeadContextProvider, _confirmed_premise, lead_confirmation_decision, lead_fixture_authoring_scope, _provider_envelope, lead_specialist_outcome, _submitted_calls, _synthesis_outcome, _visible_outcome
 from tests.collaboration_contract_fixture import LEAD, RUNTIME, USER, make_batch, make_draft, provider_call_drafts, store_batch
 from story_writing_agents.agent_context.invocation import provider as ctx_provider
 
@@ -286,7 +286,7 @@ def _missing_outcome(*, proposal: bool = False, authoring_assessment=None, input
             "evidence_ids": ([observation["zero_hit_receipt"]["evidence_id"]] if input_ids is None else [item["evidence_id"] for item in observation["read_results"]]),
             "artifact_intent": None,
             "objective_intent": None,
-            "authoring_scope": _live_scope(call, activity="review", domains=("plot_structure",)),
+            "authoring_scope": lead_fixture_authoring_scope(call, activity="review", domains=("plot_structure",)),
             "proposal": (
                 {
                     "relation": "new_step",
@@ -376,7 +376,7 @@ def _referenced_outcome(*, status: str, evidence_ids: list[str], factual=False,
             "message": "The reference is empty. What candidate material should be reviewed?" if factual else "The supplied outline and manuscript candidates require review.",
             "scope": "story_specific", "evidence_status": status, "evidence_ids": evidence_ids,
             "artifact_intent": None, "objective_intent": None,
-            "authoring_scope": _live_scope(
+            "authoring_scope": lead_fixture_authoring_scope(
                 call,
                 activity="review",
                 paths=target_paths,
@@ -565,7 +565,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                 specialist_reads.extend(observation["read_results"])
                 self.assertIn(marker, json.dumps(specialist_reads))
                 self.assertNotIn(unrelated, json.dumps(specialist_reads))
-                return _specialist_outcome("insufficient_evidence", "The assigned record is read; other requested evidence remains unavailable.")(call, provider)
+                return lead_specialist_outcome("insufficient_evidence", "The assigned record is read; other requested evidence remains unavailable.")(call, provider)
             from tests.test_lead_orchestration import _search_history
             self.backend.enqueue_for(PLOT_ARCHITECT, lambda call, provider: _search_history(call, provider, unrelated),
                 assigned_search, specialist_read, insufficient)
@@ -591,7 +591,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             def accounted(*args, **kwargs):
                 return replace(account(*args, **kwargs), usage=usage)
             with mock.patch.object(self.runtime, "_materialize_lead_evidence_inputs", side_effect=conflict_input), mock.patch.object(_LeadContextProvider, "_account", side_effect=accounted):
-                completed = await self.runtime.decide_lead_step(_decision(proposed, self._confirm_decision()))
+                completed = await self.runtime.decide_lead_step(lead_confirmation_decision(proposed, self._confirm_decision()))
             result = completed.turn
             self.assertEqual(len(raw), 2 if conflict else 1, (result, _submitted_calls(self.history(conversation_id))))
             self.assertEqual(len(self.backend.calls) - calls, 6 if conflict else 5)
@@ -652,7 +652,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         new_artifact.write_text("New evidence.\n", encoding="utf-8")
         calls_before = len(self.backend.calls)
         with self.assertRaises(BackendProtocolError):
-            await self.runtime.decide_lead_step(_decision(proposed, self._confirm_decision()))
+            await self.runtime.decide_lead_step(lead_confirmation_decision(proposed, self._confirm_decision()))
         self.assertEqual(len(self.backend.calls), calls_before)
 
     async def test_whole_and_range_conflict_bind_proposal_and_detect_drift(
@@ -702,7 +702,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         self.workspace.path("manuscript/part-01/opening.md").write_text("Opening changed.\n", encoding="utf-8",)
         submitted_before_drift = len(self.backend.calls)
         with self.assertRaises(BackendProtocolError):
-            await self.runtime.decide_lead_step(_decision(result, self._confirm_decision()))
+            await self.runtime.decide_lead_step(lead_confirmation_decision(result, self._confirm_decision()))
         self.assertEqual(len(self.backend.calls), submitted_before_drift)
         path = self.workspace.path("manuscript/part-01/exploration.md")
         path.write_text("current-exploration-evidence\nSecond line.\n", encoding="utf-8")
@@ -801,7 +801,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                 assessment = _fixture_assessment(
                     foundation_ids=("reference_1", "reference_2") if references else ("user_input",),
                 )
-                authored_scope = _live_scope(
+                authored_scope = lead_fixture_authoring_scope(
                     call, activity="review", domains=("plot_structure", "tone_execution"),
                     paths=("core_documents/global_outline.md", "manuscript/part-01/opening.md"))
                 response = _provider_envelope(call, {
@@ -958,7 +958,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             eligible_paths = lead_outcome_scope_paths(
                 LeadOutcomeKind.ANSWER, AuthoringActivity.REVIEW,
                 (ArtifactReviewDomain.PLOT_STRUCTURE,), writing_facts, ordinary_answer=True)
-            native_scope = lead_fixture_bound_scope(call, _live_scope(
+            native_scope = lead_fixture_bound_scope(call, lead_fixture_authoring_scope(
                 call, activity="review", domains=("plot_structure",)), record=True)
             constraints = call.contract.factory.constraints
             if constraints.scope is None and constraints.adoption_intent is None:
@@ -1118,10 +1118,10 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                 eligibility.completed_read_facts + eligibility.delivery_read_facts
                 if item.source_kind is ContextSourceKind.WRITING_ARTIFACT)
             self.assertTrue(eligibility_writing_facts == ())
-            scope = lead_fixture_bound_scope(call, _live_scope(
+            scope = lead_fixture_bound_scope(call, lead_fixture_authoring_scope(
                 call, activity='review', domains=(domain.value,)), record=True)
             workflow_scope = lead_fixture_bound_scope(
-                call, _live_scope(call, activity='workflow'), record=True)
+                call, lead_fixture_authoring_scope(call, activity='workflow'), record=True)
             stem = call.contract.factory.rule_seed.contract_id
             origin = call.contract if call.contract.lineage is None else call.contract.lineage.origin
             baseline = SimpleNamespace(contract=origin)
@@ -1205,7 +1205,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                 LeadOutcomeKind.ANSWER, AuthoringActivity.REVIEW,
                 (ArtifactReviewDomain.PLOT_STRUCTURE,), writing_facts, ordinary_answer=True)
             self.assertIsNotNone(eligible_paths)
-            scope = lead_fixture_bound_scope(call, _live_scope(
+            scope = lead_fixture_bound_scope(call, lead_fixture_authoring_scope(
                 call, activity='review', domains=('plot_structure',)), record=True)
             constraints = call.contract.factory.constraints
             self.assertIsNone(constraints.scope)

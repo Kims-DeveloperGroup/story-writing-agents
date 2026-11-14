@@ -304,7 +304,7 @@ class ContextRecoveryTests(fixture_execution_fixture.ContextExecutionTestCase):
         from story_writing_agents.agent_context.invocation.context_execution import AgentContextService
         case = lead._task_fixture(self)
         if action_policy is not None:
-            case.runtime._agent_context_service = AgentContextService(
+            case.runtime.agent_context_service = AgentContextService(
                 case.workspace, action_policy=action_policy)
         conversation_id = lead.LeadOrchestrationTestCase.conversation(case, "Bound authority replay")
         if seed is not None:
@@ -853,9 +853,9 @@ class RecoveryCoordinationTests(lead.LeadOrchestrationTestCase):
             ), authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded story-direction review judgments',))))
                 failure = auth_failure("codex", safe=safe)
                 self.backend.enqueue_for(PLOT_ARCHITECT, lead._SubmittedFailure(failure, submission_uncertain=not safe))
-                self.backend.enqueue_for(CHARACTER_CUSTODIAN, lead._specialist_outcome())
+                self.backend.enqueue_for(CHARACTER_CUSTODIAN, lead.lead_specialist_outcome())
                 with self.assertRaises(ProviderAuthenticationRequiredError) as caught:
-                    await self.runtime.decide_lead_step(lead._decision(proposed, CollaborationConfirmationDecision.CONFIRM))
+                    await self.runtime.decide_lead_step(lead.lead_confirmation_decision(proposed, CollaborationConfirmationDecision.CONFIRM))
                 self.assertIs(caught.exception, failure)
                 events = self.history(conversation)
                 self.assertEqual(sum(isinstance(e.payload, CollaborationSpecialistReplyPayload) for e in events), 1)
@@ -866,7 +866,7 @@ class RecoveryCoordinationTests(lead.LeadOrchestrationTestCase):
                 restarted = StoryRuntime(self.control_workspace, self.backend)
                 self.assertEqual(self.backend.calls, before)
                 with self.assertRaises(ValueError):
-                    await restarted.decide_lead_step(lead._decision(proposed, CollaborationConfirmationDecision.CONFIRM))
+                    await restarted.decide_lead_step(lead.lead_confirmation_decision(proposed, CollaborationConfirmationDecision.CONFIRM))
                 self.assertEqual(self.backend.calls, before)
                 self.assertEqual(self.history(conversation), events)
 
@@ -941,12 +941,12 @@ class RecoveryCoordinationTests(lead.LeadOrchestrationTestCase):
                     ctx_provider.record_context_provider_failure(failure, ctx_provider.ContextProviderFailureFacts(accounting))
                     raise failure
                 return await original(provider, request)
-        self.backend.enqueue_for(PLOT_ARCHITECT, lead._specialist_outcome())
-        self.backend.enqueue_for(CHARACTER_CUSTODIAN, lead._specialist_outcome())
+        self.backend.enqueue_for(PLOT_ARCHITECT, lead.lead_specialist_outcome())
+        self.backend.enqueue_for(CHARACTER_CUSTODIAN, lead.lead_specialist_outcome())
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, lead._synthesis_outcome())
         with mock.patch.object(lead._LeadContextProvider, "invoke_context", new=physical):
             result, keys = await drive_recovery(self.runtime.decide_lead_step(
-                lead._decision(proposed, CollaborationConfirmationDecision.CONFIRM)))
+                lead.lead_confirmation_decision(proposed, CollaborationConfirmationDecision.CONFIRM)))
         self.assertEqual(keys, [("codex", 0)])
         self.assertIs(result.turn.state, CollaborationStepState.COMPLETED)
         events = self.history(conversation)

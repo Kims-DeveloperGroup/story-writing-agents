@@ -31,7 +31,7 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
                 if type(event.payload) is CollaborationLeadOutcomeFailurePayload]
 
     def checkpoint(self):
-        service = self.runtime._agent_context_service
+        service = self.runtime.agent_context_service
         identity = service.session_continuation(self.session_id, LEAD_ORCHESTRATOR).identity
         key = owner_record_values.ContextLedgerKey(identity.checkpoint_scope(), "codex")
         return key, service._ledger.inspect(key)
@@ -147,7 +147,7 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
         self.append_legacy(conversation, "submitted")
         plan = replace(checkpoint.record.attempt.plan, attempt_id="abandoned_attempt",
                        operation_id="lead_turn_a", result_correlation_id="abandoned_result")
-        self.runtime._agent_context_service._ledger.reserve_attempt(
+        self.runtime.agent_context_service._ledger.reserve_attempt(
             key, expected_generation=checkpoint.generation, plan=plan)
         restarted = StoryRuntime(self.workspace, self.backend)
         await self.answer(conversation, "Retry after interrupted native work.", runtime=restarted)
@@ -192,7 +192,7 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
             self.backend.enqueue(revision_failure)
         revision_start = len(self.backend.calls)
         result = await self.runtime.decide_lead_step(
-            lead._decision(proposed, CollaborationConfirmationDecision.REVISE))
+            lead.lead_confirmation_decision(proposed, CollaborationConfirmationDecision.REVISE))
         self.assertIs(result.turn.next_action, CollaborationNextAction.RETRY_LEAD_TURN)
         self.assertEqual(len(self.backend.calls), revision_start + 1)
         revision_call = self.backend.calls[revision_start]
@@ -208,7 +208,7 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
         before = len(self.backend.calls)
         restarted = StoryRuntime(self.workspace, self.backend)
         with self.assertRaisesRegex(ValueError, "no authoritative pending request"):
-            await restarted.decide_lead_step(lead._decision(proposed, CollaborationConfirmationDecision.CONFIRM))
+            await restarted.decide_lead_step(lead.lead_confirmation_decision(proposed, CollaborationConfirmationDecision.CONFIRM))
         self.assertEqual(len(self.backend.calls), before)
         retry_findings = []
         def retry_answer(call, provider):

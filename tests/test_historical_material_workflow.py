@@ -25,10 +25,10 @@ from tests.recommendation_fixture import (
     DRAFT, action, recommendation, decision as recommendation_decision,
 )
 from tests.test_artifact_proposal_orchestration import (
-    _artifact_outcome, _artifact_synthesis_outcome, _status_id,
+    artifact_review_outcome, _artifact_synthesis_outcome, artifact_evidence_status_id,
 )
 from tests.test_lead_orchestration import (
-    _SubmittedFailure, _compact_scope, _decision, _discussion_reply, _live_material, _specialist_outcome, _submitted_calls, _synthesis_outcome, _workflow_material,
+    _SubmittedFailure, _compact_scope, lead_confirmation_decision, _discussion_reply, _live_material, lead_specialist_outcome, _submitted_calls, _synthesis_outcome, _workflow_material,
 )
 from tests.test_specialist_routing_runtime import (
     AgentBackend, OUTLINE, _ADMISSION_BRIEF, _SpecialistRoutingRuntimeCase, _fixture_assessment,
@@ -196,9 +196,9 @@ class HistoricalMaterialWorkflowTests(_SpecialistRoutingRuntimeCase):
             if item.source_id == selected_input.input_id), selected_admission)
         self.assertIn(selected_input.input_id, prepared.proposal.assignments[0].input_ids)
         self.assertEqual((historical_input.kind, historical_input.locator, historical_input.revision_digest), (c.CollaborationInputKind.CONVERSATION_EVENT, "conversation/" + draft_capture.event_id, "sha256:" + old_material.ref.material_digest))
-        self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome("drafted", "A fresh chronology follows the selected historical material."))
+        self.backend.enqueue_for(PLOT_ARCHITECT, lead_specialist_outcome("drafted", "A fresh chronology follows the selected historical material."))
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
-        drafted = await self.runtime.decide_lead_step(_decision(prepared, c.CollaborationConfirmationDecision.CONFIRM))
+        drafted = await self.runtime.decide_lead_step(lead_confirmation_decision(prepared, c.CollaborationConfirmationDecision.CONFIRM))
         self.assertIs(drafted.turn.state, c.CollaborationStepState.COMPLETED, (drafted.turn.message[:1200], drafted.turn.validation_details[:6]))
         delivered_historical = next(item for agent, call in reversed(self.backend.call_records) if agent == PLOT_ARCHITECT for item in _workflow_material(call.payload)["inputs"] if (item["input_id"], item["locator"], item["revision_digest"]) == (historical_input.input_id, historical_input.locator, historical_input.revision_digest))
         self.assertEqual((delivered_historical["text"], delivered_historical["selected_material_source"]), (old_material.text, task.task_value_to_dict(old_material.ref)))
@@ -215,9 +215,9 @@ class HistoricalMaterialWorkflowTests(_SpecialistRoutingRuntimeCase):
         ), selection_group='prepare.artifact')
         self.assertIsNotNone(fresh_ready.recommendation_request, fresh_ready)
         def integrate_fresh(call, provider):
-            return _artifact_outcome(
+            return artifact_review_outcome(
                 operations=lambda call, material, *, input_payload: [{"kind": "replace",
-                    "evidence_id": _status_id(input_payload, OUTLINE), "new_text": DRAFT}],
+                    "evidence_id": artifact_evidence_status_id(input_payload, OUTLINE), "new_text": DRAFT}],
                 evidence_status="incomplete",
                 evidence_ids=lambda call, material, *, input_payload: [
                     input_payload["core_document_statuses"][0]["evidence_id"]],
@@ -230,9 +230,9 @@ class HistoricalMaterialWorkflowTests(_SpecialistRoutingRuntimeCase):
         self.backend.enqueue(integrate_fresh)
         fresh_review = await self.runtime.decide_lead_recommendation(recommendation_decision(fresh_ready))
         self.assertEqual(None if fresh_review.proposal is None else (fresh_review.proposal.participants, fresh_review.proposal.assignments[0].mode), ((PLOT_ARCHITECT,), SpecialistAssignmentMode.REVIEW), fresh_review)
-        self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome("supports"))
+        self.backend.enqueue_for(PLOT_ARCHITECT, lead_specialist_outcome("supports"))
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, _artifact_synthesis_outcome())
-        final = await self.runtime.decide_lead_step(_decision(fresh_review, c.CollaborationConfirmationDecision.CONFIRM))
+        final = await self.runtime.decide_lead_step(lead_confirmation_decision(fresh_review, c.CollaborationConfirmationDecision.CONFIRM))
         self.assertIsNotNone(final.turn.artifact_proposal, final)
         self.assertIs(final.turn.artifact_proposal.state, c.ArtifactProposalState.REVIEWED, final.turn)
         self.assertEqual(self.artifact_bytes(), before)

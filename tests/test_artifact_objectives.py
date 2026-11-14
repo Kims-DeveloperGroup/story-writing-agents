@@ -99,7 +99,7 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
                     update=native_update, branch='lead-response-v8:family:1', selection_group=selection_group)
             return lead._provider_envelope(call, {"recommended_action": None,
                 "scope": "story_specific", "evidence_status": "empty",
-                "evidence_ids": [artifact._status_id(_provider.callback_payload(call), OUTLINE)],
+                "evidence_ids": [artifact.artifact_evidence_status_id(_provider.callback_payload(call), OUTLINE)],
                 "kind": "question", "message": message, "proposal": None,
                 "artifact_intent": None, "objective_intent": intent,
                 "authoring_scope": self.scope(call, intent=intent, activity="draft"),
@@ -107,7 +107,7 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
         return respond
 
     def scope(self, call, *, intent=None, activity="review"):
-        return lead._live_scope(call, activity=activity, paths=(OUTLINE,))
+        return lead.lead_fixture_authoring_scope(call, activity=activity, paths=(OUTLINE,))
 
     async def start(self, conversation_id=None, *, message=DRAFT, objective_id=None,
                     target_path=OUTLINE, specialist_ids=(PLOT_ARCHITECT,), authoring_paths=None,
@@ -167,9 +167,9 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
         if intent is not None:
             self.objective_tasks[self.objective(conversation_id).facts.objective_id] = proposed.proposal.authoring_scope.task_id
         for agent in specialist_ids:
-            self.backend.enqueue_for(agent, lead._specialist_outcome("drafted", message))
+            self.backend.enqueue_for(agent, lead.lead_specialist_outcome("drafted", message))
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, lead._synthesis_outcome(message=message))
-        completed = await self.runtime.decide_lead_step(lead._decision(proposed, c.CollaborationConfirmationDecision.CONFIRM))
+        completed = await self.runtime.decide_lead_step(lead.lead_confirmation_decision(proposed, c.CollaborationConfirmationDecision.CONFIRM))
         turn = completed.turn
         self.assertIs(turn.state, c.CollaborationStepState.COMPLETED, turn)
         self.assertEqual(turn.message, message + "\n\n"
@@ -211,7 +211,7 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
         intent = {"action": "continue", "objective_id": objective.facts.objective_id,
                   "next_step": "prepare", "draft_source_event_ids": [source.event_id] if select else []}
         evidence = (lambda call, material, *, input_payload: artifact._reference_ids(material)) if attached else (
-            lambda call, _material, *, input_payload: [artifact._status_id(input_payload, OUTLINE)])
+            lambda call, _material, *, input_payload: [artifact.artifact_evidence_status_id(input_payload, OUTLINE)])
         def offer_current_task(call, provider):
             sources = ((source.event_id,) if select else ("user_input",)) + (
                 tuple(evidence(call, lead._workflow_material(provider.callback_payload(call)), input_payload=provider.callback_payload(call))) if attached else ())
@@ -223,7 +223,7 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
         prompt = f"Prepare the next revision using ${{{OUTLINE}}}." if attached else "네, 그 초안 그대로 문서로 준비해 줘."
         offered = await self.runtime.lead_turn(self.session_id, conversation_id, ("Finished candidate:\n" + text + "\nYou may prepare this candidate and a separate proposal; preserve supplied facts.\n" + prompt))
         self.assertIs(offered.kind, c.LeadOutcomeKind.RECOMMENDATION, offered)
-        prepare_current_task = artifact._artifact_outcome(operations=lambda call, material, *, input_payload: [{"kind": "replace",
+        prepare_current_task = artifact.artifact_review_outcome(operations=lambda call, material, *, input_payload: [{"kind": "replace",
                 "evidence_id": evidence(call, material, input_payload=input_payload)[0], "new_text": text}],
             evidence_status='verified' if attached else 'empty', evidence_ids=evidence,
             objective_intent=intent,authoring_scope=c.authoring_scope_to_dict(scope),
@@ -240,9 +240,9 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
 
     async def review(self, proposed):
         for assignment in proposed.proposal.assignments:
-            self.backend.enqueue_for(assignment.specialist_id, lead._specialist_outcome("supports"))
+            self.backend.enqueue_for(assignment.specialist_id, lead.lead_specialist_outcome("supports"))
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, artifact._artifact_synthesis_outcome("propose"))
-        result = await self.runtime.decide_lead_step(lead._decision(proposed, c.CollaborationConfirmationDecision.CONFIRM))
+        result = await self.runtime.decide_lead_step(lead.lead_confirmation_decision(proposed, c.CollaborationConfirmationDecision.CONFIRM))
         self.assertIsNotNone(result.turn.artifact_application_request, result.turn)
         return result.turn
 
@@ -402,7 +402,7 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
             first = await self.prepare(conversation_id)
             self.assertEqual(len(self.backend.calls) - source_call_start, 5)
             selected = self.objective(conversation_id).draft_sources
-            await self.runtime.decide_lead_step(lead._decision(first, c.CollaborationConfirmationDecision.REJECT))
+            await self.runtime.decide_lead_step(lead.lead_confirmation_decision(first, c.CollaborationConfirmationDecision.REJECT))
             second = await self.prepare(conversation_id, select=False)
             self.assertEqual(len(self.backend.calls) - source_call_start, 7)
             self.assertEqual(self.objective(conversation_id).draft_sources, selected)
@@ -424,7 +424,7 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
         self.assertEqual(tuple(self.backend.calls[source_call_start + index].contract.schema_group_phase for index in (0, 3, 4, 5, 6)), (None,) * 5)
         objective_id = self.objective(conversation_id).facts.objective_id
         self.backend.enqueue(lambda call, _provider: _native_objective_response(call, response_type='answer',
-            message='Objective cancelled.', scope=lead._live_scope(call),
+            message='Objective cancelled.', scope=lead.lead_fixture_authoring_scope(call),
             update={'update_type': 'cancel_request', 'document_change_request_id': objective_id},
             branch='lead-response-v8:family:0', selection_group='answer.workflow'),
                              control_plan=selection_plan("answer.workflow"))

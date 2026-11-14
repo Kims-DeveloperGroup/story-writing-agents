@@ -1,5 +1,6 @@
 """End-to-end acceptance tests for the lead-front-channel runtime."""
 from __future__ import annotations
+from tests.known_result_finalization_fixture import finalize_known_result
 from tests.provider_wire_fixture import lead_fixture_scope_record, lead_fixture_response
 from tests.provider_wire_fixture import CallbackContextViews, ExplicitPhaseScript, FixturePhasePlanError, assert_phase_guide, selection_plan
 from tests.provider_wire_fixture import fixture_schema_node, indexed_response, lead_fixture_result, lead_fixture_scope, offered_fixture_bindings, finite_fixture_selection
@@ -125,7 +126,7 @@ async def _confirmed_premise(case, conversation, *, reference=False, recommendat
         case.assertEqual(proposed.evidence, orchestrator_module.CollaborationLeadEvidence(LeadOutcomeScope.PREMISE_ANALYSIS, orchestrator_module.LeadEvidenceStatus.NOT_APPLICABLE, ()))
     case.assertTrue(all(item.mode is SpecialistAssignmentMode.PREMISE_ANALYSIS for item in proposed.proposal.assignments))
     pending_history, pending_calls = case.history(conversation), len(case.backend.call_records)
-    await case.runtime.decide_lead_step(_decision(proposed, CollaborationConfirmationDecision.REVISE))
+    await case.runtime.decide_lead_step(lead_confirmation_decision(proposed, CollaborationConfirmationDecision.REVISE))
     pending = project_collaboration_history(case.history(conversation))
     case.assertEqual((pending.current_proposal, pending.confirmation_request_id), (proposed.proposal, proposed.confirmation_request_id))
     case.assertEqual(len(case.backend.call_records), pending_calls)
@@ -164,7 +165,7 @@ async def _confirmed_premise(case, conversation, *, reference=False, recommendat
             call.contract.decode_response(json.dumps(unexpected, ensure_ascii=False))
         return response
     case.backend.enqueue_for(LEAD_ORCHESTRATOR, summarize)
-    finished = await case.runtime.decide_lead_step(_decision(proposed, CollaborationConfirmationDecision.CONFIRM))
+    finished = await case.runtime.decide_lead_step(lead_confirmation_decision(proposed, CollaborationConfirmationDecision.CONFIRM))
     turn = finished.turn
     case.assertEqual(turn.premise_report.options[0].premise_text, literal)
     case.assertEqual(turn.premise_report_ref.report_digest, turn.premise_report.report_digest)
@@ -506,7 +507,7 @@ def _live_task(call, task_index=-1):
     return {"task_id": task_id, "task_revision": task_revision}
 
 
-def _live_scope(call, *, activity='workflow', domains=(), paths=(), task_index=-1, contributions=None):
+def lead_fixture_authoring_scope(call, *, activity='workflow', domains=(), paths=(), task_index=-1, contributions=None):
     """Declare synthetic work semantics; the runtime supplies lifecycle identity."""
     affected = set(domains) | {domain.value for path in paths if (domain := artifact_domain(path)) is not None}
     return {"interpretation": "Inspect the supplied current work.", "activity": activity, "intent": "authoring", "target_paths": list(paths), "domains": list(domains), "contributions": (copy.deepcopy(contributions) if contributions is not None else [
@@ -555,7 +556,7 @@ def _live_result(call, value):
         and (value.get('recommended_action') is None) and (execution is None)):
         authoring_scope = value.get("authoring_scope")
         if type(authoring_scope) is not dict:
-            authoring_scope = _live_scope(call, activity="workflow")
+            authoring_scope = lead_fixture_authoring_scope(call, activity="workflow")
         compact = {"message": value["message"], "authoring_scope": _compact_scope(authoring_scope),}
         if value["kind"] != "answer": compact["kind"] = value["kind"]
         if value["kind"] == "question":
@@ -579,7 +580,7 @@ def _live_result(call, value):
                         paths.append(path)
         domains = list(artifact.get("additional_review_domains", []))
         if not paths and not domains: domains = ["tone_execution"]
-    scope = _live_scope(call, activity="review" if proposal is not None or artifact is not None else "workflow", domains=domains or (["plot_structure"] if proposal is not None else []), paths=paths)
+    scope = lead_fixture_authoring_scope(call, activity="review" if proposal is not None or artifact is not None else "workflow", domains=domains or (["plot_structure"] if proposal is not None else []), paths=paths)
     if execution is not None:
         scope = copy.deepcopy(execution["request"]["authoring_scope"])
         if value.get("scope") == "workflow_meta":
@@ -747,11 +748,11 @@ def _proposal_outcome(assignments: list[dict[str, object]], *, relation: str='ne
                     "recommended_action": None, "kind": "proposal", "message": "Specialist review would resolve the open question.", "scope": "story_specific",
                     "evidence_status": "incomplete", "evidence_ids": ( [core_statuses[0]["evidence_id"]] if core_statuses else [] ), "artifact_intent": None,
                     "objective_intent": None,
-                    "proposal": { "relation": relation, "purpose": purpose, "assignments": assignments, **({"shared_premises": []} if "contributions" in _live_scope(call) else {}), },
+                    "proposal": { "relation": relation, "purpose": purpose, "assignments": assignments, **({"shared_premises": []} if "contributions" in lead_fixture_authoring_scope(call) else {}), },
                 }
         if authoring_assessment is not None: value["authoring_assessment"] = authoring_assessment
         if activity is not None:
-            value['authoring_scope'] = _live_scope(call, activity=activity, domains=(
+            value['authoring_scope'] = lead_fixture_authoring_scope(call, activity=activity, domains=(
                 'plot_structure', 'character_world', 'tone_execution'), paths=paths)
         return _provider_envelope(call, value,)
 
@@ -820,7 +821,7 @@ def _workflow_material(value: object) -> dict[str, object]:
     raise LookupError("workflow material is absent")
 
 
-def _specialist_outcome(assessment: str='supports',
+def lead_specialist_outcome(assessment: str='supports',
     message: str='The assigned evidence supports the proposed direction.'):
     def respond(
         call: ctx_provider.ContextProviderCallRequest,
@@ -909,7 +910,7 @@ def _answer_from_history(call: ctx_provider.ContextProviderCallRequest, provider
     return _visible_outcome("answer", "A prior lead response supplies enough evidence.")(call, provider)
 
 
-def _decision(result: object, kind: CollaborationConfirmationDecision, **changes: object):
+def lead_confirmation_decision(result: object, kind: CollaborationConfirmationDecision, **changes: object):
     proposal = result.proposal
     values = {"confirmation_request_id": result.confirmation_request_id,
         "session_id": result.session_id, "conversation_id": result.conversation_id,
@@ -928,7 +929,7 @@ _READINESS_USER = ( "Use bounded conversation history if needed. " "Assess readi
     "the author knows throughout that the seal proves ownership. Judge these exact whole documents." )
 
 
-_READINESS_DOCUMENTS = (("core_documents/global_outline.md", "Nora departs with the letter. A blocked bridge and a suspicious " "keeper prevent return. Her brother's seal resolves the conflict; she returns the letter.\n"),
+LEAD_FIXTURE_READINESS_DOCUMENTS = (("core_documents/global_outline.md", "Nora departs with the letter. A blocked bridge and a suspicious " "keeper prevent return. Her brother's seal resolves the conflict; she returns the letter.\n"),
     ("core_documents/part_outlines.md", "Departure establishes the letter and seal. The crossing follows " "departure and tests ownership. Return follows the crossing and resolves the late conflict.\n"),
     ("core_documents/character_sheets.md", "Nora's role is courier; she wants to honor her trusting brother. " "The keeper guards the bridge, suspects theft, and helps after recognizing the brother's seal.\n"),
     ("core_documents/narrative_rules.md", "Close third person and past tense; restrained tone and plain " "expression. Narration follows Nora; dialogue reveals the seal. No perspective exceptions.\n"),)
@@ -937,7 +938,7 @@ _READINESS_DOCUMENTS = (("core_documents/global_outline.md", "Nora departs with 
 def _whole_book_assessment(call, answer, *, offered_inputs, logical_transform: Callable[
     [core_readiness.CoreDocumentAssessment], core_readiness.CoreDocumentAssessment] | None = None):
     reads = {path: next((source['input_source_id'] for source in offered_inputs if source[
-        'source_locator'] == '${' + path + '}')) for path, _ in _READINESS_DOCUMENTS}
+        'source_locator'] == '${' + path + '}')) for path, _ in LEAD_FIXTURE_READINESS_DOCUMENTS}
     if getattr(call, 'contract', None) is not None:
         basis_ref = call.contract.factory.constraints.readiness_source_basis_ref
     else:
@@ -954,7 +955,7 @@ def _whole_book_assessment(call, answer, *, offered_inputs, logical_transform: C
               for dependency in core_readiness.DEPENDENCIES[core_readiness.AuthoringTarget(path)]), (), (core_readiness.ReaderSecret("The brother's seal proves ownership.", ("crossing",),
              ("user_input",), "The seal proves the letter belongs to Nora's brother.", (reads["core_documents/global_outline.md"],),
              "supplied", "USER delays the reader reveal; the author-side fact is resolved."),) if ordinal == 1 else (), (), "Assess the entire supplied book, without execution authority.")
-        for ordinal, (path, _) in enumerate(_READINESS_DOCUMENTS, start=1))
+        for ordinal, (path, _) in enumerate(LEAD_FIXTURE_READINESS_DOCUMENTS, start=1))
     assessment = (core_readiness.CoreDocumentAssessment(basis_ref, core_readiness.BookBasis('whole_book_established',
         'Departure, crossing and return are the entire book.', ('user_input',), ('user_input',),
         units, (), (), ('Keep the stated ending.',)), findings, (),
@@ -1003,7 +1004,7 @@ def _capture_execution_inputs(initialize, *args, **kwargs):
 
 
 class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
-    def _decide(self, turn, kind): return self.runtime.decide_lead_step(_decision(turn, kind))
+    def _decide(self, turn, kind): return self.runtime.decide_lead_step(lead_confirmation_decision(turn, kind))
 
     def _set_up_workspace(self) -> None:
         temporary = tempfile.TemporaryDirectory(prefix="lead-orchestration-")
@@ -1060,11 +1061,11 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
 
     async def record_book_readiness(self, *, seed_before_capture=False, preserve_documents=False):
         documents = tuple((path, self.workspace.path(path).read_text(encoding="utf-8"))
-                          for path, _ in _READINESS_DOCUMENTS) if preserve_documents else _READINESS_DOCUMENTS
+                          for path, _ in LEAD_FIXTURE_READINESS_DOCUMENTS) if preserve_documents else LEAD_FIXTURE_READINESS_DOCUMENTS
         for path, content in documents:
             self.workspace.path(path).write_text(content, encoding="utf-8")
         if seed_before_capture:
-            subprocess.run(["git", "add", "--", *(path for path, _ in _READINESS_DOCUMENTS)], cwd=self.workspace.root, check=True)
+            subprocess.run(["git", "add", "--", *(path for path, _ in LEAD_FIXTURE_READINESS_DOCUMENTS)], cwd=self.workspace.root, check=True)
             subprocess.run(["git", "commit", "-m", "Seed whole-book readiness inputs"], cwd=self.workspace.root, check=True, stdout=subprocess.DEVNULL)
         conversation_id = self.conversation("Explicit whole-book readiness")
         call_count, read_count = len(self.backend.calls), len(self.backend.reference_calls)
@@ -1075,7 +1076,7 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
                                           offered_inputs=provider.callback_payload(call)["task_input"]["available_input_sources"])
 
         self.backend.enqueue(assess, control_plan=selection_plan("readiness.core_documents"))
-        user = _READINESS_USER + " " + " ".join("${" + path + "}" for path, _ in _READINESS_DOCUMENTS)
+        user = _READINESS_USER + " " + " ".join("${" + path + "}" for path, _ in LEAD_FIXTURE_READINESS_DOCUMENTS)
         result = await self.runtime.lead_turn(self.session_id, conversation_id, user)
         self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
         self.assertIsNone(result.proposal)
@@ -1083,7 +1084,7 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tuple(item["content"] for item in self.backend.reference_contexts[-1]),
                          tuple(content for _, content in documents))
         readiness = self.runtime.inspect_core_document_readiness(self.session_id)
-        self.assertEqual(readiness.complete_documents, tuple(path for path, _ in _READINESS_DOCUMENTS),
+        self.assertEqual(readiness.complete_documents, tuple(path for path, _ in LEAD_FIXTURE_READINESS_DOCUMENTS),
             (result.kind, result.next_action, result.state, result.validation_details,
              any(item.core_document_readiness is not None for item in _event_payloads(
                  self.history(conversation_id), CollaborationLeadJudgmentPayload)), readiness.remaining))
@@ -1450,7 +1451,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             return legacy_build(*args, **kwargs)
         first_call_count = len(self.backend.calls)
         book_user = _READINESS_USER
-        document_texts = _READINESS_DOCUMENTS
+        document_texts = LEAD_FIXTURE_READINESS_DOCUMENTS
         for path, content in document_texts:
             self.workspace.path(path).write_text(content, encoding="utf-8")
         offered_inputs = []
@@ -1633,7 +1634,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertIsInstance(core_readiness.require_readiness(core_readiness.AuthoringTarget.MANUSCRIPT, current),
                               core_readiness.CoreDocumentReadinessNeeded)
         from story_writing_agents import editorial_state as editorial
-        self.workspace.path(character.document_path).write_text(dict(_READINESS_DOCUMENTS)[character.document_path],
+        self.workspace.path(character.document_path).write_text(dict(LEAD_FIXTURE_READINESS_DOCUMENTS)[character.document_path],
                                                                  encoding="utf-8")
         plan_owner = services.catalog.create(self.session_id, "USER-selected character plan").conversation_id
         plan_text = "Nora is a determined courier who returns the letter."
@@ -1669,7 +1670,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.backend.enqueue(lambda call, provider: search_with_offered_inputs(call, provider, text=plan_text),
                              _read_history_hit, assess_selected_plan, control_plan=selection_plan("readiness.core_documents", before_script_response=2))
         planned = await restarted.lead_turn(self.session_id, assessment_owner,
-            _READINESS_USER + " " + " ".join("${" + path + "}" for path, _ in _READINESS_DOCUMENTS))
+            _READINESS_USER + " " + " ".join("${" + path + "}" for path, _ in LEAD_FIXTURE_READINESS_DOCUMENTS))
         self.assertIs(planned.kind, LeadOutcomeKind.ANSWER)
         self.assertIsNone(planned.proposal)
         self.assertEqual((len(self.backend.calls) - physical_before,
@@ -1688,7 +1689,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertLessEqual(receipt.boundary_start, original_plan.sequence)
         self.assertGreaterEqual(receipt.boundary_end, original_plan.sequence)
         selected_ready = restarted.inspect_core_document_readiness(self.session_id)
-        self.assertEqual(selected_ready.complete_documents, tuple(path for path, _ in _READINESS_DOCUMENTS))
+        self.assertEqual(selected_ready.complete_documents, tuple(path for path, _ in LEAD_FIXTURE_READINESS_DOCUMENTS))
         await restarted.record_editorial_decision(self.session_id, plan_owner,
             editorial.EditorialRecordRequest.revise(selection.record_ref, editorial.EditorialRecordDraft(
                 editorial.EditorialRecordKind.DIRECTION, "Nora chooses caution rather than boldness.",
@@ -1696,7 +1697,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 transition_reason="USER supersedes the prior character selection.",
                 approval=editorial.EditorialApprovalState.SELECTED, request_id="supersede_courier_plan"))
         superseded = restarted.inspect_core_document_readiness(self.session_id)
-        self.assertEqual(superseded.complete_documents, tuple(path for path, _ in _READINESS_DOCUMENTS
+        self.assertEqual(superseded.complete_documents, tuple(path for path, _ in LEAD_FIXTURE_READINESS_DOCUMENTS
                                                               if path != character.document_path))
         self.assertIsInstance(core_readiness.require_readiness(core_readiness.AuthoringTarget.MANUSCRIPT, superseded),
                               core_readiness.CoreDocumentReadinessNeeded)
@@ -1750,7 +1751,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
     async def test_strict_provider_outcomes_reject_unknown_private_mixed_and_duplicate(self,
     ) -> None:
         def duplicate(call: ctx_provider.ContextProviderCallRequest, _provider: object) -> str:
-            scope = json.dumps(_compact_scope(_live_scope(call)))
+            scope = json.dumps(_compact_scope(lead_fixture_authoring_scope(call)))
             return ( '{"action":{"kind":"answer","result":' + '{"kind":"answer","kind":"question",'
                 '"message":"Visible.","authoring_scope":' + scope
                 + '}' + ',"used_handles":[]}}'
@@ -1763,7 +1764,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             def respond(call: ctx_provider.ContextProviderCallRequest, _provider: object) -> str:
                 result = value
                 if type(result) is dict:
-                    result = {** result, "authoring_scope": _compact_scope(_live_scope(call)),}
+                    result = {** result, "authoring_scope": _compact_scope(lead_fixture_authoring_scope(call)),}
                 return json.dumps({"action": {"kind": "answer", "result": result, "used_handles": [],}})
             return respond
 
@@ -4734,7 +4735,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
 
         def missing_message(call: ctx_provider.ContextProviderCallRequest, _provider: object) -> str:
             return json.dumps({'action': {'kind': 'answer', 'result': {'kind': 'answer',
-                'authoring_scope': _compact_scope(_live_scope(call))}, 'used_handles': []}})
+                'authoring_scope': _compact_scope(lead_fixture_authoring_scope(call))}, 'used_handles': []}})
 
         self.backend.enqueue(missing_message, control_plan=select("answer.workflow"))
         self.backend.enqueue(_visible_outcome("answer", "Repaired visible answer.", grouped=True), control_plan=())
@@ -4996,7 +4997,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         old_brief, new_brief = 'Draft after choosing the target.', 'Draft the supplied bounded outline at the first target.'
         def scope_question(call, provider, *, paths=(), brief=old_brief):
             return lead_fixture_response(call, {'response_type': 'clarification_question', 'response_text': 'A prior lead response for grouped repair.', 'response_details': {'planning_target': None,
-                'task_scope': lead_fixture_bound_scope(call, {**_live_scope(call, activity='draft', domains=('plot_structure',), paths=paths), 'interpretation': brief}, record=True)}}, family=0)
+                'task_scope': lead_fixture_bound_scope(call, {**lead_fixture_authoring_scope(call, activity='draft', domains=('plot_structure',), paths=paths), 'interpretation': brief}, record=True)}}, family=0)
         self.backend.enqueue(scope_question, control_plan=select("question.authoring"))
         seeded = await self.runtime.lead_turn(self.session_id, reading, "Clarify the writing target before drafting.")
         self.assertIs(seeded.kind, LeadOutcomeKind.QUESTION, (seeded.message, seeded.validation_details, seeded.provider_invocation_id, seeded.public_responses))
@@ -5005,7 +5006,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertEqual((old_scope.target_paths, old_scope.interpretation), ((), old_brief))
         self.assertFalse(any(type(event.payload) is CollaborationConfirmationPayload for event in self.history(reading)))
         refined_recommendation = recommendation(recommended_action=action(kind='prepare_consultation', source_ids=('user_input',)),
-            authoring_scope=lambda call: {**_live_scope(call, activity='draft', domains=('plot_structure',), paths=(OUTLINE,)), 'interpretation': new_brief},
+            authoring_scope=lambda call: {**lead_fixture_authoring_scope(call, activity='draft', domains=('plot_structure',), paths=(OUTLINE,)), 'interpretation': new_brief},
             authoring_assessment=task_assessment(foundation_ids=('user_input',), actions=('scene transitions', 'supporting dialogue')))
         retained = []
         def reject_with_snapshot(call, provider):
@@ -5084,7 +5085,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                         "critique": "lead-response-v8:family:2:group:critique.workflow"}[response_type])
                 self.assertIn((outer, inner), call.contract.outer_inner_schema_ids)
                 native = {'response_type': response_type, 'response_text': value['message'], **({'planning_target': None} if response_type == 'clarification_question' else {})}
-                scope = _compact_scope(_live_scope(call, activity='workflow', domains=(), paths=()))
+                scope = _compact_scope(lead_fixture_authoring_scope(call, activity='workflow', domains=(), paths=()))
                 scope = wire_result(dict(authoring_scope=scope), None, native_types={})
                 native['task_scope'] = lead_fixture_bound_scope(call, scope['writing_task_scope'])
                 response = indexed_response( {'action_type': 'submit_result',
@@ -5150,7 +5151,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             def respond(call: ctx_provider.ContextProviderCallRequest, _provider: _LeadContextProvider) -> str:
                 record_notice_tasks(call)
                 value: dict[str, object] = {'message': f'Direct {kind} attempted story work.',
-                    'authoring_scope': _compact_scope(_live_scope(call, activity=activity, domains=(
+                    'authoring_scope': _compact_scope(lead_fixture_authoring_scope(call, activity=activity, domains=(
                     'plot_structure',), paths=('core_documents/global_outline.md',)))}
                 if kind != "answer": value["kind"] = kind
                 return current_result(value, kind, 0)(call, _provider)
@@ -5419,7 +5420,7 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
         conversation_id = self.conversation("Confirm")
         proposed = await self.proposal(conversation_id, text=_REVIEW_USER_INPUT, authoring_assessment=assessment,)
         calls_before = len(self.backend.calls)
-        self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome())
+        self.backend.enqueue_for(PLOT_ARCHITECT, lead_specialist_outcome())
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
         artifacts_before = {path: path.read_bytes() for path in self.workspace.root.rglob("*.md")}
         confirmed = await self._decide(proposed, CollaborationConfirmationDecision.CONFIRM)
@@ -5457,7 +5458,7 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
         for changes in (({'confirmation_request_id': 'wrong_request'},
             {'proposal_id': 'wrong_proposal'}, {'proposal_revision': 2},{'proposal_digest': 'sha256:' + '0' * 64})):
             with self.subTest(changes=changes):
-                with self.assertRaises(ValueError): await self.runtime.decide_lead_step(_decision(mismatch,
+                with self.assertRaises(ValueError): await self.runtime.decide_lead_step(lead_confirmation_decision(mismatch,
                         CollaborationConfirmationDecision.CONFIRM, **changes))
                 self.assertEqual(len(self.backend.calls), calls)
 
@@ -5515,7 +5516,7 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
         await self.runtime.record_editorial_decision(self.session_id, other, editorial.EditorialRecordRequest("reject_proposal_memory", editorial.EditorialAction.REJECT, "Changed explicitly.", expected_ref=selected.record_ref))
         before, calls = self.history(memory_id), len(self.backend.calls)
         with self.assertRaises(ValueError):
-            await self.runtime.decide_lead_step(_decision(stale, CollaborationConfirmationDecision.CONFIRM))
+            await self.runtime.decide_lead_step(lead_confirmation_decision(stale, CollaborationConfirmationDecision.CONFIRM))
         self.assertEqual((self.history(memory_id), len(self.backend.calls)), (before, calls))
 
         from tests.test_specialist_routing_runtime import OUTLINE, scoped_proposal
@@ -5803,7 +5804,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             issues = failure_issues(caught.exception, path="$.action.result")
             self.assertEqual(issues, (f"$.action.result{path}: {requirement}",))
             self.assertNotIn("PRIVATE", repr(issues))
-        scope = _compact_scope(_live_scope(self.backend.calls[0]))
+        scope = _compact_scope(lead_fixture_authoring_scope(self.backend.calls[0]))
         host_task = _live_task(self.backend.calls[0])
         scope["task"] = f"{host_task['task_id']}@{host_task['task_revision']}"
         base = {"message": "Visible.", "authoring_scope": scope}
@@ -5926,17 +5927,17 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         restored_history = self.history(conversation_id)
         self.assertEqual(restored_history[:len(confirmed_history)], confirmed_history)
         with self.assertRaises(ValueError):
-            await restarted.decide_lead_step(_decision(proposed, CollaborationConfirmationDecision.CONFIRM))
+            await restarted.decide_lead_step(lead_confirmation_decision(proposed, CollaborationConfirmationDecision.CONFIRM))
         self.assertEqual(self.history(conversation_id), restored_history)
         self.assertEqual(restart_backend.calls, [])
-        restart_backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome())
+        restart_backend.enqueue_for(PLOT_ARCHITECT, lead_specialist_outcome())
         restart_backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
-        completed = await restarted.decide_lead_step(_decision(restored, CollaborationConfirmationDecision.CONFIRM))
+        completed = await restarted.decide_lead_step(lead_confirmation_decision(restored, CollaborationConfirmationDecision.CONFIRM))
         self.assertIs(completed.turn.state, CollaborationStepState.COMPLETED)
         self.assertEqual(len(restart_backend.calls), 2)
         self.assertEqual({path: path.read_bytes() for path in artifacts}, artifacts)
         with self.assertRaises(ValueError):
-            await restarted.decide_lead_step(_decision(restored, CollaborationConfirmationDecision.CONFIRM))
+            await restarted.decide_lead_step(lead_confirmation_decision(restored, CollaborationConfirmationDecision.CONFIRM))
         self.assertEqual(len(restart_backend.calls), 2)
 
     async def test_confirmed_live_capability_preserves_exact_evidence_without_dispatch(self) -> None:
@@ -6035,7 +6036,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
 
         def semantic_rejection(call: ctx_provider.ContextProviderCallRequest, _provider: object) -> str:
             native = {"response_type": "answer", "response_text": rejected_body,
-                "task_scope": lead_fixture_bound_scope(call, _live_scope(
+                "task_scope": lead_fixture_bound_scope(call, lead_fixture_authoring_scope(
                     call, activity="workflow", domains=()), record=True)}
             response = _bound_rejection_envelope(call, lead_fixture_result(native))
             complete = json.loads(response)
@@ -6046,7 +6047,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             self.assertEqual(member.rule_graph.findings(task_result), ())
             call.contract.decode_response(response)
             task_result['response_details']['task_scope'] = lead_fixture_bound_scope(
-                call, _live_scope(call, activity="review", domains=("plot_structure",)),
+                call, lead_fixture_authoring_scope(call, activity="review", domains=("plot_structure",)),
                 record=True)
             self.assertTrue(member.rule_graph.findings(task_result))
             response = json.dumps(complete, ensure_ascii=False, separators=(',', ':'))
@@ -6193,9 +6194,9 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             conflict = premise.PremiseConflict(capture.slot_id, capture.capture_digest, "The owner cannot draft this selected whole premise consistently.")
             self.backend.enqueue_for(PLOT_ARCHITECT, lambda call, provider: wire_answer({"assessment": "conflict", "message": conflict.reason, "premise_conflicts": premise.premise_value_to_dict((conflict,))}, wire_contract_id(call.payload)))
             self.backend.enqueue_for(CHARACTER_CUSTODIAN, lambda call, provider: wire_answer({"assessment": "drafted", "message": capture.selected_text, "premise_conflicts": []}, wire_contract_id(call.payload)))
-            self.backend.enqueue_for(EXECUTION_SPECIALIST, _specialist_outcome("constraints_assessed"))
+            self.backend.enqueue_for(EXECUTION_SPECIALIST, lead_specialist_outcome("constraints_assessed"))
             self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome(message="Resolve the exact USER premise conflict before any candidate."))
-            held = await self.runtime.decide_lead_step(_decision(recovered, CollaborationConfirmationDecision.CONFIRM))
+            held = await self.runtime.decide_lead_step(lead_confirmation_decision(recovered, CollaborationConfirmationDecision.CONFIRM))
             replies = [event.payload for event in self.history(conversation)[len(recovery_prefix):] if event.kind is CollaborationEventKind.SPECIALIST_REPLY]
             self.assertEqual(replies[0].premise_conflicts, (conflict,))
             self.assertEqual(replies[0].assessment.value, "conflict")
@@ -6782,7 +6783,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                 'bounded story-direction review judgments; preserve supplied facts and do not write files. Execution '
                 'requires separate exact confirmation.'
             ), authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded story-direction review judgments',))))
-        self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome())
+        self.backend.enqueue_for(PLOT_ARCHITECT, lead_specialist_outcome())
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
         await self._decide(proposed, CollaborationConfirmationDecision.CONFIRM)
         restart_backend = _LeadBackend(test_case=self)
@@ -7007,9 +7008,7 @@ class LeadSubmittedFailureRecoveryTests(LeadOrchestrationTestCase):
             lambda: _SubmittedFailure(RuntimeError('submission uncertain'), submission_uncertain=True))
 
 
-class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
-    """Budget exhaustion preserves real completed work and closes authority."""
-
+class BudgetConsultationFixture:
     async def _budget_consultation(self, *, message="Completed budget-bound review.",
                                    pause_before_finalization=False, build_failure=None, infeasible=False):
         from tests.test_specialist_routing_runtime import _fixture_assessment
@@ -7053,7 +7052,7 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
         self.assertIs(proposed.kind, LeadOutcomeKind.PROPOSAL)
         expected = {}
         for agent in agents:
-            self.backend.enqueue_for(agent, _search_history, _specialist_outcome("insufficient_evidence"),)
+            self.backend.enqueue_for(agent, _search_history, lead_specialist_outcome("insufficient_evidence"),)
 
         def synthesis(call, _provider):
             material = _workflow_material(_provider.callback_payload(call))
@@ -7098,14 +7097,14 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
             return result
         with mock.patch.object(BoundCallContract, 'require_authorized_answer', retain_authorized_phase):
             if pause_before_finalization:
-                with mock.patch.object(self.runtime, "_finalize_known_result_locked",
+                with mock.patch.object(self.runtime.known_result_finalization, 'finalize_known_result',
                                        side_effect=RuntimeError(
                                            "test result persisted before finalization")):
                     with self.assertRaisesRegex(RuntimeError, "test result persisted"):
                         await self._decide(proposed, CollaborationConfirmationDecision.CONFIRM)
                 decision_result = None
             elif build_failure is not None:
-                with mock.patch.object(self.runtime, "_build_continuation_proposal",
+                with mock.patch.object(self.runtime.known_result_finalization, 'build_continuation_proposal',
                                        side_effect=build_failure):
                     with self.assertRaises(type(build_failure)) as raised:
                         await self._decide(proposed, CollaborationConfirmationDecision.CONFIRM)
@@ -7130,29 +7129,11 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
         self.assertEqual(results[0].payload.overall_outcome.value, "succeeded")
         return conversation_id, proposed, decision_result, history, syntheses[0], results[0]
 
-    async def test_unaffordable_continuation_finalizes_exact_result_without_authority(self):
-        await self.record_book_readiness()
-        artifacts = {path: path.read_bytes() for path in self.workspace.root.rglob("*.md")}
-        await self._budget_consultation(infeasible=True)
-        self.assertEqual({path: path.read_bytes() for path in self.workspace.root.rglob("*.md")}, artifacts)
-        conversation, proposed, decision_result, history, synthesis, result = await self._budget_consultation()
-        turn = decision_result.turn
-        self.assertIs(turn.state, CollaborationStepState.COMPLETED)
-        self.assertIs(turn.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD)
-        self.assertIsNone(turn.proposal)
-        self.assertIsNone(turn.confirmation_request_id)
-        self.assertIn(synthesis.payload.message, turn.message)
-        self.assertIn("exceeds its remaining call budget", turn.message)
-        self.assertEqual(len([e for e in history if type(e.payload) is CollaborationProposal]), 1)
-        self.assertEqual(project_collaboration_history(history).physical_calls_spent, 10)
-        self.assertEqual(history[-2].payload.content, turn.message)
-        self.assertIs(project_collaboration_history(history).current_state, CollaborationStepState.COMPLETED)
-        before = tuple(self.backend.calls)
-        with self.assertRaises(ValueError):
-            await self.runtime.decide_lead_step(_decision(proposed, CollaborationConfirmationDecision.CONFIRM))
-        self.assertEqual(tuple(self.backend.calls), before)
-        self.assertEqual(self.history(conversation), history)
-        self.assertEqual({path: path.read_bytes() for path in artifacts}, artifacts)
+
+class LeadBudgetFinalizationTests(BudgetConsultationFixture, LeadOrchestrationTestCase):
+    """Budget exhaustion preserves real completed work and closes authority."""
+
+
 
     async def test_restart_and_repeated_known_result_finalization_are_idempotent(self):
         conversation, proposed, _, known, synthesis, result = await self._budget_consultation(
@@ -7167,7 +7148,7 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
         complete = self.history(conversation)
         self.assertEqual(complete[:len(known)], known)
         self.assertEqual(len(complete), len(known) + 2)
-        repeated = restarted._finalize_known_result_locked(self.session_id, known, projection,)
+        repeated = finalize_known_result(restarted, self.session_id, known, projection,)
         self.assertEqual(repeated, restored)
         self.assertEqual(self.history(conversation), complete)
         self.assertEqual(backend.calls, [])

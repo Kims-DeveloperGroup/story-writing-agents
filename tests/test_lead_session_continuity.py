@@ -80,7 +80,7 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         return owner_session_history.SessionHistorySourceAdapter(storage.catalog, storage.event_store, self.session_id).capture()
 
     def checkpoint(self):
-        service = self.runtime._agent_context_service
+        service = self.runtime.agent_context_service
         identity = service.session_continuation(self.session_id, LEAD_ORCHESTRATOR).identity
         return service._ledger.inspect(owner_record_values.ContextLedgerKey(identity.checkpoint_scope(), "codex"))
 
@@ -105,15 +105,15 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         self.assertIs(refusal.status, editorial.EditorialRecordStatus.PENDING_CONTROL_REQUIRED)
         self.assertEqual(self.snapshot(), prior)
         plan = "First inspect the outline.\nSecond review the character motive.\nThird draft the opening."
-        self.backend.enqueue_for(PLOT_ARCHITECT, lead._specialist_outcome())
+        self.backend.enqueue_for(PLOT_ARCHITECT, lead.lead_specialist_outcome())
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, lead._synthesis_outcome(message=plan))
-        await self.runtime.decide_lead_step(lead._decision(proposed, CollaborationConfirmationDecision.CONFIRM))
+        await self.runtime.decide_lead_step(lead.lead_confirmation_decision(proposed, CollaborationConfirmationDecision.CONFIRM))
         self.assertEqual(self.backend.call_records[-1][1].expected_thread_id, "thread-lead-1")
         followups = (
             'Proceed in the order you recommended. Literal JSON: {"task_id":"user-text","task_revision":17}',
             "Recall your last recommendation.",
             "Summarize our current discussion.", )
-        expected_scope = self.runtime._agent_context_service.scope( self.session_id, ContextSubjectKind.CONVERSATION, second, LEAD_ORCHESTRATOR)
+        expected_scope = self.runtime.agent_context_service.scope( self.session_id, ContextSubjectKind.CONVERSATION, second, LEAD_ORCHESTRATOR)
         for index, text in enumerate(followups):
             prior_thread = self.checkpoint().checkpoint_view.provider_thread_id
             self.assertIs(type(prior_thread), str)

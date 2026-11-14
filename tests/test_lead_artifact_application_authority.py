@@ -35,8 +35,8 @@ from story_writing_agents.workspace.initialization import (
     provision_session_resources,
 )
 
-from tests.test_artifact_proposal_orchestration import _INDEX, _RULES, _SECOND, _THIRD
-from tests.collaboration_contract_fixture import seed_reviewed_artifact
+from tests.test_artifact_proposal_orchestration import _INDEX, ARTIFACT_FIXTURE_RULES_PATH, _SECOND, _THIRD
+from tests.known_result_finalization_fixture import seed_reviewed_artifact
 from tests.test_lead_orchestration import LeadOrchestrationTestCase, _LeadBackend
 
 
@@ -106,9 +106,9 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
                               editorial_refs=(), editorial_context_digest=None):
         conversation_id = self.conversation(subject)
         if kind == "create":
-            self.workspace.path(_RULES).unlink(missing_ok=True)
+            self.workspace.path(ARTIFACT_FIXTURE_RULES_PATH).unlink(missing_ok=True)
         return await seed_reviewed_artifact(self, conversation_id, (
-            (kind, _RULES, "Use restrained close-third narration.\n"),
+            (kind, ARTIFACT_FIXTURE_RULES_PATH, "Use restrained close-third narration.\n"),
         ),
             editorial_refs=editorial_refs, editorial_context_digest=editorial_context_digest,
         )
@@ -299,14 +299,14 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         self.assertEqual(self.git_snapshot(), identity_git)
 
         base_turn = await self.reviewed_create("Base drift")
-        self.workspace.path(_RULES).write_text("External rule.\n", encoding="utf-8")
+        self.workspace.path(ARTIFACT_FIXTURE_RULES_PATH).write_text("External rule.\n", encoding="utf-8")
         base_git = self.git_snapshot()
         stale = await self.runtime.decide_artifact_application(
             _application_decision(base_turn, ArtifactApplicationDecisionKind.APPLY)
         )
         self.assertIs(stale.outcome.outcome, ArtifactApplicationOutcomeKind.STALE)
         self.assertEqual(
-            self.workspace.path(_RULES).read_text(encoding="utf-8"), "External rule.\n"
+            self.workspace.path(ARTIFACT_FIXTURE_RULES_PATH).read_text(encoding="utf-8"), "External rule.\n"
         )
         self.assertEqual(self.git_snapshot(), base_git)
 
@@ -328,7 +328,7 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         self.assertEqual(self.git_snapshot(), relationship_git)
 
     async def test_application_and_result_persistence_failures_map_safely(self) -> None:
-        self.workspace.path(_RULES).unlink(missing_ok=True)
+        self.workspace.path(ARTIFACT_FIXTURE_RULES_PATH).unlink(missing_ok=True)
         subprocess.run(
             ["git", "add", "-A", "--", "core_documents", "manuscript"],
             cwd=self.workspace.root, check=True,
@@ -339,7 +339,7 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
             cwd=self.workspace.root, check=True, stdout=subprocess.DEVNULL,
         )
         memory_conversation = self.conversation("Scoped failure direction")
-        draft = replace(editorial_request("failure_scope").draft, scope=scopes.EditorialScope.whole(_RULES))
+        draft = replace(editorial_request("failure_scope").draft, scope=scopes.EditorialScope.whole(ARTIFACT_FIXTURE_RULES_PATH))
         memory = await self.runtime.record_editorial_decision(self.session_id, memory_conversation,
             editorial.EditorialRecordRequest.directive(draft,
                 transition_reason="Retain the actual target direction."))
@@ -383,7 +383,7 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
                                  and item.application_request_digest == request.application_request_digest)
                 self.assertEqual(attempts[-1].phase, "recovery_required" if expected is
                                  ArtifactApplicationOutcomeKind.RECOVERY_REQUIRED else "uncertain")
-                self.assertEqual(attempts[-1].target_paths, (_RULES,))
+                self.assertEqual(attempts[-1].target_paths, (ARTIFACT_FIXTURE_RULES_PATH,))
                 self.assertEqual(state.applied_facts, ())
 
         turn = await self.reviewed_create("Commit preparation failure")
@@ -542,7 +542,7 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
             ArtifactApplicationNextAction.INSPECT_AND_RESOLVE_OUTCOME,
         )
         self.assertIsNone(uncertain.outcome.result)
-        self.assertTrue(self.workspace.path(_RULES).exists())
+        self.assertTrue(self.workspace.path(ARTIFACT_FIXTURE_RULES_PATH).exists())
         self.assertEqual(self.git_snapshot(), git_before)
         observed = self.runtime.inspect_editorial_state(self.session_id)
         request = turn.artifact_application_request

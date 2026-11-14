@@ -1749,8 +1749,8 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 256)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 1323)
+        self.assertEqual(len(modules), 257)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 1342)
         self.assertTrue(
             {
                 "story_writing_agents.artifact_proposals",
@@ -6756,7 +6756,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                 notice = f"for rejected call {case.backend.calls[-1].call_id}:"
                 self.assertIn(notice + " no bounded literal final response_text was recoverable.", rendered)
         from tests import provider_wire_fixture as wire
-        from tests.test_lead_orchestration import _live_scope
+        from tests.test_lead_orchestration import lead_fixture_authoring_scope
         from tests.recommendation_fixture import OUTLINE
         case = _task_fixture(self)
         conversation = case.conversation("A real preparation gap remains a question")
@@ -6764,7 +6764,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
         case.backend.enqueue(lambda call, _provider: wire.lead_fixture_response(call,
             {"response_type": "clarification_question", "response_text": "Preparation scope undecided.",
              "response_details": {"planning_target": None, "task_scope": wire.lead_fixture_bound_scope(call,
-                 _live_scope(call, activity="review", domains=("plot_structure",), paths=(OUTLINE,),
+                 lead_fixture_authoring_scope(call, activity="review", domains=("plot_structure",), paths=(OUTLINE,),
                      contributions=[{"domain": "plot_structure", "role": "constraint_assessor"}]), record=True)}}, family=0),
             control_plan=wire.selection_plan("question.authoring"))
         question = runner.run(case.runtime.lead_turn(case.session_id, conversation,

@@ -1,6 +1,7 @@
 """Focused semantic presentation coverage for durable collaboration events."""
 
 from __future__ import annotations
+from tests.known_result_finalization_fixture import finalize_known_result
 
 import unittest
 import subprocess
@@ -87,7 +88,7 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
             origin = next(event for event in known if type(event.payload) is CollaborationLeadSynthesisPayload)
             origin_call = next(event for event in known if type(event.payload) is CollaborationProviderCallPayload and event.payload.state is CollaborationProviderCallState.SUBMITTED and event.payload.invocation_id == origin.payload.provider_invocation_id)
             before_calls = len(case.backend.calls)
-            finalized = case.runtime._finalize_known_result_locked(case.session_id, known, project_collaboration_history(known))
+            finalized = finalize_known_result(case.runtime, case.session_id, known, project_collaboration_history(known))
             self.assertEqual(len(case.backend.calls), before_calls)
             final_history = services.event_store.read(case.session_id, metadata.conversation_id)
             finalization_notice = next(event for event in final_history if event.turn_id == finalized.turn_id and type(event.payload) is CollaborationMessagePayload and event.sender.kind.value == "lead")

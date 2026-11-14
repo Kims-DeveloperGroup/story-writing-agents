@@ -13,6 +13,7 @@ from collections.abc import (
     Coroutine,
 )
 
+from ..agent_context.invocation.context_execution import AgentContextService
 from ..agent_context.progress import ContextActionProgressSink
 from ..collaboration_execution_results import (
     CollaborationInvocationResult,
@@ -68,7 +69,7 @@ from ..lead_preparation import (
     reply_contract_values,
 )
 from ..runtime_resources import collaboration_event_journal as event_journal
-from ..workspace.initialization import SessionArtifactBindingError
+from ..workspace.initialization import SessionArtifactBinding, SessionArtifactBindingError
 
 __all__ = ["ConfirmedStepExecution"]
 
@@ -158,9 +159,19 @@ class ConfirmedStepExecution:
         persist_results: Callable[..., None],
         read_events: Callable[[str, str], tuple[CollaborationEvent, ...]],
         prepare_recommendation_request: Callable[..., CollaborationEventDraft],
-        finalize_known_result: Callable[
-            [str, tuple[CollaborationEvent, ...], CollaborationHistoryProjection], LeadTurnResult,
-        ],
+        finalize_known_result: Callable[..., LeadTurnResult],
+        context_service: AgentContextService,
+        render_premise_report: Callable[..., LeadTurnResult],
+        validate_exact_candidate_reviews: Callable[..., None],
+        qualify_artifact_final_review: Callable[..., Any],
+        attach_document_plan: Callable[..., LeadTurnResult],
+        bind_session_artifacts: Callable[[str], SessionArtifactBinding],
+        build_contextual_definition: Callable[..., Any],
+        build_agent_profile: Callable[..., Any],
+        read_authoring_events: Callable[[str], tuple[CollaborationEvent, ...]],
+        validate_review_material: Callable[..., None],
+        qualify_readiness_targets: Callable[..., Any],
+        qualify_authoring_inputs: Callable[..., Any],
     ) -> Coroutine[Any, Any, LeadTurnResult]:
         """Issue under the held lock and return the original execution coroutine."""
         capability = _ConfirmedStepCapability(
@@ -195,6 +206,18 @@ class ConfirmedStepExecution:
             read_events=read_events,
             prepare_recommendation_request=prepare_recommendation_request,
             finalize_known_result=finalize_known_result,
+            context_service=context_service,
+            render_premise_report=render_premise_report,
+            validate_exact_candidate_reviews=validate_exact_candidate_reviews,
+            qualify_artifact_final_review=qualify_artifact_final_review,
+            attach_document_plan=attach_document_plan,
+            bind_session_artifacts=bind_session_artifacts,
+            build_contextual_definition=build_contextual_definition,
+            build_agent_profile=build_agent_profile,
+            read_authoring_events=read_authoring_events,
+            validate_review_material=validate_review_material,
+            qualify_readiness_targets=qualify_readiness_targets,
+            qualify_authoring_inputs=qualify_authoring_inputs,
         )
 
     def discard_unexecuted_confirmation(
@@ -222,9 +245,19 @@ class ConfirmedStepExecution:
         persist_results: Callable[..., None],
         read_events: Callable[[str, str], tuple[CollaborationEvent, ...]],
         prepare_recommendation_request: Callable[..., CollaborationEventDraft],
-        finalize_known_result: Callable[
-            [str, tuple[CollaborationEvent, ...], CollaborationHistoryProjection], LeadTurnResult,
-        ],
+        finalize_known_result: Callable[..., LeadTurnResult],
+        context_service: AgentContextService,
+        render_premise_report: Callable[..., LeadTurnResult],
+        validate_exact_candidate_reviews: Callable[..., None],
+        qualify_artifact_final_review: Callable[..., Any],
+        attach_document_plan: Callable[..., LeadTurnResult],
+        bind_session_artifacts: Callable[[str], SessionArtifactBinding],
+        build_contextual_definition: Callable[..., Any],
+        build_agent_profile: Callable[..., Any],
+        read_authoring_events: Callable[[str], tuple[CollaborationEvent, ...]],
+        validate_review_material: Callable[..., None],
+        qualify_readiness_targets: Callable[..., Any],
+        qualify_authoring_inputs: Callable[..., Any],
     ) -> LeadTurnResult:
         """Consume exact start authority and finish one confirmed provider round."""
 
@@ -585,6 +618,19 @@ class ConfirmedStepExecution:
                     session_id,
                     persisted,
                     finalized_projection,
+                    context_service=context_service,
+                    render_premise_report=render_premise_report,
+                    append_batch=append_batch,
+                    validate_exact_candidate_reviews=validate_exact_candidate_reviews,
+                    qualify_artifact_final_review=qualify_artifact_final_review,
+                    attach_document_plan=attach_document_plan,
+                    bind_session_artifacts=bind_session_artifacts,
+                    build_contextual_definition=build_contextual_definition,
+                    build_agent_profile=build_agent_profile,
+                    read_authoring_events=read_authoring_events,
+                    validate_review_material=validate_review_material,
+                    qualify_readiness_targets=qualify_readiness_targets,
+                    qualify_authoring_inputs=qualify_authoring_inputs,
                 )
                 if authentication_failure is not None:
                     raise authentication_failure
@@ -598,6 +644,19 @@ class ConfirmedStepExecution:
                     session_id,
                     persisted,
                     finalized_projection,
+                    context_service=context_service,
+                    render_premise_report=render_premise_report,
+                    append_batch=append_batch,
+                    validate_exact_candidate_reviews=validate_exact_candidate_reviews,
+                    qualify_artifact_final_review=qualify_artifact_final_review,
+                    attach_document_plan=attach_document_plan,
+                    bind_session_artifacts=bind_session_artifacts,
+                    build_contextual_definition=build_contextual_definition,
+                    build_agent_profile=build_agent_profile,
+                    read_authoring_events=read_authoring_events,
+                    validate_review_material=validate_review_material,
+                    qualify_readiness_targets=qualify_readiness_targets,
+                    qualify_authoring_inputs=qualify_authoring_inputs,
                 )
                 if authentication_failure is not None:
                     raise authentication_failure
@@ -633,10 +692,20 @@ class ConfirmedStepExecution:
         *,
         close_failed_attempt: Callable[..., LeadTurnResult | None],
         finalize_recommendation_failure: Callable[[str, str], LeadTurnResult | None],
-        finalize_known_result: Callable[
-            [str, tuple[CollaborationEvent, ...], CollaborationHistoryProjection], LeadTurnResult,
-        ],
+        finalize_known_result: Callable[..., LeadTurnResult],
         append_batch: Callable[[CollaborationEventBatch], CollaborationAppendReceipt],
+        context_service: AgentContextService,
+        render_premise_report: Callable[..., LeadTurnResult],
+        validate_exact_candidate_reviews: Callable[..., None],
+        qualify_artifact_final_review: Callable[..., Any],
+        attach_document_plan: Callable[..., LeadTurnResult],
+        bind_session_artifacts: Callable[[str], SessionArtifactBinding],
+        build_contextual_definition: Callable[..., Any],
+        build_agent_profile: Callable[..., Any],
+        read_authoring_events: Callable[[str], tuple[CollaborationEvent, ...]],
+        validate_review_material: Callable[..., None],
+        qualify_readiness_targets: Callable[..., Any],
+        qualify_authoring_inputs: Callable[..., Any],
     ) -> LeadTurnResult | None:
         if (projection.next_safe_action is CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME
                 and any(type(event.payload) is CollaborationProviderCallPayload
@@ -812,6 +881,19 @@ class ConfirmedStepExecution:
                     session_id,
                     events,
                     projection,
+                    context_service=context_service,
+                    render_premise_report=render_premise_report,
+                    append_batch=append_batch,
+                    validate_exact_candidate_reviews=validate_exact_candidate_reviews,
+                    qualify_artifact_final_review=qualify_artifact_final_review,
+                    attach_document_plan=attach_document_plan,
+                    bind_session_artifacts=bind_session_artifacts,
+                    build_contextual_definition=build_contextual_definition,
+                    build_agent_profile=build_agent_profile,
+                    read_authoring_events=read_authoring_events,
+                    validate_review_material=validate_review_material,
+                    qualify_readiness_targets=qualify_readiness_targets,
+                    qualify_authoring_inputs=qualify_authoring_inputs,
                 )
             if marker in self._live_execution_markers:
                 return LeadTurnResult(

@@ -44,21 +44,21 @@ from story_writing_agents.git.story_commit_contracts import (
 from story_writing_agents.workspace.initialization import provision_session_resources
 
 from tests import test_lead_artifact_application_authority as lead_artifact_application_tests
-from tests.collaboration_contract_fixture import seed_reviewed_artifact
+from tests.known_result_finalization_fixture import seed_reviewed_artifact
 from tests.helpers import pristine_initialized_workspace
 from tests.provider_wire_fixture import selection_plan, lead_fixture_result, lead_fixture_response
 from tests.test_artifact_proposal_orchestration import (
-    _RULES,
-    _artifact_outcome,
+    ARTIFACT_FIXTURE_RULES_PATH,
+    artifact_review_outcome,
     _artifact_synthesis_outcome,
     _reference_ids,
 )
 from tests.test_lead_orchestration import (
     LeadOrchestrationTestCase,
     _LeadBackend,
-    _decision,
-    _specialist_outcome,
-    _live_scope,
+    lead_confirmation_decision,
+    lead_specialist_outcome,
+    lead_fixture_authoring_scope,
 )
 
 
@@ -150,20 +150,20 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
             await self.record_book_readiness(seed_before_capture=True)
         conversation_id = self.conversation(subject)
         self.backend.enqueue(
-            _artifact_outcome(
+            artifact_review_outcome(
                 operations=lambda _call, material, *, input_payload: [
                     {"evidence_id": _reference_ids(material)[0], "kind": "replace", "new_text": new_text}
                 ],
                 evidence_status="empty",
                 authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
-                authoring_scope=lambda call: _live_scope(call, activity='review', domains=('tone_execution',), paths=(_RULES,)),
+                authoring_scope=lambda call: lead_fixture_authoring_scope(call, activity='review', domains=('tone_execution',), paths=(ARTIFACT_FIXTURE_RULES_PATH,)),
             ),
                              control_plan=selection_plan("artifact.changes"))
         user_material = "\nSupplied replacement:\n" + new_text if user_brief is None else "\nSupplied narrative-style brief:\n" + user_brief
         proposed = await self.runtime.lead_turn(
             self.session_id,
             conversation_id,
-            ((f"Update ${{{_RULES}}} with an exact narrative rule." + user_material + '\nYou may give bounded artifact review judgments and prepare a separate exact replacement proposal; preserve supplied facts and require separate execution confirmation.')),
+            ((f"Update ${{{ARTIFACT_FIXTURE_RULES_PATH}}} with an exact narrative rule." + user_material + '\nYou may give bounded artifact review judgments and prepare a separate exact replacement proposal; preserve supplied facts and require separate execution confirmation.')),
         )
         self.assertIsNotNone(proposed.proposal, (
             proposed.kind, proposed.next_action, proposed.state, proposed.validation_details,
@@ -172,14 +172,14 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
         for assignment in proposed.proposal.assignments:
             self.backend.enqueue_for(
                 assignment.specialist_id,
-                _specialist_outcome("supports"),
+                lead_specialist_outcome("supports"),
             )
         self.backend.enqueue_for(
             LEAD_ORCHESTRATOR,
             _artifact_synthesis_outcome("propose"),
         )
         reviewed = await self.runtime.decide_lead_step(
-            _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
+            lead_confirmation_decision(proposed, CollaborationConfirmationDecision.CONFIRM)
         )
         return reviewed.turn
 
@@ -205,7 +205,7 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
     ):
         turn = (
             await seed_reviewed_artifact(
-                self, self.conversation(subject), (("replace", _RULES, new_text),),
+                self, self.conversation(subject), (("replace", ARTIFACT_FIXTURE_RULES_PATH, new_text),),
             ) if seeded else await self.reviewed_create(subject, new_text=new_text, readiness=readiness)
         )
         applied = await self.runtime.decide_artifact_application(
@@ -334,7 +334,7 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
             ),
         )
         self.assertEqual(
-            tuple(item.path for item in request.candidate.paths), (_RULES,)
+            tuple(item.path for item in request.candidate.paths), (ARTIFACT_FIXTURE_RULES_PATH,)
         )
         self.assertEqual(self.session_git_snapshot(), before_git)
 
@@ -451,7 +451,7 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
             self.git(
                 "diff-tree", "--no-commit-id", "--name-only", "-r", after_head.decode()
             ).splitlines(),
-            [_RULES.encode()],
+            [ARTIFACT_FIXTURE_RULES_PATH.encode()],
         )
         self.assertEqual(self.git("diff", "--cached", "--binary"), b"")
         identity = (
@@ -561,7 +561,7 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
         self.assertEqual(revised_result.commit_id.encode("ascii"), final_head)
         self.assertEqual(
             self.git("diff-tree", "--no-commit-id", "--name-only", "-r", final_head.decode()).splitlines(),
-            [_RULES.encode()],
+            [ARTIFACT_FIXTURE_RULES_PATH.encode()],
         )
         self.assertEqual(self.git("diff", "--cached", "--binary"), b"")
         self.assertFalse(any(command[0] in forbidden for command in commands))

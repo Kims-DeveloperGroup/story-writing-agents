@@ -62,9 +62,9 @@ def _document_plan_native_response(call, value):
 
 
 def _document_global_candidate_script(target_path, old_global_bytes, updated_global):
-    return artifact._artifact_outcome(
+    return artifact.artifact_review_outcome(
         operations=lambda _call, material, input_payload: [{"kind": "replace", "evidence_id": material["qualified_read_ids"][target_path], "new_text": updated_global}],
-        authoring_scope=lambda call: lead._live_scope(call, activity="review", domains=("plot_structure",), paths=(target_path,),
+        authoring_scope=lambda call: lead.lead_fixture_authoring_scope(call, activity="review", domains=("plot_structure",), paths=(target_path,),
             contributions=[{"domain": "plot_structure", "role": "constraint_assessor"}]),
         authoring_assessment=asdict(task_assessment(foundation_ids=("user_input",), actions=('Review only the exact USER-supplied global-outline replacement; do not Apply or resolve the chapter ending.',))),
         read_queries=((target_path, old_global_bytes.decode("utf-8").splitlines()[0]),), read_prefix="core_documents/")
@@ -73,7 +73,7 @@ def _document_global_candidate_script(target_path, old_global_bytes, updated_glo
 def _document_global_draft_recommendation_script(target_path, purpose, chosen_ending):
     """Reuse the exact explicitly authored Global DRAFT recommendation callback."""
     def respond(call, provider):
-        scope = lead._live_scope(call, activity="draft", domains=("plot_structure",), paths=(target_path,), contributions=[{"domain": "plot_structure", "role": "draft_owner"}])
+        scope = lead.lead_fixture_authoring_scope(call, activity="draft", domains=("plot_structure",), paths=(target_path,), contributions=[{"domain": "plot_structure", "role": "draft_owner"}])
         return recommendation(message=purpose,
             recommended_action=action(kind="prepare_consultation", source_ids=("user_input",), purpose=purpose,
                 instruction=purpose + " " + chosen_ending, specialist_ids=(PLOT_ARCHITECT,)),
@@ -84,7 +84,7 @@ def _document_global_draft_recommendation_script(target_path, purpose, chosen_en
 def _planning_question_response(call, _provider):
     return _document_plan_native_response(call, {
         "kind": "question", "message": "Next Plot step: resolve the ending decision, then update the global outline before the part outline.",
-        "authoring_scope": lead._live_scope(call, activity="draft", domains=("plot_structure",), paths=()),
+        "authoring_scope": lead.lead_fixture_authoring_scope(call, activity="draft", domains=("plot_structure",), paths=()),
         "planning_target": AuthoringTarget.MANUSCRIPT.value})
 
 
@@ -296,11 +296,11 @@ class LeadArtifactObjectiveTests(RecommendationCase):
                          ("create", path, text.encode()))
         self.assertEqual(self.objective(conversation_id).draft_sources, (source,))
         for assignment in prepared.proposal.assignments:
-            self.backend.enqueue_for(assignment.specialist_id, lead._specialist_outcome(
+            self.backend.enqueue_for(assignment.specialist_id, lead.lead_specialist_outcome(
                 "concern" if assignment.specialist_id == lead.EXECUTION_SPECIALIST else "supports",
                 "The source-bound bridge crossing remains uncertain." if assignment.specialist_id == lead.EXECUTION_SPECIALIST else "Preserve the intentional ambiguity; strengthen hesitation."))
         self.backend.enqueue_for(lead.LEAD_ORCHESTRATOR, artifact._artifact_synthesis_outcome(message=account))
-        reviewed = (await self.runtime.decide_lead_step(lead._decision(prepared, c.CollaborationConfirmationDecision.CONFIRM))).turn
+        reviewed = (await self.runtime.decide_lead_step(lead.lead_confirmation_decision(prepared, c.CollaborationConfirmationDecision.CONFIRM))).turn
         self.assertIsNotNone(reviewed.artifact_application_request, reviewed)
         self.assertEqual(len(self.backend.calls) - source_positive_call_start, 12)
         review = self.projection(conversation_id).current_reviewed_artifact_proposal
@@ -593,7 +593,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
             sources = provider.callback_payload(call)["task_input"]["available_input_sources"]
             selected_source = next(item for item in sources if item["source_locator"] == "artifact-candidate/" + candidate_ref.candidate_id)
             alias = selected_source["input_source_id"]
-            scope = lead._live_scope(call, activity="draft" if draft else "review", domains=("plot_structure",), paths=(part_node.target_path,),
+            scope = lead.lead_fixture_authoring_scope(call, activity="draft" if draft else "review", domains=("plot_structure",), paths=(part_node.target_path,),
                 contributions=[{"domain": "plot_structure", "role": "draft_owner" if draft else "constraint_assessor"}])
             scope["intent"] = "authoring" if draft else "review_only"
             assignment = {"agent_id": PLOT_ARCHITECT, "instruction": purpose, "mode": "draft" if draft else "review",
@@ -625,10 +625,10 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         selected_input = next(item for item in consumer.proposal.basis.inputs if item.kind is c.CollaborationInputKind.ARTIFACT_CANDIDATE)
         self.assertEqual(selected_input.revision_digest, candidate_ref.candidate_digest)
         self.assertIsNone(next(view for view in self.runtime.inspect_document_plans(self.session_id) if view.plan.ref == goal_plan.ref).current_node_id)
-        self.backend.enqueue_for(PLOT_ARCHITECT, lead._specialist_outcome("supports", "The provisional outline can guide part planning; the closing decision is still required before formal drafting."))
+        self.backend.enqueue_for(PLOT_ARCHITECT, lead.lead_specialist_outcome("supports", "The provisional outline can guide part planning; the closing decision is still required before formal drafting."))
         self.backend.enqueue_for(lead.LEAD_ORCHESTRATOR, lead._synthesis_outcome(message="Retain the original Chapter 3 goal and ask for its closing decision; no writing or publication is approved."))
         dispatch_start = len(self.backend.call_records)
-        consumed = (await self.runtime.decide_lead_step(lead._decision(consumer, c.CollaborationConfirmationDecision.CONFIRM))).turn
+        consumed = (await self.runtime.decide_lead_step(lead.lead_confirmation_decision(consumer, c.CollaborationConfirmationDecision.CONFIRM))).turn
         self.assertIs(consumed.state, c.CollaborationStepState.COMPLETED)
         review_confirmation = next(event for event in self.payload_events(planning_conversation, c.CollaborationConfirmationPayload)
             if event.payload.proposal_id == consumer.proposal.proposal_id)
@@ -721,7 +721,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.assertEqual(global_recommendation.recommendation_request.document_node.plan_ref, goal_plan.ref)
         def prepare_global_draft(call, _provider):
             return _document_plan_native_response(call, {"kind": "proposal", "message": global_draft_purpose,
-                "authoring_scope": lead._live_scope(call, activity="draft", domains=("plot_structure",), paths=(global_node.target_path,), contributions=[{"domain": "plot_structure", "role": "draft_owner"}]),
+                "authoring_scope": lead.lead_fixture_authoring_scope(call, activity="draft", domains=("plot_structure",), paths=(global_node.target_path,), contributions=[{"domain": "plot_structure", "role": "draft_owner"}]),
                 "authoring_assessment": asdict(task_assessment(foundation_ids=("user_input",), actions=(global_draft_purpose,))),
                 "proposal": {"relation": "new_step", "purpose": global_draft_purpose, "assignments": [{"agent_id": PLOT_ARCHITECT,
                     "instruction": global_draft_purpose, "mode": "draft", "input_ids": list(dict(call.contract.semantic_index.policy.choices)["input_ids"])}]}})
@@ -735,10 +735,10 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.assertEqual(global_draft_offer.proposal.authoring_scope.target_paths, (global_node.target_path,))
         self.assertEqual(tuple((row.specialist_id, row.mode.value) for row in global_draft_offer.proposal.assignments), ((PLOT_ARCHITECT, "draft"),))
         global_draft_text = "# Global outline\nNora preserves the promise, then hands her brother the sealed letter as Chapter 3 closes.\n"
-        self.backend.enqueue_for(PLOT_ARCHITECT, lead._specialist_outcome("drafted", global_draft_text))
+        self.backend.enqueue_for(PLOT_ARCHITECT, lead.lead_specialist_outcome("drafted", global_draft_text))
         self.backend.enqueue_for(lead.LEAD_ORCHESTRATOR, lead._synthesis_outcome(message=global_draft_text))
         global_writing_start = len(self.backend.call_records)
-        global_written = (await self.runtime.decide_lead_step(lead._decision(global_draft_offer, c.CollaborationConfirmationDecision.CONFIRM))).turn
+        global_written = (await self.runtime.decide_lead_step(lead.lead_confirmation_decision(global_draft_offer, c.CollaborationConfirmationDecision.CONFIRM))).turn
         self.assertIs(global_written.state, c.CollaborationStepState.COMPLETED)
         global_writers = self.backend.call_records[global_writing_start:]
         self.assertEqual(tuple(agent for agent, _call in global_writers), (PLOT_ARCHITECT, lead.LEAD_ORCHESTRATOR))
@@ -763,7 +763,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         def recommend_part_draft(call, provider):
             sources = provider.callback_payload(call)["task_input"]["available_input_sources"]
             alias = next(item["input_source_id"] for item in sources if item["source_locator"] == "artifact-candidate/" + candidate_ref.candidate_id)
-            scope = lead._live_scope(call, activity="draft", domains=("plot_structure",), paths=(part_node.target_path,),
+            scope = lead.lead_fixture_authoring_scope(call, activity="draft", domains=("plot_structure",), paths=(part_node.target_path,),
                 contributions=[{"domain": "plot_structure", "role": "draft_owner"}])
             return recommendation(message=draft_purpose,
                 recommended_action=action(kind="prepare_consultation", source_ids=("user_input", alias), purpose=draft_purpose,
@@ -813,10 +813,10 @@ class LeadArtifactObjectiveTests(RecommendationCase):
                          (review_confirmation.event_id,))
         self.assertEqual(pending_draft.cumulative_plan_physical_calls, len(self.backend.calls) - planning_calls)
         part_draft = chr(10).join(("Return unit / Chapter 3:", "- Nora approaches her brother with the sealed letter.", "- Nora hands him the letter, closing the established return unit.")) + chr(10)
-        self.backend.enqueue_for(PLOT_ARCHITECT, lead._specialist_outcome("drafted", part_draft))
+        self.backend.enqueue_for(PLOT_ARCHITECT, lead.lead_specialist_outcome("drafted", part_draft))
         self.backend.enqueue_for(lead.LEAD_ORCHESTRATOR, lead._synthesis_outcome(message=part_draft))
         writing_start = len(self.backend.call_records)
-        written = (await self.runtime.decide_lead_step(lead._decision(draft_offer, c.CollaborationConfirmationDecision.CONFIRM))).turn
+        written = (await self.runtime.decide_lead_step(lead.lead_confirmation_decision(draft_offer, c.CollaborationConfirmationDecision.CONFIRM))).turn
         self.assertIs(written.state, c.CollaborationStepState.COMPLETED)
         writers = self.backend.call_records[writing_start:]
         self.assertEqual(tuple(agent for agent, _call in writers), (PLOT_ARCHITECT, lead.LEAD_ORCHESTRATOR))
@@ -924,7 +924,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         def partial_start(call, _provider):
             input_ids = tuple(dict(call.contract.semantic_index.policy.choices)["input_ids"])
             return _document_plan_native_response(call, {"kind": "proposal", "message": multi_request,
-                "authoring_scope": lead._live_scope(call, activity="draft", domains=("plot_structure",), paths=full_targets,
+                "authoring_scope": lead.lead_fixture_authoring_scope(call, activity="draft", domains=("plot_structure",), paths=full_targets,
                     contributions=[{"domain": "plot_structure", "role": "draft_owner"}]),
                 "authoring_assessment": asdict(task_assessment(foundation_ids=input_ids, actions=("Draft both requested documents in separate sequential Plot work.",))),
                 "objective_intent": {"action": "start", "target_paths": [global_node.target_path], "next_step": "consult"},

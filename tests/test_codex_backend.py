@@ -3657,7 +3657,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
     async def _exercise_preliminary_capture(self, *, repair=False, seed=False, failure=None):
         with mock.patch.object(self, "workspace", pristine_initialized_workspace(self)):
             from tests.provider_wire_fixture import ExplicitPhaseScript, selection_plan, lead_fixture_response, lead_fixture_bound_scope, finite_fixture_selection, CallbackContextViews
-            from tests.test_lead_orchestration import _live_scope
+            from tests.test_lead_orchestration import lead_fixture_authoring_scope
             from story_writing_agents.runtime_resources import provider_call_accounting as accounting_module
             from story_writing_agents.agent_context.ledger.checkpoint_ledger import ContextLedger
             from story_writing_agents import conversations as c
@@ -3677,7 +3677,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     "further_review_required": True, "next_action": "request_information"}
                 return lead_fixture_response(call, {"response_type": "answer", "response_text": "Mina protects her brother.",
                     "response_details": {"task_scope": lead_fixture_bound_scope(call,
-                        _live_scope(call, activity="review", domains=("character_world",)), record=True),
+                        lead_fixture_authoring_scope(call, activity="review", domains=("character_world",)), record=True),
                         "preliminary_review": intent}}, family=0)
             script = ExplicitPhaseScript(("{}", preliminary) if repair else (preliminary,), selection_plan("answer.observed_facts"))
             physical_calls, specs, callback_errors = [], [], []
@@ -3828,7 +3828,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(evaluate(parse_jsonl(raw), catalog, filters, next(e.event_id for e in history if e.payload is judgment), -1).items)
 
             if seed:
-                from tests.test_lead_orchestration import _decision, _synthesis_outcome
+                from tests.test_lead_orchestration import lead_confirmation_decision, _synthesis_outcome
                 from tests.provider_wire_fixture import answer as wire_answer, contract_id as wire_contract_id
                 from jsonl_viewer.inspection import MISSING
                 task = proposed.proposal.authoring_scope
@@ -3838,7 +3838,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     {"assessment": "supports", "message": "The supplied candidate supports the scoped review."},
                     wire_contract_id(call.payload)), _synthesis_outcome()))
                 with mock.patch.object(backend_module._BoundContextProvider, "invoke_context", new=observed_invoke):
-                    completed = await runtime.decide_lead_step(_decision(proposed, c.CollaborationConfirmationDecision.CONFIRM))
+                    completed = await runtime.decide_lead_step(lead_confirmation_decision(proposed, c.CollaborationConfirmationDecision.CONFIRM))
                 self.assertIs(completed.turn.state, c.CollaborationStepState.COMPLETED, (completed, callback_errors))
                 script.require_fixture_valid()
                 history = runtime.conversation_storage_services.event_store.read("preliminary_capture", prior)
