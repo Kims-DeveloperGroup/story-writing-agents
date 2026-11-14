@@ -12,7 +12,7 @@ from typing import Any, Sequence
 
 from tests.runner.contracts import RunnerError
 from tests.runner.reporting import reconcile_reports
-from tests.id_moves import remap_base_caps
+from tests.id_moves import caps_digest, remap_base_caps
 
 
 BUDGET_PATH = Path(__file__).parent / "fixtures" / "test_budget_v1.json"
@@ -119,6 +119,22 @@ def check_monotonic(current: dict[str, Any], base: dict[str, Any]) -> None:
             and hashlib.sha256(json.dumps(current["subtest_caps"], sort_keys=True, separators=(",", ":")).encode()).hexdigest() == "ce4382b4bac0778363a7ea7ca90c5c81be63c89077b23abcc4dedbbc170167d9"
         ):
             return
+        if (
+            (base["max_test_source_lines"], current["max_test_source_lines"]) == (151456, 151516)
+            and base["schema_version"] == current["schema_version"] == 1
+            and tuple(base[name] for name in time_fields) == tuple(current[name] for name in time_fields) == (18000, 3600)
+            and len(base["subtest_caps"]) == len(current["subtest_caps"]) == 2544
+            and sum(base["subtest_caps"].values()) == sum(current["subtest_caps"].values()) == 8690
+            and base["subtest_caps"].keys() != current["subtest_caps"].keys()
+            and (base_digest := caps_digest(base["subtest_caps"])) == "ce4382b4bac0778363a7ea7ca90c5c81be63c89077b23abcc4dedbbc170167d9"
+            and (current_digest := caps_digest(current["subtest_caps"])) == "52d0575e721cf829d7ca7cc0409cd28861ac1db33b587b684d4611aff6df728c"
+        ):
+            try:
+                publication_caps = remap_base_caps(current["subtest_caps"], base["subtest_caps"], digests=(base_digest, current_digest))
+            except ValueError as error:
+                raise BudgetError(str(error)) from error
+            if publication_caps == current["subtest_caps"]:
+                return
         raise BudgetError("increased max_test_source_lines")
     try:
         base_caps = remap_base_caps(current["subtest_caps"], base["subtest_caps"])

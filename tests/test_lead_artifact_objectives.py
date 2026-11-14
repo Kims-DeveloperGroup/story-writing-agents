@@ -961,7 +961,7 @@ class LeadDefaultBudgetRefusalTests(unittest.IsolatedAsyncioTestCase):
         conversation_id = case.conversation("Default grouped budget boundary")
         call_start = len(case.backend.calls)
         execution_notes = []
-        original_persistence = case.runtime._persist_collaboration_results_with_generation_pin
+        original_persistence = case.runtime.collaboration_result_publication._persist_collaboration_results_with_generation_pin
         def observed_persistence(**arguments):
             try:
                 proposal = arguments["proposal"]
@@ -979,7 +979,7 @@ class LeadDefaultBudgetRefusalTests(unittest.IsolatedAsyncioTestCase):
                 execution_notes.append({"diagnostic_error_type": type(diagnostic_error).__name__})
             return original_persistence(**arguments)
         original_result = lead._live_result
-        with mock.patch.object(case.runtime, "_persist_collaboration_results_with_generation_pin", new=observed_persistence):
+        with mock.patch.object(case.runtime.collaboration_result_publication, "_persist_collaboration_results_with_generation_pin", new=observed_persistence):
             with mock.patch.object(lead, "_live_result", side_effect=lambda call, value: original_result(
                 call, {**value, "message": brief} if value.get("kind") == "proposal" else value)):
                 try:

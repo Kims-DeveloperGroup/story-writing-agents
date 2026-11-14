@@ -6,7 +6,7 @@ from .contracts import RunnerError
 from .evidence import manifest, required_dict
 
 
-HOSTED_PROFILE = 'audited-162-v6'
+HOSTED_PROFILE = 'audited-162-v7'
 
 
 HOSTED_CLEANUP_SECONDS = 30.0
@@ -123,11 +123,11 @@ HOSTED_LAUNCH_IDS = (
     'tests.test_recommendation_actions.RecommendationActionContractTests.test_action_values_and_decisions_are_closed_exact_and_immutable',
     'tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_outer_cancellation_joins_tasks_persists_terminals_and_cleans_marker',
     'tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_synthesis_derives_non_supporting_inputs_locally',
-    'tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_synthesis_cancellation_preserves_specialist_result_and_never_reruns_it',
+    'tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_synthesis_cancellation_preserves_specialist_result_and_never_reruns_it',
     'tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_submitted_uncertainty_enters_unknown_and_never_replays',
-    'tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_persistent_validation_publication_failure_keeps_result_unknown',
+    'tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_persistent_validation_publication_failure_keeps_result_unknown',
     'tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_failed_specialist_retries_transient_validation_publication',
-    'tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_confirm_starts_one_atomic_dispatch_batch_then_runs_three_in_parallel',
+    'tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_confirm_starts_one_atomic_dispatch_batch_then_runs_three_in_parallel',
     'tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_original_and_repair_validation_details_persist_across_restart',
     'tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_assignment_failure_joins_siblings_and_skips_synthesis',
     'tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_start_append_failure_makes_zero_specialist_calls_and_leaks_no_marker',
@@ -190,6 +190,7 @@ HOSTED_MIXED_SERIAL_IDS = (
     'tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_review_requires_disclosed_concrete_basis_while_draft_forbids_it',
     'tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip',
     'tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_is_strict_versioned_immutable_and_content_safe',
+    'tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_result_persistence_failure_cleans_marker_after_provider_completion',
 )
 
 

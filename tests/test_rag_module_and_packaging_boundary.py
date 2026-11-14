@@ -346,8 +346,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 251)
-        self.assertEqual(len(edges), 1315)
+        self.assertEqual(len(modules), 252)
+        self.assertEqual(len(edges), 1327)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -416,6 +416,21 @@ class RagModuleBoundaryTests(unittest.TestCase):
                     {target for edge_source, target in edges if edge_source == source},
                     expected,
                 )
+        publication = "story_writing_agents.lead_execution.collaboration_result_publication"
+        self.assertEqual({target for source, target in edges if source == publication}, {
+            "story_writing_agents.collaboration_execution_results",
+            "story_writing_agents.conversation_storage.contracts",
+            "story_writing_agents.conversations",
+            "story_writing_agents.errors",
+            "story_writing_agents.lead_control_events",
+            "story_writing_agents.lead_preparation",
+            "story_writing_agents.lead_preparation.authoring_authority",
+            "story_writing_agents.lead_preparation.reply_contract_values",
+            "story_writing_agents.runtime_resources",
+            "story_writing_agents.runtime_resources.collaboration_event_journal",
+            "story_writing_agents.runtime_resources.generation_pin_cleanup",
+        })
+        self.assertEqual({source for source, target in edges if target == publication}, {"story_writing_agents.orchestrator"})
         workspace_dependencies = {
             "story_writing_agents.workspace": {
                 "story_writing_agents.conversation_storage.filesystem",
@@ -1199,6 +1214,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 "story_writing_agents/antigravity_response_decoding.py",
             "story_writing_agents/lead_execution/confirmed_step_execution.py",
             "story_writing_agents/lead_execution/lead_step_decisions.py",
+            "story_writing_agents/lead_execution/collaboration_result_publication.py",
             "story_writing_agents/workspace/session_record_validation.py",
             "story_writing_agents/workspace/session_source_workspace.py",
             )

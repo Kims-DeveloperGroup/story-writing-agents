@@ -12,18 +12,18 @@
         "tests/runner/"
       ],
       "focused_ids": [
+        "tests.test_selected_task_material_codec.SelectedTaskMaterialCodecTests.test_two_captures_keep_closed_wire_shape_and_order",
         "tests.test_suite_budget.SuiteBudgetTests.test_exact_duration_boundary_passes_and_excess_fails",
         "tests.test_suite_budget.SuiteBudgetTests.test_new_id_increased_subtests_and_relaxed_time_are_rejected",
         "tests.test_suite_budget.SuiteBudgetTests.test_runner_counts_successful_subtests_in_parent_record",
-        "tests.test_suite_budget.SuiteBudgetTests.test_subtest_expansion_and_incomplete_shards_fail",
-        "tests.test_selected_task_material_codec.SelectedTaskMaterialCodecTests.test_two_captures_keep_closed_wire_shape_and_order"
+        "tests.test_suite_budget.SuiteBudgetTests.test_subtest_expansion_and_incomplete_shards_fail"
       ],
       "affected_ids": [
+        "tests.test_selected_task_material_codec.SelectedTaskMaterialCodecTests.test_two_captures_keep_closed_wire_shape_and_order",
         "tests.test_suite_budget.SuiteBudgetTests.test_exact_duration_boundary_passes_and_excess_fails",
         "tests.test_suite_budget.SuiteBudgetTests.test_new_id_increased_subtests_and_relaxed_time_are_rejected",
         "tests.test_suite_budget.SuiteBudgetTests.test_runner_counts_successful_subtests_in_parent_record",
-        "tests.test_suite_budget.SuiteBudgetTests.test_subtest_expansion_and_incomplete_shards_fail",
-        "tests.test_selected_task_material_codec.SelectedTaskMaterialCodecTests.test_two_captures_keep_closed_wire_shape_and_order"
+        "tests.test_suite_budget.SuiteBudgetTests.test_subtest_expansion_and_incomplete_shards_fail"
       ],
       "affected_full": true,
       "depends_on": []
@@ -65,14 +65,14 @@
         "tests/module_graph_fixture.py"
       ],
       "focused_ids": [
-        "tests.test_git_external_operation_inspection.GitExternalOperationInspectionTests.test_contract_adapter_exports_and_dependencies_are_exact",
-        "tests.test_artifact_relationship_policy.ArtifactRelationshipBoundaryTests.test_ast_graph_counts_and_cycles_match_accepted_brief"
+        "tests.test_artifact_relationship_policy.ArtifactRelationshipBoundaryTests.test_ast_graph_counts_and_cycles_match_accepted_brief",
+        "tests.test_git_external_operation_inspection.GitExternalOperationInspectionTests.test_contract_adapter_exports_and_dependencies_are_exact"
       ],
       "affected_ids": [
-        "tests.test_git_external_operation_inspection.GitExternalOperationInspectionTests.test_contract_adapter_exports_and_dependencies_are_exact",
         "tests.test_artifact_application_contracts.ArtifactApplicationBoundaryTests.test_module_graph_matches_accepted_delta",
         "tests.test_artifact_application_store_recovery.ArtifactApplicationBoundaryTests.test_store_is_sole_persistence_interpreter_and_matches_boundary",
         "tests.test_artifact_relationship_policy.ArtifactRelationshipBoundaryTests.test_ast_graph_counts_and_cycles_match_accepted_brief",
+        "tests.test_git_external_operation_inspection.GitExternalOperationInspectionTests.test_contract_adapter_exports_and_dependencies_are_exact",
         "tests.test_rag_module_and_packaging_boundary.RagModuleBoundaryTests.test_inventory_edges_cycles_and_sole_dual_importer_match_the_brief"
       ],
       "depends_on": []
@@ -6396,12 +6396,10 @@
         "tests/test_specialist_orchestration_accounting.py"
       ],
       "focused_ids": [
-        "tests.test_specialist_orchestration_accounting.SpecialistAccountingAcceptanceTests.test_local_reference_and_search_answer_count_only_provider_calls",
-        "tests.test_specialist_orchestration_accounting.SpecialistAccountingAcceptanceTests.test_result_persistence_failure_cleans_marker_after_provider_completion"
+        "tests.test_specialist_orchestration_accounting.SpecialistAccountingAcceptanceTests.test_local_reference_and_search_answer_count_only_provider_calls"
       ],
       "affected_ids": [
-        "tests.test_specialist_orchestration_accounting.SpecialistAccountingAcceptanceTests.test_local_reference_and_search_answer_count_only_provider_calls",
-        "tests.test_specialist_orchestration_accounting.SpecialistAccountingAcceptanceTests.test_result_persistence_failure_cleans_marker_after_provider_completion"
+        "tests.test_specialist_orchestration_accounting.SpecialistAccountingAcceptanceTests.test_local_reference_and_search_answer_count_only_provider_calls"
       ],
       "depends_on": [
         "context-execution-fixture",
@@ -6420,14 +6418,12 @@
       "focused_ids": [
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_assignment_failure_joins_siblings_and_skips_synthesis",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_concurrent_duplicate_domain_and_schema_reports_keep_call_order",
-        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_confirm_starts_one_atomic_dispatch_batch_then_runs_three_in_parallel",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_domain_rejection_details_survive_restarted_finalization",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_execution_delivers_only_each_assignments_ordered_reference_subset",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_failed_specialist_retries_transient_validation_publication",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_invalid_specialist_shapes_repair_then_fall_back_without_halting",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_one_and_two_assignments_run_with_exact_parallel_width",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_outer_cancellation_joins_tasks_persists_terminals_and_cleans_marker",
-        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_persistent_validation_publication_failure_keeps_result_unknown",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_provider_free_advisory_confirms_one_specialist_without_synthesis_or_chain",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_recovered_reply_retries_transient_validation_publication",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_restarted_finalization_restores_only_this_execution_diagnostics",
@@ -6435,21 +6431,18 @@
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_specialist_and_synthesis_validation_details_are_private_and_correlated",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_start_append_failure_makes_zero_specialist_calls_and_leaks_no_marker",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_submitted_uncertainty_enters_unknown_and_never_replays",
-        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_synthesis_cancellation_preserves_specialist_result_and_never_reruns_it",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_synthesis_contract_is_semantic_and_runtime_derives_attribution",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_synthesis_derives_non_supporting_inputs_locally"
       ],
       "affected_ids": [
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_assignment_failure_joins_siblings_and_skips_synthesis",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_concurrent_duplicate_domain_and_schema_reports_keep_call_order",
-        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_confirm_starts_one_atomic_dispatch_batch_then_runs_three_in_parallel",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_domain_rejection_details_survive_restarted_finalization",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_execution_delivers_only_each_assignments_ordered_reference_subset",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_failed_specialist_retries_transient_validation_publication",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_invalid_specialist_shapes_repair_then_fall_back_without_halting",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_one_and_two_assignments_run_with_exact_parallel_width",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_outer_cancellation_joins_tasks_persists_terminals_and_cleans_marker",
-        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_persistent_validation_publication_failure_keeps_result_unknown",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_provider_free_advisory_confirms_one_specialist_without_synthesis_or_chain",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_recovered_reply_retries_transient_validation_publication",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_restarted_finalization_restores_only_this_execution_diagnostics",
@@ -6457,7 +6450,6 @@
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_specialist_and_synthesis_validation_details_are_private_and_correlated",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_start_append_failure_makes_zero_specialist_calls_and_leaks_no_marker",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_submitted_uncertainty_enters_unknown_and_never_replays",
-        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_synthesis_cancellation_preserves_specialist_result_and_never_reruns_it",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_synthesis_contract_is_semantic_and_runtime_derives_attribution",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_synthesis_derives_non_supporting_inputs_locally"
       ],
@@ -7465,6 +7457,11 @@
         "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_entropy_failure_and_registry_scope_mismatch_are_content_free",
         "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_exact_surface_states_fields_and_no_content_in_repr",
         "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_response_rejection_facts_require_one_of_five_codes_and_submitted_calls",
+        "tests.agent_context.contracts.test_result_validation.StructuredOutputValidationTests.test_bounded_chunks_preserve_order_and_over_32k_content",
+        "tests.agent_context.contracts.test_result_validation.StructuredOutputValidationTests.test_diagnose_json_text_reports_all_independent_safe_issues",
+        "tests.agent_context.contracts.test_result_validation.StructuredOutputValidationTests.test_malformed_and_duplicate_json_have_value_free_diagnostics",
+        "tests.agent_context.contracts.test_result_validation.StructuredOutputValidationTests.test_properties_omitted_from_required_remain_optional",
+        "tests.agent_context.contracts.test_result_validation.StructuredOutputValidationTests.test_union_selects_matching_branch_without_other_branch_noise",
         "tests.agent_context.invocation.test_bound_action_frames.CompactWireDecoderTests.test_artifact_prefix_validation_is_exact_and_one_scope_per_search",
         "tests.agent_context.invocation.test_bound_action_frames.CompactWireDecoderTests.test_double_encoded_or_invalid_structured_results_reject",
         "tests.agent_context.invocation.test_bound_action_frames.CompactWireDecoderTests.test_invalid_read_values_report_only_fixed_source_handle_guidance",
@@ -7492,18 +7489,18 @@
         "tests.agent_context.invocation.test_search_answer_authority.SearchAndAnswerLifecycleTests.test_search_preflight_and_executed_failures_charge_differently",
         "tests.agent_context.invocation.test_search_answer_authority.SearchAndAnswerLifecycleTests.test_search_preserves_query_match_order_mints_handles_and_rejects_reuse",
         "tests.agent_context.invocation.test_search_answer_authority.SearchAndAnswerLifecycleTests.test_search_trims_tail_to_frame_budget_and_empty_frame_failure_is_terminal",
-        "tests.agent_context.invocation.test_search_answer_authority.SearchAndAnswerLifecycleTests.test_unused_or_substituted_handle_cannot_authorize_and_baseexception_cleans",
-        "tests.agent_context.contracts.test_result_validation.StructuredOutputValidationTests.test_bounded_chunks_preserve_order_and_over_32k_content",
-        "tests.agent_context.contracts.test_result_validation.StructuredOutputValidationTests.test_diagnose_json_text_reports_all_independent_safe_issues",
-        "tests.agent_context.contracts.test_result_validation.StructuredOutputValidationTests.test_malformed_and_duplicate_json_have_value_free_diagnostics",
-        "tests.agent_context.contracts.test_result_validation.StructuredOutputValidationTests.test_properties_omitted_from_required_remain_optional",
-        "tests.agent_context.contracts.test_result_validation.StructuredOutputValidationTests.test_union_selects_matching_branch_without_other_branch_noise"
+        "tests.agent_context.invocation.test_search_answer_authority.SearchAndAnswerLifecycleTests.test_unused_or_substituted_handle_cannot_authorize_and_baseexception_cleans"
       ],
       "affected_ids": [
         "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_binding_rejects_scope_identity_reference_order_and_unpaired_facts",
         "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_entropy_failure_and_registry_scope_mismatch_are_content_free",
         "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_exact_surface_states_fields_and_no_content_in_repr",
         "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_response_rejection_facts_require_one_of_five_codes_and_submitted_calls",
+        "tests.agent_context.contracts.test_result_validation.StructuredOutputValidationTests.test_bounded_chunks_preserve_order_and_over_32k_content",
+        "tests.agent_context.contracts.test_result_validation.StructuredOutputValidationTests.test_diagnose_json_text_reports_all_independent_safe_issues",
+        "tests.agent_context.contracts.test_result_validation.StructuredOutputValidationTests.test_malformed_and_duplicate_json_have_value_free_diagnostics",
+        "tests.agent_context.contracts.test_result_validation.StructuredOutputValidationTests.test_properties_omitted_from_required_remain_optional",
+        "tests.agent_context.contracts.test_result_validation.StructuredOutputValidationTests.test_union_selects_matching_branch_without_other_branch_noise",
         "tests.agent_context.invocation.test_bound_action_frames.CompactWireDecoderTests.test_artifact_prefix_validation_is_exact_and_one_scope_per_search",
         "tests.agent_context.invocation.test_bound_action_frames.CompactWireDecoderTests.test_double_encoded_or_invalid_structured_results_reject",
         "tests.agent_context.invocation.test_bound_action_frames.CompactWireDecoderTests.test_invalid_read_values_report_only_fixed_source_handle_guidance",
@@ -7531,12 +7528,7 @@
         "tests.agent_context.invocation.test_search_answer_authority.SearchAndAnswerLifecycleTests.test_search_preflight_and_executed_failures_charge_differently",
         "tests.agent_context.invocation.test_search_answer_authority.SearchAndAnswerLifecycleTests.test_search_preserves_query_match_order_mints_handles_and_rejects_reuse",
         "tests.agent_context.invocation.test_search_answer_authority.SearchAndAnswerLifecycleTests.test_search_trims_tail_to_frame_budget_and_empty_frame_failure_is_terminal",
-        "tests.agent_context.invocation.test_search_answer_authority.SearchAndAnswerLifecycleTests.test_unused_or_substituted_handle_cannot_authorize_and_baseexception_cleans",
-        "tests.agent_context.contracts.test_result_validation.StructuredOutputValidationTests.test_bounded_chunks_preserve_order_and_over_32k_content",
-        "tests.agent_context.contracts.test_result_validation.StructuredOutputValidationTests.test_diagnose_json_text_reports_all_independent_safe_issues",
-        "tests.agent_context.contracts.test_result_validation.StructuredOutputValidationTests.test_malformed_and_duplicate_json_have_value_free_diagnostics",
-        "tests.agent_context.contracts.test_result_validation.StructuredOutputValidationTests.test_properties_omitted_from_required_remain_optional",
-        "tests.agent_context.contracts.test_result_validation.StructuredOutputValidationTests.test_union_selects_matching_branch_without_other_branch_noise"
+        "tests.agent_context.invocation.test_search_answer_authority.SearchAndAnswerLifecycleTests.test_unused_or_substituted_handle_cannot_authorize_and_baseexception_cleans"
       ],
       "depends_on": []
     },
@@ -7547,12 +7539,12 @@
         "src/story_writing_agents/agent_context/contracts/errors.py"
       ],
       "focused_ids": [
-        "tests.test_agent_context_actions.ActionSurfaceAndPolicyTests.test_errors_are_fixed_content_free_and_chainless",
-        "tests.agent_context.invocation.test_request_contracts.ContextExecutionValueTests.test_workspace_identity_values_errors_and_reprs_are_content_free"
+        "tests.agent_context.invocation.test_request_contracts.ContextExecutionValueTests.test_workspace_identity_values_errors_and_reprs_are_content_free",
+        "tests.test_agent_context_actions.ActionSurfaceAndPolicyTests.test_errors_are_fixed_content_free_and_chainless"
       ],
       "affected_ids": [
-        "tests.test_agent_context_actions.ActionSurfaceAndPolicyTests.test_errors_are_fixed_content_free_and_chainless",
-        "tests.agent_context.invocation.test_request_contracts.ContextExecutionValueTests.test_workspace_identity_values_errors_and_reprs_are_content_free"
+        "tests.agent_context.invocation.test_request_contracts.ContextExecutionValueTests.test_workspace_identity_values_errors_and_reprs_are_content_free",
+        "tests.test_agent_context_actions.ActionSurfaceAndPolicyTests.test_errors_are_fixed_content_free_and_chainless"
       ],
       "depends_on": []
     },
@@ -7625,12 +7617,12 @@
         "src/story_writing_agents/agent_context/contracts/action_schema.py"
       ],
       "focused_ids": [
-        "tests.test_agent_context_actions.ActionSurfaceAndPolicyTests.test_exact_surface_enums_fields_and_signatures",
-        "tests.agent_context.invocation.test_bound_action_frames.CompactWireDecoderTests.test_schema_is_action_only_and_runtime_correlation_is_exact"
+        "tests.agent_context.invocation.test_bound_action_frames.CompactWireDecoderTests.test_schema_is_action_only_and_runtime_correlation_is_exact",
+        "tests.test_agent_context_actions.ActionSurfaceAndPolicyTests.test_exact_surface_enums_fields_and_signatures"
       ],
       "affected_ids": [
-        "tests.test_agent_context_actions.ActionSurfaceAndPolicyTests.test_exact_surface_enums_fields_and_signatures",
-        "tests.agent_context.invocation.test_bound_action_frames.CompactWireDecoderTests.test_schema_is_action_only_and_runtime_correlation_is_exact"
+        "tests.agent_context.invocation.test_bound_action_frames.CompactWireDecoderTests.test_schema_is_action_only_and_runtime_correlation_is_exact",
+        "tests.test_agent_context_actions.ActionSurfaceAndPolicyTests.test_exact_surface_enums_fields_and_signatures"
       ],
       "depends_on": [
         "agent-context.contracts.call_offers",
@@ -13138,6 +13130,7 @@
         "tests.test_codex_backend.CodexBackendTestCase.test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread",
         "tests.test_codex_backend.CodexBackendTestCase.test_diagnostic_failure_does_not_replace_provider_failure_or_taint",
         "tests.test_collaboration_context.CollaborationTransitionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_persistent_validation_publication_failure_keeps_result_unknown",
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_artifact_input_uses_authorized_reference_read_and_stale_digest_fails",
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_interrupt_cancels_all_matching_auditors_and_cleans_registry",
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_phase_mapping_is_exact_and_finalization_is_read_only",
@@ -13165,7 +13158,6 @@
         "tests.test_session_lifecycle.SessionLifecycleContractTests.test_lifecycle_module_is_leaf_and_clean_imports_work",
         "tests.test_session_recovery_contracts.SessionRecoveryBoundaryTests.test_clean_import_and_exact_dependencies_match_accepted_delta",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_failed_specialist_retries_transient_validation_publication",
-        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_persistent_validation_publication_failure_keeps_result_unknown",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_recovered_reply_retries_transient_validation_publication",
         "tests.test_workspace_session_history.WorkspaceSessionHistoryCompositionTests.test_internal_wrapper_uses_main_root_manifest_and_noncreating_snapshot",
         "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_moved_session_worktree_is_recovery_required_and_never_cleaned"
@@ -13199,6 +13191,7 @@
         "tests.test_codex_backend.CodexBackendTestCase.test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread",
         "tests.test_codex_backend.CodexBackendTestCase.test_diagnostic_failure_does_not_replace_provider_failure_or_taint",
         "tests.test_collaboration_context.CollaborationTransitionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_persistent_validation_publication_failure_keeps_result_unknown",
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_artifact_input_uses_authorized_reference_read_and_stale_digest_fails",
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_interrupt_cancels_all_matching_auditors_and_cleans_registry",
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_phase_mapping_is_exact_and_finalization_is_read_only",
@@ -13226,7 +13219,6 @@
         "tests.test_session_lifecycle.SessionLifecycleContractTests.test_lifecycle_module_is_leaf_and_clean_imports_work",
         "tests.test_session_recovery_contracts.SessionRecoveryBoundaryTests.test_clean_import_and_exact_dependencies_match_accepted_delta",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_failed_specialist_retries_transient_validation_publication",
-        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_persistent_validation_publication_failure_keeps_result_unknown",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_recovered_reply_retries_transient_validation_publication",
         "tests.test_workspace_session_history.WorkspaceSessionHistoryCompositionTests.test_internal_wrapper_uses_main_root_manifest_and_noncreating_snapshot",
         "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_moved_session_worktree_is_recovery_required_and_never_cleaned"
@@ -13260,6 +13252,7 @@
         "tests.test_codex_backend.CodexBackendTestCase.test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread",
         "tests.test_codex_backend.CodexBackendTestCase.test_diagnostic_failure_does_not_replace_provider_failure_or_taint",
         "tests.test_collaboration_context.CollaborationTransitionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_persistent_validation_publication_failure_keeps_result_unknown",
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_artifact_input_uses_authorized_reference_read_and_stale_digest_fails",
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_interrupt_cancels_all_matching_auditors_and_cleans_registry",
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_phase_mapping_is_exact_and_finalization_is_read_only",
@@ -13287,7 +13280,6 @@
         "tests.test_session_lifecycle.SessionLifecycleContractTests.test_lifecycle_module_is_leaf_and_clean_imports_work",
         "tests.test_session_recovery_contracts.SessionRecoveryBoundaryTests.test_clean_import_and_exact_dependencies_match_accepted_delta",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_failed_specialist_retries_transient_validation_publication",
-        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_persistent_validation_publication_failure_keeps_result_unknown",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_recovered_reply_retries_transient_validation_publication",
         "tests.test_workspace_session_history.WorkspaceSessionHistoryCompositionTests.test_internal_wrapper_uses_main_root_manifest_and_noncreating_snapshot",
         "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_moved_session_worktree_is_recovery_required_and_never_cleaned"
@@ -13317,6 +13309,7 @@
         "tests.test_codex_backend.CodexBackendTestCase.test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread",
         "tests.test_codex_backend.CodexBackendTestCase.test_diagnostic_failure_does_not_replace_provider_failure_or_taint",
         "tests.test_collaboration_context.CollaborationTransitionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_persistent_validation_publication_failure_keeps_result_unknown",
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_artifact_input_uses_authorized_reference_read_and_stale_digest_fails",
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_interrupt_cancels_all_matching_auditors_and_cleans_registry",
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_phase_mapping_is_exact_and_finalization_is_read_only",
@@ -13344,7 +13337,6 @@
         "tests.test_session_lifecycle.SessionLifecycleContractTests.test_lifecycle_module_is_leaf_and_clean_imports_work",
         "tests.test_session_recovery_contracts.SessionRecoveryBoundaryTests.test_clean_import_and_exact_dependencies_match_accepted_delta",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_failed_specialist_retries_transient_validation_publication",
-        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_persistent_validation_publication_failure_keeps_result_unknown",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_recovered_reply_retries_transient_validation_publication",
         "tests.test_workspace_session_history.WorkspaceSessionHistoryCompositionTests.test_internal_wrapper_uses_main_root_manifest_and_noncreating_snapshot",
         "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_moved_session_worktree_is_recovery_required_and_never_cleaned"
@@ -13377,6 +13369,7 @@
         "tests.test_codex_backend.CodexBackendTestCase.test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread",
         "tests.test_codex_backend.CodexBackendTestCase.test_diagnostic_failure_does_not_replace_provider_failure_or_taint",
         "tests.test_collaboration_context.CollaborationTransitionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_persistent_validation_publication_failure_keeps_result_unknown",
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_artifact_input_uses_authorized_reference_read_and_stale_digest_fails",
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_interrupt_cancels_all_matching_auditors_and_cleans_registry",
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_phase_mapping_is_exact_and_finalization_is_read_only",
@@ -13404,7 +13397,6 @@
         "tests.test_session_lifecycle.SessionLifecycleContractTests.test_lifecycle_module_is_leaf_and_clean_imports_work",
         "tests.test_session_recovery_contracts.SessionRecoveryBoundaryTests.test_clean_import_and_exact_dependencies_match_accepted_delta",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_failed_specialist_retries_transient_validation_publication",
-        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_persistent_validation_publication_failure_keeps_result_unknown",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_recovered_reply_retries_transient_validation_publication",
         "tests.test_workspace_session_history.WorkspaceSessionHistoryCompositionTests.test_internal_wrapper_uses_main_root_manifest_and_noncreating_snapshot",
         "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_moved_session_worktree_is_recovery_required_and_never_cleaned"
@@ -13440,6 +13432,7 @@
         "tests.test_codex_backend.CodexBackendTestCase.test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread",
         "tests.test_codex_backend.CodexBackendTestCase.test_diagnostic_failure_does_not_replace_provider_failure_or_taint",
         "tests.test_collaboration_context.CollaborationTransitionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_persistent_validation_publication_failure_keeps_result_unknown",
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_artifact_input_uses_authorized_reference_read_and_stale_digest_fails",
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_interrupt_cancels_all_matching_auditors_and_cleans_registry",
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_phase_mapping_is_exact_and_finalization_is_read_only",
@@ -13467,7 +13460,6 @@
         "tests.test_session_lifecycle.SessionLifecycleContractTests.test_lifecycle_module_is_leaf_and_clean_imports_work",
         "tests.test_session_recovery_contracts.SessionRecoveryBoundaryTests.test_clean_import_and_exact_dependencies_match_accepted_delta",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_failed_specialist_retries_transient_validation_publication",
-        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_persistent_validation_publication_failure_keeps_result_unknown",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_recovered_reply_retries_transient_validation_publication",
         "tests.test_workspace_session_history.WorkspaceSessionHistoryCompositionTests.test_internal_wrapper_uses_main_root_manifest_and_noncreating_snapshot",
         "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_moved_session_worktree_is_recovery_required_and_never_cleaned"
@@ -13503,6 +13495,7 @@
         "tests.test_codex_backend.CodexBackendTestCase.test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread",
         "tests.test_codex_backend.CodexBackendTestCase.test_diagnostic_failure_does_not_replace_provider_failure_or_taint",
         "tests.test_collaboration_context.CollaborationTransitionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_persistent_validation_publication_failure_keeps_result_unknown",
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_artifact_input_uses_authorized_reference_read_and_stale_digest_fails",
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_interrupt_cancels_all_matching_auditors_and_cleans_registry",
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_phase_mapping_is_exact_and_finalization_is_read_only",
@@ -13530,7 +13523,6 @@
         "tests.test_session_lifecycle.SessionLifecycleContractTests.test_lifecycle_module_is_leaf_and_clean_imports_work",
         "tests.test_session_recovery_contracts.SessionRecoveryBoundaryTests.test_clean_import_and_exact_dependencies_match_accepted_delta",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_failed_specialist_retries_transient_validation_publication",
-        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_persistent_validation_publication_failure_keeps_result_unknown",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_recovered_reply_retries_transient_validation_publication",
         "tests.test_workspace_session_history.WorkspaceSessionHistoryCompositionTests.test_internal_wrapper_uses_main_root_manifest_and_noncreating_snapshot",
         "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_moved_session_worktree_is_recovery_required_and_never_cleaned"
@@ -14018,28 +14010,28 @@
         "src/story_writing_agents/lead_execution/__init__.py"
       ],
       "focused_ids": [
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_confirm_starts_one_atomic_dispatch_batch_then_runs_three_in_parallel",
         "tests.test_lead_orchestration.LeadDecisionAuthorityTests.test_confirm_is_exact_single_use_and_executes_without_artifact_effect",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_confirmed_restart_preserves_evidence_and_requires_fresh_authority",
-        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_confirm_starts_one_atomic_dispatch_batch_then_runs_three_in_parallel",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_outer_cancellation_joins_tasks_persists_terminals_and_cleans_marker"
       ],
       "affected_ids": [
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_confirm_starts_one_atomic_dispatch_batch_then_runs_three_in_parallel",
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_persistent_validation_publication_failure_keeps_result_unknown",
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_result_persistence_failure_cleans_marker_after_provider_completion",
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_synthesis_cancellation_preserves_specialist_result_and_never_reruns_it",
         "tests.test_lead_orchestration.LeadDecisionAuthorityTests.test_confirm_is_exact_single_use_and_executes_without_artifact_effect",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_capability_is_private_nonserializable_and_single_use",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_confirmed_live_capability_preserves_exact_evidence_without_dispatch",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_confirmed_restart_preserves_evidence_and_requires_fresh_authority",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_unresolved_running_becomes_outcome_unknown_without_provider",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_unstarted_prepared_and_submitted_requests_never_replay",
-        "tests.test_specialist_orchestration_accounting.SpecialistAccountingAcceptanceTests.test_result_persistence_failure_cleans_marker_after_provider_completion",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_assignment_failure_joins_siblings_and_skips_synthesis",
-        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_confirm_starts_one_atomic_dispatch_batch_then_runs_three_in_parallel",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_execution_delivers_only_each_assignments_ordered_reference_subset",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_outer_cancellation_joins_tasks_persists_terminals_and_cleans_marker",
-        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_persistent_validation_publication_failure_keeps_result_unknown",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_restarted_finalization_restores_only_this_execution_diagnostics",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_start_append_failure_makes_zero_specialist_calls_and_leaks_no_marker",
-        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_submitted_uncertainty_enters_unknown_and_never_replays",
-        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_synthesis_cancellation_preserves_specialist_result_and_never_reruns_it"
+        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_submitted_uncertainty_enters_unknown_and_never_replays"
       ],
       "affected_full": true,
       "depends_on": []
@@ -14054,22 +14046,24 @@
         "tests.test_lead_orchestration.LeadDecisionAuthorityTests.test_confirm_is_exact_single_use_and_executes_without_artifact_effect"
       ],
       "affected_ids": [
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_confirm_starts_one_atomic_dispatch_batch_then_runs_three_in_parallel",
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_persistent_validation_publication_failure_keeps_result_unknown",
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_result_persistence_failure_cleans_marker_after_provider_completion",
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_synthesis_cancellation_preserves_specialist_result_and_never_reruns_it",
+        "tests.test_lead_artifact_objectives.LeadDefaultBudgetRefusalTests.test_default_grouped_budget_refuses_unfunded_artifact_preparation",
         "tests.test_lead_orchestration.LeadDecisionAuthorityTests.test_confirm_is_exact_single_use_and_executes_without_artifact_effect",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_capability_is_private_nonserializable_and_single_use",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_confirmed_live_capability_preserves_exact_evidence_without_dispatch",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_confirmed_restart_preserves_evidence_and_requires_fresh_authority",
+        "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_restored_results_keep_strict_evidence_and_provider_free_compatibility",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_unresolved_running_becomes_outcome_unknown_without_provider",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_unstarted_prepared_and_submitted_requests_never_replay",
-        "tests.test_specialist_orchestration_accounting.SpecialistAccountingAcceptanceTests.test_result_persistence_failure_cleans_marker_after_provider_completion",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_assignment_failure_joins_siblings_and_skips_synthesis",
-        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_confirm_starts_one_atomic_dispatch_batch_then_runs_three_in_parallel",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_execution_delivers_only_each_assignments_ordered_reference_subset",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_outer_cancellation_joins_tasks_persists_terminals_and_cleans_marker",
-        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_persistent_validation_publication_failure_keeps_result_unknown",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_restarted_finalization_restores_only_this_execution_diagnostics",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_start_append_failure_makes_zero_specialist_calls_and_leaks_no_marker",
-        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_submitted_uncertainty_enters_unknown_and_never_replays",
-        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_synthesis_cancellation_preserves_specialist_result_and_never_reruns_it"
+        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_submitted_uncertainty_enters_unknown_and_never_replays"
       ],
       "affected_full": true,
       "depends_on": [
@@ -14085,7 +14079,8 @@
         "lead-preparation.response_rules",
         "runtime-resources",
         "runtime-resources.collaboration_event_journal",
-        "runtime-resources.session_execution_scopes"
+        "runtime-resources.session_execution_scopes",
+        "runtime.collaboration_result_publication"
       ]
     },
     {
@@ -14095,27 +14090,29 @@
         "src/story_writing_agents/lead_execution/confirmed_step_execution.py"
       ],
       "focused_ids": [
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_confirm_starts_one_atomic_dispatch_batch_then_runs_three_in_parallel",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_confirmed_restart_preserves_evidence_and_requires_fresh_authority",
-        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_confirm_starts_one_atomic_dispatch_batch_then_runs_three_in_parallel",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_outer_cancellation_joins_tasks_persists_terminals_and_cleans_marker"
       ],
       "affected_ids": [
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_confirm_starts_one_atomic_dispatch_batch_then_runs_three_in_parallel",
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_persistent_validation_publication_failure_keeps_result_unknown",
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_result_persistence_failure_cleans_marker_after_provider_completion",
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_synthesis_cancellation_preserves_specialist_result_and_never_reruns_it",
+        "tests.test_lead_artifact_objectives.LeadDefaultBudgetRefusalTests.test_default_grouped_budget_refuses_unfunded_artifact_preparation",
         "tests.test_lead_orchestration.LeadDecisionAuthorityTests.test_confirm_is_exact_single_use_and_executes_without_artifact_effect",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_capability_is_private_nonserializable_and_single_use",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_confirmed_live_capability_preserves_exact_evidence_without_dispatch",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_confirmed_restart_preserves_evidence_and_requires_fresh_authority",
+        "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_restored_results_keep_strict_evidence_and_provider_free_compatibility",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_unresolved_running_becomes_outcome_unknown_without_provider",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_unstarted_prepared_and_submitted_requests_never_replay",
-        "tests.test_specialist_orchestration_accounting.SpecialistAccountingAcceptanceTests.test_result_persistence_failure_cleans_marker_after_provider_completion",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_assignment_failure_joins_siblings_and_skips_synthesis",
-        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_confirm_starts_one_atomic_dispatch_batch_then_runs_three_in_parallel",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_execution_delivers_only_each_assignments_ordered_reference_subset",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_outer_cancellation_joins_tasks_persists_terminals_and_cleans_marker",
-        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_persistent_validation_publication_failure_keeps_result_unknown",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_restarted_finalization_restores_only_this_execution_diagnostics",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_start_append_failure_makes_zero_specialist_calls_and_leaks_no_marker",
-        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_submitted_uncertainty_enters_unknown_and_never_replays",
-        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_synthesis_cancellation_preserves_specialist_result_and_never_reruns_it"
+        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_submitted_uncertainty_enters_unknown_and_never_replays"
       ],
       "affected_full": true,
       "depends_on": [
@@ -14127,7 +14124,8 @@
         "lead-preparation.reply_contract_values",
         "lead-preparation.response_rules",
         "runtime-resources",
-        "runtime-resources.collaboration_event_journal"
+        "runtime-resources.collaboration_event_journal",
+        "runtime.collaboration_result_publication"
       ]
     },
     {
@@ -14156,16 +14154,70 @@
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_minimal_reference_answer_needs_no_provider_correction"
       ],
       "affected_ids": [
-        "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_minimal_reference_answer_needs_no_provider_correction",
-        "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_direct_search_read_answer_uses_bounded_history_without_proposal",
-        "tests.test_specialist_orchestration_accounting.SpecialistAccountingAcceptanceTests.test_local_reference_and_search_answer_count_only_provider_calls",
         "tests.test_lead_orchestration.LeadDecisionAuthorityTests.test_reference_drift_blocks_confirmation_without_calls",
+        "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_direct_search_read_answer_uses_bounded_history_without_proposal",
+        "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_minimal_reference_answer_needs_no_provider_correction",
         "tests.test_lead_orchestration.LeadReferenceFailurePrecedenceTests.test_primary_reference_and_capacity_errors_are_not_reclassified",
+        "tests.test_specialist_orchestration_accounting.SpecialistAccountingAcceptanceTests.test_local_reference_and_search_answer_count_only_provider_calls",
         "tests.test_workspace_and_config.WorkspaceContractTests.test_workspace_facade_exports_and_signatures_are_exact"
       ],
       "affected_full": true,
       "depends_on": [
         "workspace.session-record-validation"
+      ]
+    },
+    {
+      "name": "tests.test_collaboration_result_publication",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/test_collaboration_result_publication.py"
+      ],
+      "focused_ids": [
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_confirm_starts_one_atomic_dispatch_batch_then_runs_three_in_parallel",
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_persistent_validation_publication_failure_keeps_result_unknown",
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_result_persistence_failure_cleans_marker_after_provider_completion",
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_synthesis_cancellation_preserves_specialist_result_and_never_reruns_it"
+      ],
+      "affected_ids": [
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_confirm_starts_one_atomic_dispatch_batch_then_runs_three_in_parallel",
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_persistent_validation_publication_failure_keeps_result_unknown",
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_result_persistence_failure_cleans_marker_after_provider_completion",
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_synthesis_cancellation_preserves_specialist_result_and_never_reruns_it"
+      ],
+      "depends_on": [
+        "tests.test_lead_orchestration",
+        "tests.test_specialist_orchestration_accounting",
+        "tests.test_specialist_orchestration_execution"
+      ]
+    },
+    {
+      "name": "runtime.collaboration_result_publication",
+      "boundary": "authority",
+      "paths": [
+        "src/story_writing_agents/lead_execution/collaboration_result_publication.py"
+      ],
+      "focused_ids": [
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_result_persistence_failure_cleans_marker_after_provider_completion"
+      ],
+      "affected_ids": [
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_confirm_starts_one_atomic_dispatch_batch_then_runs_three_in_parallel",
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_persistent_validation_publication_failure_keeps_result_unknown",
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_result_persistence_failure_cleans_marker_after_provider_completion",
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_synthesis_cancellation_preserves_specialist_result_and_never_reruns_it",
+        "tests.test_lead_artifact_objectives.LeadDefaultBudgetRefusalTests.test_default_grouped_budget_refuses_unfunded_artifact_preparation",
+        "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_confirmed_live_capability_preserves_exact_evidence_without_dispatch",
+        "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_confirmed_restart_preserves_evidence_and_requires_fresh_authority",
+        "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_restored_results_keep_strict_evidence_and_provider_free_compatibility"
+      ],
+      "affected_full": false,
+      "depends_on": [
+        "collaboration-execution-results",
+        "lead-control-events",
+        "lead-preparation.authoring_authority",
+        "lead-preparation.reply_contract_values",
+        "runtime-resources",
+        "runtime-resources.collaboration_event_journal",
+        "runtime-resources.generation_pin_cleanup"
       ]
     }
   ],

@@ -1,9 +1,7 @@
 from __future__ import annotations
 import json
-from dataclasses import asdict, replace
-from unittest import mock
-from story_writing_agents import StoryRuntime, agents, conversations, models
-from story_writing_agents.conversation_storage import ConversationStorageServices
+from dataclasses import asdict
+from story_writing_agents import agents, conversations, models
 from tests import test_lead_orchestration as lead
 from tests.recommendation_fixture import task_assessment
 
@@ -111,45 +109,3 @@ class SpecialistAccountingAcceptanceTests(lead.LeadOrchestrationTestCase):
         projection = conversations.project_collaboration_history(history)
         self.assertEqual(projection.physical_calls_spent, 6)
         self.assertLessEqual(projection.physical_calls_spent, 12)
-
-    async def test_result_persistence_failure_cleans_marker_after_provider_completion(self) -> None:
-        conversation_id = self.conversation("Result persistence failure")
-        proposed = await self.proposal(conversation_id, text=_REVIEW_BRIEF + "\n\nPlease check the story direction.", authoring_assessment=asdict(_review_assessment()))
-        original = self.runtime.conversation_storage_services
-        failing = _FailingEventStore(original.event_store, event_kind=conversations.CollaborationEventKind.EXECUTION_RESULT)
-        services = ConversationStorageServices(
-            original.catalog_binding,
-            replace(original.event_store_binding, component=failing),
-            original.search_binding,
-            original.mutation_coordinator,
-        )
-        runtime, _, live_executions = lead._capture_execution_inputs(
-            StoryRuntime, self.workspace,
-            self.backend,  # type: ignore[arg-type]
-            conversation_storage_services=services,
-        )
-        self.backend.enqueue_for(agents.PLOT_ARCHITECT, lead._specialist_outcome())
-        self.backend.enqueue_for(agents.LEAD_ORCHESTRATOR, lead._synthesis_outcome())
-        failing.enabled = True
-
-        captured = []
-        invoke = runtime._run_collaboration_invocation
-        async def record(**arguments):
-            result = await invoke(**arguments)
-            captured.append(result)
-            return result
-        with mock.patch.object(runtime, "_run_collaboration_invocation", side_effect=record):
-            with self.assertRaisesRegex(RuntimeError, "injected durable append failure"):
-                await runtime.decide_lead_step(
-                    lead._decision(proposed, conversations.CollaborationConfirmationDecision.CONFIRM) )
-
-        self.assertEqual(failing.failures, 1)
-        self.assertEqual(live_executions, set())
-        self.assertIs(
-            conversations.project_collaboration_history(self.history(conversation_id)).current_state,
-            conversations.CollaborationStepState.RUNNING, )
-        submitted = [event.payload for event in self.history(conversation_id) if type(event.payload) is conversations.CollaborationProviderCallPayload
-            and event.payload.state is conversations.CollaborationProviderCallState.SUBMITTED
-            and event.payload.invocation_kind in {conversations.CollaborationInvocationKind.SPECIALIST_ASSIGNMENT, conversations.CollaborationInvocationKind.LEAD_SYNTHESIS}]
-        self.assertEqual({result.provider_invocation_id for result in captured}, {call.invocation_id for call in submitted})
-        self.assertEqual(len(captured), 2)

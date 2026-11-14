@@ -465,6 +465,50 @@
         }
       ],
       "legacy_unresolved_lines": 1550
+    },
+    {
+      "issue": 1020,
+      "origin_commit": "a1fba1a38327de3c5e7427bec4366a588bb62ba1",
+      "origins": [
+        {
+          "source": "tests/test_specialist_orchestration_accounting.py",
+          "sha256": "34dfae2ecb256b970b81fe37fabfe68c4de019a4320a007a6e425f729ca1a8dc",
+          "source_ranges": [
+            [
+              115,
+              155
+            ]
+          ],
+          "destinations": [
+            "tests/test_collaboration_result_publication.py"
+          ],
+          "counting": "Exactly four existing method bodies moved once. Existing fixture helpers reused from original test owners; no newCase/subTest/scenario; legacy1550 retained."
+        },
+        {
+          "source": "tests/test_specialist_orchestration_execution.py",
+          "sha256": "03ed7a59987a10c9a0cde00c47d4a2e74280dbe39b6e458d6268b90273f3d6f0",
+          "source_ranges": [
+            [
+              701,
+              728
+            ],
+            [
+              311,
+              345
+            ],
+            [
+              65,
+              155
+            ]
+          ],
+          "destinations": [
+            "tests/test_collaboration_result_publication.py"
+          ],
+          "counting": "Exactly four existing method bodies moved once. Existing fixture helpers reused from original test owners; no newCase/subTest/scenario; legacy1550 retained."
+        }
+      ],
+      "legacy_unresolved_lines": 1550,
+      "counting": "Issue 1020 approved +60 lines: raw test source +55 and counted support +5; current raw148525 + support1441 + legacy1550 = 151516. Four method moves, all assertions/scenarios, and immutable origins remain unchanged."
     }
   ]
 }

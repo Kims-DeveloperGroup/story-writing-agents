@@ -13,6 +13,12 @@ def parent_test(test: unittest.TestCase) -> unittest.TestCase:
     return getattr(test, "test_case", test)
 
 
+def source_collection_for(test: unittest.TestCase) -> CanonicalCollection | None:
+    """Return the prepared source collection supplied by this test's runner owner."""
+    result = getattr(getattr(parent_test(test), "_outcome", None), "result", None)
+    return result._source_collection if isinstance(result, TimedTextTestResult) else None
+
+
 class TimedTextTestResult(unittest.TextTestResult):
     """Preserve unittest callbacks while recording parent-test timing and status."""
 
@@ -24,6 +30,7 @@ class TimedTextTestResult(unittest.TextTestResult):
     def __init__(self, *args: object, clock: Callable[[], float] = time.perf_counter, **kwargs: object) -> None:
         super().__init__(*args, **kwargs)
         self._clock = clock
+        self._source_collection: CanonicalCollection | None = None
         self._started_at: dict[str, float] = {}
         self._statuses: dict[str, str] = {}
         self._durations: dict[str, float] = {}
@@ -131,12 +138,14 @@ class Execution:
 
 
 def execute(selection: CanonicalCollection, *, stream: TextIO, failfast: bool = False,
-             clock: Callable[[], float] = time.perf_counter) -> Execution:
+            clock: Callable[[], float] = time.perf_counter,
+            source_collection: CanonicalCollection | None = None) -> Execution:
     before = source_snapshot()
     environment = execution_environment()
     captured: list[TimedTextTestResult] = []
     def result_factory(*args, **kwargs):
         result = TimedTextTestResult(*args, clock=clock, **kwargs)
+        result._source_collection = source_collection
         captured.append(result)
         return result
     test_runner = unittest.TextTestRunner(

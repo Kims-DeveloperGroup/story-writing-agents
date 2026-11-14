@@ -62,7 +62,7 @@ def hosted_partition(canonical: CanonicalCollection, selection: CanonicalCollect
     classes = {identifier.rsplit(".", 1)[0] for identifier in eligible}
     present = {identifier for identifier in canonical.ids if identifier.rsplit(".", 1)[0] in classes}
     if (present != (eligible | mixed_serial) or len(eligible) != 162
-            or len(mixed_serial) != 8 or eligible & mixed_serial):
+            or len(mixed_serial) != 9 or eligible & mixed_serial):
         raise RunnerError("audited whole-method eligibility changed")
     serial = tuple(test for test in selection.tests if test.id() not in eligible)
     scheduled = tuple(identifier for identifier in selection.ids if identifier in eligible)
@@ -196,7 +196,7 @@ def hosted_execute(canonical, selected, options, *, slowest, stream):
             raise RunnerError("hosted method work grant exhausted before serial traversal")
         signal.setitimer(signal.ITIMER_REAL, work_deadline - time.monotonic())
         if serial.ids:
-            execution = execute(serial, stream=stream)
+            execution = execute(serial, stream=stream, source_collection=canonical if isinstance(canonical, CanonicalCollection) else None)
             report = run_report(canonical, serial, execution, slowest=0)
             if execution.interrupted or report["unexecuted_ids"] or report["totals"]["completed"] != len(serial.ids):
                 errors.append("serial traversal interrupted or incomplete")
