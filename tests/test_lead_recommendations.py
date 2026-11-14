@@ -545,7 +545,7 @@ class LeadRecommendationRecoveryTests(RecommendationCase):
             conversation_id, turn = await self.reference_offer()
             request_event = self.payload_events(conversation_id, c.LeadRecommendationRequestPayload)[-1]
             self.assertIsNotNone(turn.provider_invocation_id)
-            self.assertEqual(self.runtime._recommendation_turn_result(request_event).provider_invocation_id, turn.provider_invocation_id)
+            self.assertEqual(self.runtime.known_result_finalization.recommendation_turn_result(request_event).provider_invocation_id, turn.provider_invocation_id)
             error = BackendProtocolError("Synthetic unresolved preparation")
             self.backend.enqueue(lead._SubmittedFailure(error, submission_uncertain=fault == "uncertain"))
             inspect_type = type(self.runtime.artifacts)

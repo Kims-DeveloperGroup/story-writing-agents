@@ -925,7 +925,6 @@ class SpecialistRoutingRuntimeTests(_SpecialistRoutingRuntimeCase):
         from story_writing_agents.specialist_routing import required_authoring_domains, artifact_domain
         from tests.provider_wire_fixture import (fixture_schema_node, offered_fixture_bindings,
                                                 indexed_response, finite_fixture_read_selection)
-        from tests.test_lead_orchestration import _live_scope
         part_outline, rules = "core_documents/part_outlines.md", "core_documents/narrative_rules.md"
         documents = {
             OUTLINE: "Mina promises to protect her brother, then hides the letter. D2 reveals the secret. "

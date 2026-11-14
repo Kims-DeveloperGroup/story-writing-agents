@@ -1023,6 +1023,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             "story_writing_agents.authoring_task_lifecycle", "story_writing_agents.conversations", "story_writing_agents.conversations.context",
             "story_writing_agents.conversations.events", "story_writing_agents.interactive_terminal._collaboration_view",
             "story_writing_agents.artifact_transactions.artifact_application_authority", "story_writing_agents.lead_preparation.outcome_decoding",
+            "story_writing_agents.lead_execution.known_result_finalization",
             "story_writing_agents.lead_preparation.call_rule_factory", "story_writing_agents.lead_provider_contracts", "story_writing_agents.orchestrator"})
         self.assertIn("story_writing_agents.document_plan", modules)
         self.assertEqual({target for source, target in edges if source == "story_writing_agents.document_plan"}, {
