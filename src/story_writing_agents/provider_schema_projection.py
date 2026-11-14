@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from collections.abc import Mapping
@@ -27,6 +26,7 @@ from .provider_message_catalog import (
 from .structured_output_validation import (
     require_native_schema_projection,
     schema_rule_fingerprints,
+    strict_json_object,
 )
 
 def hoist_schema_definitions(schema: Mapping) -> dict:
@@ -448,195 +448,374 @@ def project_result_schema(schema: Mapping, contract_id: str) -> dict:
     return _compact_lead_schema_guidance(projected) if family == "lead-response-v6" else projected
 
 
-def share_schema_descriptions(schema: Mapping) -> dict:
-    """Share literal annotations in one final document, with an exact inverse."""
-    def encoded(value: object) -> bytes:
-        return json.dumps(value, ensure_ascii=False, sort_keys=True,
-                          allow_nan=False, separators=(",", ":")).encode("utf-8", "strict")
+def factor_rule_schema(schema: Mapping[str, object]) -> dict[str, object]:
+    """Share equivalent acyclic rule nodes without expanding or pruning the graph."""
+    root = strict_json_object(json.dumps(dict(schema), ensure_ascii=False, allow_nan=False))
+    original_fingerprint, definition_fingerprints = schema_rule_fingerprints(root)
+    source_definitions = root.pop("$defs", {})
+    names = {identity: f"d{number}" for number, identity in enumerate(sorted(set(definition_fingerprints.values())))}
+    aliases = {name: names[identity] for name, identity in definition_fingerprints.items()}
 
-    def annotated(node: dict):
-        if "description" in node:
-            yield node
-        for child in node.get("properties", {}).values():
-            yield from annotated(child)
-        for child in node.get("anyOf", ()):
-            yield from annotated(child)
-        if isinstance(node.get("items"), dict):
-            yield from annotated(node["items"])
-        for child in node.get("$defs", {}).values():
-            yield from annotated(child)
+    def rename(node: object, symbols: Mapping[str, str]) -> object:
+        if type(node) is not dict:
+            return node
+        result = dict(node)
+        if "$ref" in result:
+            result["$ref"] = "#/$defs/" + symbols[result["$ref"][len("#/$defs/"):]]
+            return result
+        if type(result.get("properties")) is dict:
+            result["properties"] = {name: rename(child, symbols) for name, child in result["properties"].items()}
+        if type(result.get("anyOf")) is list:
+            result["anyOf"] = [rename(child, symbols) for child in result["anyOf"]]
+        if "items" in result:
+            result["items"] = rename(result["items"], symbols)
+        return result
 
-    original = deepcopy(dict(schema))
-    original_bytes = encoded(original)
-    original_fingerprints = schema_rule_fingerprints(original)
+    definitions: dict[str, object] = {}
+    for name, node in sorted(source_definitions.items()):
+        # Bare aliases resolve to their concrete target, avoiding a self-alias after merging.
+        while set(node) == {"$ref"}:
+            node = source_definitions[node["$ref"][len("#/$defs/"):]]
+        definitions.setdefault(aliases[name], rename(node, aliases))
+    root = rename(root, aliases)
     counts: dict[str, int] = {}
-    for node in annotated(original):
-        value = node["description"]
-        counts[value] = counts.get(value, 0) + 1
-    values = sorted(counts)
-    suffixes = set()
-    for index, value in enumerate(values):
-        for other in values[:index]:
-            size = 0
-            while size < min(len(value), len(other)) and value[-size - 1] == other[-size - 1]:
-                size += 1
-            size = min(size, len(value) - 1, len(other) - 1)
-            if size > 0:
-                suffixes.add(value[-size:])
-    candidates = sorted(
-        suffixes,
-        key=lambda value: (
-            -sum(count for text, count in counts.items() if text.endswith(value))
-            * (len(encoded(value)) - 2),
-            value,
-        ),
-    )
-    alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    nodes: dict[str, object] = {}
+    node_keys: dict[int, str] = {}
 
-    def short_name(number: int) -> str:
-        result = ""
-        while True:
-            number, digit = divmod(number, len(alphabet))
-            result = alphabet[digit] + result
-            if not number:
+    def children(node: Mapping[str, object]):
+        properties = node.get("properties")
+        if type(properties) is dict:
+            yield from properties.values()
+        variants = node.get("anyOf")
+        if type(variants) is list:
+            yield from variants
+        if "items" in node:
+            yield node["items"]
+
+    def key(node: object) -> str:
+        return json.dumps(node, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+
+    fingerprint_definitions = dict(definitions)
+    fingerprint_names: dict[int, str] = {}
+
+    def collect_fingerprint_nodes(node: object) -> None:
+        if type(node) is not dict or id(node) in fingerprint_names:
+            return
+        name = f"p{len(fingerprint_names)}"
+        if name in fingerprint_definitions:
+            raise ValueError("schema fingerprint scratch symbol conflicts with an input definition")
+        fingerprint_names[id(node)] = name
+        fingerprint_definitions[name] = node
+        for name in sorted(node.get("properties", {})):
+            collect_fingerprint_nodes(node["properties"][name])
+        for child in node.get("anyOf", ()):
+            collect_fingerprint_nodes(child)
+        if "items" in node:
+            collect_fingerprint_nodes(node["items"])
+
+    collect_fingerprint_nodes(root)
+    for name in sorted(definitions):
+        collect_fingerprint_nodes(definitions[name])
+    _, node_fingerprints = schema_rule_fingerprints(
+        {**root, "$defs": fingerprint_definitions})
+    node_keys.update({identity: node_fingerprints[name]
+                      for identity, name in fingerprint_names.items()})
+
+    def source_key(node: object) -> str:
+        return node_keys[id(node)]
+
+    def count(node: object, *, outer: bool = False) -> None:
+        if type(node) is not dict:
+            return
+        identity = source_key(node)
+        if not outer and "$ref" not in node:
+            counts[identity] = counts.get(identity, 0) + 1
+            nodes[identity] = node
+        for child in children(node):
+            count(child)
+
+    count(root, outer=True)
+    for node in definitions.values():
+        count(node, outer=True)
+    existing = {source_key(node): name for name, node in definitions.items()}
+    source_order: dict[str, tuple[int, str]] = {}
+    for source_identity, source_node in nodes.items():
+        source_literal = key(source_node)
+        source_order[source_identity] = (len(source_literal.encode("utf-8")), source_literal)
+    shared: dict[str, str] = {}
+    # Preserve the current large-node seed; additional bindings must reduce its actual bytes.
+    for identity, times in sorted(counts.items(), key=lambda item: source_order[item[0]][1]):
+        if source_order[identity][0] < 80:
+            continue
+        if identity in existing:
+            shared[identity] = existing[identity]
+        elif times > 1:
+            shared[identity] = f"n{len(shared)}"
+
+    def render(node: object, *, own: str | None = None) -> object:
+        if type(node) is not dict:
+            return node
+        identity = source_key(node)
+        if identity in shared and identity != own:
+            return {"$ref": "#/$defs/" + shared[identity]}
+        result = dict(node)
+        if type(result.get("properties")) is dict:
+            result["properties"] = {name: render(child) for name, child in result["properties"].items()}
+        if type(result.get("anyOf")) is list:
+            result["anyOf"] = [render(child) for child in result["anyOf"]]
+        if "items" in result:
+            result["items"] = render(result["items"])
+        return result
+
+    def symbol_aliases(reference_counts: Mapping[str, int]) -> dict[str, str]:
+        alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+        def short_name(number: int) -> str:
+            name = ""
+            while True:
+                number, digit = divmod(number, len(alphabet))
+                name = alphabet[digit] + name
+                if not number:
+                    return name
+                number -= 1
+
+        return {
+            name: short_name(number)
+            for number, name in enumerate(sorted(reference_counts, key=lambda name: (-reference_counts[name], name)))
+        }
+
+    def compact_symbols(graph: dict[str, object]) -> tuple[dict[str, object], dict[str, str]]:
+        """Use the same local-symbol layout for every cost trial and final graph."""
+        if not graph.get("$defs"):
+            return graph, {}
+        reference_counts = dict.fromkeys(graph["$defs"], 0)
+
+        def count_references(node: object) -> None:
+            if type(node) is not dict:
+                return
+            if "$ref" in node:
+                reference_counts[node["$ref"][len("#/$defs/"):]] += 1
+                return
+            for child in children(node):
+                count_references(child)
+
+        count_references(graph)
+        for node in graph["$defs"].values():
+            count_references(node)
+        aliases = symbol_aliases(reference_counts)
+        compact = rename(graph, aliases)
+        compact["$defs"] = {aliases[name]: rename(node, aliases) for name, node in graph["$defs"].items()}
+        return compact, aliases
+
+    def assemble() -> tuple[dict[str, object], dict[str, str]]:
+        result = render(root, own=source_key(root))
+        assert type(result) is dict
+        declarations = {name: render(node, own=source_key(node)) for name, node in definitions.items()}
+        for identity, name in shared.items():
+            if name not in declarations:
+                declarations[name] = render(nodes[identity], own=identity)
+        if declarations:
+            result["$defs"] = declarations
+        return compact_symbols(result)
+
+    quoted_sizes: dict[str, int] = {}
+    fixed_sizes: dict[int, int] = {}
+
+    def quoted_size(value: str) -> int:
+        if value not in quoted_sizes:
+            quoted_sizes[value] = len(key(value).encode("utf-8"))
+        return quoted_sizes[value]
+
+    def fixed_size(node: dict[str, object]) -> int:
+        """Count unchanged bytes; the detached source keeps every node alive."""
+        identity = id(node)
+        if identity not in fixed_sizes:
+            size = 2 + max(0, len(node) - 1)
+            for name, value in node.items():
+                size += quoted_size(name) + 1
+                if name == "properties" and type(value) is dict:
+                    size += 2 + max(0, len(value) - 1)
+                    size += sum(quoted_size(field) + 1 for field in value)
+                elif name == "anyOf" and type(value) is list:
+                    size += 2 + max(0, len(value) - 1)
+                elif name != "items":
+                    size += len(key(value).encode("utf-8"))
+            fixed_sizes[identity] = size
+        return fixed_sizes[identity]
+
+    def measure(node: object, reference_counts: dict[str, int], *,
+                own: str | None = None, count_refs: bool = True) -> int:
+        if type(node) is not dict:
+            return len(key(node).encode("utf-8"))
+        identity = source_key(node)
+        if identity in shared and identity != own:
+            name = shared[identity]
+            if count_refs:
+                reference_counts[name] += 1
+            return 2 + quoted_size("$ref") + 1 + quoted_size("#/$defs/" + name)
+        size = fixed_size(node)
+        if "$ref" in node:
+            if count_refs:
+                reference_counts[node["$ref"][len("#/$defs/"):]] += 1
+            count_refs = False
+        for child in children(node):
+            size += measure(child, reference_counts, count_refs=count_refs)
+        return size
+
+    def trial_size() -> tuple[int, dict[str, str]]:
+        """Measure the exact rendered/renamed trial without materializing it."""
+        declarations = {name: (node, source_key(node)) for name, node in definitions.items()}
+        for identity, name in shared.items():
+            if name not in declarations:
+                declarations[name] = (nodes[identity], identity)
+        reference_counts = dict.fromkeys(declarations, 0)
+        size = measure(root, reference_counts, own=source_key(root))
+        if declarations:
+            size += (1 if root else 0) + quoted_size("$defs") + 1
+            size += 2 + max(0, len(declarations) - 1)
+            for name, (node, own) in declarations.items():
+                size += quoted_size(name) + 1 + measure(node, reference_counts, own=own)
+        aliases = symbol_aliases(reference_counts)
+        for name, alias in aliases.items():
+            size += quoted_size(alias) - quoted_size(name)
+            size += reference_counts[name] * (
+                quoted_size("#/$defs/" + alias) - quoted_size("#/$defs/" + name))
+        return size, aliases
+
+    def share_annotations(graph: dict[str, object]) -> dict[str, object]:
+        literal_ids: dict[tuple[object, ...], int] = {}
+        full_keys: dict[int, int] = {}
+        body_keys: dict[int, int] = {}
+
+        def literal_key(value: object) -> int:
+            if type(value) in {dict, list}:
+                identity = id(value)
+                if identity in full_keys:
+                    return full_keys[identity]
+                if type(value) is dict:
+                    pairs = tuple((field, literal_key(child))
+                                  for field, child in sorted(value.items()))
+                    signature = ("object", pairs)
+                    body = ("object", tuple(pair for pair in pairs
+                                            if pair[0] != "description"))
+                    body_keys[identity] = literal_ids.setdefault(body, len(literal_ids))
+                else:
+                    signature = ("array", tuple(literal_key(child) for child in value))
+                result = literal_ids.setdefault(signature, len(literal_ids))
+                full_keys[identity] = result
                 return result
-            number -= 1
+            signature = ("scalar", key(value))
+            return literal_ids.setdefault(signature, len(literal_ids))
 
-    source_text = original_bytes.decode("utf-8")
-    token_bound = len(candidates) + len(values) * (len(values) + 1) // 2
-    prefix_size = 1
-    if token_bound:
-        digits = {character: number + 1 for number, character in enumerate(alphabet)}
-        for word in re.finditer("[a-zA-Z]+", source_text):
-            start, end = word.span()
-            if (start == 0 or end == len(source_text)
-                    or source_text[start - 1] != "~" or source_text[end] != "~"):
+        groups: dict[int, list[object]] = {}
+
+        def collect(node: object) -> None:
+            if type(node) is not dict:
+                return
+            if "$defs" not in node:
+                groups.setdefault(body_keys[id(node)], []).append(node)
+            for child in children(node):
+                collect(child)
+            for child in node.get("$defs", {}).values():
+                collect(child)
+
+        literal_key(graph)
+        collect(graph)
+        used = set(graph.get("$defs", {}))
+        selected: dict[int, str] = {}
+        eligible: list[tuple[str, int, list[object]]] = []
+        for identity, occurrences in groups.items():
+            meanings = {key({"description": node["description"]}) if "description" in node
+                        else "" for node in occurrences}
+            if len(occurrences) < 2 or len(meanings) < 2:
                 continue
-            number = 0
-            for position in range(start, end):
-                number = number * len(alphabet) + digits[source_text[position]]
-                if number > token_bound:
-                    break
-            if number > token_bound:
-                continue
-            before, after = start, end
-            while before and source_text[before - 1] == "~":
-                before -= 1
-            while after < len(source_text) and source_text[after] == "~":
-                after += 1
-            prefix_size = max(prefix_size, min(start - before, after - end) + 1)
-    prefix = "~" * prefix_size
-    segments = {value: [(False, value)] for value in values}
-    literals: dict[str, str] = {}
-    chunks: list[str] = []
+            representative = occurrences[0]
+            body = key({field: value for field, value in representative.items()
+                        if field != "description"})
+            eligible.append((body, identity, occurrences))
+        for body, identity, occurrences in sorted(eligible, key=lambda item: item[0]):
+            number = len(selected)
+            name = f"a{number}"
+            while name in used:
+                number += 1
+                name = f"a{number}"
+            reference = key({"$ref": "#/$defs/" + name})
+            gain = (len(occurrences) * (len(body.encode("utf-8"))
+                    - len(reference.encode("utf-8")))
+                    - len(body.encode("utf-8")) - len(key(name).encode("utf-8")) - 2)
+            if gain > 0:
+                selected[identity] = name
+                used.add(name)
+        targets: dict[str, object] = {}
 
-    def intern(value: str, count: int) -> str | None:
-        code = prefix + short_name(len(literals)) + prefix
-        chunk = f"{code} {len(value)}:{value}\n"
-        if count * (len(encoded(value)) - len(encoded(code))) <= len(encoded(chunk)) - 2:
-            return None
-        literals[code] = value
-        chunks.append(chunk)
-        return code
+        def visit(node: object) -> object:
+            if type(node) is not dict:
+                return node
+            name = selected.get(body_keys[id(node)]) if "$defs" not in node else None
+            result = dict(node)
+            if "properties" in node:
+                result["properties"] = {name: visit(child)
+                                        for name, child in node["properties"].items()}
+            if "anyOf" in node:
+                result["anyOf"] = [visit(child) for child in node["anyOf"]]
+            if "items" in node:
+                result["items"] = visit(node["items"])
+            if "$defs" in node:
+                result["$defs"] = {name: visit(child) for name, child in node["$defs"].items()}
+            if name is not None:
+                target = {field: value for field, value in result.items()
+                          if field != "description"}
+                if name in targets and key(targets[name]) != key(target):
+                    raise ValueError("annotation sharing changed an exact rule body")
+                targets[name] = target
+                result = {"$ref": "#/$defs/" + name}
+                if "description" in node:
+                    result["description"] = node["description"]
+            return result
 
-    for value in candidates:
-        matched = [text for text, pieces in segments.items()
-                   if len(pieces) == 1 and not pieces[0][0] and text.endswith(value)]
-        code = intern(value, sum(counts[text] for text in matched))
-        if code is not None:
-            for text in matched:
-                segments[text] = [(False, text[:-len(value)]), (True, code)]
-    prefix_counts: dict[str, int] = {}
-    for text, pieces in segments.items():
-        for is_code, value in pieces:
-            if not is_code and value:
-                prefix_counts[value] = prefix_counts.get(value, 0) + counts[text]
-    prefixes = sorted(prefix_counts)
-    shared_prefixes = set()
-    for index, value in enumerate(prefixes):
-        for other in prefixes[:index]:
-            size = 0
-            while size < min(len(value), len(other)) and value[size] == other[size]:
-                size += 1
-            size = min(size, len(value) - 1, len(other) - 1)
-            if size > 0:
-                shared_prefixes.add(value[:size])
-    for value in sorted(shared_prefixes, key=lambda part: (
-        -sum(count for text, count in prefix_counts.items() if text.startswith(part))
-        * (len(encoded(part)) - 2), part,
-    )):
-        matched = [text for text, pieces in segments.items()
-                   if not pieces[0][0] and len(pieces[0][1]) > len(value)
-                   and pieces[0][1].startswith(value)]
-        code = intern(value, sum(counts[text] for text in matched))
-        if code is not None:
-            for text in matched:
-                pieces = segments[text]
-                segments[text] = [(True, code), (False, pieces[0][1][len(value):])] + pieces[1:]
-    prefix_counts = {}
-    for text, pieces in segments.items():
-        for is_code, value in pieces:
-            if not is_code and value:
-                prefix_counts[value] = prefix_counts.get(value, 0) + counts[text]
-    for value, count in sorted(prefix_counts.items()):
-        code = intern(value, count)
-        if code is not None:
-            for text, pieces in segments.items():
-                segments[text] = [
-                    (is_code, code if not is_code and piece == value else piece)
-                    for is_code, piece in pieces
-                ]
-    if not literals:
-        return original
-    scope = hashlib.sha256(original_bytes).hexdigest()
-    marker = (
-        f"\n[SWA-DESCRIPTIONS {scope}]\n"
-        "Exact delimited description tokens use only this complete schema's literal dictionary. "
-        "Expand each token once wherever it occurs; all other characters remain literal. "
-        "Lengths count Unicode characters. The first line records original root-description "
-        "presence and entry count.\n"
-    )
-    while marker in source_text:
-        marker = "\n" + marker
-    result = deepcopy(original)
-    for node in annotated(result):
-        node["description"] = "".join(piece for _, piece in segments[node["description"]])
-    had_root = "description" in result
-    result["description"] = (
-        result.get("description", "") + marker + f"{int(had_root)} {len(literals)}\n"
-        + "".join(chunks)
-    )
+        result = visit(graph)
+        assert type(result) is dict
+        if targets:
+            result.setdefault("$defs", {}).update(targets)
+        return result
 
-    restored = deepcopy(result)
-    root_text, separator, payload = restored["description"].rpartition(marker)
-    if not separator:
-        raise WireShapeError("$", "missing scoped description dictionary")
-    header, payload = payload.split("\n", 1)
-    root_flag, size = (int(value) for value in header.split())
-    recovered: dict[str, str] = {}
-    for _ in range(size):
-        header, payload = payload.split(":", 1)
-        code, length = header.rsplit(" ", 1)
-        length = int(length)
-        recovered[code], payload = payload[:length], payload[length:]
-        if not payload.startswith("\n"):
-            raise WireShapeError("$", "invalid description dictionary framing")
-        payload = payload[1:]
-    if payload or recovered != literals:
-        raise WireShapeError("$", "incomplete scoped description dictionary")
-    if root_flag:
-        restored["description"] = root_text
-    else:
-        del restored["description"]
-    token_pattern = re.compile("|".join(re.escape(code) for code in recovered))
-    for node in annotated(restored):
-        node["description"] = token_pattern.sub(
-            lambda match: recovered[match.group()], node["description"]
-        )
-    if (encoded(restored) != original_bytes
-            or schema_rule_fingerprints(restored) != original_fingerprints):
-        raise WireShapeError("$", "description sharing changed complete rule graph")
-    return result if len(encoded(result)) < len(original_bytes) else original
+    seeded = dict(shared)
+    shared.clear()
+    baseline, baseline_aliases = assemble()
+    baseline_bytes = len(key(baseline).encode("utf-8"))
+    current_bytes, expected_aliases = baseline_bytes, baseline_aliases
+    if seeded:
+        shared.update(seeded)
+        current_bytes, expected_aliases = trial_size()
+        if current_bytes >= baseline_bytes:
+            shared.clear()
+            current_bytes, expected_aliases = baseline_bytes, baseline_aliases
+    for identity, times in sorted(counts.items(), key=lambda item: source_order[item[0]]):
+        if identity in shared or (times <= 1 and identity not in existing):
+            continue
+        shared[identity] = existing.get(identity, f"n{len(shared)}")
+        candidate_bytes, candidate_aliases = trial_size()
+        if candidate_bytes < current_bytes:
+            current_bytes, expected_aliases = candidate_bytes, candidate_aliases
+        else:
+            del shared[identity]
+    result, final_aliases = assemble() if shared else (baseline, baseline_aliases)
+    if (final_aliases != expected_aliases or len(key(result).encode("utf-8")) != current_bytes or current_bytes > baseline_bytes
+            or (shared and current_bytes >= baseline_bytes)):
+        raise ValueError("schema sharing does not preserve its complete UTF-8 cost guard")
+    candidate, candidate_aliases = compact_symbols(share_annotations(result))
+    candidate_bytes = len(key(candidate).encode("utf-8"))
+    if candidate_bytes < current_bytes:
+        result, current_bytes = candidate, candidate_bytes
+        final_aliases = {name: candidate_aliases[alias] for name, alias in final_aliases.items()}
+    if len(key(result).encode("utf-8")) != current_bytes:
+        raise ValueError("annotation sharing changed complete UTF-8 cost accounting")
+    result_fingerprint, result_definitions = schema_rule_fingerprints(result)
+    if result_fingerprint != original_fingerprint or any(
+        result_definitions.get(final_aliases[aliases[name]]) != identity for name, identity in definition_fingerprints.items()
+    ):
+        raise ValueError("schema factoring changed the declared rule graph")
+    return result
 
 
 def _compact_lead_schema_guidance(schema: dict) -> dict:
@@ -768,6 +947,7 @@ def project_retrieval_schema(schema: Mapping) -> dict:
 
 __all__ = [
     'LEAD_SCOPE_NATIVE_FIELDS',
+    'factor_rule_schema',
     'hoist_schema_definitions',
     'project_action_schema',
     'project_direct_schema',
@@ -778,5 +958,4 @@ __all__ = [
     'rebase_schema_definitions',
     'require_schema_projection',
     'restore_lead_scope_result',
-    'share_schema_descriptions',
 ]

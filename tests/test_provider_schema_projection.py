@@ -6,7 +6,7 @@ import copy
 class ProviderSchemaProjectionTests(unittest.TestCase):
     def test_small_factoring_annotations_and_owner_refs_are_exact(self) -> None:
         # Ref spelling and lossless factoring preserve independently supplied neighboring values.
-        from story_writing_agents.lead_provider_contracts import factor_rule_schema
+        from story_writing_agents.provider_schema_projection import factor_rule_schema
         from story_writing_agents.provider_schema_projection import hoist_schema_definitions, require_schema_projection
         from story_writing_agents.provider_message_catalog import WireShapeError
         from story_writing_agents.structured_output_validation import SchemaRules

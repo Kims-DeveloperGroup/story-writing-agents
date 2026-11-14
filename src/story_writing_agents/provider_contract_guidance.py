@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from collections.abc import Mapping
@@ -31,8 +32,10 @@ from .provider_message_catalog import (
     STRUCTURED_INPUT_FIELDS,
     WIRE_VERSION,
     field_description,
+    WireShapeError,
 )
 from .provider_schema_selection import LEAD_GROUP_PHASE_GUIDES, SchemaSelectionInput
+from .structured_output_validation import schema_rule_fingerprints
 
 def diagnostic_to_wire(text: str, *, result_fields: bool = True) -> str:
     """Translate trusted validator paths and rules by their owning shape."""
@@ -148,6 +151,197 @@ def describe_schema(schema: Mapping) -> dict:
     require_description(result)
     visit(result)
     return result
+
+
+def share_schema_descriptions(schema: Mapping) -> dict:
+    """Share literal annotations in one final document, with an exact inverse."""
+    def encoded(value: object) -> bytes:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True,
+                          allow_nan=False, separators=(",", ":")).encode("utf-8", "strict")
+
+    def annotated(node: dict):
+        if "description" in node:
+            yield node
+        for child in node.get("properties", {}).values():
+            yield from annotated(child)
+        for child in node.get("anyOf", ()):
+            yield from annotated(child)
+        if isinstance(node.get("items"), dict):
+            yield from annotated(node["items"])
+        for child in node.get("$defs", {}).values():
+            yield from annotated(child)
+
+    original = deepcopy(dict(schema))
+    original_bytes = encoded(original)
+    original_fingerprints = schema_rule_fingerprints(original)
+    counts: dict[str, int] = {}
+    for node in annotated(original):
+        value = node["description"]
+        counts[value] = counts.get(value, 0) + 1
+    values = sorted(counts)
+    suffixes = set()
+    for index, value in enumerate(values):
+        for other in values[:index]:
+            size = 0
+            while size < min(len(value), len(other)) and value[-size - 1] == other[-size - 1]:
+                size += 1
+            size = min(size, len(value) - 1, len(other) - 1)
+            if size > 0:
+                suffixes.add(value[-size:])
+    candidates = sorted(
+        suffixes,
+        key=lambda value: (
+            -sum(count for text, count in counts.items() if text.endswith(value))
+            * (len(encoded(value)) - 2),
+            value,
+        ),
+    )
+    alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+    def short_name(number: int) -> str:
+        result = ""
+        while True:
+            number, digit = divmod(number, len(alphabet))
+            result = alphabet[digit] + result
+            if not number:
+                return result
+            number -= 1
+
+    source_text = original_bytes.decode("utf-8")
+    token_bound = len(candidates) + len(values) * (len(values) + 1) // 2
+    prefix_size = 1
+    if token_bound:
+        digits = {character: number + 1 for number, character in enumerate(alphabet)}
+        for word in re.finditer("[a-zA-Z]+", source_text):
+            start, end = word.span()
+            if (start == 0 or end == len(source_text)
+                    or source_text[start - 1] != "~" or source_text[end] != "~"):
+                continue
+            number = 0
+            for position in range(start, end):
+                number = number * len(alphabet) + digits[source_text[position]]
+                if number > token_bound:
+                    break
+            if number > token_bound:
+                continue
+            before, after = start, end
+            while before and source_text[before - 1] == "~":
+                before -= 1
+            while after < len(source_text) and source_text[after] == "~":
+                after += 1
+            prefix_size = max(prefix_size, min(start - before, after - end) + 1)
+    prefix = "~" * prefix_size
+    segments = {value: [(False, value)] for value in values}
+    literals: dict[str, str] = {}
+    chunks: list[str] = []
+
+    def intern(value: str, count: int) -> str | None:
+        code = prefix + short_name(len(literals)) + prefix
+        chunk = f"{code} {len(value)}:{value}\n"
+        if count * (len(encoded(value)) - len(encoded(code))) <= len(encoded(chunk)) - 2:
+            return None
+        literals[code] = value
+        chunks.append(chunk)
+        return code
+
+    for value in candidates:
+        matched = [text for text, pieces in segments.items()
+                   if len(pieces) == 1 and not pieces[0][0] and text.endswith(value)]
+        code = intern(value, sum(counts[text] for text in matched))
+        if code is not None:
+            for text in matched:
+                segments[text] = [(False, text[:-len(value)]), (True, code)]
+    prefix_counts: dict[str, int] = {}
+    for text, pieces in segments.items():
+        for is_code, value in pieces:
+            if not is_code and value:
+                prefix_counts[value] = prefix_counts.get(value, 0) + counts[text]
+    prefixes = sorted(prefix_counts)
+    shared_prefixes = set()
+    for index, value in enumerate(prefixes):
+        for other in prefixes[:index]:
+            size = 0
+            while size < min(len(value), len(other)) and value[size] == other[size]:
+                size += 1
+            size = min(size, len(value) - 1, len(other) - 1)
+            if size > 0:
+                shared_prefixes.add(value[:size])
+    for value in sorted(shared_prefixes, key=lambda part: (
+        -sum(count for text, count in prefix_counts.items() if text.startswith(part))
+        * (len(encoded(part)) - 2), part,
+    )):
+        matched = [text for text, pieces in segments.items()
+                   if not pieces[0][0] and len(pieces[0][1]) > len(value)
+                   and pieces[0][1].startswith(value)]
+        code = intern(value, sum(counts[text] for text in matched))
+        if code is not None:
+            for text in matched:
+                pieces = segments[text]
+                segments[text] = [(True, code), (False, pieces[0][1][len(value):])] + pieces[1:]
+    prefix_counts = {}
+    for text, pieces in segments.items():
+        for is_code, value in pieces:
+            if not is_code and value:
+                prefix_counts[value] = prefix_counts.get(value, 0) + counts[text]
+    for value, count in sorted(prefix_counts.items()):
+        code = intern(value, count)
+        if code is not None:
+            for text, pieces in segments.items():
+                segments[text] = [
+                    (is_code, code if not is_code and piece == value else piece)
+                    for is_code, piece in pieces
+                ]
+    if not literals:
+        return original
+    scope = hashlib.sha256(original_bytes).hexdigest()
+    marker = (
+        f"\n[SWA-DESCRIPTIONS {scope}]\n"
+        "Exact delimited description tokens use only this complete schema's literal dictionary. "
+        "Expand each token once wherever it occurs; all other characters remain literal. "
+        "Lengths count Unicode characters. The first line records original root-description "
+        "presence and entry count.\n"
+    )
+    while marker in source_text:
+        marker = "\n" + marker
+    result = deepcopy(original)
+    for node in annotated(result):
+        node["description"] = "".join(piece for _, piece in segments[node["description"]])
+    had_root = "description" in result
+    result["description"] = (
+        result.get("description", "") + marker + f"{int(had_root)} {len(literals)}\n"
+        + "".join(chunks)
+    )
+
+    restored = deepcopy(result)
+    root_text, separator, payload = restored["description"].rpartition(marker)
+    if not separator:
+        raise WireShapeError("$", "missing scoped description dictionary")
+    header, payload = payload.split("\n", 1)
+    root_flag, size = (int(value) for value in header.split())
+    recovered: dict[str, str] = {}
+    for _ in range(size):
+        header, payload = payload.split(":", 1)
+        code, length = header.rsplit(" ", 1)
+        length = int(length)
+        recovered[code], payload = payload[:length], payload[length:]
+        if not payload.startswith("\n"):
+            raise WireShapeError("$", "invalid description dictionary framing")
+        payload = payload[1:]
+    if payload or recovered != literals:
+        raise WireShapeError("$", "incomplete scoped description dictionary")
+    if root_flag:
+        restored["description"] = root_text
+    else:
+        del restored["description"]
+    token_pattern = re.compile("|".join(re.escape(code) for code in recovered))
+    for node in annotated(restored):
+        node["description"] = token_pattern.sub(
+            lambda match: recovered[match.group()], node["description"]
+        )
+    if (encoded(restored) != original_bytes
+            or schema_rule_fingerprints(restored) != original_fingerprints):
+        raise WireShapeError("$", "description sharing changed complete rule graph")
+    return result if len(encoded(result)) < len(original_bytes) else original
 
 
 def _schema_response_rules(schema: Mapping) -> list[str]:
@@ -326,4 +520,5 @@ __all__ = [
     'common_contract_guide',
     'describe_schema',
     'diagnostic_to_wire',
+    'share_schema_descriptions',
 ]

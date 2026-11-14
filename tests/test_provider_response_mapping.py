@@ -1,10 +1,10 @@
-"""Response recovery interoperates with exact historical wire codecs."""
 from __future__ import annotations
 import unittest
 import copy
 import hashlib
 import json
 from dataclasses import replace
+from story_writing_agents.provider_response_mapping import recover_lead_public_response, recover_lead_public_response_kind
 from story_writing_agents.conversations import (
     CollaborationAppendError,
     CollaborationEventKind,
@@ -86,7 +86,6 @@ class ProviderResponseMappingTests(unittest.TestCase):
         self.assertEqual(collaboration_proposal_digest(proposal), proposal.proposal_digest)
         self.assertEqual(collaboration_batch_digest(batch), batch.batch_digest)
         from story_writing_agents import lead_task_transitions as task
-        from story_writing_agents.provider_response_mapping import recover_lead_public_response, recover_lead_public_response_kind
         literal = "Literal 한🙂\r\n  retained response."
         public = task.LeadPublicResponse(invocation_id="inv_public", call_id="call_public", ordinal=1,
             call_kind="initial", acceptance=task.LeadPublicResponseAcceptance.ACCEPTED,

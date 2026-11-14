@@ -14744,7 +14744,7 @@
           "destination": "tests/test_provider_schema_projection.py",
           "original_file_sha256": "f3014b00d0f1ba4717d14a4e076236601f35d7d17067cc542d26356806f022c5",
           "original_method_ast_sha256": "b9a556f548034c5ecac367e4d8692ed2e91defc791f49fa93aed0f8468749ba3",
-          "expected_method_ast_sha256": "99c630ef0d0f9ede0d5f5cb90a428cb82cf0c9e9d772c8cf5f4dabbee35efefc"
+          "expected_method_ast_sha256": "5a6fd7704d86f2f680f281dba6dc4ce87810fa920d6f0609afbf7ce98f4ee109"
         },
         {
           "old_id": "tests.test_collaboration_events.CollaborationWireContractTests.test_all_wire_values_have_stable_golden_hashes_and_round_trip",
@@ -14754,7 +14754,7 @@
           "destination": "tests/test_provider_response_mapping.py",
           "original_file_sha256": "3437176ec97122a899680b709d40e962ec39181b1363b7788e53b39e75f7d15d",
           "original_method_ast_sha256": "9f738e84cb166488d29ce508ffb07e2a719997f9e819967102656537a8a5da21",
-          "expected_method_ast_sha256": "7c7cbd5982741a8699f9f96ef5228fed26b467de64d36631b73c1d1c98961ed7"
+          "expected_method_ast_sha256": "90570fe605504d25190dd09b80b2c4677482f5498722ae4230d2ff331881c511"
         }
       ]
     }
