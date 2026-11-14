@@ -95,6 +95,19 @@ _FEEDBACK_NEW_CAPS = {
 _FEEDBACK_OLD_CORE = 'tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_unstarted_prepared_and_submitted_requests_never_replay'
 
 def _feedback_migration(current: dict[str, Any], base: dict[str, Any]) -> bool:
+    metadata = ("max_sequential_wall_seconds", "max_shard_wall_seconds", "max_test_source_lines", "schema_version")
+    fields = {*metadata, "subtest_caps"}
+    if (type(base) is dict and type(current) is dict
+            and all(type(key) is str for budget in (base, current) for key in budget)
+            and all(budget.keys() == fields for budget in (base, current))
+            and all(type(budget[name]) is int and 0 < budget[name] < 2**31
+                    for budget in (base, current) for name in metadata)
+            and all(budget["schema_version"] == 1 for budget in (base, current))
+            and (base["max_test_source_lines"], current["max_test_source_lines"]) not in ((148783, 151431), (150770, 151431))
+            and all(type(budget["subtest_caps"]) is dict for budget in (base, current))
+            and all(type(key) is str and type(value) is int and 0 <= value < 2**31
+                    for budget in (base, current) for key, value in budget["subtest_caps"].items())):
+        return False
     base_caps = base["subtest_caps"]
     expected = {**base_caps, _FEEDBACK_OLD_CORE: 2, **_FEEDBACK_NEW_CAPS}
     digest = hashlib.sha256(json.dumps(base_caps, sort_keys=True, separators=(",", ":")).encode()).hexdigest()

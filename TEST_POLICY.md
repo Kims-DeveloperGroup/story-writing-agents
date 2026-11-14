@@ -86,7 +86,7 @@ complete workflow shares a 75-minute deadline, including setup and shutdown.
 
 선행 #1020 통합 main `65ad7c27`의 raw148525 + 등록 support1441 + legacy1550에서, 기존 두 Case의 전체1:1 이동과 필수 경계·정책 검증을 위해 **raw+127/support+43**을 배정한다. 구성은 test layout·support50, 중복을 제외한 import5, 새 graph 계약85·기존 기대 set3, packaging5, 이동·정책22행이다. 새 support36행에는 기존 raw helper33행을 중복 없이 한 번 이동하며 legacy1550을 절감하지 않는다. 실제 최종 counter는 raw148652 + support1484 + legacy1550 =151686을 넘지 않아야 한다.
 
-기존2544개 ID 중 원본 schema95행·response146행 두 Case만1:1 이동하며 cap0/4 및 전체 cap합8690, schema1,18000/3600초, worker profile/상한을 유지한다. 정확한 이전 cap52d0575e…→새 cap2823d24a… 전이와 닫힌 source receipt를 검증한다. stage/hash·default API·기존 opt-in2값과 원래 모든 부정 입력을 보존하고, 새 before998 checkpoint는 명시적 opt-in3값으로만 제공한다. 범용 `suite_budget.py` guard의 실제16행은 기존 범용 도구 계상 범위 밖으로 별도 공개하며 테스트 내용을 그 도구로 옮기지 않는다.
+기존2544개 ID 중 원본 schema95행·response146행 두 Case만1:1 이동하며 cap0/4 및 전체 cap합8690, schema1,18000/3600초, worker profile/상한을 유지한다. 정확한 이전 cap52d0575e…→새 cap2823d24a… 전이와 닫힌 source receipt를 검증한다. stage/hash·default API·기존 opt-in2값과 원래 모든 부정 입력을 보존하고, 새 before998 checkpoint는 명시적 opt-in3값으로만 제공한다. 범용 `suite_budget.py`의 승인 전이 guard16행과 legacy 예외의 보수적 fast-reject13행은 기존 범용 도구 계상 범위 밖으로 실제 비용을 별도 공개하며 테스트 내용을 그 도구로 옮기지 않는다. Fast-reject는 안전한 일반 JSONBudget의 불가능 source pair만 False로 처리하고, 승인 후보·불명확한 입력은 기존 권한 검사 본문으로 보낸다.
 
 정상 cold 선택3회에서 재현한 초기 후보의 지연은 별도 기록으로 보존한다. 실제 factoring 함수와 설명 공유 함수를 해당 도메인 소유자로 이동하고 기존 공개 경로를 유지한다. 새 graph edge1행은 이번 PR의 신규 testmodule docstring1행만 제거해 상쇄한다. 기존 도메인 import의 header 이동은 원래 준비 단계의 보존이며, 인위적 warmup·clock 변경 없이 import/collection·Case·전체 CLI 비용을 함께 기록하고 동일 cold 선택과 최종 전체 검증을 다시 수행한다.
 
