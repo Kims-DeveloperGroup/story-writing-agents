@@ -26,4 +26,3 @@
 동일 실제 오류의 before/after RED/GREEN, affected 검증, 최종 source의 정상 전체 CI·각 메서드/원본 합산/전체 시간 비교와 관리 리뷰·수동 squash·종료·복구 가능한 정리를 요구한다. 기존 before 자료는 source·환경·ID/cap/profile·순서 적용성을 검증한 범위에서만 재사용한다.
 
 현재 체크포인트에는 런타임/테스트 구현이나 실행 결과가 없다. [부모의 승인 후 구현 전 보고](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/975#issuecomment-6872099912)와 연결하며, Draft PR 생성 확인 후에만 코드를 편집한다.
-
