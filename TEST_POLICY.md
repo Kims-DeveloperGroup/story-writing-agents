@@ -88,7 +88,7 @@ raw 배정은 네Case·비수집 fixture의 header/import/class46행, 패키징1
 
 기존 네Case를1:1로 옮겨 전체2,544Case·cap합8,690을 유지한다. hosted162개는 method ID 수이며 실제 클래스 분포는22→25로 바뀐다. 이를 metadata와 audit digest에 반영하고 동일162개 method의 ID 전이, class/mixed/LPT 알고리즘과 원래 weight 총량, 162-v7 정책명·최대4동시worker 및18,000/3,600초 한도를 유지한다. 추정 weight를 실측값으로 바꾸거나 Case.__module__을 위조하지 않는다.
 
-`historical_feedback_caps`의 기존 옵션·default dict·2tuple·3tuple 동작과 None checkpoint 의미를 보존한다. 새 `with_finalization_base=False`를 명시적으로 요청할 때만 legacy/ce/52/현재2823 checkpoint의4tuple을 제공하며, 새 정책Case는 세 옵션을 모두 요청한다. 현재 map은 fresh reverse-stage 및 실제 hash 검증으로 복원한다. 52를 현재2823으로 재라벨하거나 캐시·힌트로 권한 검증을 생략하지 않는다. 범용 `suite_budget.py`의 새 전이16행은 기존 범용 계상 경계 밖의 실제 코드로 별도 기록하며 테스트 내용을 제외 도구로 옮기지 않는다.
+`historical_feedback_caps`의 기존 옵션·default dict·2tuple·3tuple 동작과 None checkpoint 의미를 보존한다. 새 `with_finalization_base=False`를 명시적으로 요청할 때만 legacy/ce/52/현재2823 checkpoint의4tuple을 제공하며, 새 정책Case는 세 옵션을 모두 요청한다. 현재 map은 fresh reverse-stage 및 실제 hash 검증으로 복원한다. Legacy의 기존 expected-map과 current cap이 다른 경우만 hash 전에 False를 반환한다. 기존 digest·전체 return과 새4hash·freshreceipt는 그대로이며, 지원되는 불변 JSON budget의 거절 결과를 보존한다. 52를 현재2823으로 재라벨하거나 캐시·힌트로 권한 검증을 생략하지 않는다. 범용 `suite_budget.py`의 새 전이16행과 legacy cap-equality 조기 거절2행(합18행)은 기존 범용 계상 경계 밖의 실제 코드로 별도 기록하며 테스트 내용을 제외 도구로 옮기지 않는다.
 
 빠른 개발 검증은 새 owner의 기존 네Case로 시작하고 budget·두 graph를 더한 같은7Case의 정상 전후3회로 넓힌다. 실제 production 진단 복원값을 비우는 동일한 오류를 before/after 기존 assertion의 RED/GREEN으로 확인한다. import/collection·Case·전체CLI·진단을 구분하고 양의 차이·실패·취소를 보존한다. 최종 head의 전체 CI와 source·실제 checkout·162child 종료·reconciliation을 검증하며 기존 baseline을 새 source에서 실행했다고 표시하지 않는다.
 

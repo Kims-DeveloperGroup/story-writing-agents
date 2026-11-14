@@ -97,6 +97,8 @@ _FEEDBACK_OLD_CORE = 'tests.test_lead_orchestration.LeadRecoveryAndAccountingTes
 def _feedback_migration(current: dict[str, Any], base: dict[str, Any]) -> bool:
     base_caps = base["subtest_caps"]
     expected = {**base_caps, _FEEDBACK_OLD_CORE: 2, **_FEEDBACK_NEW_CAPS}
+    if current["subtest_caps"] != expected:
+        return False
     digest = hashlib.sha256(json.dumps(base_caps, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return (digest == _FEEDBACK_BASE_CAP_DIGEST and current["subtest_caps"] == expected
             and base["schema_version"] == current["schema_version"] == 1
