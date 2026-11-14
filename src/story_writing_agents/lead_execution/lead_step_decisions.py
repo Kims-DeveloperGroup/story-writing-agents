@@ -61,7 +61,7 @@ from ..lead_task_transitions import (
 )
 from ..runtime_resources import collaboration_event_journal as event_journal
 from ..runtime_resources.session_execution_scopes import SessionExecutionScopes
-from ..workspace.initialization import SessionArtifactBindingError
+from ..workspace.initialization import SessionArtifactBinding, SessionArtifactBindingError
 
 __all__ = ["LeadStepDecisions"]
 
@@ -98,9 +98,19 @@ class LeadStepDecisions:
         persist_results: Callable[..., None],
         read_events: Callable[[str, str], tuple[CollaborationEvent, ...]],
         prepare_recommendation_request: Callable[..., CollaborationEventDraft],
-        finalize_known_result: Callable[
-            [str, tuple[CollaborationEvent, ...], CollaborationHistoryProjection], LeadTurnResult,
-        ],
+        finalize_known_result: Callable[..., LeadTurnResult],
+        context_service: AgentContextService,
+        render_premise_report: Callable[..., LeadTurnResult],
+        validate_exact_candidate_reviews: Callable[..., None],
+        qualify_artifact_final_review: Callable[..., Any],
+        attach_document_plan: Callable[..., LeadTurnResult],
+        bind_session_artifacts: Callable[[str], SessionArtifactBinding],
+        build_contextual_definition: Callable[..., Any],
+        build_agent_profile: Callable[..., Any],
+        read_authoring_events: Callable[[str], tuple[CollaborationEvent, ...]],
+        validate_review_material: Callable[..., None],
+        qualify_readiness_targets: Callable[..., Any],
+        qualify_authoring_inputs: Callable[..., Any],
     ) -> LeadDecisionResult:
         """Apply one exact structured decision to the authoritative request tail."""
 
@@ -433,6 +443,18 @@ class LeadStepDecisions:
                     read_events=read_events,
                     prepare_recommendation_request=prepare_recommendation_request,
                     finalize_known_result=finalize_known_result,
+                    context_service=context_service,
+                    render_premise_report=render_premise_report,
+                    validate_exact_candidate_reviews=validate_exact_candidate_reviews,
+                    qualify_artifact_final_review=qualify_artifact_final_review,
+                    attach_document_plan=attach_document_plan,
+                    bind_session_artifacts=bind_session_artifacts,
+                    build_contextual_definition=build_contextual_definition,
+                    build_agent_profile=build_agent_profile,
+                    read_authoring_events=read_authoring_events,
+                    validate_review_material=validate_review_material,
+                    qualify_readiness_targets=qualify_readiness_targets,
+                    qualify_authoring_inputs=qualify_authoring_inputs,
                 )
                 return LeadDecisionResult(
                     decision.session_id,

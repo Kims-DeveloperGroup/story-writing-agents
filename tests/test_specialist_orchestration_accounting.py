@@ -86,7 +86,7 @@ class SpecialistAccountingAcceptanceTests(lead.LeadOrchestrationTestCase):
                                  read_current_proposal, answer_after_read)
         self.backend.enqueue_for(agents.LEAD_ORCHESTRATOR, lead._synthesis_outcome())
         decision = await self.runtime.decide_lead_step(
-            lead._decision(proposed, conversations.CollaborationConfirmationDecision.CONFIRM)
+            lead.lead_confirmation_decision(proposed, conversations.CollaborationConfirmationDecision.CONFIRM)
         )
 
         self.assertIs(decision.turn.state, conversations.CollaborationStepState.COMPLETED)

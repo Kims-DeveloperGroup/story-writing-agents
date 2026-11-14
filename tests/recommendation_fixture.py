@@ -479,7 +479,7 @@ def recommendation(*, message=DRAFT, recommended_action=None, mutate=None,
             owner_domains = tuple(dict.fromkeys(
                 [domains[agent] for agent in selected['specialist_ids']] +
                 ['plot_structure' for path in selected['target_paths'] if path == OUTLINE]))
-            scope = lead._live_scope(call, activity='review', paths=tuple(selected['target_paths']),
+            scope = lead.lead_fixture_authoring_scope(call, activity='review', paths=tuple(selected['target_paths']),
                 domains=owner_domains,
                 contributions=[{'domain': domain, 'role': 'constraint_assessor'}
                 for domain in owner_domains], task_index=0 if selected['objective_id'] is not None else -1)
@@ -488,7 +488,7 @@ def recommendation(*, message=DRAFT, recommended_action=None, mutate=None,
         value = {
             "kind": "recommendation", "message": message,
             "scope": "story_specific", "evidence_status": status["document_status"] if status["document_status"] in {"empty", "missing"} else "incomplete",
-            "evidence_ids": [artifact._status_id(_provider.callback_payload(call), OUTLINE)], "proposal": None, "artifact_intent": None,
+            "evidence_ids": [artifact.artifact_evidence_status_id(_provider.callback_payload(call), OUTLINE)], "proposal": None, "artifact_intent": None,
             "objective_intent": None, "recommended_action": selected,
             "authoring_scope": scope,}
         if authoring_assessment is not None:
@@ -555,14 +555,14 @@ def _unbound_preparation(turn, *, text=DRAFT, mutate=None, read_evidence=False):
     selected = [item.event_id for item in request.draft_sources]
     def selected_evidence(call, path, *, input_payload):
         return (input_payload["context_observation"]["read_results"][0]["evidence_id"]
-                if read_evidence else artifact._status_id(input_payload, path))
+                if read_evidence else artifact.artifact_evidence_status_id(input_payload, path))
     intent = ({"action": "start", "request": request.instruction,
                "target_paths": list(request.target_paths), "next_step": "prepare",
                "draft_source_event_ids": selected}
               if request.objective_id is None else
               {"action": "continue", "objective_id": request.objective_id,
                "next_step": "prepare", "draft_source_event_ids": selected})
-    producer = artifact._artifact_outcome(
+    producer = artifact.artifact_review_outcome(
         operations=lambda call, material, *, input_payload: [
             ({
                 "kind": "patch", "evidence_id": selected_evidence(call, path, input_payload=input_payload),

@@ -346,8 +346,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 256)
-        self.assertEqual(len(edges), 1353)
+        self.assertEqual(len(modules), 257)
+        self.assertEqual(len(edges), 1375)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -1041,6 +1041,31 @@ class RagModuleBoundaryTests(unittest.TestCase):
                           "story_writing_agents.lead_preparation.call_rule_factory",
                         "story_writing_agents.lead_execution.lead_step_decisions"})
 
+        known_result_owner = "story_writing_agents.lead_execution.known_result_finalization"
+        self.assertEqual({target for source, target in edges if source == known_result_owner}, {
+            "story_writing_agents.agent_context.invocation.context_execution",
+            "story_writing_agents.agents",
+            "story_writing_agents.artifact_proposals",
+            "story_writing_agents.artifact_transactions.artifact_application_authority",
+            "story_writing_agents.authoring_admission",
+            "story_writing_agents.conversation_storage.contracts",
+            "story_writing_agents.conversations",
+            "story_writing_agents.core_document_readiness",
+            "story_writing_agents.errors",
+            "story_writing_agents.lead_control_events",
+            "story_writing_agents.lead_preparation",
+            "story_writing_agents.lead_preparation.authoring_authority",
+            "story_writing_agents.lead_preparation.reply_contract_values",
+            "story_writing_agents.models",
+            "story_writing_agents.review_contracts",
+            "story_writing_agents.runtime_resources",
+            "story_writing_agents.runtime_resources.collaboration_event_journal",
+            "story_writing_agents.runtime_resources.provider_call_accounting",
+            "story_writing_agents.specialist_routing",
+            "story_writing_agents.workspace.initialization",
+        })
+        self.assertEqual({source for source, target in edges if target == known_result_owner}, {"story_writing_agents.orchestrator"})
+
     def test_supported_module_surfaces_do_not_expand_the_root_facade(self) -> None:
         self.assertEqual(len(story_writing_agents.__all__), 106)
         rag_names = set().union(
@@ -1304,6 +1329,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             "story_writing_agents/lead_execution/confirmed_step_execution.py",
             "story_writing_agents/lead_execution/lead_step_decisions.py",
             "story_writing_agents/lead_execution/collaboration_result_publication.py",
+            "story_writing_agents/lead_execution/known_result_finalization.py",
             "story_writing_agents/workspace/session_record_validation.py",
             "story_writing_agents/workspace/session_source_workspace.py",
             'story_writing_agents/provider_contract_guidance.py',

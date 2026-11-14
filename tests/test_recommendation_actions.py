@@ -154,7 +154,7 @@ class RecommendationActionContractTests(RecommendationCase):
                         member, replacement, 1), 1)
             if bad_route:
                 bad = recommendation(recommended_action=action(source_ids=sources, kind="prepare_consultation", specialist_ids=("plot_architect",)),
-                    authoring_scope=lambda call: lead._live_scope(
+                    authoring_scope=lambda call: lead.lead_fixture_authoring_scope(
                         call, activity="review", paths=(OUTLINE,), domains=("plot_structure",)),
                     authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=('bounded review judgments', 'separate proposal preparation')))
                 def bad(call, provider, encode=bad):

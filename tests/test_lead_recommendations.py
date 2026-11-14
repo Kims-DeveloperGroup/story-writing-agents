@@ -40,7 +40,7 @@ class LeadRecommendationTests(RecommendationCase):
                 else: value['authoring_assessment'] = None
             rejected = await self._rejected_pair(self.conversation('Invalid preparation assessment'), 'Prepare a bounded story consultation.',
                 recommendation(recommended_action=action(kind='prepare_consultation', source_ids=('user_input',)),
-                    authoring_scope=lambda call: lead._live_scope(call, activity='draft', domains=('plot_structure',), paths=(OUTLINE,)),
+                    authoring_scope=lambda call: lead.lead_fixture_authoring_scope(call, activity='draft', domains=('plot_structure',), paths=(OUTLINE,)),
                     authoring_assessment=assessment, mutate=omit_parent), selection_group='prepare.consultation.authoring')
             self.assertIn('authoring_assessment', '\n'.join(rejected.validation_details)); self.assert_no_downstream(rejected.conversation_id)
             self.assertTrue(any(item.response.acceptance.value == 'rejected' for item in rejected.public_responses))
@@ -52,7 +52,7 @@ class LeadRecommendationTests(RecommendationCase):
         def genuine_gap(call, _provider):
             return lead_fixture_response(call, {'response_type': 'clarification_question', 'response_text': 'Memoir or fiction?',
                 'response_details': {'planning_target': None, 'task_scope': lead_fixture_bound_scope(call,
-                    lead._live_scope(call, activity='draft', domains=('plot_structure',), paths=(OUTLINE,)), record=True)}}, family=0)
+                    lead.lead_fixture_authoring_scope(call, activity='draft', domains=('plot_structure',), paths=(OUTLINE,)), record=True)}}, family=0)
         self.assertEqual(admission.assessment_from_dict(admission.assessment_to_dict(unresolved)), unresolved)
         self.backend.enqueue(genuine_gap, control_plan=selection_plan('question.authoring'))
         question = await self.runtime.lead_turn(self.session_id, cid, 'Prepare a consultation: memoir versus fiction is undecided. Ask for that choice.')
@@ -82,12 +82,12 @@ class LeadRecommendationTests(RecommendationCase):
                 e.direction is c.CollaborationDirection.USER_TO_LEAD for e in events), 1)
             return producer(call, provider)
         self.enqueue_preparation(turn, answer=observed); calls = len(self.backend.calls)
-        original_qualifier = self.runtime._qualify_authoring_inputs; qualification_starts = []
+        original_qualifier = self.runtime.qualify_authoring_inputs; qualification_starts = []
         def checked_qualifier(*args, **kwargs):
             qualification_starts.append(bool(self.payload_events(conversation_id, c.LeadRecommendationStartedPayload)))
             return original_qualifier(*args, **kwargs)
         with mock.patch.object(self.runtime, "lead_turn", side_effect=AssertionError("recursive public Lead")), \
-                mock.patch.object(self.runtime, "_qualify_authoring_inputs", side_effect=checked_qualifier):
+                mock.patch.object(self.runtime, 'qualify_authoring_inputs', side_effect=checked_qualifier):
             prepared = await self.runtime.session(self.session_id).decide_lead_recommendation(decision(turn))
         self.assertEqual(qualification_starts[:1], [False]); self.assertIs(type(prepared), c.LeadTurnResult)
         self.assertEqual(len(self.backend.calls) - calls, 3); self.assertIs(prepared.kind, c.LeadOutcomeKind.PROPOSAL)
@@ -190,7 +190,7 @@ class LeadRecommendationTests(RecommendationCase):
                         protected_constraints=(origins[0][1],), decisions=(admission.AdmissionDecision('Preserve actual experience',
                             admission.DecisionCoverage.SUPPLIED, ('history_user_43',), 'Use only supplied experience.'),))
             self.backend.enqueue(recommendation(recommended_action=action(kind="prepare_consultation", source_ids=("user_input",)),
-                authoring_scope=lambda call: lead._live_scope(call, activity="review", domains=("plot_structure",),
+                authoring_scope=lambda call: lead.lead_fixture_authoring_scope(call, activity="review", domains=("plot_structure",),
                     contributions=[{'domain': 'plot_structure', 'role': 'draft_owner'}] if staged else None),
                 authoring_assessment=historical_assessment if staged else task_assessment(foundation_ids=("user_input",), actions=('bounded review judgments', 'separate proposal preparation'))), control_plan=selection_plan("prepare.consultation.authoring"))
             offered = await self.runtime.lead_turn(self.session_id, cid,
@@ -264,9 +264,9 @@ class LeadRecommendationTests(RecommendationCase):
                 self.assertEqual(ordinary_users_before_confirm, 4)
                 self.runtime = StoryRuntime(self.control_workspace, self.backend)
                 self.assertEqual(self.runtime.conversation_storage_services.event_store.read(self.session_id, cid), before_events)
-                original_qualifier, qualification_starts = self.runtime._qualify_authoring_inputs, []
+                original_qualifier, qualification_starts = self.runtime.qualify_authoring_inputs, []
                 with mock.patch.object(self.runtime, "lead_turn", side_effect=AssertionError("recursive public Lead")), \
-                        mock.patch.object(self.runtime, '_qualify_authoring_inputs', side_effect=checked_qualifier):
+                        mock.patch.object(self.runtime, 'qualify_authoring_inputs', side_effect=checked_qualifier):
                     prepared = await self.runtime.session(self.session_id).decide_lead_recommendation(decision(offered))
                 self.assertEqual(qualification_starts[:1], [False])
             else:
@@ -428,10 +428,10 @@ class LeadRecommendationTests(RecommendationCase):
         self.runtime = StoryRuntime(self.control_workspace, self.backend)
         self.assertEqual(self.runtime.inspect_editorial_state(self.session_id), state)
         with self.assertRaises(ValueError):
-            await self.runtime.decide_lead_step(lead._decision(prepared,
+            await self.runtime.decide_lead_step(lead.lead_confirmation_decision(prepared,
                 c.CollaborationConfirmationDecision.CONFIRM))
         self.assertEqual((self.history(work), len(self.backend.calls)), (before, calls))
-        await self.runtime.decide_lead_step(lead._decision(prepared,
+        await self.runtime.decide_lead_step(lead.lead_confirmation_decision(prepared,
             c.CollaborationConfirmationDecision.REJECT))
         _, fresh = await self.recommend(work)
         fresh_basis = fresh.recommendation_request.basis
@@ -500,7 +500,7 @@ class LeadRecommendationTests(RecommendationCase):
         self.workspace.path(OUTLINE).write_bytes(source_bytes + b"External drift.\n")
         try:
             with self.assertRaisesRegex(ValueError, "source is unavailable or changed"):
-                await self.runtime.decide_lead_step(lead._decision(drift_plan,
+                await self.runtime.decide_lead_step(lead.lead_confirmation_decision(drift_plan,
                     c.CollaborationConfirmationDecision.CONFIRM))
             current = self.runtime.inspect_editorial_state(self.session_id)
             self.assertEqual((current.current_records,

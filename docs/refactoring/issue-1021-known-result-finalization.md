@@ -24,4 +24,12 @@
 
 정상 일곱 Case 전후3회와 별도 import/collection·Case·전체CLI 진단을 구분한다. 실제 진단 복원값을 비우는 동일한 production 오류의 before/after RED/GREEN을 기존 assertion으로 확인한다. 양의 시간차·실패·취소와 적용 한계를 보존하고 clock·GC·대기값을 보정하지 않는다.
 
-현재 문서 checkpoint는 구현 결과나 테스트 성공을 주장하지 않는다. Draft PR 생성과 source 동일성 확인 후 구현을 시작한다.
+위 문서 checkpoint `51ce6f79`는 구현 결과나 테스트 성공을 주장하지 않는 구현 전 기록이다. Draft PR #1031 생성과 source 동일성 확인 후 구현을 시작했다.
+
+## 구현 정적 확인
+
+세 메서드를 실제 `KnownResultFinalization`로 이동했다. keyword-only constructor는 기존 storage와 artifact authority 두 객체만 보관한다. 공개 연산과 context를 호출별로 전달하며, 세 본문과 나머지 Root·두 helper의 역정규화 AST 및 기본값을 대조했다.
+
+실제 runtime 그래프는257모듈/1375edge/DAG이고 owner의 outgoing20개·incomingRoot1개, module index300행을 확인했다. 기존 네Case의 body219행·assertion·MRO·fixture 수명과 source152,064행을 정적으로 확인했다. 같은162개 hosted method가 실제25개 클래스에 분포하며 동시worker 상한4와 weight총량은 유지한다.
+
+runtime 동작·전후 정상3회·동일 필드 RED/GREEN·최종 전체CI의 성공 여부는 공식 실행 증거로 판단한다. 정적 확인을 runtime 테스트 성공으로 표시하지 않는다.

@@ -247,9 +247,9 @@ class SuiteBudgetTests(unittest.TestCase):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
         migrated = suite_budget.load_budget(Path(__file__).with_name("fixtures") / "test_budget_v1.json")
-        source_current = dict(migrated, subtest_caps=dict(migrated["subtest_caps"]))
+        source_current, finalization_current = dict(migrated, subtest_caps=dict(migrated["subtest_caps"])), dict(migrated)
         after_move_current = source_current
-        migrated["subtest_caps"], publication_caps, before_998_caps = historical_feedback_caps(migrated["subtest_caps"], with_publication_base=True, with_before_998_base=True)
+        migrated["subtest_caps"], publication_caps, before_998_caps, after_move_current["subtest_caps"] = historical_feedback_caps(migrated["subtest_caps"], with_publication_base=True, with_before_998_base=True, with_finalization_base=True)
         publication_current = dict(after_move_current, subtest_caps=before_998_caps)
         publication_base = dict(publication_current, max_test_source_lines=151456, subtest_caps=publication_caps)
         source_current = publication_base
@@ -354,10 +354,25 @@ class SuiteBudgetTests(unittest.TestCase):
         ):
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(after_move_current, subtest_caps=caps), publication_current)
         self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, after_move_current, dict(publication_current, subtest_caps={**publication_current["subtest_caps"], matrix_id: 2}))
+        finalization_current["max_test_source_lines"] = 152064
+        self.assertIsNone(suite_budget.check_monotonic(finalization_current, after_move_current))
+        self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, finalization_current, dict(finalization_current, max_test_source_lines=151686))
+        self._assert_source_limit_neighbors_rejected(finalization_current, after_move_current)
+        for field, value in (("schema_version", 2), ("max_sequential_wall_seconds", 18001), ("max_shard_wall_seconds", 3601)):
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(finalization_current, **{field: value}), after_move_current)
+        for caps in (
+            {key: value for key, value in finalization_current["subtest_caps"].items() if key != zero_id},
+            {**finalization_current["subtest_caps"], "tests.unreviewed.Case.test_extra": 0},
+            {**finalization_current["subtest_caps"], matrix_id: 2},
+            {**finalization_current["subtest_caps"], matrix_id: 0},
+        ):
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(finalization_current, subtest_caps=caps), after_move_current)
+        self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, finalization_current, dict(after_move_current, subtest_caps={**after_move_current["subtest_caps"], matrix_id: 2}))
+
         ids = runner_profile.HOSTED_METHOD_IDS
         self.assertEqual(runner_evidence.manifest(ids)["digest"],
-                         'sha256:ba11e8ce2f3741fcb9cbcaf85998ec7b9fcc760783df7cd55ef1b75f4fc487c6')
-        self.assertEqual((len(ids), len({value.rsplit(".", 1)[0] for value in ids})), (162, 22))
+                         'sha256:3423bb9d3e2cff5c627fb573c9466437d824ab3fbfa6623a395cf71fe58a4078')
+        self.assertEqual((len(ids), len({value.rsplit(".", 1)[0] for value in ids})), (162, 25))
         cases = tuple(SimpleNamespace(id=lambda identifier=value: identifier) for value in (*ids, *runner_profile.HOSTED_MIXED_SERIAL_IDS, "unreviewed.test"))
         canonical = runner_contracts.CanonicalCollection(cases, (*ids, *runner_profile.HOSTED_MIXED_SERIAL_IDS, "unreviewed.test"))
         serial, scheduled = runner_hosted.hosted_partition(canonical, canonical)
@@ -366,7 +381,7 @@ class SuiteBudgetTests(unittest.TestCase):
                                              (suite_policy.ISOLATED_TEST_ID,))
         serial, scheduled = runner_hosted.hosted_partition(canonical, isolated)
         self.assertEqual((serial.ids, scheduled), ((), (suite_policy.ISOLATED_TEST_ID,)))
-        launch_digest = 'sha256:207d64f53b88140bc68c64ee852197efbdbe6979b6a5b91eb9c7250da56b4fdd'
+        launch_digest = 'sha256:f2dccc0e6ff11d672d13af1ef2ae52518757cfdc675c7e08c884e01c334ed03b'
         self.assertEqual(runner_evidence.manifest(runner_profile.hosted_launch_order(ids))["digest"], launch_digest)
         self.assertEqual(runner_profile.hosted_launch_order(ids[::-1]), runner_profile.hosted_launch_order(ids))
         self.assertEqual(runner_profile.hosted_launch_order((ids[-1], ids[0])), (ids[0], ids[-1]))
