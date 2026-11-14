@@ -14744,7 +14744,7 @@
           "destination": "tests/test_provider_schema_projection.py",
           "original_file_sha256": "f3014b00d0f1ba4717d14a4e076236601f35d7d17067cc542d26356806f022c5",
           "original_method_ast_sha256": "b9a556f548034c5ecac367e4d8692ed2e91defc791f49fa93aed0f8468749ba3",
-          "expected_method_ast_sha256": "5a6fd7704d86f2f680f281dba6dc4ce87810fa920d6f0609afbf7ce98f4ee109"
+          "expected_method_ast_sha256": "bbaf328e2fa52618d5fa73c917c833320ed17ecdf972cd14d227561815412af7"
         },
         {
           "old_id": "tests.test_collaboration_events.CollaborationWireContractTests.test_all_wire_values_have_stable_golden_hashes_and_round_trip",

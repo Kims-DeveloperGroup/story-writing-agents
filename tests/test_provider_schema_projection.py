@@ -1,15 +1,16 @@
 from __future__ import annotations
 import unittest
 import copy
+from story_writing_agents.provider_schema_projection import factor_rule_schema
+from story_writing_agents.provider_schema_projection import hoist_schema_definitions, require_schema_projection
+from story_writing_agents.provider_message_catalog import WireShapeError
+from story_writing_agents.structured_output_validation import SchemaRules
+from story_writing_agents.provider_schema_projection import rebase_schema_definitions
 
 
 class ProviderSchemaProjectionTests(unittest.TestCase):
     def test_small_factoring_annotations_and_owner_refs_are_exact(self) -> None:
         # Ref spelling and lossless factoring preserve independently supplied neighboring values.
-        from story_writing_agents.provider_schema_projection import factor_rule_schema
-        from story_writing_agents.provider_schema_projection import hoist_schema_definitions, require_schema_projection
-        from story_writing_agents.provider_message_catalog import WireShapeError
-        from story_writing_agents.structured_output_validation import SchemaRules
         graph = {'type': 'object', 'properties': {'left': {'$ref': '#/$defs/value'},
             'right': {'$ref': '#/$defs/alias'}}, 'required': ['left', 'right'],
             'additionalProperties': False, '$defs': {'value': {'type': 'integer', 'enum': [1]},
@@ -63,7 +64,6 @@ class ProviderSchemaProjectionTests(unittest.TestCase):
             '$defs': {'local': {'type': 'string', 'enum': ['literal']}}}
         different_owners = {'type': 'object', 'properties': { 'integer_owner': local_integer, 'text_owner': local_text},
             'required': ['integer_owner', 'text_owner'], 'additionalProperties': False}
-        from story_writing_agents.provider_schema_projection import rebase_schema_definitions
         with self.assertRaises(WireShapeError): hoist_schema_definitions(different_owners)
         associated_components = {**different_owners, 'properties': {
             'integer_owner': rebase_schema_definitions(local_integer, 'fixture_integer'),
