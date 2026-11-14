@@ -28,6 +28,11 @@ raw template. Preserve all visible headings and meanings. Invocation never grant
 operations, bypassed protections, unrelated scope, Project-schema changes, dependency-policy
 exceptions, or destructive cleanup authority.
 
+For design-related scope, apply only this stage's conditional handoff in the
+[Figma workflow](../../../docs/design/figma-workflow.md#project-handoffs).
+Root decides applicability; ordinary development skips Figma and designer work.
+This adds no lifecycle authority or extra approval stage.
+
 ## Establish readiness without a separate planning invocation
 
 1. Accept a clear objective or existing owning Issue; inspect the repository and current work.
@@ -58,8 +63,8 @@ exceptions, or destructive cleanup authority.
 2. Verify path, repository, native Development link, branch, base/HEAD ancestry, and porcelain
    before editing. Preserve unrelated changes and other worktrees. Move the item to
    `In progress`; this is the implementation phase, after planning readiness.
-3. Implement only accepted scope. Use `runtime_implementer` or `test_engineer` only under
-   AGENTS routing; those agents never receive this skill's GitHub or lifecycle authority.
+3. Implement only accepted scope. Use `runtime_implementer`, `test_engineer`, or the
+   selectively assigned `designer` only under AGENTS routing; those agents never receive this skill's GitHub or lifecycle authority.
 4. Runtime code and runtime agent definition (`config/agents/`) changes require affected
    runtime tests through the canonical runner, with exact selectors and JSON evidence.
    Runtime and test changes require full CI under

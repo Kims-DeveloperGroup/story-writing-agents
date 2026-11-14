@@ -86,6 +86,15 @@ for a separate plan approval. Neither path may bypass a blocked dependency or mi
 scope decision. The other standalone stages validate their prerequisites and report missing
 owner/actions instead of automatically executing earlier stages.
 
+## Design-related work
+
+Root records design impact and its reason in the owning Issue's implementation
+summary. Only applicable design work follows the canonical
+[Figma workflow](docs/design/figma-workflow.md), including target/source links,
+scoped designer ownership, task-specific synchronization, and design evidence in
+the existing stage handoffs. General development skips these operations. Existing
+Issue/Project fields, stage authority, CI, review severity, and closure rules apply.
+
 ## Planning Metadata
 
 Requirement is the organization-level native **Issue field**, with `Must|Recommended|Optional`

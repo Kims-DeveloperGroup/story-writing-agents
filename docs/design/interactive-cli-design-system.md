@@ -1,5 +1,9 @@
 # Interactive CLI design system contract
 
+For the maintained Figma target, source/node links, reference-host foundations,
+and task-scoped design work, use the [Figma workflow](figma-workflow.md).
+The current behavior reference below remains authoritative over this historical record.
+
 > **Historical design record:** this long-form record preserves the terminal
 > behavior delivered across earlier issues, including the retired schema-v1
 > advisory, routing, composition, consensus, and artifact-picker consumers.

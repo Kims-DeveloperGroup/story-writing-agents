@@ -77,6 +77,9 @@ visible headings and their meaning. Omit an optional details block only when it 
 
 ## Technical provenance and artifacts
 
+<!-- When design applies, retain file/node links, source base/head, comparison scope,
+structural/visual checks and changed-input identity under docs/design/figma-workflow.md. -->
+
 <details>
 <summary>Supporting provenance: identifiers, review history, timing, and artifacts</summary>
 

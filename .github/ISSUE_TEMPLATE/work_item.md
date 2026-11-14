@@ -51,6 +51,9 @@ and diff review. Distinguish planned verification from observed results.
 
 ## Implementation summary
 
+<!-- Record Design impact: required|not_required and the reason. For required work,
+link the accepted target/intent/criteria under docs/design/figma-workflow.md. -->
+
 {{Briefly explain the issue-specific mechanisms or responsibility changes that produce the expected results. Surface the most important design decision or preserved boundary here. Distinguish confirmed decisions from proposals; label new paths or APIs as proposed. Keep the detailed steps below.}}
 
 [Detailed implementation plan](#implementation-plan)

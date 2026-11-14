@@ -551,7 +551,7 @@ jobs:
                   raise SystemExit(f"{relative}: template headings changed: {actual!r}")
 
           agents = {path.name for path in (root / ".codex/agents").glob("*.toml")}
-          if agents != {"runtime_implementer.toml", "test_engineer.toml"}:
+          if agents != {"runtime_implementer.toml", "test_engineer.toml", "designer.toml"}:
               raise SystemExit(f"unexpected development agents: {sorted(agents)!r}")
           required = [
               root / ".agents/skills/project-workflow/SKILL.md",
