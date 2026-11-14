@@ -6082,9 +6082,7 @@ class StoryRuntime:
         if proposal is None or result is None or result_event_id is None:
             raise BackendProtocolError("known result finalization lacks authority")
         turn_id = event_journal.deterministic_id("t", result_event_id, "finalize")
-        validation_details = reply_contract_values.execution_validation_details(
-            events, result.execution_attempt_id, proposal.step_id,
-        )
+        validation_details = ()
         synthesis_event = next(
             (
                 event
