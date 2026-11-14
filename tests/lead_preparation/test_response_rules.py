@@ -716,7 +716,8 @@ class SpecialistRoutingTests(unittest.TestCase):
         self.assertEqual(agent_metadata["content"], source_metadata["content"])
         self.assertEqual(source_metadata["document_node"], documents.document_node_binding_to_dict(binding))
         self.assertEqual(source_metadata["preliminary_review"], review.preliminary_review_to_dict(report))
-        from story_writing_agents.provider_wire import add_contract_guidance, project_context_payload
+        from story_writing_agents.provider_contract_guidance import add_contract_guidance
+        from story_writing_agents.provider_request_mapping import project_context_payload
         document_input = {"task_input": {"document_node": agent_metadata["document_node"],
             "document_plan": documents.document_plan_to_dict(plan),
             "document_selection": documents.document_node_selection_to_dict(node_selection),
@@ -964,7 +965,7 @@ class SpecialistRoutingTests(unittest.TestCase):
         import asyncio
         from story_writing_agents.agent_context.contracts import session as context_service
         from story_writing_agents.agent_context.manifest import ContextManifest
-        from story_writing_agents.provider_wire import project_context_payload
+        from story_writing_agents.provider_request_mapping import project_context_payload
         binding = context_service.ContextInvocationBinding(offers.scope, "selected-v9-operation", "selected-v9-result",
                                                           ContextManifest(offers.scope, ()))
         async def check_current_v9_frames():

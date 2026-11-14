@@ -34,15 +34,23 @@ from .writing_artifacts.catalog import (
 )
 from .writing_artifacts.change_sets import ArtifactChangeOperationKind
 from .writing_artifacts.relationship_policy import artifact_source_operation_rule
-from .provider_wire import (
-    project_result_schema, normalize_result, hoist_schema_definitions, rebase_schema_definitions,
-    project_lead_scope_schema, restore_lead_scope_result, project_lead_scope_diagnostic,
-    diagnostic_to_wire,
-    ACTIVITIES as AUTHORING_ACTIVITIES, ASSIGNMENT_TYPES,
+from .provider_schema_projection import (
+    project_result_schema,
+    hoist_schema_definitions,
+    rebase_schema_definitions,
+    project_lead_scope_schema,
+    restore_lead_scope_result,
+    project_lead_scope_diagnostic,
 )
-from .provider_wire import share_schema_descriptions
-from .provider_wire import CHANGE_TYPES, ENUM_MEANINGS, field_description
-from .provider_wire import DRAFTING_ACTIONS, LEAD_RESPONSES
+from .provider_response_mapping import normalize_result
+from .provider_contract_guidance import diagnostic_to_wire
+from .provider_message_catalog import (
+    ACTIVITIES as AUTHORING_ACTIVITIES,
+    ASSIGNMENT_TYPES,
+)
+from .provider_schema_projection import share_schema_descriptions
+from .provider_message_catalog import CHANGE_TYPES, ENUM_MEANINGS, field_description
+from .provider_message_catalog import DRAFTING_ACTIONS, LEAD_RESPONSES
 from .lead_schema_groups import (
     LEAD_SCHEMA_GROUPS, LeadGroupCatalog, LeadGroupRequestBasis, LeadResultSemantics,
     LeadSchemaGroup, SchemaGroupControlOwner, schema_group_for,

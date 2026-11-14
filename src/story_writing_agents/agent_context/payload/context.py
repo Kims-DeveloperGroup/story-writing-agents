@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import json
-from ...provider_wire import (
-    add_contract_guidance,
-    project_context_payload,
-)
+from ...provider_contract_guidance import add_contract_guidance
+from ...provider_request_mapping import project_context_payload
 from ..accounting import (
     ContextComponentKind,
     JsonPath,

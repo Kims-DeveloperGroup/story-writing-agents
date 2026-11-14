@@ -1,7 +1,7 @@
 {
   "max_sequential_wall_seconds": 18000,
   "max_shard_wall_seconds": 3600,
-  "max_test_source_lines": 151516,
+  "max_test_source_lines": 151686,
   "schema_version": 1,
   "subtest_caps": {
     "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_binding_rejects_scope_identity_reference_order_and_unpaired_facts": 0,
@@ -904,7 +904,6 @@
     "tests.test_collaboration_events.CollaborationValueContractTests.test_proposal_closure_budget_and_advisory_invariants_fail_closed": 0,
     "tests.test_collaboration_events.CollaborationValueContractTests.test_result_value_requires_exact_terminal_facts": 0,
     "tests.test_collaboration_events.CollaborationValueContractTests.test_visible_text_uses_strict_utf8_byte_bounds_and_contains_no_metadata": 3,
-    "tests.test_collaboration_events.CollaborationWireContractTests.test_all_wire_values_have_stable_golden_hashes_and_round_trip": 4,
     "tests.test_collaboration_events.CollaborationWireContractTests.test_artifact_public_decoders_clear_content_from_exception_graphs": 7,
     "tests.test_collaboration_events.CollaborationWireContractTests.test_duplicate_extra_missing_nonfinite_and_noncanonical_json_are_rejected": 11,
     "tests.test_collaboration_events.CollaborationWireContractTests.test_every_proposal_dimension_and_order_changes_the_digest": 22,
@@ -2049,7 +2048,6 @@
     "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_validation_details_do_not_grant_action_authority": 0,
     "tests.test_lead_orchestration.LeadReferenceFailurePrecedenceTests.test_primary_reference_and_capacity_errors_are_not_reclassified": 7,
     "tests.test_lead_orchestration.LeadReferenceFailurePrecedenceTests.test_reference_failure_with_unwritable_history_stays_recovery_required": 0,
-    "tests.test_lead_orchestration.LeadSchemaFactoringTests.test_small_factoring_annotations_and_owner_refs_are_exact": 0,
     "tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_cancelled_before_correction_never_replays": 1,
     "tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_cancelled_during_correction_never_replays": 1,
     "tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_crashed_before_correction_never_replays": 1,
@@ -2180,6 +2178,8 @@
     "tests.test_provider_process_streaming.TestProviderProcessStreaming.test_streaming_receives_lines_in_real_time": 0,
     "tests.test_provider_process_streaming.TestProviderProcessStreaming.test_streaming_selects_streaming_when_stdout_has_read_without_readline": 0,
     "tests.test_provider_process_streaming.TestProviderProcessStreaming.test_streaming_timeout_terminates_process": 0,
+    "tests.test_provider_response_mapping.ProviderResponseMappingTests.test_all_wire_values_have_stable_golden_hashes_and_round_trip": 4,
+    "tests.test_provider_schema_projection.ProviderSchemaProjectionTests.test_small_factoring_annotations_and_owner_refs_are_exact": 0,
     "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_abandoned_turn_preserves_other_conversation_successful_checkpoint": 0,
     "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_attached_reference_cancellation_closes_and_releases_for_explicit_retry": 0,
     "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_corrupt_failed_history_cannot_admit_provider_work": 0,

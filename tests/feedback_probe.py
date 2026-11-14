@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 
 CASE = "tests.test_selected_task_material_codec.SelectedTaskMaterialCodecTests.test_two_captures_keep_closed_wire_shape_and_order"
-SOURCE_HASH = "a9696b95cd08e9b6bd4eacf89bcd036738c4bf8823c3d8a313b79791d5c258a3"
+SOURCE_HASH = "daa1df5ee08be5e6fb4b382fd1a117f13908192933967d9b056b7ea45010f174"
 
 
 SOURCE_WITNESSES = (

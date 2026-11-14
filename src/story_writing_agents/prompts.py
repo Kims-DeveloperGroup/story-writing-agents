@@ -1,7 +1,8 @@
 """Deterministic prompt assembly with least-context hydration."""
 
 from __future__ import annotations
-from .provider_wire import WIRE_VERSION, common_contract_guide, LEAD_GROUP_COMMON_POLICY
+from .provider_message_catalog import WIRE_VERSION, LEAD_GROUP_COMMON_POLICY
+from .provider_contract_guidance import common_contract_guide
 
 import hashlib
 import json

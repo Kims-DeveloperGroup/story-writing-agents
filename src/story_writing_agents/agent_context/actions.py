@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from ..provider_wire import project_zero_hit_receipt
+from ..provider_request_mapping import project_zero_hit_receipt
 from ..structured_output_validation import nonblank_text_rule
-from ..provider_wire import SOURCE_TYPES
+from ..provider_message_catalog import SOURCE_TYPES
 
 import hashlib
 import json

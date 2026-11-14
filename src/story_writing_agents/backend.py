@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 from .agents import LEAD_ORCHESTRATOR
-from .provider_wire import require_schema_projection
-from .provider_wire import (
-    WIRE_VERSION, RETRIEVAL_ACTIONS, WireShapeError, add_contract_guidance, diagnostic_to_wire, project_direct_payload,
-    project_direct_schema, project_retrieval_schema, normalize_direct_result,
+from .provider_schema_projection import require_schema_projection
+from .provider_message_catalog import WIRE_VERSION, RETRIEVAL_ACTIONS, WireShapeError
+from .provider_contract_guidance import add_contract_guidance, diagnostic_to_wire
+from .provider_request_mapping import project_direct_payload
+from .provider_schema_projection import project_direct_schema, project_retrieval_schema
+from .provider_response_mapping import (
+    normalize_direct_result,
     normalize_retrieval_action,
 )
 

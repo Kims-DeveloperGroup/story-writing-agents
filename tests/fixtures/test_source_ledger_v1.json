@@ -12,7 +12,8 @@
     "tests/feedback_probe.py",
     "tests/id_moves.py",
     "tests/module_graph_fixture.py",
-    "tests/terminal_input_fixture.py"
+    "tests/terminal_input_fixture.py",
+    "tests/provider_response_contract_fixture.py"
   ],
   "origins": {
     "test_git_external_operation_inspection.py": {
@@ -509,6 +510,60 @@
       ],
       "legacy_unresolved_lines": 1550,
       "counting": "Issue 1020 approved +60 lines: raw test source +55 and counted support +5; current raw148525 + support1441 + legacy1550 = 151516. Four method moves, all assertions/scenarios, and immutable origins remain unchanged."
+    },
+    {
+      "issue": 998,
+      "origin_commit": "65ad7c277d1da5ad7b1cab931f48364607067d67",
+      "origins": [
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "sha256": "f3014b00d0f1ba4717d14a4e076236601f35d7d17067cc542d26356806f022c5",
+          "source_ranges": [
+            [
+              1438,
+              1535
+            ]
+          ],
+          "destinations": [
+            "tests/test_provider_schema_projection.py"
+          ],
+          "counting": "Whole existing Case1:1; all assertions/negative vectors/resources retained. Only approved public import/helper-name transitions; no new scenario/Case/subTest."
+        },
+        {
+          "source": "tests/test_collaboration_events.py",
+          "sha256": "3437176ec97122a899680b709d40e962ec39181b1363b7788e53b39e75f7d15d",
+          "source_ranges": [
+            [
+              1173,
+              1319
+            ]
+          ],
+          "destinations": [
+            "tests/test_provider_response_mapping.py"
+          ],
+          "counting": "Whole existing Case1:1; all assertions/negative vectors/resources retained. Only approved public import/helper-name transitions; no new scenario/Case/subTest."
+        },
+        {
+          "source": "tests/test_collaboration_events.py",
+          "sha256": "3437176ec97122a899680b709d40e962ec39181b1363b7788e53b39e75f7d15d",
+          "source_ranges": [
+            [
+              190,
+              191
+            ],
+            [
+              253,
+              283
+            ]
+          ],
+          "destinations": [
+            "tests/provider_response_contract_fixture.py"
+          ],
+          "counting": "Two existing33-row pure helpers moved once to registered36-row support; no copied helper body or legacy credit."
+        }
+      ],
+      "legacy_unresolved_lines": 1550,
+      "counting": "Issue998 approved +170 only: raw+127 and counted support+43; raw148652+support1484+legacy1550=151686. Whole two existing Cases and two existing pure helper definitions moved once; current IDs2544/cap sum8690, assertions/scenarios preserved. Generic suite_budget guard actual+16 rows disclosed outside existing charge. No credit from unchanged unregistered provider_wire_fixture or legacy1550."
     }
   ]
 }

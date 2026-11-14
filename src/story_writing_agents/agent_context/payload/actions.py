@@ -3,12 +3,9 @@
 from __future__ import annotations
 
 import json
-from ...provider_wire import (
-    WireShapeError,
-    diagnostic_to_wire,
-    normalize_context_action,
-    normalize_result,
-)
+from ...provider_message_catalog import WireShapeError
+from ...provider_contract_guidance import diagnostic_to_wire
+from ...provider_response_mapping import normalize_context_action, normalize_result
 from ...structured_output_validation import (
     bounded_chunks,
     carry_validation,

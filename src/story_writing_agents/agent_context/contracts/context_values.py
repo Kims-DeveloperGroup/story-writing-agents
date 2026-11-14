@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from ...provider_wire import WIRE_VERSION
+from ...provider_message_catalog import WIRE_VERSION
 from ...structured_output_validation import validation_failure
 from ..actions import (
     ContextActionError,

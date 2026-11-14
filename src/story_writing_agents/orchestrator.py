@@ -5,7 +5,7 @@ from __future__ import annotations
 from .authoring_task_lifecycle import (TaskBindingContext, TaskBindingPlan,
     resolve_task_binding, bind_task_outcome, task_identity_for_origin)
 from .specialist_routing import scope_spec_from_dict
-from .provider_wire import project_agent_task_metadata
+from .agent_task_projection import project_agent_task_metadata
 from .document_plan import (DocumentPlan, DocumentNodeSpec, DocumentNodeBinding, DocumentPlanView,
     DocumentNodeView, DocumentNodeState, DocumentNodeNextAction, DocumentPlanningGoalRef, document_value_digest,
     document_node_binding_to_dict, DocumentNodeSelection, DocumentCandidateUseIntent, DocumentCandidateSelection,
@@ -74,8 +74,12 @@ from .lead_provider_contracts import (
     LeadDecodedResult,
     empty_core_status_evidence,
 )
-from .provider_wire import (normalize_result, recover_lead_public_response,
-    recover_lead_public_response_kind, hoist_schema_definitions)
+from .provider_response_mapping import (
+    normalize_result,
+    recover_lead_public_response,
+    recover_lead_public_response_kind,
+)
+from .provider_schema_projection import hoist_schema_definitions
 
 from .lead_premise_decisions import (
     PremiseQuestionIntent, PremiseDecisionSpec, PremiseDecisionSelection,
@@ -115,7 +119,7 @@ from .lead_exploration import (LeadInteractionMode, ExplorationIdeaKind, Explora
 from .conversations.events import (CollaborationLeadExplorationRequestPayload,
     CollaborationLeadExplorationResultPayload, CollaborationExplorationAdoptionPayload)
 
-from .provider_wire import project_result_schema
+from .provider_schema_projection import project_result_schema
 
 import re
 import asyncio

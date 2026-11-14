@@ -193,7 +193,7 @@ class CompactWireDecoderTests(unittest.TestCase):
         basis = LeadGroupRequestBasis("group-operation", "group-result", "group-scope")
         selector = grouped_factory.for_offer(offers, request_basis=basis)
         from story_writing_agents.provider_schema_selection import SchemaSelectionInput
-        from story_writing_agents.provider_wire import add_contract_guidance
+        from story_writing_agents.provider_contract_guidance import add_contract_guidance
         wire = SchemaSelectionInput("select", offers.call_id, selector.outer_inner_schema_ids,
             2, "current-context", catalog=json.dumps(selector.group_stage.catalog.as_object()).encode()).as_object()
         self.assertEqual(SchemaSelectionInput.from_value(wire).as_object(), wire)

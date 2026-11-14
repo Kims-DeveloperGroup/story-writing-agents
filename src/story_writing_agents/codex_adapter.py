@@ -1,7 +1,7 @@
 """Codex-specific binding, command, event, and structured-output adapter."""
 
 from __future__ import annotations
-from .provider_wire import common_contract_guide
+from .provider_contract_guidance import common_contract_guide
 from .provider_adapter import (ProviderContinuationRejection,
     NativeContextCheck, NativeContextObservation, NativeContextCheckStage,
     NativeContextSourceStage, NativeContextCheckReason)

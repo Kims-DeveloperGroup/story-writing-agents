@@ -44,7 +44,10 @@ from ..agent_context.accounting import ProviderCallAccounting, ProviderCallKind,
 from ..provider_execution_workspace import ProviderExecutionWorkspace
 from ..structured_output_validation import bounded_chunks, diagnose_json_text
 from . import collaboration_event_journal as event_journal
-from ..provider_wire import recover_lead_public_response, recover_lead_public_response_kind
+from ..provider_response_mapping import (
+    recover_lead_public_response,
+    recover_lead_public_response_kind,
+)
 from dataclasses import replace
 
 
