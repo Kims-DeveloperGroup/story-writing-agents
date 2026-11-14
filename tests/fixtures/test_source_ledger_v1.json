@@ -13,7 +13,8 @@
     "tests/id_moves.py",
     "tests/module_graph_fixture.py",
     "tests/terminal_input_fixture.py",
-    "tests/provider_response_contract_fixture.py"
+    "tests/provider_response_contract_fixture.py",
+    "tests/known_result_finalization_fixture.py"
   ],
   "origins": {
     "test_git_external_operation_inspection.py": {
@@ -564,6 +565,90 @@
       ],
       "legacy_unresolved_lines": 1550,
       "counting": "Issue998 approved +170 only: raw+127 and counted support+43; raw148652+support1484+legacy1550=151686. Whole two existing Cases and two existing pure helper definitions moved once; current IDs2544/cap sum8690, assertions/scenarios preserved. Generic suite_budget guard actual+16 rows disclosed outside existing charge. No credit from unchanged unregistered provider_wire_fixture or legacy1550. Cold-factor correction reallocates only the new response module docstring row to the Guidance-to-Validation graph expectation row; required recovery import moves to the domain header and factor import follows the lower owner. Raw+127/support+43/total+170 remains unchanged. Schema preparation follow-up moves the same five required imports to its domain module header (+5/-5 ordinary rows), preserving the original prepared dependency stage while disclosing cold CLI/import cost; no warmup call, fixture, clock or non-import Case change."
+    },
+    {
+      "issue": 1021,
+      "origin_commit": "8e730b3e8f5b092d34e8d249da56a1275fc3ded4",
+      "origins": [
+        {
+          "source": "tests/test_specialist_orchestration_execution.py",
+          "sha256": "86bc8e93955597e3ecf82ed9c79af291844111593221f5e8d612eefe5e1e199c",
+          "source_ranges": [
+            [
+              325,
+              355
+            ]
+          ],
+          "destinations": [
+            "tests/test_known_result_finalization.py"
+          ],
+          "counting": "Genuine existing Case1:1; all original assertions, negatives and resources retained with accepted public names/real-owner adapter/spy transition."
+        },
+        {
+          "source": "tests/test_specialist_orchestration_execution.py",
+          "sha256": "86bc8e93955597e3ecf82ed9c79af291844111593221f5e8d612eefe5e1e199c",
+          "source_ranges": [
+            [
+              357,
+              414
+            ]
+          ],
+          "destinations": [
+            "tests/test_known_result_finalization.py"
+          ],
+          "counting": "Genuine existing Case1:1; all original assertions, negatives and resources retained with accepted public names/real-owner adapter/spy transition."
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "sha256": "593b9f22524819ee494570fd36b5af02d2df92ceea7462898dd66f775961a9ce",
+          "source_ranges": [
+            [
+              7133,
+              7155
+            ]
+          ],
+          "destinations": [
+            "tests/test_known_result_finalization.py"
+          ],
+          "counting": "Genuine existing Case1:1; all original assertions, negatives and resources retained with accepted public names/real-owner adapter/spy transition."
+        },
+        {
+          "source": "tests/test_artifact_proposal_orchestration.py",
+          "sha256": "13c9e98dbe24a53556db2f14f5c655030b10153d035738ae8bf4c9ca2ad4355b",
+          "source_ranges": [
+            [
+              823,
+              934
+            ]
+          ],
+          "destinations": [
+            "tests/test_known_result_finalization.py"
+          ],
+          "counting": "Genuine existing Case1:1; all original assertions, negatives and resources retained with accepted public names/real-owner adapter/spy transition."
+        },
+        {
+          "source": "tests/collaboration_contract_fixture.py",
+          "sha256": "4eab330155f967e8e2493b9b3a6411e11010d5fe072580d05fe2192d319e893c",
+          "source_ranges": [
+            [
+              1262,
+              1489
+            ]
+          ],
+          "destinations": [
+            "tests/known_result_finalization_fixture.py"
+          ],
+          "counting": "Original222-row seed moves once; entire277-row support charged (34imports+2header+19adapter). Old uncounted helper/legacy credit0."
+        }
+      ],
+      "legacy_unresolved_lines": 1550,
+      "counting": "Approved1021 only raw89/support289=+378,151686→152064. New module description1row reallocated to actual required import. Final rendered counter required; no old assertion/helper/docstring or legacy credit.",
+      "approved_source_delta": 378,
+      "planned_raw_delta": 89,
+      "planned_support_delta": 289,
+      "current_receipt_sha256": "4ba51d517f648045a335a156192d4d728fa401ef11f60854e0a1aba7e7dcacfa",
+      "original_caps_sha256": "2823d24a5e6436e5b6fbe2356047375707e88c3e73c5f784011e8efa37e30fe5",
+      "expected_caps_sha256": "d9bd3023ba2ac0c68de7f8fb8de964f5e528db92a43e9a48a176445cee8bd28f"
     }
   ]
 }

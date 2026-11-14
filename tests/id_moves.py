@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 RECEIPT_PATH = Path(__file__).parent / "fixtures" / "test_id_moves_v1.json"
-RECEIPT_SHA256 = "87fc781f32d1139547e68125fe84486df39af2ee5cde312dbaa0b679754edbae"
+RECEIPT_SHA256 = "4ba51d517f648045a335a156192d4d728fa401ef11f60854e0a1aba7e7dcacfa"
 ORIGINAL_CAPS_SHA256 = "fc586b3eaa147b4ad4bc06e42e98378c50bd56a9fb09954219c20c45e882b99b"
 S02_CAPS_SHA256 = "b554b945803dd496796fd0bf7cad3201c7f729c37821a90231fc734074576c52"
 S03_CAPS_SHA256 = "7f3bdd0982191c0adef51815ae3445fa4a55c11dfcb5d7574179e0c542b0310c"
@@ -13,7 +13,8 @@ S05_CAPS_SHA256 = "8371eef31044fa33e0ee7e34af17bb3fb03e47556ac1b0f601124d13650b5
 S06_CAPS_SHA256 = "0caff3ac47db80cd2344dc4ff480358ec9cc09d2ed68d151ffa2e754c100d156"
 S07_CAPS_SHA256 = "ce4382b4bac0778363a7ea7ca90c5c81be63c89077b23abcc4dedbbc170167d9"
 BEFORE_998_CAPS_SHA256 = "52d0575e721cf829d7ca7cc0409cd28861ac1db33b587b684d4611aff6df728c"
-EXPECTED_CAPS_SHA256 = "2823d24a5e6436e5b6fbe2356047375707e88c3e73c5f784011e8efa37e30fe5"
+BEFORE_FINALIZATION_CAPS_SHA256 = "2823d24a5e6436e5b6fbe2356047375707e88c3e73c5f784011e8efa37e30fe5"
+EXPECTED_CAPS_SHA256 = "d9bd3023ba2ac0c68de7f8fb8de964f5e528db92a43e9a48a176445cee8bd28f"
 ORIGINAL_ID = "tests.test_agent_context_planning.PlanningSurfaceTests.test_exact_dataclass_fields_and_immutability"
 SECOND_ID = "tests.test_agent_context_sources.SourceSurfacePolicyAndValueTests.test_descriptor_snapshot_records_are_exact_immutable_and_content_hidden"
 THIRD_ID = "tests.test_specialist_routing.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip"
@@ -21,6 +22,7 @@ FOURTH_ID = "tests.test_lead_artifact_application.LeadArtifactApplicationTests.t
 FIFTH_ID = "tests.test_specialist_orchestration.SpecialistAccountingAcceptanceTests.test_local_reference_and_search_answer_count_only_provider_calls"
 SIXTH_ID = "tests.test_specialist_orchestration_accounting.SpecialistAccountingAcceptanceTests.test_result_persistence_failure_cleans_marker_after_provider_completion"
 SEVENTH_ID = "tests.test_lead_orchestration.LeadSchemaFactoringTests.test_small_factoring_annotations_and_owner_refs_are_exact"
+EIGHTH_ID = "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_restarted_finalization_restores_only_this_execution_diagnostics"
 STAGES = (
     (964, "d198abaf60edb1956acbd1f410ad3b1b9fbbedd8", ORIGINAL_CAPS_SHA256, S02_CAPS_SHA256, 45),
     (965, "a18dfc6b3faa8dc326668c77d0da12441be388f8", S02_CAPS_SHA256, S03_CAPS_SHA256, 117),
@@ -28,7 +30,8 @@ STAGES = (
     (1006, "a231649d001ff30d29f927c6884339ce09e2edc3", S05_CAPS_SHA256, S06_CAPS_SHA256, 8),
     (1007, "b7dd8d8d986d92aad22aad8db44e0ad0d02a4a68", S06_CAPS_SHA256, S07_CAPS_SHA256, 22),
     (1020, "a1fba1a38327de3c5e7427bec4366a588bb62ba1", S07_CAPS_SHA256, BEFORE_998_CAPS_SHA256, 4),
-    (998, "65ad7c277d1da5ad7b1cab931f48364607067d67", BEFORE_998_CAPS_SHA256, EXPECTED_CAPS_SHA256, 2),
+    (998, "65ad7c277d1da5ad7b1cab931f48364607067d67", BEFORE_998_CAPS_SHA256, BEFORE_FINALIZATION_CAPS_SHA256, 2),
+    (1021, "8e730b3e8f5b092d34e8d249da56a1275fc3ded4", BEFORE_FINALIZATION_CAPS_SHA256, EXPECTED_CAPS_SHA256, 4),
 )
 
 def caps_digest(caps: dict[str, int]) -> str:
@@ -58,7 +61,7 @@ def load_receipt() -> list[dict]:
 
 def remap_base_caps(current: dict[str, int], base: dict[str, int], *, digests: tuple[str, str] | None = None) -> dict[str, int]:
     """Rekey exact approved inventories; digests are hints and every resulting stage is independently verified."""
-    if ORIGINAL_ID in current or (ORIGINAL_ID not in base and SECOND_ID not in base and THIRD_ID not in base and FOURTH_ID not in base and FIFTH_ID not in base and SIXTH_ID not in base and SEVENTH_ID not in base) or current == base:
+    if ORIGINAL_ID in current or (ORIGINAL_ID not in base and SECOND_ID not in base and THIRD_ID not in base and FOURTH_ID not in base and FIFTH_ID not in base and SIXTH_ID not in base and SEVENTH_ID not in base and EIGHTH_ID not in base) or current == base:
         return base
     base_digest = caps_digest(base) if digests is None else digests[0]
     before = [stage[2] for stage in STAGES]
@@ -82,13 +85,18 @@ def remap_base_caps(current: dict[str, int], base: dict[str, int], *, digests: t
         raise ValueError("canonical move adds, drops, or changes cases")
     return result
 
-def historical_feedback_caps(current: dict[str, int], *, with_publication_base: bool = False, with_before_998_base: bool = False) -> dict[str, int] | tuple[dict[str, int], dict[str, int] | None] | tuple[dict[str, int], dict[str, int] | None, dict[str, int] | None]:
+def historical_feedback_caps(current: dict[str, int], *,
+    with_publication_base: bool = False,
+    with_before_998_base: bool = False,
+    with_finalization_base: bool = False,
+) -> (dict[str, int] | tuple[dict[str, int], dict[str, int] | None] | tuple[dict[str, int], dict[str, int] | None, dict[str, int] | None]
+      | tuple[dict[str, int], dict[str, int] | None, dict[str, int] | None, dict[str, int] | None]):
     """Restore historical keys and explicitly requested verified checkpoints."""
     digest = caps_digest(current)
     ends = [stage[3] for stage in STAGES]
     if digest not in ends:
         raise ValueError("historical fixture differs approved current inventory")
-    result, publication_base, before_998_base = dict(current), None, dict(current) if with_before_998_base and digest == BEFORE_998_CAPS_SHA256 else None
+    result, publication_base, before_998_base, finalization_base = dict(current), None, dict(current) if with_before_998_base and digest == BEFORE_998_CAPS_SHA256 else None, dict(current) if with_finalization_base and digest == BEFORE_FINALIZATION_CAPS_SHA256 else None
     for stage in reversed(load_receipt()[:ends.index(digest) + 1]):
         for move in stage["moves"]:
             old, new, cap = move["old_id"], move["new_id"], move["subtest_cap"]
@@ -101,6 +109,10 @@ def historical_feedback_caps(current: dict[str, int], *, with_publication_base: 
             publication_base = dict(result)
         if with_before_998_base and stage["original_caps_sha256"] == BEFORE_998_CAPS_SHA256:
             before_998_base = dict(sorted(result.items()))
+        if with_finalization_base and stage["original_caps_sha256"] == BEFORE_FINALIZATION_CAPS_SHA256:
+            finalization_base = dict(sorted(result.items()))
+    if with_finalization_base:
+        return result, publication_base, before_998_base, finalization_base
     if with_before_998_base:
         return result, publication_base, before_998_base
     return (result, publication_base) if with_publication_base else result

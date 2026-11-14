@@ -19,15 +19,15 @@ from story_writing_agents.conversation_storage import ConversationStorageBackend
 from story_writing_agents.conversation_storage.migration import ConversationStorageTransferOutcome, transfer_conversation_storage, verify_conversation_storage
 from story_writing_agents.conversation_storage.sqlite import compose_sqlite_conversation_storage, provision_sqlite_conversation_storage
 from story_writing_agents.writing_artifacts.repository import WritingArtifactRepository
-from tests.test_lead_orchestration import LeadOrchestrationTestCase, _LeadBackend, _READINESS_DOCUMENTS, _decision, _live_material, _live_scope, _provider_envelope, _read_history_hit, _search_history, _specialist_outcome, _visible_outcome, _workflow_material
+from tests.test_lead_orchestration import LeadOrchestrationTestCase, _LeadBackend, LEAD_FIXTURE_READINESS_DOCUMENTS, lead_confirmation_decision, _live_material, lead_fixture_authoring_scope, _provider_envelope, _read_history_hit, _search_history, lead_specialist_outcome, _visible_outcome, _workflow_material
 
 
 
 
-_OUTLINE = "core_documents/global_outline.md"
+ARTIFACT_FIXTURE_OUTLINE_PATH = "core_documents/global_outline.md"
 
 
-_RULES = "core_documents/narrative_rules.md"
+ARTIFACT_FIXTURE_RULES_PATH = "core_documents/narrative_rules.md"
 
 
 _INDEX = "manuscript/part-01/index.md"
@@ -55,12 +55,12 @@ def _reference_ids(material: dict[str, object]) -> list[str]:
     ]
 
 
-def _status_id(input_payload, locator: str) -> str:
+def artifact_evidence_status_id(input_payload, locator: str) -> str:
     statuses = input_payload["core_document_statuses"]
     return next(item["evidence_id"] for item in statuses if item["artifact_path"] == locator)
 
 
-def _artifact_outcome(
+def artifact_review_outcome(
     *,
     operations: object,
     evidence_status: str = "verified",
@@ -217,14 +217,7 @@ def _artifact_synthesis_outcome(
     return respond
 
 
-class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
-    def artifact_snapshot(self) -> tuple[tuple[str, bytes], ...]:
-        return tuple(
-            (item.path, item.content)
-            for item in WritingArtifactRepository(
-                self.workspace.root
-            ).capture_complete_state() )
-
+class ArtifactReviewFixture:
     def artifact_events(self, conversation_id: str, payload_type: type) -> tuple:
         return tuple(
             event.payload
@@ -239,17 +232,17 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         decision: str = "propose",
     ):
         from tests.recommendation_fixture import task_assessment
-        self.workspace.path(_RULES).unlink(missing_ok=True)
+        self.workspace.path(ARTIFACT_FIXTURE_RULES_PATH).unlink(missing_ok=True)
         self.backend.enqueue(
-            _artifact_outcome(
-                operations=[ { "kind" : "create" , "new_text" : "Use restrained close-third narration.\n" , "suggested_path" : _RULES , } ],
+            artifact_review_outcome(
+                operations=[ { "kind" : "create" , "new_text" : "Use restrained close-third narration.\n" , "suggested_path" : ARTIFACT_FIXTURE_RULES_PATH , } ],
                 evidence_status="missing",
-                evidence_ids=lambda call, _material, *, input_payload: [_status_id(input_payload, _RULES)],
+                evidence_ids=lambda call, _material, *, input_payload: [artifact_evidence_status_id(input_payload, ARTIFACT_FIXTURE_RULES_PATH)],
                 authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
 
-                authoring_scope=lambda call: _live_scope(
+                authoring_scope=lambda call: lead_fixture_authoring_scope(
                     call, activity='review', domains=('tone_execution',),
-                    paths=(_RULES,), contributions=[
+                    paths=(ARTIFACT_FIXTURE_RULES_PATH,), contributions=[
                         {'domain': domain, 'role': 'constraint_assessor'}
                         for domain in ('tone_execution',)]),
             )
@@ -260,13 +253,24 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             ("Complete the missing narrative rules." + '\nSupplied requested candidate content:\n' + json.dumps(['Use restrained close-third narration.\n'])
              + '\nYou may give bounded artifact review judgments and prepare separate proposals; preserve supplied facts. Revision and execution require separate exact confirmation.'),
         )
-        self.backend.enqueue_for( EXECUTION_SPECIALIST, _specialist_outcome(assessment), )
+        self.backend.enqueue_for( EXECUTION_SPECIALIST, lead_specialist_outcome(assessment), )
         self.backend.enqueue_for(
             LEAD_ORCHESTRATOR,
             _artifact_synthesis_outcome(decision), )
         decided = await self.runtime.decide_lead_step(
-            _decision(proposed, CollaborationConfirmationDecision.CONFIRM) )
+            lead_confirmation_decision(proposed, CollaborationConfirmationDecision.CONFIRM) )
         return proposed, decided
+
+
+class ArtifactProposalOrchestrationTests(ArtifactReviewFixture, LeadOrchestrationTestCase):
+    def artifact_snapshot(self) -> tuple[tuple[str, bytes], ...]:
+        return tuple(
+            (item.path, item.content)
+            for item in WritingArtifactRepository(
+                self.workspace.root
+            ).capture_complete_state() )
+
+
 
     async def test_incomplete_core_workflow_is_reviewed_only_after_confirmation(
         self,
@@ -275,18 +279,18 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         await self.record_book_readiness()
         before_calls = len(self.backend.call_records)
         conversation_id = self.conversation("Complete missing core")
-        self.workspace.path(_RULES).unlink(missing_ok=True)
+        self.workspace.path(ARTIFACT_FIXTURE_RULES_PATH).unlink(missing_ok=True)
         before = self.artifact_snapshot()
         self.backend.enqueue(
-            _artifact_outcome(
-                operations=[ { "kind" : "create" , "new_text" : "Use restrained close-third narration.\n" , "suggested_path" : _RULES , } ],
+            artifact_review_outcome(
+                operations=[ { "kind" : "create" , "new_text" : "Use restrained close-third narration.\n" , "suggested_path" : ARTIFACT_FIXTURE_RULES_PATH , } ],
                 evidence_status="missing",
-                evidence_ids=lambda call, _material, *, input_payload: [_status_id(input_payload, _RULES)],
+                evidence_ids=lambda call, _material, *, input_payload: [artifact_evidence_status_id(input_payload, ARTIFACT_FIXTURE_RULES_PATH)],
                 authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
 
-                authoring_scope=lambda call: _live_scope(
+                authoring_scope=lambda call: lead_fixture_authoring_scope(
                     call, activity='review', domains=('tone_execution',),
-                    paths=(_RULES,), contributions=[
+                    paths=(ARTIFACT_FIXTURE_RULES_PATH,), contributions=[
                         {'domain': domain, 'role': 'constraint_assessor'}
                         for domain in ('tone_execution',)]),
             )
@@ -312,7 +316,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
 
         candidate = proposed.artifact_proposal.candidate.candidate
         candidate_value = json.loads(serialize_artifact_review_candidate(candidate))
-        self.backend.enqueue_for(EXECUTION_SPECIALIST, _specialist_outcome("supports"))
+        self.backend.enqueue_for(EXECUTION_SPECIALIST, lead_specialist_outcome("supports"))
         self.backend.enqueue_for(
             LEAD_ORCHESTRATOR,
             _artifact_synthesis_outcome("propose"), )
@@ -320,7 +324,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         context = owner_session_history.SessionHistorySourceAdapter(storage.catalog, storage.event_store, self.session_id)
         prior = context.capture().coverage
         decision = await self.runtime.decide_lead_step(
-            _decision(proposed, CollaborationConfirmationDecision.CONFIRM) )
+            lead_confirmation_decision(proposed, CollaborationConfirmationDecision.CONFIRM) )
 
         self.assertIs( decision.turn.artifact_proposal.state, ArtifactProposalState.REVIEWED )
         reviewed = decision.turn.artifact_proposal.reviewed_proposal
@@ -331,9 +335,9 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self.assertEqual(self.artifact_snapshot(), before)
         from story_writing_agents.core_document_readiness import AuthoringTarget, require_readiness
         current_readiness = self.runtime.inspect_core_document_readiness(self.session_id)
-        self.assertNotIn(_RULES, current_readiness.complete_documents)
-        self.assertIn(_RULES, require_readiness(AuthoringTarget.MANUSCRIPT, current_readiness).required_documents)
-        self.assertFalse(self.workspace.path(_RULES).exists())
+        self.assertNotIn(ARTIFACT_FIXTURE_RULES_PATH, current_readiness.complete_documents)
+        self.assertIn(ARTIFACT_FIXTURE_RULES_PATH, require_readiness(AuthoringTarget.MANUSCRIPT, current_readiness).required_documents)
+        self.assertFalse(self.workspace.path(ARTIFACT_FIXTURE_RULES_PATH).exists())
         from tests.provider_wire_fixture import artifact_candidate as wire_candidate
         from tests.test_agent_context_accounting import _expanded_context_payload
         materials = [(agent_id, (self.backend.callback_payload(call))["task_input"])
@@ -390,37 +394,37 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
     ) -> None:
         from tests.recommendation_fixture import task_assessment
         await self.record_book_readiness()
-        rules = self.workspace.path(_RULES)
+        rules = self.workspace.path(ARTIFACT_FIXTURE_RULES_PATH)
         rules.write_text("Always use past tense.\n", encoding="utf-8")
         conflict_id = self.conversation("Conflicting core edit")
         before = self.artifact_snapshot()
         self.backend.enqueue(
-            _artifact_outcome(
+            artifact_review_outcome(
                 operations=lambda _call,
-                material, *, input_payload: [{"evidence_id": material['qualified_read_ids'][_RULES],
+                material, *, input_payload: [{"evidence_id": material['qualified_read_ids'][ARTIFACT_FIXTURE_RULES_PATH],
                     "kind": "replace", "new_text": "Use present tense in dream passages.\n",
                 }],
                 evidence_status="verified",
                 authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
-                authoring_scope=lambda call: _live_scope(
+                authoring_scope=lambda call: lead_fixture_authoring_scope(
                     call, activity='review', domains=('tone_execution',),
-                    paths=(_RULES,), contributions=[
+                    paths=(ARTIFACT_FIXTURE_RULES_PATH,), contributions=[
                         {'domain': domain, 'role': 'constraint_assessor'}
                         for domain in ('tone_execution',)]),
 
-            read_queries=((_RULES, 'Always'),), read_prefix='core_documents/',)
+            read_queries=((ARTIFACT_FIXTURE_RULES_PATH, 'Always'),), read_prefix='core_documents/',)
         , control_plan=selection_plan('artifact.changes', before_script_response=2))
         physical_before = len(self.backend.calls)
         proposed = await self.runtime.lead_turn(
             self.session_id,
             conflict_id,
-            (f"Edit ${{{_RULES}}} even though the existing rule conflicts." + '\nSupplied requested candidate content:\n' + json.dumps(['Use present tense in dream passages.\n'])
+            (f"Edit ${{{ARTIFACT_FIXTURE_RULES_PATH}}} even though the existing rule conflicts." + '\nSupplied requested candidate content:\n' + json.dumps(['Use present tense in dream passages.\n'])
              + '\nYou may give bounded artifact review judgments and prepare separate proposals; preserve supplied facts. Revision and execution require separate exact confirmation.'),
         )
         physical = self.backend.calls[physical_before:]
         self.assertEqual(len(physical), 4)
         reads = self.backend.callback_payload(physical[-1])['context_observation']['read_results']
-        expected_links = ((_RULES, 'replace'),)
+        expected_links = ((ARTIFACT_FIXTURE_RULES_PATH, 'replace'),)
         self.assertEqual(tuple((path, kind) for path, kind, _identity
                                in self.backend.artifact_read_links), expected_links)
         by_path = {row['provenance']['source_locator']: row['evidence_id'] for row in reads}
@@ -436,12 +440,12 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             proposed.kind, proposed.next_action, proposed.state, proposed.validation_details,
             proposed.artifact_proposal is not None,
         ))
-        self.backend.enqueue_for(EXECUTION_SPECIALIST, _specialist_outcome("conflict"))
+        self.backend.enqueue_for(EXECUTION_SPECIALIST, lead_specialist_outcome("conflict"))
         self.backend.enqueue_for(
             LEAD_ORCHESTRATOR,
             _artifact_synthesis_outcome("revise"), )
         revised = await self.runtime.decide_lead_step(
-            _decision(proposed, CollaborationConfirmationDecision.CONFIRM) )
+            lead_confirmation_decision(proposed, CollaborationConfirmationDecision.CONFIRM) )
         self.assertIs(
             revised.turn.artifact_proposal.state,
             ArtifactProposalState.REVISION_REQUIRED, )
@@ -455,14 +459,14 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         rename_id = self.conversation("Atomic manuscript rename repair")
         rename_before = self.artifact_snapshot()
         self.backend.enqueue(
-            _artifact_outcome(
+            artifact_review_outcome(
                 operations=lambda _call, material, *, input_payload: [
                     {"evidence_id": material['qualified_read_ids'][_INDEX],
                      "kind": "replace", "new_text": "[next](third.md)\n"},
                     {"evidence_id": material['qualified_read_ids'][_SECOND],
                      "kind": "rename", "suggested_destination": _THIRD}, ],
                 authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
-                authoring_scope=lambda call: _live_scope(
+                authoring_scope=lambda call: lead_fixture_authoring_scope(
                     call, activity='review', domains=('tone_execution',),
                     paths=(_INDEX, _SECOND, _THIRD), contributions=[{'domain': domain, 'role': 'constraint_assessor'}
                         for domain in ('tone_execution',)]),
@@ -511,7 +515,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             manuscript.artifact_proposal.candidate.candidate.relationship_validation.projected_dangling_edges,
             (), )
         rejected = await self.runtime.decide_lead_step(
-            _decision(manuscript, CollaborationConfirmationDecision.REJECT) )
+            lead_confirmation_decision(manuscript, CollaborationConfirmationDecision.REJECT) )
         self.assertIs( rejected.turn.artifact_proposal.state, ArtifactProposalState.REJECTED )
         self.assertEqual(self.artifact_snapshot(), rename_before)
 
@@ -567,17 +571,17 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         from tests.recommendation_fixture import task_assessment
         await self.record_book_readiness()
         stale_id = self.conversation("Stale candidate")
-        self.workspace.path(_RULES).unlink(missing_ok=True)
+        self.workspace.path(ARTIFACT_FIXTURE_RULES_PATH).unlink(missing_ok=True)
         self.backend.enqueue(
-            _artifact_outcome(
-                operations=[ { "kind" : "create" , "new_text" : "A narrative rule.\n" , "suggested_path" : _RULES , } ],
+            artifact_review_outcome(
+                operations=[ { "kind" : "create" , "new_text" : "A narrative rule.\n" , "suggested_path" : ARTIFACT_FIXTURE_RULES_PATH , } ],
                 evidence_status="missing",
-                evidence_ids=lambda call, _material, *, input_payload: [_status_id(input_payload, _RULES)],
+                evidence_ids=lambda call, _material, *, input_payload: [artifact_evidence_status_id(input_payload, ARTIFACT_FIXTURE_RULES_PATH)],
                 authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
 
-                authoring_scope=lambda call: _live_scope(
+                authoring_scope=lambda call: lead_fixture_authoring_scope(
                     call, activity='review', domains=('tone_execution',),
-                    paths=(_RULES,), contributions=[
+                    paths=(ARTIFACT_FIXTURE_RULES_PATH,), contributions=[
                         {'domain': domain, 'role': 'constraint_assessor'}
                         for domain in ('tone_execution',)]),)
         , control_plan=selection_plan('artifact.changes'))
@@ -588,27 +592,27 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
              + '\nYou may give bounded artifact review judgments and prepare separate proposals; preserve supplied facts. Revision and execution require separate exact confirmation.'),
         )
         call_count = len(self.backend.call_records)
-        self.workspace.path(_RULES).write_text( "External current rule.\n", encoding="utf-8" )
+        self.workspace.path(ARTIFACT_FIXTURE_RULES_PATH).write_text( "External current rule.\n", encoding="utf-8" )
         external = self.artifact_snapshot()
         stale = await self.runtime.decide_lead_step(
-            _decision(stale_proposal, CollaborationConfirmationDecision.CONFIRM) )
+            lead_confirmation_decision(stale_proposal, CollaborationConfirmationDecision.CONFIRM) )
         self.assertIs(stale.turn.artifact_proposal.state, ArtifactProposalState.STALE)
         self.assertEqual(len(self.backend.call_records), call_count)
         self.assertIn("No provider was called", stale.turn.message)
         self.assertEqual(self.artifact_snapshot(), external)
 
-        self.workspace.path(_RULES).unlink()
+        self.workspace.path(ARTIFACT_FIXTURE_RULES_PATH).unlink()
         revise_id = self.conversation("Revise candidate")
         self.backend.enqueue(
-            _artifact_outcome(
-                operations=[ { "kind" : "create" , "new_text" : "First candidate.\n" , "suggested_path" : _RULES , } ],
+            artifact_review_outcome(
+                operations=[ { "kind" : "create" , "new_text" : "First candidate.\n" , "suggested_path" : ARTIFACT_FIXTURE_RULES_PATH , } ],
                 evidence_status="missing",
-                evidence_ids=lambda call, _material, *, input_payload: [_status_id(input_payload, _RULES)],
+                evidence_ids=lambda call, _material, *, input_payload: [artifact_evidence_status_id(input_payload, ARTIFACT_FIXTURE_RULES_PATH)],
                 authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
 
-                authoring_scope=lambda call: _live_scope(
+                authoring_scope=lambda call: lead_fixture_authoring_scope(
                     call, activity='review', domains=('tone_execution',),
-                    paths=(_RULES,), contributions=[
+                    paths=(ARTIFACT_FIXTURE_RULES_PATH,), contributions=[
                         {'domain': domain, 'role': 'constraint_assessor'}
                         for domain in ('tone_execution',)]),
             )
@@ -656,20 +660,20 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                     "recommended_action": {
                         "kind": "prepare_artifact", "purpose": "Prepare a fresh candidate.",
                         "instruction": "Prepare a new candidate for the narrative rules.", "expected_result": "An exact separately reviewable candidate.",
-                        "source_ids": ["current_response"], "target_paths": [_RULES], "specialist_ids": [], "objective_id": None,
+                        "source_ids": ["current_response"], "target_paths": [ARTIFACT_FIXTURE_RULES_PATH], "specialist_ids": [], "objective_id": None,
                     },
                     "kind": "recommendation",
                     "message": "The old candidate is superseded; request a fresh candidate.",
                     "scope": "story_specific",
                     "evidence_status": "missing",
-                    "evidence_ids": [_status_id(_provider.callback_payload(call), _RULES)],
+                    "evidence_ids": [artifact_evidence_status_id(_provider.callback_payload(call), ARTIFACT_FIXTURE_RULES_PATH)],
                     "proposal": None,
                     "artifact_intent": None,
                     "objective_intent": None,
-                    "authoring_scope": _live_scope(
+                    "authoring_scope": lead_fixture_authoring_scope(
                         call,
                         activity="review",
-                        paths=(_RULES,), domains=("tone_execution",),
+                        paths=(ARTIFACT_FIXTURE_RULES_PATH,), domains=("tone_execution",),
                     ),
                     "authoring_assessment": asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
                 },
@@ -679,7 +683,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             LEAD_ORCHESTRATOR,
             fresh_recommendation, )
         revised = await self.runtime.decide_lead_step(
-            _decision(first, CollaborationConfirmationDecision.REVISE, revision_request=(
+            lead_confirmation_decision(first, CollaborationConfirmationDecision.REVISE, revision_request=(
                 'Revise proposed review.\nSupplied narrative-rule candidate:\n'
                 + first.artifact_proposal.candidate.candidate.change_set.operations[0].content.decode("utf-8")
                 + '\nYou may give bounded artifact review judgments and prepare a separate proposal; preserve supplied facts. Execution requires separate exact confirmation.'
@@ -710,15 +714,15 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             (LEAD_ORCHESTRATOR,), )
 
         self.backend.enqueue(
-            _artifact_outcome(
-                operations=[ { "kind" : "create" , "new_text" : "Second candidate.\n" , "suggested_path" : _RULES , } ],
+            artifact_review_outcome(
+                operations=[ { "kind" : "create" , "new_text" : "Second candidate.\n" , "suggested_path" : ARTIFACT_FIXTURE_RULES_PATH , } ],
                 evidence_status="missing",
-                evidence_ids=lambda call, _material, *, input_payload: [_status_id(input_payload, _RULES)],
+                evidence_ids=lambda call, _material, *, input_payload: [artifact_evidence_status_id(input_payload, ARTIFACT_FIXTURE_RULES_PATH)],
                 authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
 
-                authoring_scope=lambda call: _live_scope(
+                authoring_scope=lambda call: lead_fixture_authoring_scope(
                     call, activity='review', domains=('tone_execution',),
-                    paths=(_RULES,), contributions=[
+                    paths=(ARTIFACT_FIXTURE_RULES_PATH,), contributions=[
                         {'domain': domain, 'role': 'constraint_assessor'}
                         for domain in ('tone_execution',)]),)
         , control_plan=selection_plan('artifact.changes'))
@@ -741,17 +745,17 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         from tests.recommendation_fixture import task_assessment
         await self.record_book_readiness()
         conversation_id = self.conversation("Replace artifact candidate")
-        self.workspace.path(_RULES).unlink(missing_ok=True)
+        self.workspace.path(ARTIFACT_FIXTURE_RULES_PATH).unlink(missing_ok=True)
         self.backend.enqueue(
-            _artifact_outcome(
-                operations=[ { "kind" : "create" , "new_text" : "First candidate.\n" , "suggested_path" : _RULES , } ],
+            artifact_review_outcome(
+                operations=[ { "kind" : "create" , "new_text" : "First candidate.\n" , "suggested_path" : ARTIFACT_FIXTURE_RULES_PATH , } ],
                 evidence_status="missing",
-                evidence_ids=lambda call, _material, *, input_payload: [_status_id(input_payload, _RULES)],
+                evidence_ids=lambda call, _material, *, input_payload: [artifact_evidence_status_id(input_payload, ARTIFACT_FIXTURE_RULES_PATH)],
                 authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
 
-                authoring_scope=lambda call: _live_scope(
+                authoring_scope=lambda call: lead_fixture_authoring_scope(
                     call, activity='review', domains=('tone_execution',),
-                    paths=(_RULES,), contributions=[
+                    paths=(ARTIFACT_FIXTURE_RULES_PATH,), contributions=[
                         {'domain': domain, 'role': 'constraint_assessor'}
                         for domain in ('tone_execution',)]),
             )
@@ -762,15 +766,15 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             ("Prepare the first narrative-rule candidate." + '\nSupplied requested candidate content:\n' + json.dumps(['First candidate.\n'])
              + '\nYou may give bounded artifact review judgments and prepare separate proposals; preserve supplied facts. Revision and execution require separate exact confirmation.'),
         )
-        revision_fixture = _artifact_outcome(
-            operations=[ { "kind" : "create" , "new_text" : "Revised candidate.\n" , "suggested_path" : _RULES , } ],
+        revision_fixture = artifact_review_outcome(
+            operations=[ { "kind" : "create" , "new_text" : "Revised candidate.\n" , "suggested_path" : ARTIFACT_FIXTURE_RULES_PATH , } ],
             evidence_status="missing",
-            evidence_ids=lambda call, _material, *, input_payload: [_status_id(input_payload, _RULES)],
+            evidence_ids=lambda call, _material, *, input_payload: [artifact_evidence_status_id(input_payload, ARTIFACT_FIXTURE_RULES_PATH)],
             authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
 
-            authoring_scope=lambda call: _live_scope(
+            authoring_scope=lambda call: lead_fixture_authoring_scope(
                 call, activity='review', domains=('tone_execution',),
-                paths=(_RULES,), contributions=[
+                paths=(ARTIFACT_FIXTURE_RULES_PATH,), contributions=[
                     {'domain': domain, 'role': 'constraint_assessor'}
                     for domain in ('tone_execution',)]),)
         def checked_revision(call, provider):
@@ -782,7 +786,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             return self._require_revision_fixture(call, revision_fixture(call, provider), first.proposal.authoring_scope, artifact=True)
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, checked_revision)
         replacement = await self.runtime.decide_lead_step(
-            _decision(first, CollaborationConfirmationDecision.REVISE) )
+            lead_confirmation_decision(first, CollaborationConfirmationDecision.REVISE) )
         second = replacement.turn
         self.assertEqual(second.step_id, first.step_id)
         self.assertIs(
@@ -820,118 +824,6 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             2,
         )
 
-    async def test_all_assessments_are_preserved_and_partial_failure_never_reviews(
-        self,
-    ) -> None:
-        from tests.recommendation_fixture import task_assessment
-        await self.record_book_readiness()
-        assessments = (
-            "supports",
-            "concern",
-            "conflict",
-            "insufficient_evidence", )
-        for ordinal, assessment in enumerate(assessments, start=1):
-            with self.subTest(assessment=assessment):
-                conversation_id = self.conversation(f"Assessment {ordinal}")
-                proposed, decided = await self.reviewed_create(
-                    conversation_id,
-                    assessment=assessment, )
-                reviewed = decided.turn.artifact_proposal.reviewed_proposal
-                self.assertEqual(
-                    reviewed.reviews[0].assessment,
-                    CollaborationSpecialistAssessment(assessment), )
-                expected_unresolved = (
-                    ()
-                    if assessment == "supports"
-                    else proposed.proposal.assignments[0].input_ids )
-                self.assertEqual(reviewed.unresolved_input_ids, expected_unresolved)
-                self.assertEqual(
-                    reviewed.limitations,
-                    (
-                        "No additional limitations were reported."
-                        if not expected_unresolved
-                        else "Unresolved reviewer inputs remain: "
-                        + ", ".join(expected_unresolved)
-                        + "."
-                    ),
-                )
-
-        self.workspace.path(_RULES).write_text(dict(_READINESS_DOCUMENTS)[_RULES], encoding="utf-8")
-        await self.record_book_readiness(preserve_documents=True)
-        failed_id = self.conversation("Partial reviewer failure")
-        self.backend.enqueue(
-            _artifact_outcome(
-                operations=[ { "kind" : "create" , "new_text" : "New scene.\n" , "suggested_path" : "manuscript/part-02/new.md" , } ],
-                evidence_status="incomplete",
-                evidence_ids=lambda call, _material, *, input_payload: [_status_id(input_payload, _OUTLINE)],
-                additional_review_domains=("plot_structure",),
-                authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
-
-                authoring_scope=lambda call: _live_scope(
-                    call, activity='review', domains=('plot_structure', 'tone_execution'),
-                    paths=('manuscript/part-02/new.md',), contributions=[
-                        {'domain': domain, 'role': 'constraint_assessor'}
-                        for domain in ('plot_structure', 'tone_execution')]),)
-        , control_plan=selection_plan('artifact.changes'))
-        proposed = await self.runtime.lead_turn(
-            self.session_id,
-            failed_id,
-            ("Prepare a new scene candidate." + '\nSupplied requested candidate content:\n' + json.dumps(['New scene.\n'])
-             + '\nYou may give bounded artifact review judgments and prepare separate proposals; preserve supplied facts. Revision and execution require separate exact confirmation.'),
-        )
-        self.assertIsNotNone(proposed.proposal, (
-            proposed.kind, proposed.next_action, proposed.state, proposed.validation_details,
-            proposed.artifact_proposal is not None,
-        ))
-        bad_calls = []
-        def malformed_reviewer(call, _provider):
-            from story_writing_agents.structured_output_validation import diagnose_json_text
-            from tests.provider_wire_fixture import contract_id, response
-            self.assertEqual(contract_id(call.payload), "specialist-assignment-response-v3")
-            self.assertFalse(hasattr(call, "contract"))
-            value = { "assessment": "supports", "assignment_id": "wrong_assignment", "input_ids": [], "message": "Malformed reviewer identity.", }
-            encoded = response(json.dumps({"action": {"kind": "answer", "result": value, "used_handles": []}}), contract_id(call.payload))
-            self.assertTrue(diagnose_json_text(encoded, call.schema))
-            bad_calls.append(call)
-            return encoded
-        for assignment in proposed.proposal.assignments:
-            response = (malformed_reviewer if assignment.specialist_id == PLOT_ARCHITECT
-                else _specialist_outcome("supports"))
-            self.backend.enqueue_for(assignment.specialist_id, response)
-            if assignment.specialist_id == PLOT_ARCHITECT:
-                self.backend.enqueue_for(assignment.specialist_id, response)
-        review_call_start = len(self.backend.call_records)
-        failed = await self.runtime.decide_lead_step(
-            _decision(proposed, CollaborationConfirmationDecision.CONFIRM) )
-        self.assertIs(failed.turn.artifact_proposal.state, ArtifactProposalState.FAILED)
-        self.assertIsNone(failed.turn.artifact_proposal.reviewed_proposal)
-        self.assertEqual(
-            self.artifact_events(failed_id, ArtifactReviewedProposal),
-            (), )
-        failures = self.artifact_events(failed_id, ArtifactReviewFailurePayload)
-        self.assertEqual(failures[-1].code, ArtifactReviewFailureCode.REVIEW_INCOMPLETE)
-        candidate_value = json.loads(
-            serialize_artifact_review_candidate(
-                proposed.artifact_proposal.candidate.candidate
-            ) )
-        specialist_calls = self.backend.call_records[review_call_start:]
-        self.assertEqual(len(bad_calls), 2)
-        self.assertCountEqual(
-            tuple(agent_id for agent_id, _call in specialist_calls),
-            tuple(item.specialist_id for item in proposed.proposal.assignments) + (PLOT_ARCHITECT,), )
-        from tests.provider_wire_fixture import artifact_candidate as wire_candidate
-        from tests.test_agent_context_accounting import _expanded_context_payload
-        for assignment in proposed.proposal.assignments:
-            with self.subTest(specialist=assignment.specialist_id):
-                for call in (call for agent_id, call in specialist_calls
-                             if agent_id == assignment.specialist_id):
-                    material = (_expanded_context_payload(call.payload) if "shared_context_objects" in call.payload else call.payload)["task_input"]
-                    if call is bad_calls[1]:
-                        self.assertEqual(set(material), {"original_task_input", "response_correction"})
-                        material = material["original_task_input"]
-                    disclosed = next(item["artifact_candidate"] for item in material["inputs"]
-                                     if item["input_source_type"] == "artifact_candidate")
-                    self.assertEqual(disclosed, wire_candidate(candidate_value))
 
     async def test_missing_synthesis_message_fails_and_reviewed_restart_has_no_authority(
         self,
@@ -941,17 +833,17 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         failure_events = []
         for ordinal, malformed in enumerate(("omit_rationale",), start=1):
             mismatch_id = self.conversation(f"Synthesis mismatch {ordinal}")
-            self.workspace.path(_RULES).unlink(missing_ok=True)
+            self.workspace.path(ARTIFACT_FIXTURE_RULES_PATH).unlink(missing_ok=True)
             self.backend.enqueue(
-                _artifact_outcome(
-                    operations=[ { "kind" : "create" , "new_text" : "Rule candidate.\n" , "suggested_path" : _RULES , } ],
+                artifact_review_outcome(
+                    operations=[ { "kind" : "create" , "new_text" : "Rule candidate.\n" , "suggested_path" : ARTIFACT_FIXTURE_RULES_PATH , } ],
                     evidence_status="missing",
-                    evidence_ids=lambda call, _material, *, input_payload: [_status_id(input_payload, _RULES)],
+                    evidence_ids=lambda call, _material, *, input_payload: [artifact_evidence_status_id(input_payload, ARTIFACT_FIXTURE_RULES_PATH)],
                     authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
 
-                authoring_scope=lambda call: _live_scope(
+                authoring_scope=lambda call: lead_fixture_authoring_scope(
                     call, activity='review', domains=('tone_execution',),
-                    paths=(_RULES,), contributions=[
+                    paths=(ARTIFACT_FIXTURE_RULES_PATH,), contributions=[
                         {'domain': domain, 'role': 'constraint_assessor'}
                         for domain in ('tone_execution',)]),)
             , control_plan=selection_plan('artifact.changes'))
@@ -963,14 +855,14 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             )
             self.backend.enqueue_for(
                 EXECUTION_SPECIALIST,
-                _specialist_outcome("conflict"), )
+                lead_specialist_outcome("conflict"), )
             malformed_response = _artifact_synthesis_outcome( "propose", malformed=malformed )
             self.backend.enqueue_for(
                 LEAD_ORCHESTRATOR,
                 malformed_response, )
             self.backend.enqueue_for(LEAD_ORCHESTRATOR, malformed_response)
             mismatch = await self.runtime.decide_lead_step(
-                _decision(proposed, CollaborationConfirmationDecision.CONFIRM) )
+                lead_confirmation_decision(proposed, CollaborationConfirmationDecision.CONFIRM) )
             self.assertIs(
                 mismatch.turn.artifact_proposal.state,
                 ArtifactProposalState.FAILED, )
@@ -1137,9 +1029,9 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
     async def test_search_read_answer_can_add_an_artifact_candidate(self) -> None:
         from tests.recommendation_fixture import task_assessment
         reference_ids = []
-        core_paths = ("core_documents/character_sheets.md", _OUTLINE, _RULES, "core_documents/part_outlines.md")
-        for path, content in _READINESS_DOCUMENTS:
-            if path in (_RULES, "core_documents/part_outlines.md"):
+        core_paths = ("core_documents/character_sheets.md", ARTIFACT_FIXTURE_OUTLINE_PATH, ARTIFACT_FIXTURE_RULES_PATH, "core_documents/part_outlines.md")
+        for path, content in LEAD_FIXTURE_READINESS_DOCUMENTS:
+            if path in (ARTIFACT_FIXTURE_RULES_PATH, "core_documents/part_outlines.md"):
                 content = content.replace(". ", ".\n", 1)
             self.workspace.path(path).write_text(content, encoding="utf-8")
         await self.record_book_readiness(preserve_documents=True)
@@ -1153,13 +1045,13 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         def answer_with_artifact(call, provider):
             observation = provider.callback_payload(call)["context_observation"]
             evidence_id = observation["read_results"][0]["evidence_id"]
-            return _artifact_outcome(
+            return artifact_review_outcome(
                 operations=[{"kind": "create", "new_text": "A searched scene candidate.\n",
                     "suggested_path": "manuscript/part-02/searched.md"}],
                 evidence_ids=[*reference_ids, evidence_id], evidence_status="verified",
                 additional_review_domains=(),
                 message="The read context supports an exact candidate.",
-                authoring_scope=_live_scope(call, activity="review",
+                authoring_scope=lead_fixture_authoring_scope(call, activity="review",
                     domains=("plot_structure", "character_world", "tone_execution"),
                     paths=("manuscript/part-02/searched.md",)),
                 authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',),
@@ -1252,22 +1144,22 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
     ) -> None:
         from tests.recommendation_fixture import task_assessment
         await self.record_book_readiness()
-        self.workspace.path(_RULES).unlink(missing_ok=True)
+        self.workspace.path(ARTIFACT_FIXTURE_RULES_PATH).unlink(missing_ok=True)
         conversation_id = self.conversation("Reject provider authority")
         before = self.artifact_snapshot()
-        invalid = _artifact_outcome(
-            operations=[ { "apply_authority_granted" : True , "kind" : "create" , "new_text" : "Must not survive.\n" , "suggested_path" : _RULES , } ],
+        invalid = artifact_review_outcome(
+            operations=[ { "apply_authority_granted" : True , "kind" : "create" , "new_text" : "Must not survive.\n" , "suggested_path" : ARTIFACT_FIXTURE_RULES_PATH , } ],
             evidence_status="missing",
-            evidence_ids=lambda call, _material, *, input_payload: [_status_id(input_payload, _RULES)],
+            evidence_ids=lambda call, _material, *, input_payload: [artifact_evidence_status_id(input_payload, ARTIFACT_FIXTURE_RULES_PATH)],
 
                 authoring_assessment=asdict(task_assessment(
                     foundation_ids=('user_input',),
                     actions=(
                         'bounded artifact review judgments', 'separate proposal preparation'))),
 
-                authoring_scope=lambda call: _live_scope(
+                authoring_scope=lambda call: lead_fixture_authoring_scope(
                     call, activity='review', domains=('tone_execution',),
-                    paths=(_RULES,), contributions=[
+                    paths=(ARTIFACT_FIXTURE_RULES_PATH,), contributions=[
                         {'domain': domain, 'role': 'constraint_assessor'}
                         for domain in ('tone_execution',)]),)
         self.backend.enqueue(invalid, control_plan=selection_plan('artifact.changes'))
@@ -1305,11 +1197,11 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         evidence = proposal.basis.evidence
         receipt = evidence.receipts[0]
         empty_digest = "sha256:" + hashlib.sha256(b"").hexdigest()
-        self.assertEqual(receipt.locator, _OUTLINE)
+        self.assertEqual(receipt.locator, ARTIFACT_FIXTURE_OUTLINE_PATH)
         self.assertEqual(receipt.content_digest, empty_digest)
         self.assertNotEqual(receipt.revision_digest, receipt.content_digest)
         def translated(selected):
-            return case.runtime._artifact_intent_evidence(selected, session_id=case.session_id, conversation_id=conversation_id, artifact_binding=case.runtime._session_artifact_binding(case.session_id))
+            return case.runtime._artifact_intent_evidence(selected, session_id=case.session_id, conversation_id=conversation_id, artifact_binding=case.runtime.bind_session_artifacts(case.session_id))
         valid = translated(replace(evidence, receipts=(receipt,)))
         self.assertEqual(len(valid), 1)
         self.assertEqual((valid[0].source_digest, valid[0].boundary_digest), (empty_digest, empty_digest))
@@ -1324,7 +1216,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         for changed in (replace(receipt, source_id="foreign_source"), replace(receipt, revision_digest=objectives.digest("wrong metadata")), replace(receipt, evidence_id="status_99")):
             with self.subTest(receipt=changed), self.assertRaises(BackendProtocolError):
                 translated(replace(evidence, receipts=(changed,)))
-        path = case.workspace.path(_OUTLINE)
+        path = case.workspace.path(ARTIFACT_FIXTURE_OUTLINE_PATH)
         replacement = path.with_suffix(".replacement")
         replacement.write_bytes(b"")
         replacement.replace(path)
@@ -1342,7 +1234,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         from story_writing_agents.orchestrator import CONTEXT_SOURCE_POLICY
         from tests import test_artifact_objectives as objectives
         text = "첫째 beat\r\nneedle 민\r\n마지막 beat\n"
-        self.workspace.path(_OUTLINE).write_bytes(text.encode("utf-8"))
+        self.workspace.path(ARTIFACT_FIXTURE_OUTLINE_PATH).write_bytes(text.encode("utf-8"))
         conversation_id = self.conversation("Genuine READ evidence")
         def search(call, _provider):
             from tests.provider_wire_fixture import offered_fixture_bindings, indexed_response
@@ -1351,8 +1243,8 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                 'queries': [{'search_text': 'needle', 'source_types': {'story_document': True}}]},
                 outer_schema_id=outer, inner_schema_id=inner, contract=call.contract)
         def answer(call, provider):
-            scope = lead_fixture_bound_scope(call, _live_scope(call,
-                activity="review", domains=("plot_structure",), paths=(_OUTLINE,)), record=True)
+            scope = lead_fixture_bound_scope(call, lead_fixture_authoring_scope(call,
+                activity="review", domains=("plot_structure",), paths=(ARTIFACT_FIXTURE_OUTLINE_PATH,)), record=True)
             return lead_fixture_response(call, {"response_type": "clarification_question",
                 "response_text": "The selected line is visible; what should change?",
                 "response_details": {"task_scope": scope, "planning_target": None}}, family=0)
@@ -1364,11 +1256,11 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             for item in result.evidence.receipts
             if item.acquisition is c.CollaborationEvidenceAcquisition.READ )
         self.assertIs(receipt.acquisition, c.CollaborationEvidenceAcquisition.READ)
-        scope = self.runtime._agent_context_service.scope(self.session_id, ContextSubjectKind.CONVERSATION, conversation_id, LEAD_ORCHESTRATOR)
+        scope = self.runtime.agent_context_service.scope(self.session_id, ContextSubjectKind.CONVERSATION, conversation_id, LEAD_ORCHESTRATOR)
         snapshot = WritingArtifactSourceAdapter(
             WritingArtifactRepository(self.workspace.root),
             scope,
-        ).capture(_OUTLINE, CONTEXT_SOURCE_POLICY)
+        ).capture(ARTIFACT_FIXTURE_OUTLINE_PATH, CONTEXT_SOURCE_POLICY)
         whole_sha = snapshot.descriptor.content_digest
         self.assertEqual(whole_sha, objectives.digest(text))
         self.assertNotEqual(snapshot.descriptor.revision, whole_sha)
@@ -1379,7 +1271,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         for selected, expected_bounds in ((whole, (None, None)), (ranged, (2, 2))):
             with self.subTest(boundary="full_span" if selected is whole else "partial"):
                 evidence = replace(result.evidence, receipts=(selected,))
-                converted, = self.runtime._artifact_intent_evidence(evidence, session_id=self.session_id, conversation_id=conversation_id, artifact_binding=self.runtime._session_artifact_binding(self.session_id))
+                converted, = self.runtime._artifact_intent_evidence(evidence, session_id=self.session_id, conversation_id=conversation_id, artifact_binding=self.runtime.bind_session_artifacts(self.session_id))
                 self.assertEqual(converted.source_digest, whole_sha)
                 self.assertEqual(converted.boundary_digest, selected.content_digest)
                 self.assertEqual((converted.start_line, converted.end_line), expected_bounds)
@@ -1388,20 +1280,20 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                 intent = (ArtifactReplaceIntent(selected.evidence_id, "Whole replacement.\n")
                           if selected is whole else
                           ArtifactPatchIntent(selected.evidence_id, "Revised 민 line.\r\n"))
-                review_scope = AuthoringScope(AuthoringActivity.REVIEW, (_OUTLINE,), (),
+                review_scope = AuthoringScope(AuthoringActivity.REVIEW, (ARTIFACT_FIXTURE_OUTLINE_PATH,), (),
                     "Review the exact synthetic whole or ranged candidate.", "synthetic_review", 1)
-                candidate = self.runtime._construct_artifact_review_candidate(session_id=self.session_id, conversation_id=conversation_id, turn_id=result.turn_id, step_id=result.step_id, intent=ArtifactProposalIntent((intent,)), evidence=evidence, authoring_scope=review_scope, artifact_binding=self.runtime._session_artifact_binding(self.session_id))
+                candidate = self.runtime._construct_artifact_review_candidate(session_id=self.session_id, conversation_id=conversation_id, turn_id=result.turn_id, step_id=result.step_id, intent=ArtifactProposalIntent((intent,)), evidence=evidence, authoring_scope=review_scope, artifact_binding=self.runtime.bind_session_artifacts(self.session_id))
                 self.assertEqual("sha256:" + candidate.change_set.operations[0].base_digest, whole_sha)
                 for invalid in (replace(selected, revision_digest=objectives.digest("wrong metadata")), replace(selected, content_digest=objectives.digest("wrong bytes"))):
                     with self.assertRaises(ValueError):
-                        self.runtime._artifact_intent_evidence(replace(evidence, receipts=(invalid,)), session_id=self.session_id, conversation_id=conversation_id, artifact_binding=self.runtime._session_artifact_binding(self.session_id))
+                        self.runtime._artifact_intent_evidence(replace(evidence, receipts=(invalid,)), session_id=self.session_id, conversation_id=conversation_id, artifact_binding=self.runtime.bind_session_artifacts(self.session_id))
         # Byte-identical physical replacement is stale despite equal whole/boundary hashes.
-        path = self.workspace.path(_OUTLINE)
+        path = self.workspace.path(ARTIFACT_FIXTURE_OUTLINE_PATH)
         replacement = path.with_suffix(".replacement")
         replacement.write_bytes(path.read_bytes())
         replacement.replace(path)
         with self.assertRaises(ValueError):
-            self.runtime._artifact_intent_evidence(result.evidence, session_id=self.session_id, conversation_id=conversation_id, artifact_binding=self.runtime._session_artifact_binding(self.session_id))
+            self.runtime._artifact_intent_evidence(result.evidence, session_id=self.session_id, conversation_id=conversation_id, artifact_binding=self.runtime.bind_session_artifacts(self.session_id))
 
 
 if __name__ == "__main__": unittest.main()

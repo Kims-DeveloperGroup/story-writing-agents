@@ -1415,7 +1415,6 @@
         "tests/test_artifact_proposal_orchestration.py"
       ],
       "focused_ids": [
-        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_all_assessments_are_preserved_and_partial_failure_never_reviews",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_core_conflict_revision_and_manuscript_atomic_rename_workflows",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_empty_core_status_evidence_requires_selected_fresh_zero_byte_source",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_incomplete_core_workflow_is_reviewed_only_after_confirmation",
@@ -1426,10 +1425,10 @@
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_reviewed_history_transfers_with_filesystem_sqlite_parity",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_revised_artifact_intent_replaces_candidate_in_the_same_step",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_search_read_answer_can_add_an_artifact_candidate",
-        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_stale_confirmation_and_revision_require_fresh_authority"
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_stale_confirmation_and_revision_require_fresh_authority",
+        "tests.test_known_result_finalization.KnownResultAssessmentTests.test_all_assessments_are_preserved_and_partial_failure_never_reviews"
       ],
       "affected_ids": [
-        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_all_assessments_are_preserved_and_partial_failure_never_reviews",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_core_conflict_revision_and_manuscript_atomic_rename_workflows",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_empty_core_status_evidence_requires_selected_fresh_zero_byte_source",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_incomplete_core_workflow_is_reviewed_only_after_confirmation",
@@ -1440,7 +1439,8 @@
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_reviewed_history_transfers_with_filesystem_sqlite_parity",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_revised_artifact_intent_replaces_candidate_in_the_same_step",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_search_read_answer_can_add_an_artifact_candidate",
-        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_stale_confirmation_and_revision_require_fresh_authority"
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_stale_confirmation_and_revision_require_fresh_authority",
+        "tests.test_known_result_finalization.KnownResultAssessmentTests.test_all_assessments_are_preserved_and_partial_failure_never_reviews"
       ],
       "depends_on": [
         "context-execution-fixture",
@@ -2104,13 +2104,8 @@
         "tests.test_collaboration_context.CollaborationTransitionTests.test_projection_is_deterministic_ordered_typed_and_history_only"
       ],
       "depends_on": [
-        "context-execution-fixture",
-        "tests.test_agent_context_accounting",
-        "tests.test_artifact_objectives",
-        "tests.test_artifact_proposal_orchestration",
         "tests.test_artifact_proposals",
-        "tests.test_collaboration_events",
-        "tests.test_lead_orchestration"
+        "tests.test_collaboration_events"
       ]
     },
     {
@@ -2158,13 +2153,8 @@
         "tests.test_collaboration_events.CollaborationWireContractTests.test_validation_message_correlation_round_trips_and_old_message_decodes"
       ],
       "depends_on": [
-        "context-execution-fixture",
         "provider-response-contract-fixture",
-        "tests.test_agent_context_accounting",
-        "tests.test_artifact_objectives",
-        "tests.test_artifact_proposal_orchestration",
         "tests.test_artifact_proposals",
-        "tests.test_lead_orchestration",
         "tests.test_specialist_routing_runtime"
       ]
     },
@@ -2459,13 +2449,7 @@
         "tests.test_conversation_archive.ConversationArchiveWireTests.test_noncanonical_order_spacing_newlines_and_escaping_are_rejected",
         "tests.test_conversation_archive.ConversationArchiveWireTests.test_schema_one_archive_and_transcript_shape_are_rejected"
       ],
-      "depends_on": [
-        "context-execution-fixture",
-        "tests.test_agent_context_accounting",
-        "tests.test_artifact_objectives",
-        "tests.test_artifact_proposal_orchestration",
-        "tests.test_lead_orchestration"
-      ]
+      "depends_on": []
     },
     {
       "name": "tests.test_conversation_catalog",
@@ -2539,13 +2523,7 @@
         "tests.test_conversation_catalog.FilesystemConversationCatalogPersistenceTests.test_wrong_path_owners_are_rejected",
         "tests.test_conversation_catalog.FilesystemConversationCatalogPersistenceTests.test_wrong_persisted_types_are_rejected"
       ],
-      "depends_on": [
-        "context-execution-fixture",
-        "tests.test_agent_context_accounting",
-        "tests.test_artifact_objectives",
-        "tests.test_artifact_proposal_orchestration",
-        "tests.test_lead_orchestration"
-      ]
+      "depends_on": []
     },
     {
       "name": "tests.test_conversation_rag",
@@ -2619,13 +2597,7 @@
         "tests.test_conversation_rag_cli.ConversationRagCliWorkflowTests.test_search_returns_only_authorized_excerpt_and_sanitizes_failure",
         "tests.test_conversation_rag_cli.ConversationRagCliWorkflowTests.test_status_maps_every_observed_state_without_turning_nonready_into_failure"
       ],
-      "depends_on": [
-        "context-execution-fixture",
-        "tests.test_agent_context_accounting",
-        "tests.test_artifact_objectives",
-        "tests.test_artifact_proposal_orchestration",
-        "tests.test_lead_orchestration"
-      ]
+      "depends_on": []
     },
     {
       "name": "tests.test_conversation_rag_composition",
@@ -2721,13 +2693,7 @@
         "tests.test_conversation_rag_runtime.ConversationRagRuntimeTests.test_invalid_or_failing_state_is_sanitized_without_content",
         "tests.test_conversation_rag_runtime.ConversationRagRuntimeTests.test_literal_preflight_returns_exact_event_field_citation_provider_free"
       ],
-      "depends_on": [
-        "context-execution-fixture",
-        "tests.test_agent_context_accounting",
-        "tests.test_artifact_objectives",
-        "tests.test_artifact_proposal_orchestration",
-        "tests.test_lead_orchestration"
-      ]
+      "depends_on": []
     },
     {
       "name": "tests.test_conversation_rag_store",
@@ -2801,13 +2767,7 @@
         "tests.test_conversation_retrieval.ConversationRetrievalContractTests.test_search_and_history_observations_serialize_closed_readable_fields",
         "tests.test_conversation_retrieval.ConversationRetrievalContractTests.test_unions_handler_signatures_exports_and_facades_are_exact"
       ],
-      "depends_on": [
-        "context-execution-fixture",
-        "tests.test_agent_context_accounting",
-        "tests.test_artifact_objectives",
-        "tests.test_artifact_proposal_orchestration",
-        "tests.test_lead_orchestration"
-      ]
+      "depends_on": []
     },
     {
       "name": "tests.test_conversation_runtime",
@@ -2869,13 +2829,7 @@
         "tests.test_conversation_search.InMemoryCollaborationSearchContractTests.test_cited_pages_preserve_one_exact_history_snapshot",
         "tests.test_conversation_search.InMemoryCollaborationSearchContractTests.test_search_uses_readable_event_fields_and_never_catalog_subjects"
       ],
-      "depends_on": [
-        "context-execution-fixture",
-        "tests.test_agent_context_accounting",
-        "tests.test_artifact_objectives",
-        "tests.test_artifact_proposal_orchestration",
-        "tests.test_lead_orchestration"
-      ]
+      "depends_on": []
     },
     {
       "name": "tests.test_conversation_storage",
@@ -2975,13 +2929,7 @@
         "tests.test_conversation_storage.ConversationStorageServicesTests.test_services_reject_distinct_provenance_tokens_and_wrong_coordinator",
         "tests.test_conversation_storage.ConversationStorageServicesTests.test_services_reject_malformed_bindings_and_missing_port_methods"
       ],
-      "depends_on": [
-        "context-execution-fixture",
-        "tests.test_agent_context_accounting",
-        "tests.test_artifact_objectives",
-        "tests.test_artifact_proposal_orchestration",
-        "tests.test_lead_orchestration"
-      ]
+      "depends_on": []
     },
     {
       "name": "tests.test_conversation_storage_migration",
@@ -3038,12 +2986,7 @@
         "tests.test_conversation_storage_migration.ConversationStorageTransferSurfaceTests.test_imports_are_lazy_dependency_exact_and_io_free"
       ],
       "depends_on": [
-        "context-execution-fixture",
-        "tests.test_agent_context_accounting",
-        "tests.test_artifact_objectives",
-        "tests.test_artifact_proposal_orchestration",
-        "tests.test_collaboration_events",
-        "tests.test_lead_orchestration"
+        "tests.test_collaboration_events"
       ]
     },
     {
@@ -3064,13 +3007,7 @@
         "tests.test_conversation_storage_migration_cli.ConversationStorageTransferCliTests.test_missing_workspace_is_one_content_free_schema_v1_failure",
         "tests.test_conversation_storage_migration_cli.ConversationStorageTransferCliTests.test_storage_grammar_is_exact_and_invalid_syntax_precedes_io"
       ],
-      "depends_on": [
-        "context-execution-fixture",
-        "tests.test_agent_context_accounting",
-        "tests.test_artifact_objectives",
-        "tests.test_artifact_proposal_orchestration",
-        "tests.test_lead_orchestration"
-      ]
+      "depends_on": []
     },
     {
       "name": "tests.test_conversation_storage_provisioning",
@@ -3168,13 +3105,7 @@
         "tests.test_conversation_storage_selection.ConversationStorageStartupTests.test_startup_mismatch_and_target_failure_do_not_fallback_or_write_marker",
         "tests.test_conversation_storage_selection.ConversationStorageStartupTests.test_startup_uses_one_outer_lease_and_same_bundle_backend"
       ],
-      "depends_on": [
-        "context-execution-fixture",
-        "tests.test_agent_context_accounting",
-        "tests.test_artifact_objectives",
-        "tests.test_artifact_proposal_orchestration",
-        "tests.test_lead_orchestration"
-      ]
+      "depends_on": []
     },
     {
       "name": "tests.test_conversation_storage_selection_cli",
@@ -3198,13 +3129,7 @@
         "tests.test_conversation_storage_selection_cli.ConversationStorageSelectionCliTests.test_use_dispatch_is_provider_free_and_passes_exact_selection_arguments",
         "tests.test_conversation_storage_selection_cli.ConversationStorageSelectionCliTests.test_workspace_and_selection_failures_emit_one_sanitized_json_document"
       ],
-      "depends_on": [
-        "context-execution-fixture",
-        "tests.test_agent_context_accounting",
-        "tests.test_artifact_objectives",
-        "tests.test_artifact_proposal_orchestration",
-        "tests.test_lead_orchestration"
-      ]
+      "depends_on": []
     },
     {
       "name": "tests.test_debug_log",
@@ -3352,13 +3277,7 @@
         "tests.test_filesystem_collaboration_event_store.FilesystemCollaborationEventStorePersistenceTests.test_construction_absent_read_and_first_append_are_exact_and_isolated",
         "tests.test_filesystem_collaboration_event_store.FilesystemCollaborationEventStorePersistenceTests.test_retry_precedes_tail_cas_and_semantic_failures_preserve_bytes"
       ],
-      "depends_on": [
-        "context-execution-fixture",
-        "tests.test_agent_context_accounting",
-        "tests.test_artifact_objectives",
-        "tests.test_artifact_proposal_orchestration",
-        "tests.test_lead_orchestration"
-      ]
+      "depends_on": []
     },
     {
       "name": "tests.test_filesystem_conversation_archive",
@@ -3397,12 +3316,7 @@
         "tests.test_filesystem_conversation_archive.FilesystemConversationArchiveRoundTripTests.test_unrelated_complete_records_and_private_lock_state_are_preserved"
       ],
       "depends_on": [
-        "context-execution-fixture",
-        "tests.test_agent_context_accounting",
-        "tests.test_artifact_objectives",
-        "tests.test_artifact_proposal_orchestration",
-        "tests.test_collaboration_events",
-        "tests.test_lead_orchestration"
+        "tests.test_collaboration_events"
       ]
     },
     {
@@ -3948,14 +3862,10 @@
         "tests.test_interactive_collaboration_view.ArtifactAndGitCollaborationViewTests.test_runtime_artifact_and_local_commit_events_are_complete_and_safe"
       ],
       "depends_on": [
-        "context-execution-fixture",
+        "known-result-finalization-fixture",
         "tests.lead_preparation.test_response_rules",
-        "tests.test_agent_context_accounting",
-        "tests.test_artifact_objectives",
-        "tests.test_artifact_proposal_orchestration",
         "tests.test_interactive_terminal_composer",
         "tests.test_lead_artifact_application_authority",
-        "tests.test_lead_orchestration",
         "tests.test_lead_story_commit_authority"
       ]
     },
@@ -4322,13 +4232,7 @@
       "affected_ids": [
         "tests.test_interactive_pty.InteractiveCliPtyTests.test_conversation_management_routes_controls_and_main_interrupt"
       ],
-      "depends_on": [
-        "context-execution-fixture",
-        "tests.test_agent_context_accounting",
-        "tests.test_artifact_objectives",
-        "tests.test_artifact_proposal_orchestration",
-        "tests.test_lead_orchestration"
-      ]
+      "depends_on": []
     },
     {
       "name": "tests.test_interactive_settings",
@@ -4762,13 +4666,7 @@
         "tests.test_interactive_terminal_external_view.RawExternalViewLifecycleTests.test_reentry_and_progress_overlap_are_rejected_then_latch_releases",
         "tests.test_interactive_terminal_external_view.RawExternalViewLifecycleTests.test_transient_view_refuses_line_fallback_before_writing_content"
       ],
-      "depends_on": [
-        "context-execution-fixture",
-        "tests.test_agent_context_accounting",
-        "tests.test_artifact_objectives",
-        "tests.test_artifact_proposal_orchestration",
-        "tests.test_lead_orchestration"
-      ]
+      "depends_on": []
     },
     {
       "name": "tests.test_interactive_terminal_foundation",
@@ -5329,9 +5227,7 @@
         "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority"
       ],
       "depends_on": [
-        "context-execution-fixture",
-        "tests.test_agent_context_accounting",
-        "tests.test_artifact_objectives",
+        "known-result-finalization-fixture",
         "tests.test_artifact_proposal_orchestration",
         "tests.test_collaboration_events",
         "tests.test_lead_orchestration"
@@ -5415,11 +5311,11 @@
         "tests/test_lead_orchestration.py"
       ],
       "focused_ids": [
+        "tests.test_known_result_finalization.KnownResultBudgetTests.test_unaffordable_continuation_finalizes_exact_result_without_authority",
         "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_budget_notice_preserves_maximum_utf8_synthesis",
         "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_initial_budget_rejection_remains_failure",
         "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_only_budget_subtype_is_caught_after_successful_result",
         "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_restart_and_repeated_known_result_finalization_are_idempotent",
-        "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_unaffordable_continuation_finalizes_exact_result_without_authority",
         "tests.test_lead_orchestration.LeadDecisionAuthorityTests.test_confirm_is_exact_single_use_and_executes_without_artifact_effect",
         "tests.test_lead_orchestration.LeadDecisionAuthorityTests.test_mismatch_reject_revise_and_free_text_are_non_authorizing",
         "tests.test_lead_orchestration.LeadDecisionAuthorityTests.test_reference_drift_blocks_confirmation_without_calls",
@@ -5469,11 +5365,11 @@
         "tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_timed_out_during_correction_never_replays"
       ],
       "affected_ids": [
+        "tests.test_known_result_finalization.KnownResultBudgetTests.test_unaffordable_continuation_finalizes_exact_result_without_authority",
         "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_budget_notice_preserves_maximum_utf8_synthesis",
         "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_initial_budget_rejection_remains_failure",
         "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_only_budget_subtype_is_caught_after_successful_result",
         "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_restart_and_repeated_known_result_finalization_are_idempotent",
-        "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_unaffordable_continuation_finalizes_exact_result_without_authority",
         "tests.test_lead_orchestration.LeadDecisionAuthorityTests.test_confirm_is_exact_single_use_and_executes_without_artifact_effect",
         "tests.test_lead_orchestration.LeadDecisionAuthorityTests.test_mismatch_reject_revise_and_free_text_are_non_authorizing",
         "tests.test_lead_orchestration.LeadDecisionAuthorityTests.test_reference_drift_blocks_confirmation_without_calls",
@@ -5524,6 +5420,7 @@
       ],
       "depends_on": [
         "context-execution-fixture",
+        "known-result-finalization-fixture",
         "tests.test_agent_context_accounting",
         "tests.test_agent_exchange_viewer",
         "tests.test_artifact_objectives",
@@ -5594,6 +5491,7 @@
       ],
       "depends_on": [
         "context-execution-fixture",
+        "known-result-finalization-fixture",
         "tests.test_agent_context_accounting",
         "tests.test_artifact_objectives",
         "tests.test_artifact_proposal_orchestration",
@@ -6052,11 +5950,6 @@
         "tests.test_public_api_and_cli.PublicApiTests.test_uninitialized_direct_constructors_reject_without_artifacts"
       ],
       "depends_on": [
-        "context-execution-fixture",
-        "tests.test_agent_context_accounting",
-        "tests.test_artifact_objectives",
-        "tests.test_artifact_proposal_orchestration",
-        "tests.test_lead_orchestration",
         "tests.test_smoke_cli"
       ]
     },
@@ -6318,13 +6211,7 @@
         "tests.test_session_recovery_reconciliation.SessionRecoveryStateTests.test_missing_foreign_duplicate_and_contradictory_evidence_fail_closed",
         "tests.test_session_recovery_reconciliation.SessionRecoveryStateTests.test_recovery_then_uncertainty_then_terminal_precedence_is_deterministic"
       ],
-      "depends_on": [
-        "context-execution-fixture",
-        "tests.test_agent_context_accounting",
-        "tests.test_artifact_objectives",
-        "tests.test_artifact_proposal_orchestration",
-        "tests.test_lead_orchestration"
-      ]
+      "depends_on": []
     },
     {
       "name": "tests.test_session_transition_assessment",
@@ -6413,9 +6300,10 @@
         "tests/test_specialist_orchestration_execution.py"
       ],
       "focused_ids": [
+        "tests.test_known_result_finalization.KnownResultRecoveryTests.test_domain_rejection_details_survive_restarted_finalization",
+        "tests.test_known_result_finalization.KnownResultRecoveryTests.test_restarted_finalization_restores_only_this_execution_diagnostics",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_assignment_failure_joins_siblings_and_skips_synthesis",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_concurrent_duplicate_domain_and_schema_reports_keep_call_order",
-        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_domain_rejection_details_survive_restarted_finalization",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_execution_delivers_only_each_assignments_ordered_reference_subset",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_failed_specialist_retries_transient_validation_publication",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_invalid_specialist_shapes_repair_then_fall_back_without_halting",
@@ -6423,7 +6311,6 @@
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_outer_cancellation_joins_tasks_persists_terminals_and_cleans_marker",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_provider_free_advisory_confirms_one_specialist_without_synthesis_or_chain",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_recovered_reply_retries_transient_validation_publication",
-        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_restarted_finalization_restores_only_this_execution_diagnostics",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_second_round_uses_reply_events_fresh_authority_and_cannot_chain_again",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_specialist_and_synthesis_validation_details_are_private_and_correlated",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_start_append_failure_makes_zero_specialist_calls_and_leaks_no_marker",
@@ -6432,9 +6319,10 @@
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_synthesis_derives_non_supporting_inputs_locally"
       ],
       "affected_ids": [
+        "tests.test_known_result_finalization.KnownResultRecoveryTests.test_domain_rejection_details_survive_restarted_finalization",
+        "tests.test_known_result_finalization.KnownResultRecoveryTests.test_restarted_finalization_restores_only_this_execution_diagnostics",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_assignment_failure_joins_siblings_and_skips_synthesis",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_concurrent_duplicate_domain_and_schema_reports_keep_call_order",
-        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_domain_rejection_details_survive_restarted_finalization",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_execution_delivers_only_each_assignments_ordered_reference_subset",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_failed_specialist_retries_transient_validation_publication",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_invalid_specialist_shapes_repair_then_fall_back_without_halting",
@@ -6442,7 +6330,6 @@
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_outer_cancellation_joins_tasks_persists_terminals_and_cleans_marker",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_provider_free_advisory_confirms_one_specialist_without_synthesis_or_chain",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_recovered_reply_retries_transient_validation_publication",
-        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_restarted_finalization_restores_only_this_execution_diagnostics",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_second_round_uses_reply_events_fresh_authority_and_cannot_chain_again",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_specialist_and_synthesis_validation_details_are_private_and_correlated",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_start_append_failure_makes_zero_specialist_calls_and_leaks_no_marker",
@@ -6452,6 +6339,7 @@
       ],
       "depends_on": [
         "context-execution-fixture",
+        "known-result-finalization-fixture",
         "tests.test_agent_context_accounting",
         "tests.test_lead_orchestration",
         "tests.test_specialist_orchestration_accounting"
@@ -6492,8 +6380,6 @@
       "depends_on": [
         "context-execution-fixture",
         "tests.test_agent_context_accounting",
-        "tests.test_artifact_objectives",
-        "tests.test_artifact_proposal_orchestration",
         "tests.test_lead_artifact_objectives",
         "tests.test_lead_orchestration",
         "tests.test_specialist_routing_runtime"
@@ -6573,13 +6459,7 @@
         "tests.test_sqlite_collaboration_event_store.SQLiteCollaborationEventStoreFirstSliceTests.test_legacy_database_and_v1_shaped_rows_fail_without_mutation",
         "tests.test_sqlite_collaboration_event_store.SQLiteCollaborationEventStoreFirstSliceTests.test_transaction_failures_rollback_or_expose_a_retryable_commit"
       ],
-      "depends_on": [
-        "context-execution-fixture",
-        "tests.test_agent_context_accounting",
-        "tests.test_artifact_objectives",
-        "tests.test_artifact_proposal_orchestration",
-        "tests.test_lead_orchestration"
-      ]
+      "depends_on": []
     },
     {
       "name": "tests.test_sqlite_conversation_storage",
@@ -6656,12 +6536,7 @@
         "tests.test_sqlite_conversation_storage.SQLiteProvisioningConcurrencyTests.test_spawned_process_provisioners_install_one_complete_database"
       ],
       "depends_on": [
-        "context-execution-fixture",
-        "tests.test_agent_context_accounting",
-        "tests.test_artifact_objectives",
-        "tests.test_artifact_proposal_orchestration",
-        "tests.test_collaboration_events",
-        "tests.test_lead_orchestration"
+        "tests.test_collaboration_events"
       ]
     },
     {
@@ -6756,13 +6631,7 @@
         "tests.test_sqlite_database.SQLiteDatabaseVerificationTests.test_schema_objects_fingerprint_and_query_plans_are_exact",
         "tests.test_sqlite_database.SQLiteDatabaseVerificationTests.test_verify_existing_and_preflight_remain_exhaustive"
       ],
-      "depends_on": [
-        "context-execution-fixture",
-        "tests.test_agent_context_accounting",
-        "tests.test_artifact_objectives",
-        "tests.test_artifact_proposal_orchestration",
-        "tests.test_lead_orchestration"
-      ]
+      "depends_on": []
     },
     {
       "name": "tests.test_suite_budget",
@@ -8540,13 +8409,8 @@
         "tests.agent_context.sources.test_authority_adapters.RealAuthorityAdapterTests.test_zero_record_focused_conversation_exists_with_explicit_bootstrap"
       ],
       "depends_on": [
-        "context-execution-fixture",
         "context-source-authority-fixture",
-        "context-source-values-fixture",
-        "tests.test_agent_context_accounting",
-        "tests.test_artifact_objectives",
-        "tests.test_artifact_proposal_orchestration",
-        "tests.test_lead_orchestration"
+        "context-source-values-fixture"
       ]
     },
     {
@@ -13703,9 +13567,9 @@
         "tests.test_collaboration_events.CollaborationPackageBoundaryTests.test_clean_import_orders_have_no_cwd_io_or_dynamic_forwarding",
         "tests.test_collaboration_events.CollaborationPackageBoundaryTests.test_leaf_and_facade_exports_identity_metadata_pickle_and_root_omission",
         "tests.test_collaboration_events.CollaborationValueContractTests.test_constants_and_closed_enums_are_exact",
-        "tests.test_provider_response_mapping.ProviderResponseMappingTests.test_all_wire_values_have_stable_golden_hashes_and_round_trip",
         "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_public_definitions_live_in_their_exact_owner_modules",
-        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_supported_package_exports_are_identity_stable"
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_supported_package_exports_are_identity_stable",
+        "tests.test_provider_response_mapping.ProviderResponseMappingTests.test_all_wire_values_have_stable_golden_hashes_and_round_trip"
       ],
       "affected_full": true
     },
@@ -14017,6 +13881,7 @@
         "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_persistent_validation_publication_failure_keeps_result_unknown",
         "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_result_persistence_failure_cleans_marker_after_provider_completion",
         "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_synthesis_cancellation_preserves_specialist_result_and_never_reruns_it",
+        "tests.test_known_result_finalization.KnownResultRecoveryTests.test_restarted_finalization_restores_only_this_execution_diagnostics",
         "tests.test_lead_orchestration.LeadDecisionAuthorityTests.test_confirm_is_exact_single_use_and_executes_without_artifact_effect",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_capability_is_private_nonserializable_and_single_use",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_confirmed_live_capability_preserves_exact_evidence_without_dispatch",
@@ -14026,7 +13891,6 @@
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_assignment_failure_joins_siblings_and_skips_synthesis",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_execution_delivers_only_each_assignments_ordered_reference_subset",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_outer_cancellation_joins_tasks_persists_terminals_and_cleans_marker",
-        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_restarted_finalization_restores_only_this_execution_diagnostics",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_start_append_failure_makes_zero_specialist_calls_and_leaks_no_marker",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_submitted_uncertainty_enters_unknown_and_never_replays"
       ],
@@ -14047,6 +13911,7 @@
         "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_persistent_validation_publication_failure_keeps_result_unknown",
         "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_result_persistence_failure_cleans_marker_after_provider_completion",
         "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_synthesis_cancellation_preserves_specialist_result_and_never_reruns_it",
+        "tests.test_known_result_finalization.KnownResultRecoveryTests.test_restarted_finalization_restores_only_this_execution_diagnostics",
         "tests.test_lead_artifact_objectives.LeadDefaultBudgetRefusalTests.test_default_grouped_budget_refuses_unfunded_artifact_preparation",
         "tests.test_lead_orchestration.LeadDecisionAuthorityTests.test_confirm_is_exact_single_use_and_executes_without_artifact_effect",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_capability_is_private_nonserializable_and_single_use",
@@ -14058,7 +13923,6 @@
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_assignment_failure_joins_siblings_and_skips_synthesis",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_execution_delivers_only_each_assignments_ordered_reference_subset",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_outer_cancellation_joins_tasks_persists_terminals_and_cleans_marker",
-        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_restarted_finalization_restores_only_this_execution_diagnostics",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_start_append_failure_makes_zero_specialist_calls_and_leaks_no_marker",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_submitted_uncertainty_enters_unknown_and_never_replays"
       ],
@@ -14096,6 +13960,7 @@
         "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_persistent_validation_publication_failure_keeps_result_unknown",
         "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_result_persistence_failure_cleans_marker_after_provider_completion",
         "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_synthesis_cancellation_preserves_specialist_result_and_never_reruns_it",
+        "tests.test_known_result_finalization.KnownResultRecoveryTests.test_restarted_finalization_restores_only_this_execution_diagnostics",
         "tests.test_lead_artifact_objectives.LeadDefaultBudgetRefusalTests.test_default_grouped_budget_refuses_unfunded_artifact_preparation",
         "tests.test_lead_orchestration.LeadDecisionAuthorityTests.test_confirm_is_exact_single_use_and_executes_without_artifact_effect",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_capability_is_private_nonserializable_and_single_use",
@@ -14107,12 +13972,12 @@
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_assignment_failure_joins_siblings_and_skips_synthesis",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_execution_delivers_only_each_assignments_ordered_reference_subset",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_outer_cancellation_joins_tasks_persists_terminals_and_cleans_marker",
-        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_restarted_finalization_restores_only_this_execution_diagnostics",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_start_append_failure_makes_zero_specialist_calls_and_leaks_no_marker",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_submitted_uncertainty_enters_unknown_and_never_replays"
       ],
       "affected_full": true,
       "depends_on": [
+        "agent-context.invocation.context_execution",
         "collaboration-execution-results",
         "lead-control-events",
         "lead-preparation.authoring_authority",
@@ -14244,12 +14109,7 @@
         "tests.test_provider_response_mapping.ProviderResponseMappingTests.test_all_wire_values_have_stable_golden_hashes_and_round_trip"
       ],
       "depends_on": [
-        "context-execution-fixture",
-        "provider-response-contract-fixture",
-        "tests.test_agent_context_accounting",
-        "tests.test_artifact_objectives",
-        "tests.test_artifact_proposal_orchestration",
-        "tests.test_lead_orchestration"
+        "provider-response-contract-fixture"
       ]
     },
     {
@@ -14317,7 +14177,6 @@
         "tests.test_artifact_application_contracts.ArtifactApplicationBoundaryTests.test_module_graph_matches_accepted_delta",
         "tests.test_artifact_application_store_recovery.ArtifactApplicationBoundaryTests.test_store_is_sole_persistence_interpreter_and_matches_boundary",
         "tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_empty_continuation_retains_selection_and_cancel_is_terminal",
-        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_all_assessments_are_preserved_and_partial_failure_never_reviews",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_core_conflict_revision_and_manuscript_atomic_rename_workflows",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_incomplete_core_workflow_is_reviewed_only_after_confirmation",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_missing_synthesis_message_fails_and_reviewed_restart_has_no_authority",
@@ -14343,7 +14202,6 @@
         "tests.test_codex_backend.CodexBackendTestCase.test_strict_phase_reply_mapping",
         "tests.test_collaboration_events.CollaborationValueContractTests.test_actor_direction_matrix_is_closed_and_exact",
         "tests.test_collaboration_events.CollaborationValueContractTests.test_all_schema_values_have_exact_fields_frozen_slots_and_nested_tuples",
-        "tests.test_provider_response_mapping.ProviderResponseMappingTests.test_all_wire_values_have_stable_golden_hashes_and_round_trip",
         "tests.test_collaboration_events.CollaborationWireContractTests.test_artifact_public_decoders_clear_content_from_exception_graphs",
         "tests.test_collaboration_events.CollaborationWireContractTests.test_duplicate_extra_missing_nonfinite_and_noncanonical_json_are_rejected",
         "tests.test_collaboration_events.CollaborationWireContractTests.test_unicode_is_not_normalized_and_tampered_digest_is_rejected",
@@ -14355,6 +14213,7 @@
         "tests.test_interactive_controller.InteractiveLeadAdapterTests.test_literal_lead_turn_and_consultation_decisions_are_exact",
         "tests.test_interactive_controller.InteractiveLeadAdapterTests.test_retry_lead_turn_keeps_fixed_diagnostic_copy_and_renders_error_role",
         "tests.test_interactive_pty.InteractiveCliPtyTests.test_conversation_management_routes_controls_and_main_interrupt",
+        "tests.test_known_result_finalization.KnownResultAssessmentTests.test_all_assessments_are_preserved_and_partial_failure_never_reviews",
         "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_only_matching_successful_apply_satisfies_objective",
         "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_durable_zero_hit_history_contains_no_search_or_source_content",
@@ -14394,13 +14253,14 @@
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_unstarted_prepared_and_submitted_requests_never_replay",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_untrusted_answer_diagnostic_cannot_publish_private_text",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_validation_details_do_not_grant_action_authority",
-        "tests.test_provider_schema_projection.ProviderSchemaProjectionTests.test_small_factoring_annotations_and_owner_refs_are_exact",
         "tests.test_lead_recommendations.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review",
         "tests.test_lead_recommendations.LeadRecommendationTests.test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority",
         "tests.test_lead_session_continuity.LeadSessionContinuityTests.test_confirmed_plan_survives_three_followups_and_conversation_switch",
         "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation",
         "tests.test_provider_auth_recovery.ContextRecoveryTests.test_safe_replay_preserves_wire_and_counts_distinct_physical_calls",
         "tests.test_provider_auth_recovery.RecoveryCoordinationTests.test_partial_timeout_auth_is_assisted_without_replay_and_closes_lead",
+        "tests.test_provider_response_mapping.ProviderResponseMappingTests.test_all_wire_values_have_stable_golden_hashes_and_round_trip",
+        "tests.test_provider_schema_projection.ProviderSchemaProjectionTests.test_small_factoring_annotations_and_owner_refs_are_exact",
         "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_revision_timeout_keeps_superseded_confirmation_non_authorizing",
         "tests.test_rag_module_and_packaging_boundary.RagModuleBoundaryTests.test_inventory_edges_cycles_and_sole_dual_importer_match_the_brief",
         "tests.test_rag_module_and_packaging_boundary.RagModuleBoundaryTests.test_supported_module_surfaces_do_not_expand_the_root_facade",
@@ -14466,7 +14326,6 @@
         "tests.test_artifact_application_contracts.ArtifactApplicationBoundaryTests.test_module_graph_matches_accepted_delta",
         "tests.test_artifact_application_store_recovery.ArtifactApplicationBoundaryTests.test_store_is_sole_persistence_interpreter_and_matches_boundary",
         "tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_empty_continuation_retains_selection_and_cancel_is_terminal",
-        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_all_assessments_are_preserved_and_partial_failure_never_reviews",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_core_conflict_revision_and_manuscript_atomic_rename_workflows",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_incomplete_core_workflow_is_reviewed_only_after_confirmation",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_missing_synthesis_message_fails_and_reviewed_restart_has_no_authority",
@@ -14492,7 +14351,6 @@
         "tests.test_codex_backend.CodexBackendTestCase.test_strict_phase_reply_mapping",
         "tests.test_collaboration_events.CollaborationValueContractTests.test_actor_direction_matrix_is_closed_and_exact",
         "tests.test_collaboration_events.CollaborationValueContractTests.test_all_schema_values_have_exact_fields_frozen_slots_and_nested_tuples",
-        "tests.test_provider_response_mapping.ProviderResponseMappingTests.test_all_wire_values_have_stable_golden_hashes_and_round_trip",
         "tests.test_collaboration_events.CollaborationWireContractTests.test_artifact_public_decoders_clear_content_from_exception_graphs",
         "tests.test_collaboration_events.CollaborationWireContractTests.test_duplicate_extra_missing_nonfinite_and_noncanonical_json_are_rejected",
         "tests.test_collaboration_events.CollaborationWireContractTests.test_unicode_is_not_normalized_and_tampered_digest_is_rejected",
@@ -14504,6 +14362,7 @@
         "tests.test_interactive_controller.InteractiveLeadAdapterTests.test_literal_lead_turn_and_consultation_decisions_are_exact",
         "tests.test_interactive_controller.InteractiveLeadAdapterTests.test_retry_lead_turn_keeps_fixed_diagnostic_copy_and_renders_error_role",
         "tests.test_interactive_pty.InteractiveCliPtyTests.test_conversation_management_routes_controls_and_main_interrupt",
+        "tests.test_known_result_finalization.KnownResultAssessmentTests.test_all_assessments_are_preserved_and_partial_failure_never_reviews",
         "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_only_matching_successful_apply_satisfies_objective",
         "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_durable_zero_hit_history_contains_no_search_or_source_content",
@@ -14543,13 +14402,14 @@
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_unstarted_prepared_and_submitted_requests_never_replay",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_untrusted_answer_diagnostic_cannot_publish_private_text",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_validation_details_do_not_grant_action_authority",
-        "tests.test_provider_schema_projection.ProviderSchemaProjectionTests.test_small_factoring_annotations_and_owner_refs_are_exact",
         "tests.test_lead_recommendations.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review",
         "tests.test_lead_recommendations.LeadRecommendationTests.test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority",
         "tests.test_lead_session_continuity.LeadSessionContinuityTests.test_confirmed_plan_survives_three_followups_and_conversation_switch",
         "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation",
         "tests.test_provider_auth_recovery.ContextRecoveryTests.test_safe_replay_preserves_wire_and_counts_distinct_physical_calls",
         "tests.test_provider_auth_recovery.RecoveryCoordinationTests.test_partial_timeout_auth_is_assisted_without_replay_and_closes_lead",
+        "tests.test_provider_response_mapping.ProviderResponseMappingTests.test_all_wire_values_have_stable_golden_hashes_and_round_trip",
+        "tests.test_provider_schema_projection.ProviderSchemaProjectionTests.test_small_factoring_annotations_and_owner_refs_are_exact",
         "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_revision_timeout_keeps_superseded_confirmation_non_authorizing",
         "tests.test_rag_module_and_packaging_boundary.RagModuleBoundaryTests.test_inventory_edges_cycles_and_sole_dual_importer_match_the_brief",
         "tests.test_rag_module_and_packaging_boundary.RagModuleBoundaryTests.test_supported_module_surfaces_do_not_expand_the_root_facade",
@@ -14618,7 +14478,6 @@
         "tests.test_artifact_application_contracts.ArtifactApplicationBoundaryTests.test_module_graph_matches_accepted_delta",
         "tests.test_artifact_application_store_recovery.ArtifactApplicationBoundaryTests.test_store_is_sole_persistence_interpreter_and_matches_boundary",
         "tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_empty_continuation_retains_selection_and_cancel_is_terminal",
-        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_all_assessments_are_preserved_and_partial_failure_never_reviews",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_core_conflict_revision_and_manuscript_atomic_rename_workflows",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_incomplete_core_workflow_is_reviewed_only_after_confirmation",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_missing_synthesis_message_fails_and_reviewed_restart_has_no_authority",
@@ -14644,7 +14503,6 @@
         "tests.test_codex_backend.CodexBackendTestCase.test_strict_phase_reply_mapping",
         "tests.test_collaboration_events.CollaborationValueContractTests.test_actor_direction_matrix_is_closed_and_exact",
         "tests.test_collaboration_events.CollaborationValueContractTests.test_all_schema_values_have_exact_fields_frozen_slots_and_nested_tuples",
-        "tests.test_provider_response_mapping.ProviderResponseMappingTests.test_all_wire_values_have_stable_golden_hashes_and_round_trip",
         "tests.test_collaboration_events.CollaborationWireContractTests.test_artifact_public_decoders_clear_content_from_exception_graphs",
         "tests.test_collaboration_events.CollaborationWireContractTests.test_duplicate_extra_missing_nonfinite_and_noncanonical_json_are_rejected",
         "tests.test_collaboration_events.CollaborationWireContractTests.test_unicode_is_not_normalized_and_tampered_digest_is_rejected",
@@ -14656,6 +14514,7 @@
         "tests.test_interactive_controller.InteractiveLeadAdapterTests.test_literal_lead_turn_and_consultation_decisions_are_exact",
         "tests.test_interactive_controller.InteractiveLeadAdapterTests.test_retry_lead_turn_keeps_fixed_diagnostic_copy_and_renders_error_role",
         "tests.test_interactive_pty.InteractiveCliPtyTests.test_conversation_management_routes_controls_and_main_interrupt",
+        "tests.test_known_result_finalization.KnownResultAssessmentTests.test_all_assessments_are_preserved_and_partial_failure_never_reviews",
         "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_only_matching_successful_apply_satisfies_objective",
         "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_durable_zero_hit_history_contains_no_search_or_source_content",
@@ -14695,13 +14554,14 @@
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_unstarted_prepared_and_submitted_requests_never_replay",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_untrusted_answer_diagnostic_cannot_publish_private_text",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_validation_details_do_not_grant_action_authority",
-        "tests.test_provider_schema_projection.ProviderSchemaProjectionTests.test_small_factoring_annotations_and_owner_refs_are_exact",
         "tests.test_lead_recommendations.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review",
         "tests.test_lead_recommendations.LeadRecommendationTests.test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority",
         "tests.test_lead_session_continuity.LeadSessionContinuityTests.test_confirmed_plan_survives_three_followups_and_conversation_switch",
         "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation",
         "tests.test_provider_auth_recovery.ContextRecoveryTests.test_safe_replay_preserves_wire_and_counts_distinct_physical_calls",
         "tests.test_provider_auth_recovery.RecoveryCoordinationTests.test_partial_timeout_auth_is_assisted_without_replay_and_closes_lead",
+        "tests.test_provider_response_mapping.ProviderResponseMappingTests.test_all_wire_values_have_stable_golden_hashes_and_round_trip",
+        "tests.test_provider_schema_projection.ProviderSchemaProjectionTests.test_small_factoring_annotations_and_owner_refs_are_exact",
         "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_revision_timeout_keeps_superseded_confirmation_non_authorizing",
         "tests.test_rag_module_and_packaging_boundary.RagModuleBoundaryTests.test_inventory_edges_cycles_and_sole_dual_importer_match_the_brief",
         "tests.test_rag_module_and_packaging_boundary.RagModuleBoundaryTests.test_supported_module_surfaces_do_not_expand_the_root_facade",
@@ -14770,7 +14630,6 @@
         "tests.test_artifact_application_contracts.ArtifactApplicationBoundaryTests.test_module_graph_matches_accepted_delta",
         "tests.test_artifact_application_store_recovery.ArtifactApplicationBoundaryTests.test_store_is_sole_persistence_interpreter_and_matches_boundary",
         "tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_empty_continuation_retains_selection_and_cancel_is_terminal",
-        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_all_assessments_are_preserved_and_partial_failure_never_reviews",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_core_conflict_revision_and_manuscript_atomic_rename_workflows",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_incomplete_core_workflow_is_reviewed_only_after_confirmation",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_missing_synthesis_message_fails_and_reviewed_restart_has_no_authority",
@@ -14796,7 +14655,6 @@
         "tests.test_codex_backend.CodexBackendTestCase.test_strict_phase_reply_mapping",
         "tests.test_collaboration_events.CollaborationValueContractTests.test_actor_direction_matrix_is_closed_and_exact",
         "tests.test_collaboration_events.CollaborationValueContractTests.test_all_schema_values_have_exact_fields_frozen_slots_and_nested_tuples",
-        "tests.test_provider_response_mapping.ProviderResponseMappingTests.test_all_wire_values_have_stable_golden_hashes_and_round_trip",
         "tests.test_collaboration_events.CollaborationWireContractTests.test_artifact_public_decoders_clear_content_from_exception_graphs",
         "tests.test_collaboration_events.CollaborationWireContractTests.test_duplicate_extra_missing_nonfinite_and_noncanonical_json_are_rejected",
         "tests.test_collaboration_events.CollaborationWireContractTests.test_unicode_is_not_normalized_and_tampered_digest_is_rejected",
@@ -14808,6 +14666,7 @@
         "tests.test_interactive_controller.InteractiveLeadAdapterTests.test_literal_lead_turn_and_consultation_decisions_are_exact",
         "tests.test_interactive_controller.InteractiveLeadAdapterTests.test_retry_lead_turn_keeps_fixed_diagnostic_copy_and_renders_error_role",
         "tests.test_interactive_pty.InteractiveCliPtyTests.test_conversation_management_routes_controls_and_main_interrupt",
+        "tests.test_known_result_finalization.KnownResultAssessmentTests.test_all_assessments_are_preserved_and_partial_failure_never_reviews",
         "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_only_matching_successful_apply_satisfies_objective",
         "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_durable_zero_hit_history_contains_no_search_or_source_content",
@@ -14847,13 +14706,14 @@
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_unstarted_prepared_and_submitted_requests_never_replay",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_untrusted_answer_diagnostic_cannot_publish_private_text",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_validation_details_do_not_grant_action_authority",
-        "tests.test_provider_schema_projection.ProviderSchemaProjectionTests.test_small_factoring_annotations_and_owner_refs_are_exact",
         "tests.test_lead_recommendations.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review",
         "tests.test_lead_recommendations.LeadRecommendationTests.test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority",
         "tests.test_lead_session_continuity.LeadSessionContinuityTests.test_confirmed_plan_survives_three_followups_and_conversation_switch",
         "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation",
         "tests.test_provider_auth_recovery.ContextRecoveryTests.test_safe_replay_preserves_wire_and_counts_distinct_physical_calls",
         "tests.test_provider_auth_recovery.RecoveryCoordinationTests.test_partial_timeout_auth_is_assisted_without_replay_and_closes_lead",
+        "tests.test_provider_response_mapping.ProviderResponseMappingTests.test_all_wire_values_have_stable_golden_hashes_and_round_trip",
+        "tests.test_provider_schema_projection.ProviderSchemaProjectionTests.test_small_factoring_annotations_and_owner_refs_are_exact",
         "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_revision_timeout_keeps_superseded_confirmation_non_authorizing",
         "tests.test_rag_module_and_packaging_boundary.RagModuleBoundaryTests.test_inventory_edges_cycles_and_sole_dual_importer_match_the_brief",
         "tests.test_rag_module_and_packaging_boundary.RagModuleBoundaryTests.test_supported_module_surfaces_do_not_expand_the_root_facade",
@@ -14923,7 +14783,6 @@
         "tests.test_artifact_application_contracts.ArtifactApplicationBoundaryTests.test_module_graph_matches_accepted_delta",
         "tests.test_artifact_application_store_recovery.ArtifactApplicationBoundaryTests.test_store_is_sole_persistence_interpreter_and_matches_boundary",
         "tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_empty_continuation_retains_selection_and_cancel_is_terminal",
-        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_all_assessments_are_preserved_and_partial_failure_never_reviews",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_core_conflict_revision_and_manuscript_atomic_rename_workflows",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_incomplete_core_workflow_is_reviewed_only_after_confirmation",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_missing_synthesis_message_fails_and_reviewed_restart_has_no_authority",
@@ -14949,7 +14808,6 @@
         "tests.test_codex_backend.CodexBackendTestCase.test_strict_phase_reply_mapping",
         "tests.test_collaboration_events.CollaborationValueContractTests.test_actor_direction_matrix_is_closed_and_exact",
         "tests.test_collaboration_events.CollaborationValueContractTests.test_all_schema_values_have_exact_fields_frozen_slots_and_nested_tuples",
-        "tests.test_provider_response_mapping.ProviderResponseMappingTests.test_all_wire_values_have_stable_golden_hashes_and_round_trip",
         "tests.test_collaboration_events.CollaborationWireContractTests.test_artifact_public_decoders_clear_content_from_exception_graphs",
         "tests.test_collaboration_events.CollaborationWireContractTests.test_duplicate_extra_missing_nonfinite_and_noncanonical_json_are_rejected",
         "tests.test_collaboration_events.CollaborationWireContractTests.test_unicode_is_not_normalized_and_tampered_digest_is_rejected",
@@ -14961,6 +14819,7 @@
         "tests.test_interactive_controller.InteractiveLeadAdapterTests.test_literal_lead_turn_and_consultation_decisions_are_exact",
         "tests.test_interactive_controller.InteractiveLeadAdapterTests.test_retry_lead_turn_keeps_fixed_diagnostic_copy_and_renders_error_role",
         "tests.test_interactive_pty.InteractiveCliPtyTests.test_conversation_management_routes_controls_and_main_interrupt",
+        "tests.test_known_result_finalization.KnownResultAssessmentTests.test_all_assessments_are_preserved_and_partial_failure_never_reviews",
         "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_only_matching_successful_apply_satisfies_objective",
         "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_durable_zero_hit_history_contains_no_search_or_source_content",
@@ -15000,13 +14859,14 @@
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_unstarted_prepared_and_submitted_requests_never_replay",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_untrusted_answer_diagnostic_cannot_publish_private_text",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_validation_details_do_not_grant_action_authority",
-        "tests.test_provider_schema_projection.ProviderSchemaProjectionTests.test_small_factoring_annotations_and_owner_refs_are_exact",
         "tests.test_lead_recommendations.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review",
         "tests.test_lead_recommendations.LeadRecommendationTests.test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority",
         "tests.test_lead_session_continuity.LeadSessionContinuityTests.test_confirmed_plan_survives_three_followups_and_conversation_switch",
         "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation",
         "tests.test_provider_auth_recovery.ContextRecoveryTests.test_safe_replay_preserves_wire_and_counts_distinct_physical_calls",
         "tests.test_provider_auth_recovery.RecoveryCoordinationTests.test_partial_timeout_auth_is_assisted_without_replay_and_closes_lead",
+        "tests.test_provider_response_mapping.ProviderResponseMappingTests.test_all_wire_values_have_stable_golden_hashes_and_round_trip",
+        "tests.test_provider_schema_projection.ProviderSchemaProjectionTests.test_small_factoring_annotations_and_owner_refs_are_exact",
         "tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_revision_timeout_keeps_superseded_confirmation_non_authorizing",
         "tests.test_rag_module_and_packaging_boundary.RagModuleBoundaryTests.test_inventory_edges_cycles_and_sole_dual_importer_match_the_brief",
         "tests.test_rag_module_and_packaging_boundary.RagModuleBoundaryTests.test_supported_module_surfaces_do_not_expand_the_root_facade",
@@ -15033,6 +14893,152 @@
       ],
       "depends_on": [
         "provider-message-catalog"
+      ]
+    },
+    {
+      "name": "tests.test_known_result_finalization",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/test_known_result_finalization.py"
+      ],
+      "focused_ids": [
+        "tests.test_known_result_finalization.KnownResultAssessmentTests.test_all_assessments_are_preserved_and_partial_failure_never_reviews",
+        "tests.test_known_result_finalization.KnownResultBudgetTests.test_unaffordable_continuation_finalizes_exact_result_without_authority",
+        "tests.test_known_result_finalization.KnownResultRecoveryTests.test_domain_rejection_details_survive_restarted_finalization",
+        "tests.test_known_result_finalization.KnownResultRecoveryTests.test_restarted_finalization_restores_only_this_execution_diagnostics"
+      ],
+      "affected_ids": [
+        "tests.test_known_result_finalization.KnownResultAssessmentTests.test_all_assessments_are_preserved_and_partial_failure_never_reviews",
+        "tests.test_known_result_finalization.KnownResultBudgetTests.test_unaffordable_continuation_finalizes_exact_result_without_authority",
+        "tests.test_known_result_finalization.KnownResultRecoveryTests.test_domain_rejection_details_survive_restarted_finalization",
+        "tests.test_known_result_finalization.KnownResultRecoveryTests.test_restarted_finalization_restores_only_this_execution_diagnostics"
+      ],
+      "depends_on": [
+        "context-execution-fixture",
+        "known-result-finalization-fixture",
+        "tests.test_agent_context_accounting",
+        "tests.test_artifact_objectives",
+        "tests.test_artifact_proposal_orchestration",
+        "tests.test_lead_orchestration",
+        "tests.test_specialist_orchestration_accounting",
+        "tests.test_specialist_orchestration_execution"
+      ]
+    },
+    {
+      "name": "known-result-finalization-fixture",
+      "boundary": "test-support",
+      "paths": [
+        "tests/known_result_finalization_fixture.py"
+      ],
+      "focused_ids": [
+        "tests.test_known_result_finalization.KnownResultRecoveryTests.test_restarted_finalization_restores_only_this_execution_diagnostics"
+      ],
+      "affected_ids": [
+        "tests.test_artifact_application_contracts.ArtifactApplicationBoundaryTests.test_module_graph_matches_accepted_delta",
+        "tests.test_artifact_application_store_recovery.ArtifactApplicationBoundaryTests.test_store_is_sole_persistence_interpreter_and_matches_boundary",
+        "tests.test_artifact_relationship_policy.ArtifactRelationshipBoundaryTests.test_ast_graph_counts_and_cycles_match_accepted_brief",
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_confirm_starts_one_atomic_dispatch_batch_then_runs_three_in_parallel",
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_persistent_validation_publication_failure_keeps_result_unknown",
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_result_persistence_failure_cleans_marker_after_provider_completion",
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_synthesis_cancellation_preserves_specialist_result_and_never_reruns_it",
+        "tests.test_git_external_operation_inspection.GitExternalOperationInspectionTests.test_contract_adapter_exports_and_dependencies_are_exact",
+        "tests.test_interactive_collaboration_view.ArtifactAndGitCollaborationViewTests.test_runtime_artifact_and_local_commit_events_are_complete_and_safe",
+        "tests.test_interactive_controller.ControllerContractTests.test_direct_import_is_clean_and_package_graph_is_acyclic",
+        "tests.test_known_result_finalization.KnownResultAssessmentTests.test_all_assessments_are_preserved_and_partial_failure_never_reviews",
+        "tests.test_known_result_finalization.KnownResultBudgetTests.test_unaffordable_continuation_finalizes_exact_result_without_authority",
+        "tests.test_known_result_finalization.KnownResultRecoveryTests.test_domain_rejection_details_survive_restarted_finalization",
+        "tests.test_known_result_finalization.KnownResultRecoveryTests.test_restarted_finalization_restores_only_this_execution_diagnostics",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
+        "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_budget_notice_preserves_maximum_utf8_synthesis",
+        "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_only_budget_subtype_is_caught_after_successful_result",
+        "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_restart_and_repeated_known_result_finalization_are_idempotent",
+        "tests.test_lead_recommendations.LeadRecommendationRecoveryTests.test_missing_corrupt_or_unresolved_origin_accounting_never_authorizes_retry",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation",
+        "tests.test_rag_module_and_packaging_boundary.RagModuleBoundaryTests.test_inventory_edges_cycles_and_sole_dual_importer_match_the_brief",
+        "tests.test_rag_module_and_packaging_boundary.RagPackagingBoundaryTests.test_clean_base_wheel_editable_and_compatibility_extra_installs",
+        "tests.test_rag_module_and_packaging_boundary.RagPackagingBoundaryTests.test_normal_story_install_upgrades_exact_old_viewer_and_renders_nested_json",
+        "tests.test_rag_module_and_packaging_boundary.RagPackagingBoundaryTests.test_temporary_base_and_optional_artifacts_exclude_vendored_source",
+        "tests.test_session_lifecycle.SessionLifecycleContractTests.test_lifecycle_module_is_leaf_and_clean_imports_work",
+        "tests.test_session_recovery_contracts.SessionRecoveryBoundaryTests.test_clean_import_and_exact_dependencies_match_accepted_delta",
+        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_concurrent_duplicate_domain_and_schema_reports_keep_call_order",
+        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_failed_specialist_retries_transient_validation_publication",
+        "tests.test_suite_budget.SuiteBudgetTests.test_new_id_increased_subtests_and_relaxed_time_are_rejected",
+        "tests.test_workspace_session_history.WorkspaceSessionHistoryCompositionTests.test_internal_wrapper_uses_main_root_manifest_and_noncreating_snapshot"
+      ],
+      "depends_on": [
+        "context-execution-fixture",
+        "tests.test_agent_context_accounting",
+        "tests.test_artifact_objectives",
+        "tests.test_artifact_proposal_orchestration",
+        "tests.test_lead_orchestration"
+      ]
+    },
+    {
+      "name": "runtime.known_result_finalization",
+      "boundary": "authority",
+      "paths": [
+        "src/story_writing_agents/lead_execution/known_result_finalization.py"
+      ],
+      "focused_ids": [
+        "tests.test_known_result_finalization.KnownResultRecoveryTests.test_restarted_finalization_restores_only_this_execution_diagnostics"
+      ],
+      "affected_ids": [
+        "tests.test_artifact_application_contracts.ArtifactApplicationBoundaryTests.test_module_graph_matches_accepted_delta",
+        "tests.test_artifact_application_store_recovery.ArtifactApplicationBoundaryTests.test_store_is_sole_persistence_interpreter_and_matches_boundary",
+        "tests.test_artifact_relationship_policy.ArtifactRelationshipBoundaryTests.test_ast_graph_counts_and_cycles_match_accepted_brief",
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_confirm_starts_one_atomic_dispatch_batch_then_runs_three_in_parallel",
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_persistent_validation_publication_failure_keeps_result_unknown",
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_result_persistence_failure_cleans_marker_after_provider_completion",
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_synthesis_cancellation_preserves_specialist_result_and_never_reruns_it",
+        "tests.test_git_external_operation_inspection.GitExternalOperationInspectionTests.test_contract_adapter_exports_and_dependencies_are_exact",
+        "tests.test_interactive_collaboration_view.ArtifactAndGitCollaborationViewTests.test_runtime_artifact_and_local_commit_events_are_complete_and_safe",
+        "tests.test_interactive_controller.ControllerContractTests.test_direct_import_is_clean_and_package_graph_is_acyclic",
+        "tests.test_known_result_finalization.KnownResultAssessmentTests.test_all_assessments_are_preserved_and_partial_failure_never_reviews",
+        "tests.test_known_result_finalization.KnownResultBudgetTests.test_unaffordable_continuation_finalizes_exact_result_without_authority",
+        "tests.test_known_result_finalization.KnownResultRecoveryTests.test_domain_rejection_details_survive_restarted_finalization",
+        "tests.test_known_result_finalization.KnownResultRecoveryTests.test_restarted_finalization_restores_only_this_execution_diagnostics",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
+        "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_budget_notice_preserves_maximum_utf8_synthesis",
+        "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_only_budget_subtype_is_caught_after_successful_result",
+        "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_restart_and_repeated_known_result_finalization_are_idempotent",
+        "tests.test_lead_recommendations.LeadRecommendationRecoveryTests.test_missing_corrupt_or_unresolved_origin_accounting_never_authorizes_retry",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation",
+        "tests.test_rag_module_and_packaging_boundary.RagModuleBoundaryTests.test_inventory_edges_cycles_and_sole_dual_importer_match_the_brief",
+        "tests.test_rag_module_and_packaging_boundary.RagPackagingBoundaryTests.test_clean_base_wheel_editable_and_compatibility_extra_installs",
+        "tests.test_rag_module_and_packaging_boundary.RagPackagingBoundaryTests.test_normal_story_install_upgrades_exact_old_viewer_and_renders_nested_json",
+        "tests.test_rag_module_and_packaging_boundary.RagPackagingBoundaryTests.test_temporary_base_and_optional_artifacts_exclude_vendored_source",
+        "tests.test_session_lifecycle.SessionLifecycleContractTests.test_lifecycle_module_is_leaf_and_clean_imports_work",
+        "tests.test_session_recovery_contracts.SessionRecoveryBoundaryTests.test_clean_import_and_exact_dependencies_match_accepted_delta",
+        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_concurrent_duplicate_domain_and_schema_reports_keep_call_order",
+        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_failed_specialist_retries_transient_validation_publication",
+        "tests.test_suite_budget.SuiteBudgetTests.test_new_id_increased_subtests_and_relaxed_time_are_rejected",
+        "tests.test_workspace_session_history.WorkspaceSessionHistoryCompositionTests.test_internal_wrapper_uses_main_root_manifest_and_noncreating_snapshot"
+      ],
+      "affected_full": false,
+      "depends_on": [
+        "agent-context.invocation.context_execution",
+        "artifact-transactions.artifact_application_authority",
+        "lead-control-events",
+        "lead-preparation.authoring_authority",
+        "lead-preparation.call_rule_factory",
+        "lead-preparation.outcome_decoding",
+        "lead-preparation.reply_contract_values",
+        "lead-preparation.response_rules",
+        "runtime-resources",
+        "runtime-resources.collaboration_event_journal",
+        "runtime-resources.provider_call_accounting"
       ]
     }
   ],

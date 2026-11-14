@@ -38,7 +38,7 @@ class CollaborationResultPublicationTests(lead.LeadOrchestrationTestCase):
             self.backend,  # type: ignore[arg-type]
             conversation_storage_services=services,
         )
-        self.backend.enqueue_for(agents.PLOT_ARCHITECT, lead._specialist_outcome())
+        self.backend.enqueue_for(agents.PLOT_ARCHITECT, lead.lead_specialist_outcome())
         self.backend.enqueue_for(agents.LEAD_ORCHESTRATOR, lead._synthesis_outcome())
         failing.enabled = True
 
@@ -51,7 +51,7 @@ class CollaborationResultPublicationTests(lead.LeadOrchestrationTestCase):
         with mock.patch.object(runtime, "_run_collaboration_invocation", side_effect=record):
             with self.assertRaisesRegex(RuntimeError, "injected durable append failure"):
                 await runtime.decide_lead_step(
-                    lead._decision(proposed, conversations.CollaborationConfirmationDecision.CONFIRM) )
+                    lead.lead_confirmation_decision(proposed, conversations.CollaborationConfirmationDecision.CONFIRM) )
 
         self.assertEqual(failing.failures, 1)
         self.assertEqual(live_executions, set())
@@ -67,13 +67,13 @@ class CollaborationResultPublicationTests(lead.LeadOrchestrationTestCase):
     async def test_persistent_validation_publication_failure_keeps_result_unknown(self) -> None:
         conversation_id = self.conversation("Persistent diagnostic append failure")
         proposed = await self.proposal(conversation_id, text=accounting._REVIEW_BRIEF + "\n\nPlease check the story direction.", authoring_assessment=asdict(accounting._review_assessment()))
-        self.backend.enqueue_for(agents.PLOT_ARCHITECT, lead._specialist_outcome(message=""))
+        self.backend.enqueue_for(agents.PLOT_ARCHITECT, lead.lead_specialist_outcome(message=""))
         self.backend.enqueue_for(agents.PLOT_ARCHITECT, lead._SubmittedFailure(RuntimeError( 'definite provider failure')))
         with (mock.patch.object(event_journal, 'append_validation_messages',
             side_effect=RuntimeError('persistent diagnostic append failure'))):
             with (self.assertRaisesRegex(RuntimeError, 'persistent diagnostic append failure')):
                 await self.runtime.decide_lead_step(
-                    lead._decision(proposed, conversations.CollaborationConfirmationDecision.CONFIRM)
+                    lead.lead_confirmation_decision(proposed, conversations.CollaborationConfirmationDecision.CONFIRM)
                 )
         known = self.history(conversation_id)
         self.assertIs(conversations.project_collaboration_history(known).current_state,
@@ -102,10 +102,10 @@ class CollaborationResultPublicationTests(lead.LeadOrchestrationTestCase):
             entered.set()
             await asyncio.Future()
 
-        self.backend.enqueue_for(agents.PLOT_ARCHITECT, lead._specialist_outcome())
+        self.backend.enqueue_for(agents.PLOT_ARCHITECT, lead.lead_specialist_outcome())
         self.backend.enqueue_for(agents.LEAD_ORCHESTRATOR, blocked)
         task = asyncio.create_task(self.runtime.decide_lead_step(
-            lead._decision(proposed, conversations.CollaborationConfirmationDecision.CONFIRM)))
+            lead.lead_confirmation_decision(proposed, conversations.CollaborationConfirmationDecision.CONFIRM)))
         try:
             await asyncio.wait_for(entered.wait(), timeout=_SYNCHRONIZATION_TIMEOUT_SECONDS)
             task.cancel()
@@ -172,7 +172,7 @@ class CollaborationResultPublicationTests(lead.LeadOrchestrationTestCase):
             await asyncio.wait_for(release.wait(), timeout=_SYNCHRONIZATION_TIMEOUT_SECONDS)
             self.assertEqual(guard_depth, 0)
             active -= 1
-            return lead._specialist_outcome()(call, provider)
+            return lead.lead_specialist_outcome()(call, provider)
 
         for agent_id in ((agents.PLOT_ARCHITECT, agents.CHARACTER_CUSTODIAN, agents.EXECUTION_SPECIALIST)):
             self.backend.enqueue_for(agent_id, overlapping)

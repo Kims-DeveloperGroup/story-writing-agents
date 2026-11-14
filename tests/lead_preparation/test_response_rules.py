@@ -1041,7 +1041,7 @@ class SpecialistRoutingTests(unittest.TestCase):
         ordinary_call = fixture_request(ordinary_bound, current_payload)
         with self.assertRaisesRegex(ValueError, "Positive document fixture requires exactly one current offered member: 0"):
             document_fixture._document_plan_native_response(ordinary_call, artifact_value)
-        review_scope = document_fixture.lead._live_scope(current_call, activity="review", domains=("plot_structure",),
+        review_scope = document_fixture.lead.lead_fixture_authoring_scope(current_call, activity="review", domains=("plot_structure",),
             paths=(global_path,), contributions=[{"domain": "plot_structure", "role": "constraint_assessor"}])
         review_scope["intent"] = "review_only"
         review_packet = document_fixture._document_plan_native_response(current_call, {"kind": "proposal", "message": "Review only the current Global input.",
