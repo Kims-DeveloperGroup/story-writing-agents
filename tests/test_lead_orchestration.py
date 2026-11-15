@@ -2402,7 +2402,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             hook_expected = {key: sum(int(active) for hook, active in query_hooks if hook_key(hook) == key) for key in hook_calls}
             hook_codes = {key[0] for key in hook_calls}
             def hook_profile(frame, event, _arg):
-                if event == 'call' and any(frame.f_code.co_name == code.co_name for code in hook_codes) and frame.f_code in hook_codes:
+                if event == 'call' and frame.f_code in hook_codes:
                     key = (frame.f_code, id(frame.f_locals.get(frame.f_code.co_varnames[0])))
                     if key not in hook_calls: key = (frame.f_code, id(None))
                     if key in hook_calls: hook_calls[key] += 1
