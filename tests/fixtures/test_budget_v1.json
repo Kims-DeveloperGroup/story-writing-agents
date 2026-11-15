@@ -1,7 +1,7 @@
 {
   "max_sequential_wall_seconds": 18000,
   "max_shard_wall_seconds": 3600,
-  "max_test_source_lines": 152064,
+  "max_test_source_lines": 152138,
   "schema_version": 1,
   "subtest_caps": {
     "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_binding_rejects_scope_identity_reference_order_and_unpaired_facts": 0,
@@ -166,6 +166,8 @@
     "tests.agent_context.sources.test_source_contracts.SourceSurfacePolicyAndValueTests.test_descriptor_snapshot_records_are_exact_immutable_and_content_hidden": 0,
     "tests.agent_context.sources.test_source_contracts.SourceSurfacePolicyAndValueTests.test_each_policy_cap_rejects_n_plus_one_and_custom_relationships": 15,
     "tests.agent_context.sources.test_source_contracts.SourceSurfacePolicyAndValueTests.test_exact_surface_error_vocabulary_and_defaults": 0,
+    "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review": 0,
+    "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority": 8,
     "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_canonical_artifact_and_semantic_domain_ownership": 5,
     "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_drafted_is_neither_supports_nor_legacy_review_assessment": 3,
     "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_formal_planning_question_selected_gen_is_closed_and_owned": 0,
@@ -2061,8 +2063,6 @@
     "tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_timed_out_before_correction_never_replays": 1,
     "tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_timed_out_during_correction_never_replays": 1,
     "tests.test_lead_recommendations.LeadRecommendationRecoveryTests.test_missing_corrupt_or_unresolved_origin_accounting_never_authorizes_retry": 0,
-    "tests.test_lead_recommendations.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review": 0,
-    "tests.test_lead_recommendations.LeadRecommendationTests.test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority": 8,
     "tests.test_lead_session_continuity.LeadSessionContinuityTests.test_confirmed_plan_survives_three_followups_and_conversation_switch": 0,
     "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git": 0,
     "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation": 3,

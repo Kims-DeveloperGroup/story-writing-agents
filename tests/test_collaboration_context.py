@@ -418,7 +418,9 @@ class CollaborationTransitionTests(unittest.TestCase):
         from story_writing_agents import document_plan as documents, authoring_task_lifecycle as lifecycle
         from story_writing_agents.conversations.context import _task_scope_digest
         from story_writing_agents.lead_task_transitions import LeadTaskRef
-        from story_writing_agents.orchestrator import StoryRuntime, _RecommendationCapability
+        from story_writing_agents.orchestrator import StoryRuntime
+        from story_writing_agents.lead_preparation.recommendation_preparation import RecommendationCapability
+        from story_writing_agents.lead_preparation.proposal_basis_values import build_document_plan
         from story_writing_agents.lead_preparation import authoring_authority
         from story_writing_agents.runtime_resources import collaboration_event_journal as event_journal
         class ObjectiveOwner:
@@ -426,7 +428,7 @@ class CollaborationTransitionTests(unittest.TestCase):
             _draft = staticmethod(event_journal.draft)
             _validate_objective_selection = staticmethod(authoring_authority.validate_objective_selection)
             _resolved_objective_source_ids = staticmethod(authoring_authority.resolved_objective_source_ids)
-            _build_document_plan = StoryRuntime._build_document_plan
+            _build_document_plan = staticmethod(build_document_plan)
             _objective_drafts = StoryRuntime._objective_drafts
             _document_goal_facts = StoryRuntime._document_goal_facts
             def __init__(owner, captured, *, owner_conversation=fixture.CONVERSATION_ID):
@@ -477,7 +479,7 @@ class CollaborationTransitionTests(unittest.TestCase):
                 confirmation.event_id, node_request.request_id, node_request.action_id, node_request.action_revision,
                 node_request.action_digest, "node_attempt")), turn_id="prepared_turn")
         prepared_history = fixture.store_batch(selected_history, fixture.make_batch(selected_history, "node_controls", confirmation, start))
-        capability = _RecommendationCapability(prepared_history[-3], prepared_history[-2], prepared_history[-1])
+        capability = RecommendationCapability(prepared_history[-3], prepared_history[-2], prepared_history[-1])
         references = tuple(fixture.make_input(alias, kind=c.CollaborationInputKind.CONVERSATION_EVENT,
             locator="conversation/" + event.event_id, revision_digest="sha256:" + hashlib.sha256(json.dumps(
                 dataclasses.asdict(event.payload), ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
@@ -630,7 +632,7 @@ class CollaborationTransitionTests(unittest.TestCase):
                                                    authoring_scope=scope, document_plan=qualified_plan)
         foreign_judgment = foreign_draft(replace(judgment, payload=replace(judgment.payload, document_node=foreign_binding)))
         foreign_owner = ObjectiveOwner(foreign_prepared, owner_conversation=foreign_id)
-        foreign_capability = _RecommendationCapability(foreign_prepared[-3], foreign_prepared[-2], foreign_prepared[-1])
+        foreign_capability = RecommendationCapability(foreign_prepared[-3], foreign_prepared[-2], foreign_prepared[-1])
         foreign_objective, = foreign_owner._objective_drafts(replace(outcome, document_node=foreign_binding),
             c.project_collaboration_history(foreign_prepared), foreign_prepared, foreign_judgment,
             preparation=foreign_capability, plan_override=qualified_plan, session_events=captured.events())

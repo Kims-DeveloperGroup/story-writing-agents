@@ -80,6 +80,19 @@ complete workflow shares a 75-minute deadline, including setup and shutdown.
   gate. Otherwise, extend an existing representative case or replace a more
   expensive check while respecting the current inventory.
 
+## #1027의 추천 준비 권한·투영 분리 소스 배정
+
+#1021을 통합한 main `b7061d17229aa7a61d2b85fd689a7792262a1073`의 152,064행을 기준으로
+사용자가 승인한 #1027 한정 +74행을 적용해 상한을 152,138행으로 둔다.
+raw 148,741/support 1,773/legacy 1,550에서 raw +65/support +9를 배정하며 legacy는 유지한다.
+기존 두 Case의 whole-class 1:1 이동과 실제 공개 경계·descriptor·packaging·기존 정책 Case 및
+strict ID 이동 검증 비용이다. 기존 본문·assertion·negative·MRO·자원 수명은 보존한다.
+일반 도구 `tests/suite_budget.py`의 ordinary +16행은 위 산정 상한과 별도로 공개한 비용이다.
+Case·subTest·18,000/3,600초 시간·최대 4 worker 한도는 늘리지 않는다.
+기존 checkpoint dict/2·3·4tuple/None 계약과 raw hash·receipt·fresh strict remap 검증을 유지한다.
+승인 범위와 구체 비용은 [#1027](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1027#구현-계획)에 기록한다.
+#1022·#1034·#1035의 비용으로 재사용하지 않으며 아래 배정은 각 통합 시점의 이력이다.
+
 ## #1021의 영속 결과 확정 분리 소스 배정
 
 #998이 통합된 main8e730b3e의151,686행을 기준으로 사용자 승인 +378행을 적용해 상한을152,064행으로 둔다. raw148,652/support1,484/legacy1,550에서 raw +89/support +289를 배정하며 legacy 파일 변경·삭제의 차감은 사용하지 않는다. #998과 앞선 배정은 해당 단계의 이력으로 유지한다.

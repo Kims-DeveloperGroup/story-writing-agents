@@ -5436,21 +5436,16 @@
         "tests/test_lead_recommendations.py"
       ],
       "focused_ids": [
-        "tests.test_lead_recommendations.LeadRecommendationRecoveryTests.test_missing_corrupt_or_unresolved_origin_accounting_never_authorizes_retry",
-        "tests.test_lead_recommendations.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review",
-        "tests.test_lead_recommendations.LeadRecommendationTests.test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority"
+        "tests.test_lead_recommendations.LeadRecommendationRecoveryTests.test_missing_corrupt_or_unresolved_origin_accounting_never_authorizes_retry"
       ],
       "affected_ids": [
-        "tests.test_lead_recommendations.LeadRecommendationRecoveryTests.test_missing_corrupt_or_unresolved_origin_accounting_never_authorizes_retry",
-        "tests.test_lead_recommendations.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review",
-        "tests.test_lead_recommendations.LeadRecommendationTests.test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority"
+        "tests.test_lead_recommendations.LeadRecommendationRecoveryTests.test_missing_corrupt_or_unresolved_origin_accounting_never_authorizes_retry"
       ],
       "depends_on": [
         "context-execution-fixture",
         "tests.test_agent_context_accounting",
         "tests.test_artifact_objectives",
         "tests.test_artifact_proposal_orchestration",
-        "tests.test_collaboration_events",
         "tests.test_lead_orchestration"
       ]
     },
@@ -14253,8 +14248,8 @@
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_unstarted_prepared_and_submitted_requests_never_replay",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_untrusted_answer_diagnostic_cannot_publish_private_text",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_validation_details_do_not_grant_action_authority",
-        "tests.test_lead_recommendations.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review",
-        "tests.test_lead_recommendations.LeadRecommendationTests.test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority",
+        "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review",
+        "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority",
         "tests.test_lead_session_continuity.LeadSessionContinuityTests.test_confirmed_plan_survives_three_followups_and_conversation_switch",
         "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation",
         "tests.test_provider_auth_recovery.ContextRecoveryTests.test_safe_replay_preserves_wire_and_counts_distinct_physical_calls",
@@ -14402,8 +14397,8 @@
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_unstarted_prepared_and_submitted_requests_never_replay",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_untrusted_answer_diagnostic_cannot_publish_private_text",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_validation_details_do_not_grant_action_authority",
-        "tests.test_lead_recommendations.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review",
-        "tests.test_lead_recommendations.LeadRecommendationTests.test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority",
+        "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review",
+        "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority",
         "tests.test_lead_session_continuity.LeadSessionContinuityTests.test_confirmed_plan_survives_three_followups_and_conversation_switch",
         "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation",
         "tests.test_provider_auth_recovery.ContextRecoveryTests.test_safe_replay_preserves_wire_and_counts_distinct_physical_calls",
@@ -14554,8 +14549,8 @@
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_unstarted_prepared_and_submitted_requests_never_replay",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_untrusted_answer_diagnostic_cannot_publish_private_text",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_validation_details_do_not_grant_action_authority",
-        "tests.test_lead_recommendations.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review",
-        "tests.test_lead_recommendations.LeadRecommendationTests.test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority",
+        "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review",
+        "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority",
         "tests.test_lead_session_continuity.LeadSessionContinuityTests.test_confirmed_plan_survives_three_followups_and_conversation_switch",
         "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation",
         "tests.test_provider_auth_recovery.ContextRecoveryTests.test_safe_replay_preserves_wire_and_counts_distinct_physical_calls",
@@ -14706,8 +14701,8 @@
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_unstarted_prepared_and_submitted_requests_never_replay",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_untrusted_answer_diagnostic_cannot_publish_private_text",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_validation_details_do_not_grant_action_authority",
-        "tests.test_lead_recommendations.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review",
-        "tests.test_lead_recommendations.LeadRecommendationTests.test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority",
+        "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review",
+        "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority",
         "tests.test_lead_session_continuity.LeadSessionContinuityTests.test_confirmed_plan_survives_three_followups_and_conversation_switch",
         "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation",
         "tests.test_provider_auth_recovery.ContextRecoveryTests.test_safe_replay_preserves_wire_and_counts_distinct_physical_calls",
@@ -14859,8 +14854,8 @@
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_unstarted_prepared_and_submitted_requests_never_replay",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_untrusted_answer_diagnostic_cannot_publish_private_text",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_validation_details_do_not_grant_action_authority",
-        "tests.test_lead_recommendations.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review",
-        "tests.test_lead_recommendations.LeadRecommendationTests.test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority",
+        "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review",
+        "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority",
         "tests.test_lead_session_continuity.LeadSessionContinuityTests.test_confirmed_plan_survives_three_followups_and_conversation_switch",
         "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation",
         "tests.test_provider_auth_recovery.ContextRecoveryTests.test_safe_replay_preserves_wire_and_counts_distinct_physical_calls",
@@ -15039,6 +15034,102 @@
         "runtime-resources",
         "runtime-resources.collaboration_event_journal",
         "runtime-resources.provider_call_accounting"
+      ]
+    },
+    {
+      "name": "tests.lead_preparation.test_recommendation_preparation",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/lead_preparation/test_recommendation_preparation.py"
+      ],
+      "focused_ids": [
+        "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review",
+        "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority"
+      ],
+      "affected_ids": [
+        "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review",
+        "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority"
+      ],
+      "depends_on": [
+        "context-execution-fixture",
+        "tests.test_agent_context_accounting",
+        "tests.test_artifact_objectives",
+        "tests.test_artifact_proposal_orchestration",
+        "tests.test_collaboration_events",
+        "tests.test_lead_orchestration"
+      ]
+    },
+    {
+      "name": "lead-preparation.recommendation_preparation",
+      "boundary": "authority",
+      "paths": [
+        "src/story_writing_agents/lead_preparation/recommendation_preparation.py"
+      ],
+      "focused_ids": [
+        "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review"
+      ],
+      "affected_ids": [
+        "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review",
+        "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority",
+        "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip",
+        "tests.test_collaboration_context.CollaborationTransitionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_historical_material_workflow.HistoricalMaterialWorkflowTests.test_prior_draft_and_rejected_response_remain_input_only_in_new_task",
+        "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
+        "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_only_matching_successful_apply_satisfies_objective",
+        "tests.test_lead_recommendations.LeadRecommendationRecoveryTests.test_missing_corrupt_or_unresolved_origin_accounting_never_authorizes_retry",
+        "tests.test_recommendation_actions.RecommendationActionContractTests.test_confirm_origin_v2_and_continuing_v1_preserve_exact_wire_facts",
+        "tests.test_recommendation_actions.RecommendationActionContractTests.test_readable_and_session_context_expose_exact_origin_without_private_authority",
+        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_synthesis_contract_is_semantic_and_runtime_derives_attribution",
+        "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_draft_integrates_exact_all_role_review_apply_and_storage_parity",
+        "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_empty_inventory_does_not_add_unaffected_owners_and_mixed_scope_does",
+        "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_empty_target_adequate_brief_produces_draft_without_writes",
+        "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_old_drafted_revision_cannot_authorize_revised_candidate"
+      ],
+      "affected_full": false,
+      "depends_on": [
+        "lead-preparation.call_rule_factory",
+        "lead-preparation.outcome_decoding",
+        "lead-preparation.reply_contract_values",
+        "lead-preparation.response_rules",
+        "runtime-resources",
+        "runtime-resources.collaboration_event_journal"
+      ]
+    },
+    {
+      "name": "lead-preparation.proposal_basis_values",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/lead_preparation/proposal_basis_values.py"
+      ],
+      "focused_ids": [
+        "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip"
+      ],
+      "affected_ids": [
+        "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review",
+        "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority",
+        "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip",
+        "tests.test_collaboration_context.CollaborationTransitionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_historical_material_workflow.HistoricalMaterialWorkflowTests.test_prior_draft_and_rejected_response_remain_input_only_in_new_task",
+        "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
+        "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_only_matching_successful_apply_satisfies_objective",
+        "tests.test_lead_recommendations.LeadRecommendationRecoveryTests.test_missing_corrupt_or_unresolved_origin_accounting_never_authorizes_retry",
+        "tests.test_recommendation_actions.RecommendationActionContractTests.test_confirm_origin_v2_and_continuing_v1_preserve_exact_wire_facts",
+        "tests.test_recommendation_actions.RecommendationActionContractTests.test_readable_and_session_context_expose_exact_origin_without_private_authority",
+        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_synthesis_contract_is_semantic_and_runtime_derives_attribution",
+        "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_draft_integrates_exact_all_role_review_apply_and_storage_parity",
+        "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_empty_inventory_does_not_add_unaffected_owners_and_mixed_scope_does",
+        "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_empty_target_adequate_brief_produces_draft_without_writes",
+        "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_old_drafted_revision_cannot_authorize_revised_candidate"
+      ],
+      "affected_full": false,
+      "depends_on": [
+        "lead-preparation.authoring_authority",
+        "lead-preparation.call_rule_factory",
+        "lead-preparation.outcome_decoding",
+        "lead-preparation.reply_contract_values",
+        "lead-preparation.response_rules",
+        "runtime-resources",
+        "runtime-resources.collaboration_event_journal"
       ]
     }
   ],

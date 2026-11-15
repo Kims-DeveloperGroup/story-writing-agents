@@ -34,6 +34,7 @@
     "tests.agent_context.sources.test_authority_adapters.RealAuthorityAdapterTests": 3383084,
     "tests.agent_context.sources.test_registry_search.RegistrySearchTests": 225556,
     "tests.agent_context.sources.test_source_contracts.SourceSurfacePolicyAndValueTests": 2568,
+    "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests": 1238303872,
     "tests.lead_preparation.test_response_rules.SpecialistRoutingTests": 612719301,
     "tests.test_adapter_streaming.AdapterStreamingTests": 40723344,
     "tests.test_advisory_progress_streaming.AdvisoryProgressStreamingTests": 4292,
@@ -313,7 +314,6 @@
     "tests.test_lead_orchestration.LeadReferenceFailurePrecedenceTests": 670449707,
     "tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests": 1478609839,
     "tests.test_lead_recommendations.LeadRecommendationRecoveryTests": 1574225116,
-    "tests.test_lead_recommendations.LeadRecommendationTests": 1238303872,
     "tests.test_lead_session_continuity.LeadSessionContinuityTests": 859991901,
     "tests.test_lead_story_commit_authority.LeadStoryCommitTests": 1881272936,
     "tests.test_prompts.PromptAssemblerTests": 1513460,
@@ -397,6 +397,6 @@
     "tests.test_writing_artifacts.SecureStorageTests": 3725752
   },
   "policy_version": 2,
-  "provenance": "Issue938 estimated four-worker wall-equivalent occupancy: measured terminal per-method durations, serial4x/hosted1x, Decimal half-up microseconds per method with minimum1us. Isolated Front measured cost excluded; existing equal-share extraction normalized with W=R+floor(R/(n-1)). Existing class-LPT/isolation/FIFO/profile/limits unchanged. Mixed historical source/environment observations plus four explicitly source/environment-qualified PASS override reports; not CPU costs, causal speedup, actual model acceptance or a future/full-CI pass. Qualification: N historical source-qualified actual PASS and unchanged helper semantics; C actual pure contract PASS; A/B require complete current split-body PASS. Metadata estimates never credit as full-CI passes. Issue1020 exact four-case owner move: freeze each touched original class pool into quotient/remainder canonical per-ID shares, remainder assigned to earlier original canonical IDs; transfer those fixed shares to exact new IDs and conserve every original pool. Source metadata estimate only, never causal performance or CI pass evidence. Issue998 exact two-case owner move: apply the existing frozen canonical quotient/remainder shares; schema whole-class23892us rekeyed, response343832us split into remaining305628us and moved38204us with aggregate unchanged. Source metadata estimate only, not measured per-method performance or CI evidence. Issue1021 transfers frozen original-class canonical quotient/remainder shares by four actual moved IDs; global pool unchanged, not new method measurements.",
+  "provenance": "Issue938 estimated four-worker wall-equivalent occupancy: measured terminal per-method durations, serial4x/hosted1x, Decimal half-up microseconds per method with minimum1us. Isolated Front measured cost excluded; existing equal-share extraction normalized with W=R+floor(R/(n-1)). Existing class-LPT/isolation/FIFO/profile/limits unchanged. Mixed historical source/environment observations plus four explicitly source/environment-qualified PASS override reports; not CPU costs, causal speedup, actual model acceptance or a future/full-CI pass. Qualification: N historical source-qualified actual PASS and unchanged helper semantics; C actual pure contract PASS; A/B require complete current split-body PASS. Metadata estimates never credit as full-CI passes. Issue1020 exact four-case owner move: freeze each touched original class pool into quotient/remainder canonical per-ID shares, remainder assigned to earlier original canonical IDs; transfer those fixed shares to exact new IDs and conserve every original pool. Source metadata estimate only, never causal performance or CI pass evidence. Issue998 exact two-case owner move: apply the existing frozen canonical quotient/remainder shares; schema whole-class23892us rekeyed, response343832us split into remaining305628us and moved38204us with aggregate unchanged. Source metadata estimate only, not measured per-method performance or CI evidence. Issue1021 transfers frozen original-class canonical quotient/remainder shares by four actual moved IDs; global pool unchanged, not new method measurements. Issue1027 whole two-Case LeadRecommendationTests owner rekey transfers unchanged1238303872us class pool to its actual new class; no per-method split, global pool delta0, no timing/CI pass claim.",
   "schema_version": 1
 }
