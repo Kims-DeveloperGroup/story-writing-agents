@@ -387,7 +387,7 @@ class SuiteBudgetTests(unittest.TestCase):
 
         ids = runner_profile.HOSTED_METHOD_IDS
         self.assertEqual(runner_evidence.manifest(ids)["digest"],
-                         'sha256:3423bb9d3e2cff5c627fb573c9466437d824ab3fbfa6623a395cf71fe58a4078')
+                         'sha256:bfe43b74277abd407819d864947610fe4949b557955499c618a0bb9972673946')
         self.assertEqual((len(ids), len({value.rsplit(".", 1)[0] for value in ids})), (162, 25))
         cases = tuple(SimpleNamespace(id=lambda identifier=value: identifier) for value in (*ids, *runner_profile.HOSTED_MIXED_SERIAL_IDS, "unreviewed.test"))
         canonical = runner_contracts.CanonicalCollection(cases, (*ids, *runner_profile.HOSTED_MIXED_SERIAL_IDS, "unreviewed.test"))
