@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest.mock import Mock, call, patch
 
 from tests import suite_budget, suite_policy
-from tests.id_moves import historical_feedback_caps
+from tests.id_moves import historical_feedback_caps, load_receipt
 from tests.runner import contracts as runner_contracts
 from tests.runner import collection as runner_collection
 from tests.runner import selection as runner_selection
@@ -247,6 +247,10 @@ class SuiteBudgetTests(unittest.TestCase):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
         migrated = suite_budget.load_budget(Path(__file__).with_name("fixtures") / "test_budget_v1.json")
+        material_current = dict(migrated, subtest_caps=dict(migrated["subtest_caps"]))
+        for move in load_receipt()[-1]["moves"]:
+            migrated["subtest_caps"][move["old_id"]] = migrated["subtest_caps"].pop(move["new_id"])
+        migrated["max_test_source_lines"] = 152138
         source_current, finalization_current = dict(migrated, subtest_caps=dict(migrated["subtest_caps"])), dict(migrated)
         recommendation_current = dict(migrated)
         after_move_current = source_current
@@ -385,6 +389,20 @@ class SuiteBudgetTests(unittest.TestCase):
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(recommendation_current, subtest_caps=caps), finalization_current)
         self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, recommendation_current, dict(finalization_current, subtest_caps={**finalization_current["subtest_caps"], matrix_id: 2}))
 
+        material_current["max_test_source_lines"] = 152220
+        self.assertIsNone(suite_budget.check_monotonic(material_current, recommendation_current))
+        self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, material_current, dict(material_current, max_test_source_lines=152138))
+        self._assert_source_limit_neighbors_rejected(material_current, recommendation_current)
+        for field, value in (("schema_version", 2), ("max_sequential_wall_seconds", 18001), ("max_shard_wall_seconds", 3601)):
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(material_current, **{field: value}), recommendation_current)
+        for caps in (
+            {key: value for key, value in material_current["subtest_caps"].items() if key != zero_id},
+            {**material_current["subtest_caps"], "tests.unreviewed.Case.test_extra": 0},
+            {**material_current["subtest_caps"], matrix_id: 2},
+            {**material_current["subtest_caps"], matrix_id: 0},
+        ):
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(material_current, subtest_caps=caps), recommendation_current)
+        self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, material_current, dict(recommendation_current, subtest_caps={**recommendation_current["subtest_caps"], matrix_id: 2}))
         ids = runner_profile.HOSTED_METHOD_IDS
         self.assertEqual(runner_evidence.manifest(ids)["digest"],
                          'sha256:bfe43b74277abd407819d864947610fe4949b557955499c618a0bb9972673946')

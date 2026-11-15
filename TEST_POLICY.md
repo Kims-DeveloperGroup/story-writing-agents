@@ -100,6 +100,20 @@ Story runtime 기능 Case에는 이 예외를 적용하지 않는다. 전체 시
 이 결정에 따라 이 Case만을 위한 후속 digest memo 실험은 철회하고 원래 #1027 source 배정을 유지한다.
 실험의 측정·실패·취소 이력은 [#1027](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1027#구현-계획)에 보존한다.
 
+## #1028의 Lead 입력 자료·영속 근거 분리 소스 배정
+
+#1027을 통합한 main `e61b70a0d6985fe62316bb02fb478864616a2d75`의 152,138행을 기준으로
+사용자의 행 추가 포괄 승인을 적용한다. 실제 raw 148,806→148,885(+79), support 1,782→1,785(+3),
+legacy 1,550행 유지로 총 152,220행(+82)과 정확한 152,138→152,220 monotonic 예외를 기록한다.
+raw 비용은 기존 Matrix 클래스·전용 factory 이동의 header/공유 불변 상수 16행, 도메인 docstring 1행,
+잔여 Runtime Case의 실제 owner import 1행, 기존 graph Case의 세 owner 검증 40행,
+기존 패키징 registry 3행, 기존 예산 정책 Case의 정확 전이·neighbor·복구 검증 18행이다.
+support 3행은 기존 ID receipt의 이전 digest·sentinel·stage 전이이며 generic runner 전체를 새로 청구하지 않는다.
+기존 Matrix 2개 Case·24개 정적 assertion·cap 60/4, Runtime 10개 Case의 입력·부정·MRO·자원 수명을 보존한다.
+전체 2,544개 Case/cap 8,690, 18,000/3,600초와 최대 4 worker는 유지한다.
+실제 소스/receipt·동일 production 오류의 RED/GREEN·정상 시간·최종 전체 CI는 PR에서 확인한다.
+예산 정책 Case의 개별 시간은 위 사용자 결정의 전체 영향 기준으로 판단하며 Story runtime에 확장하지 않는다.
+
 ## #1027의 추천 준비 권한·투영 분리 소스 배정
 
 #1021을 통합한 main `b7061d17229aa7a61d2b85fd689a7792262a1073`의 152,064행을 기준으로
