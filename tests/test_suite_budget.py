@@ -370,7 +370,7 @@ class SuiteBudgetTests(unittest.TestCase):
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(finalization_current, subtest_caps=caps), after_move_current)
         self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, finalization_current, dict(after_move_current, subtest_caps={**after_move_current["subtest_caps"], matrix_id: 2}))
 
-        recommendation_current["max_test_source_lines"] = 152145
+        recommendation_current["max_test_source_lines"] = 152156
         self.assertIsNone(suite_budget.check_monotonic(recommendation_current, finalization_current))
         self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, recommendation_current, dict(recommendation_current, max_test_source_lines=152064))
         self._assert_source_limit_neighbors_rejected(recommendation_current, finalization_current)

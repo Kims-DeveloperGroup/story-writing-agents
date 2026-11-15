@@ -88,6 +88,16 @@ complete workflow shares a 75-minute deadline, including setup and shutdown.
 이 승인은 기존 Case·subTest 범위, 시간·worker 상한 또는 실제 성능 회귀의 면제를 허용하지 않는다.
 기존 개별 이슈의 소스 배정 이력은 보존하고, 새 행 추가는 해당 이슈에서 별도로 계상한다.
 
+## #1027 타입·범위 검사 반복 비용 수정 소스 배정
+
+앞선 +7행의 정방향 정상 비교가 기존 시간 경계를 넘었으므로 검증 루프의 비용을 수정한다.
+사용자 포괄 행 추가 승인에 따라 support +11행을 배정해 상한을 152,156행으로 둔다.
+raw 148,806/support 1,800/legacy 1,550이며 기존 +74행과 +7행은 해당 단계의 이력으로 보존한다.
+같은 불변 snapshot의 exact type identity·길이·값 범위를 C 수준 반복으로 검사하고,
+JSON의 정렬 계산은 cache miss에만 수행한다. fallback과 fresh receipt 검증은 유지한다.
+Case·subTest·시간·worker 한도는 늘리지 않으며 원래 고정 경계로 정상 성능을 다시 확인한다.
+비용·실패·계측 및 새 검증 결과는 [#1027 구현 계획](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1027#구현-계획)에 보존한다.
+
 ## #1027 예산 검증 성능 회귀 수정 소스 배정
 
 기존 #1027 +74행(152,064→152,138)은 해당 단계의 승인 이력으로 보존한다.

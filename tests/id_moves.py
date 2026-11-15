@@ -2,6 +2,8 @@
 from __future__ import annotations
 import hashlib
 from functools import lru_cache
+from itertools import repeat
+from operator import is_
 import json
 from pathlib import Path
 
@@ -40,12 +42,21 @@ STAGES = (
 
 @lru_cache(maxsize=32)
 def _caps_digest_items(items: tuple[tuple[str, int], ...]) -> str:
-    return hashlib.sha256(json.dumps(dict(items), separators=(",", ":")).encode()).hexdigest()
+    return hashlib.sha256(json.dumps(dict(items), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 def caps_digest(caps: dict[str, int]) -> str:
     items = tuple(caps.items()) if type(caps) is dict else ()
-    if type(caps) is dict and len(items) <= 2544 and all(type(k) is str and len(k) <= 256 and type(v) is int and 0 <= v <= 8690 for k, v in items):
-        return _caps_digest_items(tuple(sorted(items)))
+    keys, values = zip(*items) if items and len(items) <= 2544 else ((), ())
+    if (
+        type(caps) is dict
+        and len(items) <= 2544
+        and all(map(is_, map(type, keys), repeat(str)))
+        and all(map(is_, map(type, values), repeat(int)))
+        and max(map(len, keys), default=0) <= 256
+        and min(values, default=0) >= 0
+        and max(values, default=0) <= 8690
+    ):
+        return _caps_digest_items(items)
     return hashlib.sha256(json.dumps(caps, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 def load_receipt() -> list[dict]:
