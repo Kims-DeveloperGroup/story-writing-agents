@@ -4267,7 +4267,7 @@ class StoryRuntime:
             compacted.append(row)
         if not changed:
             return value
-        return {**value, "artifact_objectives": {**objectives, "objectives": compacted}}
+        return {**value, "artifact_objectives": {**objectives, "objective": compacted}}
 
     def attach_document_plan(self, result: LeadTurnResult, events=None, projection=None) -> LeadTurnResult:
         if result.document_plan is not None:
