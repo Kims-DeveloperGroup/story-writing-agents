@@ -649,6 +649,34 @@
       "current_receipt_sha256": "4ba51d517f648045a335a156192d4d728fa401ef11f60854e0a1aba7e7dcacfa",
       "original_caps_sha256": "2823d24a5e6436e5b6fbe2356047375707e88c3e73c5f784011e8efa37e30fe5",
       "expected_caps_sha256": "d9bd3023ba2ac0c68de7f8fb8de964f5e528db92a43e9a48a176445cee8bd28f"
+    },
+    {
+      "issue": 1027,
+      "origin_commit": "b7061d17229aa7a61d2b85fd689a7792262a1073",
+      "origins": [
+        {
+          "source": "tests/test_lead_recommendations.py",
+          "sha256": "1a6478a02237a6171fe50ae8902d00fb9943a763c5598e5555914efb65e55ed9",
+          "source_ranges": [
+            [
+              27,
+              511
+            ]
+          ],
+          "destinations": [
+            "tests/lead_preparation/test_recommendation_preparation.py"
+          ],
+          "counting": "Whole existing two-Case class moves once;467ordinary class,110/43assert/caps0/8,RecommendationCase MRO/resources/cleanup retained. Header18; only7dead imports removed after eager module witness; no doc/assert/legacy credit."
+        }
+      ],
+      "legacy_unresolved_lines": 1550,
+      "counting": "User-approved1027 only raw65/support9=+74,152064→152138: raw148806+support1782+legacy1550. Generic suite_budget.py16ordinary rows outside fee disclosed; no assertion/scenario moved there.",
+      "approved_source_delta": 74,
+      "planned_raw_delta": 65,
+      "planned_support_delta": 9,
+      "current_receipt_sha256": "bfb5b8683af42c2f0e29a42a4949c8996217cc0040e6dd87f7927b8db1d0c268",
+      "original_caps_sha256": "d9bd3023ba2ac0c68de7f8fb8de964f5e528db92a43e9a48a176445cee8bd28f",
+      "expected_caps_sha256": "08f9cb2779f4e5c5be98c8982edaedb178b0b7ae83caf31b74f1e2530d19cda7"
     }
   ]
 }

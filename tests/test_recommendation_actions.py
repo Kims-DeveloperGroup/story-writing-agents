@@ -325,7 +325,7 @@ class RecommendationActionContractTests(RecommendationCase):
         encoded = json.dumps(delivery, default=str)
         self.assertIn(request.request_event_id, encoded)
         self.assertIn(request.instruction, encoded)
-        self.assertNotIn("_RecommendationCapability", encoded)
+        self.assertNotIn("RecommendationCapability", encoded)
         self.assertEqual(self.history(conversation_id), before)
         # Decisions/revision and running/terminal states have their own readable fields.
         self.backend.enqueue(lambda call, _: lead.lead_fixture_response(call, {

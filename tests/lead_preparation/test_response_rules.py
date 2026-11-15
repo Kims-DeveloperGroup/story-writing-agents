@@ -723,14 +723,14 @@ class SpecialistRoutingTests(unittest.TestCase):
             "document_selection": documents.document_node_selection_to_dict(node_selection),
             "plan_candidate_material": [{"candidate": json.loads(artifacts.serialize_artifact_review_candidate(exact_candidate))}],
             "document_work_plan": {"plan": documents.document_plan_to_dict(plan)}}}
-        from story_writing_agents import StoryRuntime
+        from story_writing_agents.lead_preparation.proposal_basis_values import compact_document_plan_input
         document_input["task_input"]["artifact_objectives"] = {"conversation_id": task.conversation_id,
             "objectives": [{"facts": {"target_paths": [node.target_path for node in plan.nodes],
                 "request": "Preserve the original requested draft and every exact target."}, "state": "open",
                 "document_node": documents.document_node_binding_to_dict(binding), "document_plan": asdict(plan)}]}
         canonical = lambda value: json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
         original_input = canonical(document_input["task_input"])
-        compacted = StoryRuntime._compact_document_plan_input(document_input["task_input"])
+        compacted = compact_document_plan_input(document_input["task_input"])
         self.assertEqual(canonical(document_input["task_input"]), original_input)
         shared_plan = compacted["document_work_plan"]["plan"]
         self.assertIs(shared_plan, document_input["task_input"]["document_work_plan"]["plan"])
@@ -753,7 +753,7 @@ class SpecialistRoutingTests(unittest.TestCase):
         synthesis_input.pop("document_work_plan")
         for unchanged_input in (mismatched_ref, mismatched_content, synthesis_input):
             before_compaction = canonical(unchanged_input)
-            self.assertIs(StoryRuntime._compact_document_plan_input(unchanged_input), unchanged_input)
+            self.assertIs(compact_document_plan_input(unchanged_input), unchanged_input)
             self.assertEqual(canonical(unchanged_input), before_compaction)
         wire_document, _, _ = project_context_payload({"task_input": compacted}, {})
         guided_document = add_contract_guidance(wire_document, {})

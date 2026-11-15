@@ -14836,6 +14836,47 @@
           "expected_method_ast_sha256": "91098bb4eb50f7995a367d0feaa9ccc49b579e92b3df61de3a13765c4b62e897"
         }
       ]
+    },
+    {
+      "schema_version": 1,
+      "issue": 1027,
+      "origin_commit": "b7061d17229aa7a61d2b85fd689a7792262a1073",
+      "original_caps_sha256": "d9bd3023ba2ac0c68de7f8fb8de964f5e528db92a43e9a48a176445cee8bd28f",
+      "expected_caps_sha256": "08f9cb2779f4e5c5be98c8982edaedb178b0b7ae83caf31b74f1e2530d19cda7",
+      "class_moves": [
+        {
+          "source": "tests/test_lead_recommendations.py",
+          "class": "LeadRecommendationTests",
+          "destination": "tests/lead_preparation/test_recommendation_preparation.py",
+          "destination_class": "LeadRecommendationTests",
+          "methods": [
+            "test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review",
+            "test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority"
+          ]
+        }
+      ],
+      "moves": [
+        {
+          "old_id": "tests.test_lead_recommendations.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review",
+          "new_id": "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review",
+          "subtest_cap": 0,
+          "source": "tests/test_lead_recommendations.py",
+          "destination": "tests/lead_preparation/test_recommendation_preparation.py",
+          "original_file_sha256": "1a6478a02237a6171fe50ae8902d00fb9943a763c5598e5555914efb65e55ed9",
+          "original_method_ast_sha256": "5271ec6f4694f0d0c3720fd3ab8e262a7d0f178bd226c642222d022b9ed2a9b9",
+          "expected_method_ast_sha256": "5271ec6f4694f0d0c3720fd3ab8e262a7d0f178bd226c642222d022b9ed2a9b9"
+        },
+        {
+          "old_id": "tests.test_lead_recommendations.LeadRecommendationTests.test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority",
+          "new_id": "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority",
+          "subtest_cap": 8,
+          "source": "tests/test_lead_recommendations.py",
+          "destination": "tests/lead_preparation/test_recommendation_preparation.py",
+          "original_file_sha256": "1a6478a02237a6171fe50ae8902d00fb9943a763c5598e5555914efb65e55ed9",
+          "original_method_ast_sha256": "0dd8b99058a685a25f2db3ecfeb0db57cb65e7bf8b4439fbef162841018f1db8",
+          "expected_method_ast_sha256": "0dd8b99058a685a25f2db3ecfeb0db57cb65e7bf8b4439fbef162841018f1db8"
+        }
+      ]
     }
   ]
 }
