@@ -41,22 +41,27 @@ STAGES = (
 )
 
 @lru_cache(maxsize=32)
-def _caps_digest_items(items: tuple[tuple[str, int], ...]) -> str:
-    return hashlib.sha256(json.dumps(dict(items), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+def _caps_digest_items(keys: tuple[str, ...], values: tuple[int, ...]) -> str:
+    return hashlib.sha256(json.dumps(dict(zip(keys, values)), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 def caps_digest(caps: dict[str, int]) -> str:
-    items = tuple(caps.items()) if type(caps) is dict else ()
-    keys, values = zip(*items) if items and len(items) <= 2544 else ((), ())
-    if (
-        type(caps) is dict
-        and len(items) <= 2544
-        and all(map(is_, map(type, keys), repeat(str)))
-        and all(map(is_, map(type, values), repeat(int)))
-        and max(map(len, keys), default=0) <= 256
-        and min(values, default=0) >= 0
-        and max(values, default=0) <= 8690
-    ):
-        return _caps_digest_items(items)
+    if type(caps) is dict:
+        snapshot = caps.copy()
+        if len(snapshot) <= 2544:
+            keys = tuple(snapshot)
+            values = tuple(snapshot.values())
+            if (
+                all(map(is_, map(type, keys), repeat(str)))
+                and all(map(is_, map(type, values), repeat(int)))
+                and max(map(len, keys), default=0) <= 256
+                and min(values, default=0) >= 0
+                and max(values, default=0) <= 8690
+            ):
+                order = sorted(range(len(keys)), key=keys.__getitem__)
+                return _caps_digest_items(
+                    tuple(map(keys.__getitem__, order)),
+                    tuple(map(values.__getitem__, order)),
+                )
     return hashlib.sha256(json.dumps(caps, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 def load_receipt() -> list[dict]:
