@@ -44,10 +44,10 @@ class _CapsDigestIneligible(Exception):
     pass
 
 @lru_cache(maxsize=32)
-def _caps_key_order(keys: tuple[str, ...]) -> tuple[int, ...]:
+def _caps_sorted_keys(keys: frozenset[str]) -> tuple[str, ...]:
     if max(map(len, keys), default=0) > 256:
         raise _CapsDigestIneligible
-    return tuple(sorted(range(len(keys)), key=keys.__getitem__))
+    return tuple(sorted(keys))
 
 @lru_cache(maxsize=32)
 def _caps_digest_items(keys: tuple[str, ...], values: tuple[int, ...]) -> str:
@@ -59,18 +59,13 @@ def caps_digest(caps: dict[str, int]) -> str:
     if type(caps) is dict:
         snapshot = caps.copy()
         if len(snapshot) <= 2544:
-            keys = tuple(snapshot)
-            values = tuple(snapshot.values())
             if (
-                all(map(is_, map(type, keys), repeat(str)))
-                and all(map(is_, map(type, values), repeat(int)))
+                all(map(is_, map(type, snapshot), repeat(str)))
+                and all(map(is_, map(type, snapshot.values()), repeat(int)))
             ):
                 try:
-                    order = _caps_key_order(keys)
-                    return _caps_digest_items(
-                        tuple(map(keys.__getitem__, order)),
-                        tuple(map(values.__getitem__, order)),
-                    )
+                    keys = _caps_sorted_keys(frozenset(snapshot))
+                    return _caps_digest_items(keys, tuple(map(snapshot.__getitem__, keys)))
                 except _CapsDigestIneligible:
                     pass
     return hashlib.sha256(json.dumps(caps, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
