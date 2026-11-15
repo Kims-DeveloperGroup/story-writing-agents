@@ -40,8 +40,19 @@ STAGES = (
     (1027, "b7061d17229aa7a61d2b85fd689a7792262a1073", BEFORE_RECOMMENDATION_CAPS_SHA256, EXPECTED_CAPS_SHA256, 2),
 )
 
+class _CapsDigestIneligible(Exception):
+    pass
+
+@lru_cache(maxsize=32)
+def _caps_key_order(keys: tuple[str, ...]) -> tuple[int, ...]:
+    if max(map(len, keys), default=0) > 256:
+        raise _CapsDigestIneligible
+    return tuple(sorted(range(len(keys)), key=keys.__getitem__))
+
 @lru_cache(maxsize=32)
 def _caps_digest_items(keys: tuple[str, ...], values: tuple[int, ...]) -> str:
+    if min(values, default=0) < 0 or max(values, default=0) > 8690:
+        raise _CapsDigestIneligible
     return hashlib.sha256(json.dumps(dict(zip(keys, values)), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 def caps_digest(caps: dict[str, int]) -> str:
@@ -53,15 +64,15 @@ def caps_digest(caps: dict[str, int]) -> str:
             if (
                 all(map(is_, map(type, keys), repeat(str)))
                 and all(map(is_, map(type, values), repeat(int)))
-                and max(map(len, keys), default=0) <= 256
-                and min(values, default=0) >= 0
-                and max(values, default=0) <= 8690
             ):
-                order = sorted(range(len(keys)), key=keys.__getitem__)
-                return _caps_digest_items(
-                    tuple(map(keys.__getitem__, order)),
-                    tuple(map(values.__getitem__, order)),
-                )
+                try:
+                    order = _caps_key_order(keys)
+                    return _caps_digest_items(
+                        tuple(map(keys.__getitem__, order)),
+                        tuple(map(values.__getitem__, order)),
+                    )
+                except _CapsDigestIneligible:
+                    pass
     return hashlib.sha256(json.dumps(caps, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 def load_receipt() -> list[dict]:

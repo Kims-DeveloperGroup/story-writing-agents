@@ -88,6 +88,16 @@ complete workflow shares a 75-minute deadline, including setup and shutdown.
 이 승인은 기존 Case·subTest 범위, 시간·worker 상한 또는 실제 성능 회귀의 면제를 허용하지 않는다.
 기존 개별 이슈의 소스 배정 이력은 보존하고, 새 행 추가는 해당 이슈에서 별도로 계상한다.
 
+## #1027 키 정렬·범위 검사 memo 소스 배정
+
+앞선 parallel snapshot의 두 번째 위치 시간 초과를 보존하고 중복 정렬·검사 비용을 줄인다.
+사용자 포괄 행 추가 승인에 따라 support +9행을 배정해 상한을 152,170행으로 둔다.
+raw 148,806/support 1,814/legacy 1,550이며 기존 단계별 비용은 이력으로 보존한다.
+매 호출 exact type·소유된 snapshot 검사는 유지하고 키 순서를 별도 32-entry memo로 보존한다.
+길이·값 범위는 해당 memo의 miss에서 검사하며 부적격 입력은 예외로 저장을 막고 원래 fallback을 실행한다.
+기존 receipt·raw/실제 mapped digest·Case/subTest·시간·worker 조건은 유지한다.
+비용과 원본 실패·새 검증 근거는 [#1027 구현 계획](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1027#구현-계획)에 남긴다.
+
 ## #1027 불변 keys·values snapshot 소스 배정
 
 앞선 +7행과 +11행 수정의 정상 시간 초과를 보존하고 snapshot 배치를 교정한다.
