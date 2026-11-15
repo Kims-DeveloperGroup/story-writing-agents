@@ -1,6 +1,7 @@
 """Closed, source-qualified receipts for approved canonical owner moves."""
 from __future__ import annotations
 import hashlib
+from functools import lru_cache
 import json
 from pathlib import Path
 
@@ -37,7 +38,14 @@ STAGES = (
     (1027, "b7061d17229aa7a61d2b85fd689a7792262a1073", BEFORE_RECOMMENDATION_CAPS_SHA256, EXPECTED_CAPS_SHA256, 2),
 )
 
+@lru_cache(maxsize=32)
+def _caps_digest_items(items: tuple[tuple[str, int], ...]) -> str:
+    return hashlib.sha256(json.dumps(dict(items), separators=(",", ":")).encode()).hexdigest()
+
 def caps_digest(caps: dict[str, int]) -> str:
+    items = tuple(caps.items()) if type(caps) is dict else ()
+    if type(caps) is dict and len(items) <= 2544 and all(type(k) is str and len(k) <= 256 and type(v) is int and 0 <= v <= 8690 for k, v in items):
+        return _caps_digest_items(tuple(sorted(items)))
     return hashlib.sha256(json.dumps(caps, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 def load_receipt() -> list[dict]:

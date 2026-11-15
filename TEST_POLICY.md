@@ -80,6 +80,25 @@ complete workflow shares a 75-minute deadline, including setup and shutdown.
   gate. Otherwise, extend an existing representative case or replace a more
   expensive check while respecting the current inventory.
 
+## 행 추가 포괄 승인 — 2026-11-15
+
+사용자는 2026-11-15 현재 대화에서 “앞으로 모든 이슈에서 행 추가를 승인함”이라고 지시했다.
+앞으로 모든 이슈에서 필요한 소스 행 추가에는 이 승인을 적용하며 같은 승인을 반복 요청하지 않는다.
+각 이슈와 PR에는 추가 사유·실제 소스 비용·새 상한과 정확한 monotonic 예외를 계속 기록한다.
+이 승인은 기존 Case·subTest 범위, 시간·worker 상한 또는 실제 성능 회귀의 면제를 허용하지 않는다.
+기존 개별 이슈의 소스 배정 이력은 보존하고, 새 행 추가는 해당 이슈에서 별도로 계상한다.
+
+## #1027 예산 검증 성능 회귀 수정 소스 배정
+
+기존 #1027 +74행(152,064→152,138)은 해당 단계의 승인 이력으로 보존한다.
+별도로 승인된 테스트 지원 +7행에 한해 상한을 152,145행으로 둔다.
+raw 148,806/support 1,789/legacy 1,550이며 Case·subTest·시간·worker 상한은 유지한다.
+`tests/id_moves.py::caps_digest`는 매번 실제 dict의 새 불변 내용 snapshot을 만들고,
+정확한 str/int와 제한 범위에 해당할 때만 최대 32개 digest를 내용 키로 메모한다.
+그 밖의 입력은 기존 계산을 유지하며 receipt의 매 호출 SHA/content 검증은 캐시하지 않는다.
+일반 도구 `tests/suite_budget.py`는 승인 전이의 숫자만 바꾸어 추가 행은 없다.
+추가 +7행의 승인과 측정 근거는 [#1027 구현 계획](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1027#구현-계획)에 기록한다.
+
 ## #1027의 추천 준비 권한·투영 분리 소스 배정
 
 #1021을 통합한 main `b7061d17229aa7a61d2b85fd689a7792262a1073`의 152,064행을 기준으로
