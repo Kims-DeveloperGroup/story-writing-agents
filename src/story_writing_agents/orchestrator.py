@@ -12164,7 +12164,7 @@ class StoryRuntime:
             existing = known_inputs.get(receipt.evidence_id)
             if existing is not None:
                 differences = tuple(field for field in (
-                    'kind', 'locator', 'state', 'revision_digest', 'start_line', 'end_line',
+                    'locator', 'state', 'revision_digest', 'start_line', 'end_line',
                 ) if getattr(existing, field) != getattr(candidate, field))
                 if differences:
                     reason = (f"lead READ evidence {receipt.evidence_id!r} conflicts with existing input: "
