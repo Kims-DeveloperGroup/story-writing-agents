@@ -203,7 +203,7 @@ def compact_document_plan_input(value: dict[str, object]) -> dict[str, object]:
         compacted.append(row)
     if not changed:
         return value
-    return {**value, "artifact_objectives": {**objectives, "objectives": compacted}}
+    return {**value, "artifact_objectives": {**objectives, "objective": compacted}}
 
 def captured_premise_intents(basis: CollaborationProposalBasis) -> tuple[LeadSharedPremiseIntent, ...]:
     return tuple(LeadSharedPremiseIntent(item.slot_id, item.selected_premise,
