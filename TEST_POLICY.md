@@ -88,56 +88,17 @@ complete workflow shares a 75-minute deadline, including setup and shutdown.
 이 승인은 기존 Case·subTest 범위, 시간·worker 상한 또는 실제 성능 회귀의 면제를 허용하지 않는다.
 기존 개별 이슈의 소스 배정 이력은 보존하고, 새 행 추가는 해당 이슈에서 별도로 계상한다.
 
-## #1027 키 집합 정렬 memo의 실제 사용량
+## 테스트 예산 정책 Case의 시간 판정 — 2026-11-16
 
-삽입 순서와 무관한 exact str 키 집합의 정렬 결과를 재사용하도록 교정했다.
-지원 코드가 5행 줄어 실제 총량은 152,165행(raw 148,806/support 1,809/legacy 1,550)이다.
-기존 상한 152,170행과 다른 예산 필드는 유지하며 잔여 5행을 공개한다.
-소유된 snapshot의 dict/values view에서 cache 이전 exact type 검사를 유지하고,
-정렬된 key tuple과 같은 snapshot에서 읽은 값만 digest memo에 전달한다.
-길이·값 범위·부적격 예외/fallback·fresh receipt·raw/실제 mapped digest 조건은 유지한다.
-앞선 네 성능 초과와 실제 비용은 [#1027 계획](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1027#구현-계획)에 보존한다.
-
-## #1027 키 정렬·범위 검사 memo 소스 배정
-
-앞선 parallel snapshot의 두 번째 위치 시간 초과를 보존하고 중복 정렬·검사 비용을 줄인다.
-사용자 포괄 행 추가 승인에 따라 support +9행을 배정해 상한을 152,170행으로 둔다.
-raw 148,806/support 1,814/legacy 1,550이며 기존 단계별 비용은 이력으로 보존한다.
-매 호출 exact type·소유된 snapshot 검사는 유지하고 키 순서를 별도 32-entry memo로 보존한다.
-길이·값 범위는 해당 memo의 miss에서 검사하며 부적격 입력은 예외로 저장을 막고 원래 fallback을 실행한다.
-기존 receipt·raw/실제 mapped digest·Case/subTest·시간·worker 조건은 유지한다.
-비용과 원본 실패·새 검증 근거는 [#1027 구현 계획](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1027#구현-계획)에 남긴다.
-
-## #1027 불변 keys·values snapshot 소스 배정
-
-앞선 +7행과 +11행 수정의 정상 시간 초과를 보존하고 snapshot 배치를 교정한다.
-사용자 포괄 행 추가 승인에 따라 support +5행을 배정해 상한을 152,161행으로 둔다.
-raw 148,806/support 1,805/legacy 1,550이며 기존 단계의 비용 이력을 보존한다.
-exact dict의 소유된 copy에서 keys/values를 분리하고 같은 정렬 인덱스로 대응시킨다.
-기존 type·길이·값 범위와 fallback을 유지하며 새 audit event를 추가하는 marshal은 쓰지 않는다.
-Case·subTest·시간·worker 한도는 늘리지 않으며 새 정상 비교·전체 CI가 통과하기 전 종료하지 않는다.
-비용과 근거는 [#1027 구현 계획](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1027#구현-계획)에 기록한다.
-
-## #1027 타입·범위 검사 반복 비용 수정 소스 배정
-
-앞선 +7행의 정방향 정상 비교가 기존 시간 경계를 넘었으므로 검증 루프의 비용을 수정한다.
-사용자 포괄 행 추가 승인에 따라 support +11행을 배정해 상한을 152,156행으로 둔다.
-raw 148,806/support 1,800/legacy 1,550이며 기존 +74행과 +7행은 해당 단계의 이력으로 보존한다.
-같은 불변 snapshot의 exact type identity·길이·값 범위를 C 수준 반복으로 검사하고,
-JSON의 정렬 계산은 cache miss에만 수행한다. fallback과 fresh receipt 검증은 유지한다.
-Case·subTest·시간·worker 한도는 늘리지 않으며 원래 고정 경계로 정상 성능을 다시 확인한다.
-비용·실패·계측 및 새 검증 결과는 [#1027 구현 계획](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1027#구현-계획)에 보존한다.
-
-## #1027 예산 검증 성능 회귀 수정 소스 배정
-
-기존 #1027 +74행(152,064→152,138)은 해당 단계의 승인 이력으로 보존한다.
-별도로 승인된 테스트 지원 +7행에 한해 상한을 152,145행으로 둔다.
-raw 148,806/support 1,789/legacy 1,550이며 Case·subTest·시간·worker 상한은 유지한다.
-`tests/id_moves.py::caps_digest`는 매번 실제 dict의 새 불변 내용 snapshot을 만들고,
-정확한 str/int와 제한 범위에 해당할 때만 최대 32개 digest를 내용 키로 메모한다.
-그 밖의 입력은 기존 계산을 유지하며 receipt의 매 호출 SHA/content 검증은 캐시하지 않는다.
-일반 도구 `tests/suite_budget.py`는 승인 전이의 숫자만 바꾸어 추가 행은 없다.
-추가 +7행의 승인과 측정 근거는 [#1027 구현 계획](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1027#구현-계획)에 기록한다.
+사용자는 전체 테스트 시간에 큰 지장이 없다면 테스트 예산 정책 검증의 개별 증가를 허용하고,
+Story runtime 기능 검증과 구분해 관대한 정책으로 다루도록 지시했다.
+현재 확인된 대상은 `tests.test_suite_budget.SuiteBudgetTests.test_new_id_increased_subtests_and_relaxed_time_are_rejected`이다.
+이 Case의 개별 method·1:1 시간 증가만으로 Story runtime 회귀나 전달 실패로 판정하지 않는다.
+증가 원인과 원자료는 계속 기록하고, 전체 실행 시간에 유의미한 실제 영향이 없는지 확인한다.
+기존 기능·negative·Case/subTest·시간/worker 상한은 보존하고 기존 전체 시간 비교 기준을 늘리지 않는다.
+Story runtime 기능 Case에는 이 예외를 적용하지 않는다. 전체 시간에 유의미한 실제 회귀가 있으면 실패로 판단한다.
+이 결정에 따라 이 Case만을 위한 후속 digest memo 실험은 철회하고 원래 #1027 source 배정을 유지한다.
+실험의 측정·실패·취소 이력은 [#1027](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1027#구현-계획)에 보존한다.
 
 ## #1027의 추천 준비 권한·투영 분리 소스 배정
 

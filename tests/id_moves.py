@@ -1,9 +1,6 @@
 """Closed, source-qualified receipts for approved canonical owner moves."""
 from __future__ import annotations
 import hashlib
-from functools import lru_cache
-from itertools import repeat
-from operator import is_
 import json
 from pathlib import Path
 
@@ -40,34 +37,7 @@ STAGES = (
     (1027, "b7061d17229aa7a61d2b85fd689a7792262a1073", BEFORE_RECOMMENDATION_CAPS_SHA256, EXPECTED_CAPS_SHA256, 2),
 )
 
-class _CapsDigestIneligible(Exception):
-    pass
-
-@lru_cache(maxsize=32)
-def _caps_sorted_keys(keys: frozenset[str]) -> tuple[str, ...]:
-    if max(map(len, keys), default=0) > 256:
-        raise _CapsDigestIneligible
-    return tuple(sorted(keys))
-
-@lru_cache(maxsize=32)
-def _caps_digest_items(keys: tuple[str, ...], values: tuple[int, ...]) -> str:
-    if min(values, default=0) < 0 or max(values, default=0) > 8690:
-        raise _CapsDigestIneligible
-    return hashlib.sha256(json.dumps(dict(zip(keys, values)), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-
 def caps_digest(caps: dict[str, int]) -> str:
-    if type(caps) is dict:
-        snapshot = caps.copy()
-        if len(snapshot) <= 2544:
-            if (
-                all(map(is_, map(type, snapshot), repeat(str)))
-                and all(map(is_, map(type, snapshot.values()), repeat(int)))
-            ):
-                try:
-                    keys = _caps_sorted_keys(frozenset(snapshot))
-                    return _caps_digest_items(keys, tuple(map(snapshot.__getitem__, keys)))
-                except _CapsDigestIneligible:
-                    pass
     return hashlib.sha256(json.dumps(caps, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 def load_receipt() -> list[dict]:
