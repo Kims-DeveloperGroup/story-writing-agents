@@ -188,7 +188,7 @@ class CollaborationResultPublication:
                 )
                 outcome = CollaborationAssignmentOutcomeKind.SUCCEEDED
             elif isinstance(invocation_result.failure, asyncio.CancelledError):
-                outcome = CollaborationAssignmentOutcomeKind.CANCELLED
+                outcome = CollaborationAssignmentOutcomeKind.FAILED
             else:
                 outcome = CollaborationAssignmentOutcomeKind.FAILED
             if not invocation_result.submission_uncertain:
