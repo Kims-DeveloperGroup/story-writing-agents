@@ -17223,6 +17223,52 @@
         "lead-fixtures.preparation-data",
         "lead-fixtures.provider-responses"
       ]
+    },
+    {
+      "name": "lead-preparation.lead-document-nodes",
+      "boundary": "authority",
+      "paths": [
+        "src/story_writing_agents/lead_preparation/lead_document_nodes.py"
+      ],
+      "focused_ids": [
+        "tests.test_collaboration_context.CollaborationTransitionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart"
+      ],
+      "affected_ids": [
+        "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review",
+        "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority",
+        "tests.test_collaboration_context.CollaborationAtomicBatchTests.test_all_required_co_batch_families_and_split_rejections",
+        "tests.test_collaboration_context.CollaborationAtomicBatchTests.test_exact_retry_and_all_fixed_conflicts_are_classified",
+        "tests.test_collaboration_context.CollaborationBudgetAndOutcomeTests.test_assignment_synthesis_step_and_lineage_usage_caps_are_enforced",
+        "tests.test_collaboration_context.CollaborationBudgetAndOutcomeTests.test_first_second_and_third_round_boundaries_use_durable_lineage",
+        "tests.test_collaboration_context.CollaborationBudgetAndOutcomeTests.test_partial_failure_preserves_sibling_and_prohibits_synthesis",
+        "tests.test_collaboration_context.CollaborationBudgetAndOutcomeTests.test_twelve_calls_are_accepted_and_possible_thirteenth_is_rejected",
+        "tests.test_collaboration_context.CollaborationBudgetAndOutcomeTests.test_zero_synthesis_advisory_is_valid_and_submission_is_rejected",
+        "tests.test_collaboration_context.CollaborationConfirmationAndRecoveryTests.test_confirmation_is_exact_tail_single_use_and_free_text_has_no_authority",
+        "tests.test_collaboration_context.CollaborationConfirmationAndRecoveryTests.test_confirmed_restart_requires_fresh_reconfirmation_without_authority",
+        "tests.test_collaboration_context.CollaborationConfirmationAndRecoveryTests.test_failed_read_only_attempt_closes_exactly_once_and_rejects_late_calls",
+        "tests.test_collaboration_context.CollaborationConfirmationAndRecoveryTests.test_failed_revision_result_cannot_carry_or_revive_confirmation_authority",
+        "tests.test_collaboration_context.CollaborationConfirmationAndRecoveryTests.test_rejected_submitted_lead_projects_retry_and_readable_closure",
+        "tests.test_collaboration_context.CollaborationConfirmationAndRecoveryTests.test_running_restart_finalizes_known_result_or_enters_unknown_without_replay",
+        "tests.test_collaboration_context.CollaborationConfirmationAndRecoveryTests.test_unmatched_read_only_lead_projects_retry_without_write_authority",
+        "tests.test_collaboration_context.CollaborationPortAndLegacyIsolationTests.test_schema_v1_values_are_rejected_without_migration_or_union",
+        "tests.test_collaboration_context.CollaborationPortAndLegacyIsolationTests.test_unused_store_protocol_has_exact_methods_and_typing",
+        "tests.test_collaboration_context.CollaborationReadableProjectionTests.test_default_context_is_content_free_and_selection_is_bounded_additive",
+        "tests.test_collaboration_context.CollaborationReadableProjectionTests.test_every_event_projects_once_with_complete_identity_and_closed_fields",
+        "tests.test_collaboration_context.CollaborationReadableProjectionTests.test_readable_projection_rejects_v1_and_every_corrupt_history_shape",
+        "tests.test_collaboration_context.CollaborationTransitionTests.test_all_legal_and_illegal_transition_pairs_are_exact",
+        "tests.test_collaboration_context.CollaborationTransitionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
+        "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_only_matching_successful_apply_satisfies_objective",
+        "tests.test_lead_artifact_objectives.LeadDefaultBudgetRefusalTests.test_default_grouped_budget_refuses_unfunded_artifact_preparation"
+      ],
+      "depends_on": [
+        "lead-preparation.authoring_authority",
+        "lead-preparation.call_rule_factory",
+        "lead-preparation.outcome_decoding",
+        "lead-preparation.reply_contract_values",
+        "lead-preparation.response_rules"
+      ]
     }
   ],
   "ignored_names": [

@@ -1010,3 +1010,22 @@ main #947 통합 후 raw149666+helper1547=151213에 D06 한 곳의 history512KiB
 편성한다. fixture 상한은 정확히151431이며 기존 기준148783/150770에서 이 정확한 목표로의
 전환만 허용한다. 인접 상한·다른 기준·cap-map 변경은 여전히 거절한다. 기존2544개 ID,
 전체 subTest cap-map, K의10개 cap, timing fixture, 5shard·4worker·18000/3600초는 유지한다.
+
+## #1039의 문서 노드 정책 분리 소스 배정
+
+사용자의 테스트 source 행 추가 포괄 승인을 이 전달에도 적용한다.
+기준 main `6e5ede108f572ee411f0311c3fd504bcc559363e`의
+raw147690/support3425/legacy1550, 총152665행에서
+기존 Candidate 조립 Case의 실제 owner/spy/keyword 연결32행,
+기존 RAG graph·packaging 검증14행, 기존 예산 정책 Case16행을 계상한다.
+최종 raw147752/support3425/legacy1550, 총152727행(+62)이며
+정확한 source-only `152665→152727` 전이만 허용한다.
+일반 정책 guard11행은 기존 비계상 scope에 있으며 별도로 공개한다.
+
+기존2544 ID·subTest cap합8690과 cap map 원문 및 digest,
+394 timing weight group·162 guest profile·기존 실행 순서,
+18000/3600초·최대4worker는 유지한다.
+이전 source-only 전이와 인접·복합 거부 검증을 보존하며,
+새 Case·시나리오·입력·subTest·시간·worker 상한 증가는 없다.
+이 배정은 소스 구조 변경에 필요한 검증 비용만 계상하며
+Storyruntime의 실제 성능 회귀를 허용하는 예외가 아니다.

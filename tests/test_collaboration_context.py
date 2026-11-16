@@ -558,36 +558,68 @@ class CollaborationTransitionTests(unittest.TestCase):
             part_ref, node.coverage, "Use only the approved provisional Global input.", fixture.DIGEST_B)
         candidate_binding = documents.DocumentNodeBinding(root_plan.ref, root_plan.nodes[1].node_id, part_ref,
             part_ref, fixture.STEP_ID, (use,))
+        from unittest.mock import patch
+        from story_writing_agents.lead_preparation import lead_document_nodes
         validations = []
         class CandidateInputOwner:
-            _document_candidate_inputs = StoryRuntime._document_candidate_inputs
+            _document_candidate_inputs = staticmethod(
+                lead_document_nodes.document_candidate_inputs
+            )
             failure = None
-            def _validate_document_node(owner, session, value):
+            def _validate_document_node(
+                owner, session, value, *,
+                capture_editorial_snapshot,
+                prepare_document_selection,
+                read_session_authoring_events,
+                inspect_core_document_readiness,
+            ):
                 validations.append((session, value))
                 if owner.failure is not None:
                     raise owner.failure
         merge_owner = CandidateInputOwner()
-        expected = c.CollaborationInputRevision("plan_candidate_1", c.CollaborationInputKind.ARTIFACT_CANDIDATE,
-            "artifact-candidate/" + candidate.candidate_id, c.CollaborationInputState.PRESENT, candidate.candidate_digest)
-        base_inputs = (basis.inputs[0],)
-        extended = merge_owner._document_candidate_inputs(fixture.SESSION_ID, candidate_binding, base_inputs)
-        self.assertEqual(extended, (*base_inputs, expected))
-        self.assertEqual(merge_owner._document_candidate_inputs(fixture.SESSION_ID, candidate_binding, extended), extended)
-        self.assertEqual(validations[0], (fixture.SESSION_ID, candidate_binding))
-        for mismatched in (replace(expected, locator="artifact-candidate/foreign_candidate"),
-                           replace(expected, revision_digest=fixture.DIGEST_B),
-                           replace(expected, kind=c.CollaborationInputKind.CONVERSATION_EVENT),
-                           replace(expected, start_line=1, end_line=2),
-                           replace(expected, state=c.CollaborationInputState.ABSENT, revision_digest=expected.revision_digest)):
+        def unreachable_document_port(*_args, **_kwargs):
+            self.fail("candidate assembly unexpectedly called a live port")
+        document_operations = dict(
+            capture_editorial_snapshot=unreachable_document_port,
+            prepare_document_selection=unreachable_document_port,
+            read_session_authoring_events=unreachable_document_port,
+            inspect_core_document_readiness=unreachable_document_port,
+        )
+        with patch.object(
+            lead_document_nodes, "validate_document_node",
+            new=merge_owner._validate_document_node,
+        ):
+            expected = c.CollaborationInputRevision("plan_candidate_1", c.CollaborationInputKind.ARTIFACT_CANDIDATE,
+                "artifact-candidate/" + candidate.candidate_id, c.CollaborationInputState.PRESENT, candidate.candidate_digest)
+            base_inputs = (basis.inputs[0],)
+            extended = merge_owner._document_candidate_inputs(fixture.SESSION_ID, candidate_binding, base_inputs,
+                **document_operations,
+            )
+            self.assertEqual(extended, (*base_inputs, expected))
+            self.assertEqual(merge_owner._document_candidate_inputs(fixture.SESSION_ID, candidate_binding, extended,
+                **document_operations,
+            ), extended)
+            self.assertEqual(validations[0], (fixture.SESSION_ID, candidate_binding))
+            for mismatched in (replace(expected, locator="artifact-candidate/foreign_candidate"),
+                               replace(expected, revision_digest=fixture.DIGEST_B),
+                               replace(expected, kind=c.CollaborationInputKind.CONVERSATION_EVENT),
+                               replace(expected, start_line=1, end_line=2),
+                               replace(expected, state=c.CollaborationInputState.ABSENT, revision_digest=expected.revision_digest)):
+                with self.assertRaises(ValueError):
+                    merge_owner._document_candidate_inputs(fixture.SESSION_ID, candidate_binding, (*base_inputs, mismatched),
+                        **document_operations,
+                    )
             with self.assertRaises(ValueError):
-                merge_owner._document_candidate_inputs(fixture.SESSION_ID, candidate_binding, (*base_inputs, mismatched))
-        with self.assertRaises(ValueError):
-            merge_owner._document_candidate_inputs(fixture.SESSION_ID, candidate_binding,
-                (*base_inputs, expected, replace(expected, revision_digest=fixture.DIGEST_B)))
-        merge_owner.failure = ValueError("binding validation sentinel")
-        with self.assertRaisesRegex(ValueError, "^binding validation sentinel$"):
-            merge_owner._document_candidate_inputs(fixture.SESSION_ID, candidate_binding, extended)
-        self.assertEqual(validations[-1], (fixture.SESSION_ID, candidate_binding))
+                merge_owner._document_candidate_inputs(fixture.SESSION_ID, candidate_binding,
+                    (*base_inputs, expected, replace(expected, revision_digest=fixture.DIGEST_B)),
+                    **document_operations,
+                )
+            merge_owner.failure = ValueError("binding validation sentinel")
+            with self.assertRaisesRegex(ValueError, "^binding validation sentinel$"):
+                merge_owner._document_candidate_inputs(fixture.SESSION_ID, candidate_binding, extended,
+                    **document_operations,
+                )
+            self.assertEqual(validations[-1], (fixture.SESSION_ID, candidate_binding))
 
         # Cross-owner replay law only; full document workflow integration exercises the real proposal-builder bridge.
         from story_writing_agents.conversations.catalog import ConversationMetadata, ConversationStatus, CONVERSATION_METADATA_SCHEMA_VERSION
