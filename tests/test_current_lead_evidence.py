@@ -146,4 +146,3 @@ class CurrentLeadEvidenceTests(ArtifactReviewFixture, LeadOrchestrationTestCase)
                 context_service=self.runtime.agent_context_service,
                 current_lead_read_snapshot=self.runtime.current_lead_read_snapshot,
             )
-
