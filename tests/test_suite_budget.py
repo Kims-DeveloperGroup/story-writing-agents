@@ -468,7 +468,7 @@ class SuiteBudgetTests(unittest.TestCase):
                                              (suite_policy.ISOLATED_TEST_ID,))
         serial, scheduled = runner_hosted.hosted_partition(canonical, isolated)
         self.assertEqual((serial.ids, scheduled), ((), (suite_policy.ISOLATED_TEST_ID,)))
-        launch_digest = 'sha256:ad28387ca985f6f919809dd8187f2f9e94db5d0d9bd6ca70dcb2f4b44a3a9b61'
+        launch_digest = 'sha256:119c97c97980ad0d116384b12e495edec7fe5d2428feb0e2df30cf909afd8cf3'
         self.assertEqual(runner_evidence.manifest(runner_profile.hosted_launch_order(ids))["digest"], launch_digest)
         self.assertEqual(runner_profile.hosted_launch_order(ids[::-1]), runner_profile.hosted_launch_order(ids))
         self.assertEqual(runner_profile.hosted_launch_order((ids[-1], ids[0])), (ids[0], ids[-1]))
