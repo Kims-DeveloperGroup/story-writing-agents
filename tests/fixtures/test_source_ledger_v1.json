@@ -677,6 +677,55 @@
       "current_receipt_sha256": "bfb5b8683af42c2f0e29a42a4949c8996217cc0040e6dd87f7927b8db1d0c268",
       "original_caps_sha256": "d9bd3023ba2ac0c68de7f8fb8de964f5e528db92a43e9a48a176445cee8bd28f",
       "expected_caps_sha256": "08f9cb2779f4e5c5be98c8982edaedb178b0b7ae83caf31b74f1e2530d19cda7"
+    },
+    {
+      "issue": 1028,
+      "origin_commit": "e61b70a0d6985fe62316bb02fb478864616a2d75",
+      "origins": [
+        {
+          "source": "tests/test_lead_evidence_grounding.py",
+          "sha256": "29ff00e6650ebdb26059774ff32320aa341893394379bb3757ca2dec5edb5877",
+          "source_ranges": [
+            [
+              29,
+              29
+            ],
+            [
+              32,
+              32
+            ],
+            [
+              35,
+              35
+            ],
+            [
+              38,
+              49
+            ],
+            [
+              52,
+              62
+            ],
+            [
+              65,
+              70
+            ],
+            [
+              73,
+              85
+            ],
+            [
+              88,
+              240
+            ]
+          ],
+          "destinations": [
+            "tests/test_lead_evidence_matrix.py"
+          ],
+          "counting": "Whole2Case Matrix class and4exclusive factory bodies/3exclusive constants move once. Shared immutable _DIGEST_A retained inRuntime and additionally supplied innewtestmodule1ordinaryrow; no fixture duplication or legacy credit."
+        }
+      ],
+      "legacy_unresolved_lines": 1550
     }
   ]
 }

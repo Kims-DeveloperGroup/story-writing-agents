@@ -14877,6 +14877,42 @@
           "expected_method_ast_sha256": "0dd8b99058a685a25f2db3ecfeb0db57cb65e7bf8b4439fbef162841018f1db8"
         }
       ]
+    },
+    {
+      "schema_version": 1,
+      "issue": 1028,
+      "origin_commit": "e61b70a0d6985fe62316bb02fb478864616a2d75",
+      "original_caps_sha256": "08f9cb2779f4e5c5be98c8982edaedb178b0b7ae83caf31b74f1e2530d19cda7",
+      "expected_caps_sha256": "d72ded85920beccddd24ee08ca2be40c8963d0832366ce07d211f67684033335",
+      "class_moves": [
+        {
+          "source": "tests/test_lead_evidence_grounding.py",
+          "class": "DurableLeadEvidenceMatrixTests",
+          "destination": "tests/test_lead_evidence_matrix.py"
+        }
+      ],
+      "moves": [
+        {
+          "old_id": "tests.test_lead_evidence_grounding.DurableLeadEvidenceMatrixTests.test_all_sixty_scope_status_kind_cells_are_closed_and_exact",
+          "new_id": "tests.test_lead_evidence_matrix.DurableLeadEvidenceMatrixTests.test_all_sixty_scope_status_kind_cells_are_closed_and_exact",
+          "subtest_cap": 60,
+          "source": "tests/test_lead_evidence_grounding.py",
+          "destination": "tests/test_lead_evidence_matrix.py",
+          "original_file_sha256": "29ff00e6650ebdb26059774ff32320aa341893394379bb3757ca2dec5edb5877",
+          "original_method_ast_sha256": "3838ac6c59bc6cba39f0857132b7fc73a3740957a7108f1809776ac31f99bcac",
+          "expected_method_ast_sha256": "3838ac6c59bc6cba39f0857132b7fc73a3740957a7108f1809776ac31f99bcac"
+        },
+        {
+          "old_id": "tests.test_lead_evidence_grounding.DurableLeadEvidenceMatrixTests.test_missing_search_scope_and_conflict_distinctness_fail_closed",
+          "new_id": "tests.test_lead_evidence_matrix.DurableLeadEvidenceMatrixTests.test_missing_search_scope_and_conflict_distinctness_fail_closed",
+          "subtest_cap": 4,
+          "source": "tests/test_lead_evidence_grounding.py",
+          "destination": "tests/test_lead_evidence_matrix.py",
+          "original_file_sha256": "29ff00e6650ebdb26059774ff32320aa341893394379bb3757ca2dec5edb5877",
+          "original_method_ast_sha256": "2c6eac21633d5e600f508b984c521a0c9c06f690e536b16f211d3ac945f61370",
+          "expected_method_ast_sha256": "dcdb42a4566968d1323873039464c749ce4e0cf389788442d9c1d70ae912cbc8"
+        }
+      ]
     }
   ]
 }
