@@ -6,7 +6,8 @@ import copy
 import json
 from story_writing_agents import authoring_admission as admission, conversations as c
 from story_writing_agents.agents import PLOT_ARCHITECT
-from tests import test_lead_orchestration as lead
+from tests.lead_fixtures import preparation_data, provider_responses
+from story_writing_agents.agents import LEAD_ORCHESTRATOR
 from tests import test_artifact_proposal_orchestration as artifact
 from tests.test_artifact_objectives import DRAFT, OUTLINE, ObjectiveCase, digest, rewrite_history
 
@@ -78,7 +79,7 @@ def _scoped_failure_snapshots(backend, scoped, result):
     from story_writing_agents.agent_context.invocation.provider import BoundContextProviderCallRequest, ContextProviderTerminalCode as Code
     from story_writing_agents.agent_context.contracts.call_offers import ContextCallOffers
     unsupported = (('scoped', 'unsupported'),)
-    if type(backend) is not lead._LeadBackend or type(scoped) is not tuple or len(scoped) != 6:
+    if type(backend) is not provider_responses.LeadBackend or type(scoped) is not tuple or len(scoped) != 6:
         return unsupported
     starts, session, conversation, progress, submitted, proof = scoped
     containers = backend.calls, backend.call_records, backend.finalizers
@@ -99,14 +100,14 @@ def _scoped_failure_snapshots(backend, scoped, result):
     calls, records, finalizers = tuple(rows[start:] for rows, start in zip(containers, starts))
     aligned = len(calls) == len(records) and all(
         type(row) is tuple and len(row) == 2 and row[1] is call
-        and type(row[0]) is str and row[0] == lead.LEAD_ORCHESTRATOR
+        and type(row[0]) is str and row[0] == LEAD_ORCHESTRATOR
         for call, row in zip(calls, records))
     known = bool(calls) and all(type(call) is BoundContextProviderCallRequest
                 and type(call.scope) is ContextScope for call in calls)
     same_scope = known and all(
         call.scope.session_id == session and call.scope.subject_id == conversation
         and call.scope.subject_kind is ContextSubjectKind.CONVERSATION
-        and call.scope.agent_id == lead.LEAD_ORCHESTRATOR for call in calls)
+        and call.scope.agent_id == LEAD_ORCHESTRATOR for call in calls)
     last = ('last', 'unsupported')
     if known and calls and type(calls[-1].contract) is BoundCallContract:
         contract = calls[-1].contract
@@ -141,7 +142,7 @@ def _scoped_failure_snapshots(backend, scoped, result):
     cardinalities = [0, 0, 0]
     supported, overflow = True, False
     for finalizer in finalizers:
-        if type(finalizer) is not lead._Finalizer or type(finalizer.calls) is not list:
+        if type(finalizer) is not provider_responses.Finalizer or type(finalizer.calls) is not list:
             supported = False
             continue
         if len(finalizer.calls) > 8:
@@ -185,7 +186,7 @@ def _stored_failure_snapshots(backend, *, scoped=None, result=None):
     from story_writing_agents.agent_context.invocation.provider import BoundContextProviderCallRequest, ContextProviderTerminalCode as Code
     from story_writing_agents.agent_context.contracts.call_offers import ContextCallOffers
     unsupported = ('unsupported',)
-    if type(backend) is not lead._LeadBackend:
+    if type(backend) is not provider_responses.LeadBackend:
         return unsupported, unsupported
     calls, records, finalizers = backend.calls, backend.call_records, backend.finalizers
     if any(type(rows) is not list for rows in (calls, records, finalizers)):
@@ -246,7 +247,7 @@ def _stored_failure_snapshots(backend, *, scoped=None, result=None):
              Code.CONTEXT_RUNTIME_FAILED)
     tag_counts, code_counts = [0] * 4, [0] * 7
     for finalizer in finalizers:
-        if (type(finalizer) is not lead._Finalizer or type(finalizer.calls) is not list
+        if (type(finalizer) is not provider_responses.Finalizer or type(finalizer.calls) is not list
                 or len(finalizer.calls) > 8):
             return request, unsupported
         for row in finalizer.calls:
@@ -371,7 +372,7 @@ def _current_policy_failure_note(
                    projection.current_proposal is not None)
     stored = _stored_failure_snapshots(backend)
     entries = ('entries', 'unsupported')
-    if type(backend) is lead._LeadBackend:
+    if type(backend) is provider_responses.LeadBackend:
         containers = (backend.calls, backend.providers, backend.reference_calls)
         if all(type(rows) is list for rows in containers):
             entries = ('entries', tuple(min(len(rows), 65535) for rows in containers),
@@ -467,7 +468,7 @@ def recommendation(*, message=DRAFT, recommended_action=None, mutate=None,
     selected = action() if recommended_action is None else recommended_action
 
     def respond(call, _provider):
-        material = lead._live_material(call)
+        material = preparation_data.live_material(call)
         execution = material.get("structured_recommendation_execution")
         if authoring_scope is not _RECOMMENDATION_SCOPE_DEFAULT:
             scope = authoring_scope(call) if callable(authoring_scope) else copy.deepcopy(authoring_scope)
@@ -479,7 +480,7 @@ def recommendation(*, message=DRAFT, recommended_action=None, mutate=None,
             owner_domains = tuple(dict.fromkeys(
                 [domains[agent] for agent in selected['specialist_ids']] +
                 ['plot_structure' for path in selected['target_paths'] if path == OUTLINE]))
-            scope = lead.lead_fixture_authoring_scope(call, activity='review', paths=tuple(selected['target_paths']),
+            scope = preparation_data.lead_fixture_authoring_scope(call, activity='review', paths=tuple(selected['target_paths']),
                 domains=owner_domains,
                 contributions=[{'domain': domain, 'role': 'constraint_assessor'}
                 for domain in owner_domains], task_index=0 if selected['objective_id'] is not None else -1)
@@ -502,7 +503,7 @@ def recommendation(*, message=DRAFT, recommended_action=None, mutate=None,
                 lead_fixture_response, finite_fixture_selection, lead_fixture_assessment)
             compact = {'kind': value['kind'], 'message': value['message'],
                        'authoring_scope': copy.deepcopy(value['authoring_scope']),
-                       'recommended_action': lead._compact_recommended(value['recommended_action'])}
+                       'recommended_action': preparation_data.compact_recommended(value['recommended_action'])}
             if 'authoring_assessment' in value:
                 compact['authoring_assessment'] = value['authoring_assessment']
             baseline_keys = {'kind', 'message', 'scope', 'evidence_status', 'evidence_ids',
@@ -533,7 +534,7 @@ def recommendation(*, message=DRAFT, recommended_action=None, mutate=None,
                 native['authoring_assessment'] = lead_fixture_assessment(
                     native['authoring_assessment'], source_choices=choices['input_ids'] + choices['historical_user_source_ids'])
             return lead_fixture_response(call, lead_fixture_result(native), family=0)
-        return lead._provider_envelope(call, value)
+        return preparation_data.provider_envelope(call, value)
     return respond
 
 
@@ -581,14 +582,14 @@ def _unbound_preparation(turn, *, text=DRAFT, mutate=None, read_evidence=False):
             "next_step": "consult", "draft_source_event_ids": selected,})
         sources = [item.input_id for item in request.basis.inputs]
         sources += ["recommendation_request", "recommendation_decision"]
-        base = lead._proposal_outcome([ {"agent_id": item, "instruction": request.instruction, "input_ids": sources} for item in request.specialist_ids], purpose=request.purpose)
+        base = preparation_data.proposal_outcome([ {"agent_id": item, "instruction": request.instruction, "input_ids": sources} for item in request.specialist_ids], purpose=request.purpose)
 
         def producer(call, provider):
             import json
             value = json.loads(base(call, provider))
             if intent is not None:
                 value["action"]["result"]["proposal"]["objective_intent"] = (
-                    lead._compact_objective(intent))
+                    preparation_data.compact_objective(intent))
             return json.dumps(value, ensure_ascii=False)
 
     def respond(call, provider):
@@ -596,7 +597,7 @@ def _unbound_preparation(turn, *, text=DRAFT, mutate=None, read_evidence=False):
         if read_evidence:
             value["action"]["used_handles"] = list(provider.used_handles)
         body = value["action"]["result"]
-        body["authoring_scope"] = lead._compact_scope( json.loads(json.dumps(asdict(request.authoring_scope))) )
+        body["authoring_scope"] = preparation_data.compact_scope( json.loads(json.dumps(asdict(request.authoring_scope))) )
         if request.basis.authoring_admission is not None:
             body["authoring_assessment"] = asdict(request.basis.authoring_admission.assessment)
         if mutate is not None:
@@ -672,7 +673,7 @@ def preparation(turn, *, text=DRAFT, mutate=None, read_evidence=False):
                 operations.append({'kind': 'create', 'suggested_path': path, 'new_text': text})
         provider.used_handles = tuple(row['read_handle'] for row in reads)
         body = {'kind': 'proposal', 'message': 'I prepared an exact candidate for specialist review.',
-                'artifact_intent': {'operations': operations, 'objective_intent': lead._compact_objective(intent)},
+                'artifact_intent': {'operations': operations, 'objective_intent': preparation_data.compact_objective(intent)},
                 'authoring_scope': json.loads(json.dumps(asdict(request.authoring_scope)))}
         if request.basis.authoring_admission is not None:
             body['authoring_assessment'] = asdict(request.basis.authoring_admission.assessment)
@@ -719,7 +720,7 @@ class RecommendationCase(ObjectiveCase):
                     c.ArtifactApplicationDecisionPayload, c.ArtifactApplicationResultPayload,
                     c.StoryCommitDecisionPayload, c.StoryCommitResultPayload}
         self.assertFalse(any(type(e.payload) in excluded for e in self.history(conversation_id)))
-        self.assertTrue(all(agent == lead.LEAD_ORCHESTRATOR for agent, _ in self.backend.call_records))
+        self.assertTrue(all(agent == LEAD_ORCHESTRATOR for agent, _ in self.backend.call_records))
 
     def assert_action_closed(self, conversation_id, state=c.LeadRecommendationState.COMPLETED):
         projection = self.projection(conversation_id)

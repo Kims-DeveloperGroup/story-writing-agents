@@ -45,7 +45,10 @@ from story_writing_agents.consensus.serialization import (
 from story_writing_agents import authoring_admission as admission
 from story_writing_agents.core_document_readiness import (
     AuthoringTarget, project_readiness, require_readiness)
-from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF, _fixture_assessment
+from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF
+from tests.lead_fixtures.preparation_data import (
+    fixture_assessment as _fixture_assessment,
+)
 
 _FIXTURE_DRAFT = _ADMISSION_BRIEF + "\nSupplied opening: Nora discovers the letter is missing before the oath."
 _FIXTURE_RULING = _ADMISSION_BRIEF + "\nKeep the reveal in chapter three and preserve the supplied motive."

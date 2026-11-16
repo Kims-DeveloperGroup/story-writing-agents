@@ -39,7 +39,8 @@ from story_writing_agents.provider_process import ProcessResult
 from story_writing_agents.workspace.initialization import compose_session_artifact_binding, provision_session_resources
 
 from tests import test_interactive_controller as interactive_controller_tests
-from tests import test_lead_orchestration as lead
+from tests.lead_fixtures import preparation_data, provider_responses, runtime_setup
+from story_writing_agents.conversations import LeadOutcomeKind, CollaborationNextAction
 from tests.test_specialist_orchestration_execution import _assignments
 from tests.helpers import initialized_workspace, live_provider_execution_workspace, pristine_initialized_workspace
 from tests.test_interactive_auth import ScriptedAuthService, TerminalHarness, snapshot, status
@@ -302,13 +303,13 @@ class AuthContextProvider(fixture_execution_fixture.ScriptedProvider):
 class ContextRecoveryTests(fixture_execution_fixture.ContextExecutionTestCase):
     async def _bound_replay(self, responses, *, seed, before_script_response, action_policy=None):
         from story_writing_agents.agent_context.invocation.context_execution import AgentContextService
-        case = lead._task_fixture(self)
+        case = runtime_setup.task_fixture(self)
         if action_policy is not None:
             case.runtime.agent_context_service = AgentContextService(
                 case.workspace, action_policy=action_policy)
-        conversation_id = lead.LeadOrchestrationTestCase.conversation(case, "Bound authority replay")
+        conversation_id = runtime_setup.LeadOrchestrationTestCase.conversation(case, "Bound authority replay")
         if seed is not None:
-            case.backend.enqueue(lead._visible_outcome("answer", seed),
+            case.backend.enqueue(preparation_data.visible_outcome("answer", seed),
                                  control_plan=selection_plan("answer.workflow"))
             await case.runtime.lead_turn(case.session_id, conversation_id, seed)
         start = len(case.backend.calls)
@@ -351,8 +352,8 @@ class ContextRecoveryTests(fixture_execution_fixture.ContextExecutionTestCase):
         self.assertEqual(len(captured), 1)
         self.assertEqual(remaining, [])
         self.assertIsNone(outcome.state)
-        self.assertIs(outcome.kind, lead.LeadOutcomeKind.ANSWER)
-        self.assertIs(outcome.next_action, lead.CollaborationNextAction.CONTINUE_WITH_LEAD)
+        self.assertIs(outcome.kind, LeadOutcomeKind.ANSWER)
+        self.assertIs(outcome.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD)
         self.assertEqual(outcome.message, json.loads(captured[0].answer)['message'])
         return case.backend.calls[start:], captured[0], failed
 
@@ -393,7 +394,7 @@ class ContextRecoveryTests(fixture_execution_fixture.ContextExecutionTestCase):
         self.assertEqual(provider.application_bytes[0], provider.application_bytes[1])
         self.assertEqual(len({call.call_id for call in result.provider_calls}), 2)
         calls, bound_result, failed = await self._bound_replay(
-            (auth_failure(), lead._visible_outcome("answer")), seed=None, before_script_response=1)
+            (auth_failure(), preparation_data.visible_outcome("answer")), seed=None, before_script_response=1)
         self._require_bound_replay(calls, bound_result, failed, count=3, failure_index=0)
         self.assertEqual(calls[0].contract.eligibility_offers.completed_read_facts, ())
         self.assertEqual(calls[0].contract.eligibility_offers.delivery_read_facts, ())
@@ -578,9 +579,9 @@ class ContextRecoveryTests(fixture_execution_fixture.ContextExecutionTestCase):
         self.assertEqual(len(result.provider_calls), 4)
         self.assertEqual(provider.calls[2].payload, provider.calls[3].payload)
         self.assertEqual(provider.calls[2].expected_thread_id, provider.calls[3].expected_thread_id)
-        search = lambda call, provider: lead._search_history(call, provider, "Bound history evidence")
+        search = lambda call, provider: preparation_data.search_history(call, provider, "Bound history evidence")
         calls, bound_result, failed = await self._bound_replay(
-            (search, lead._read_history_hit, auth_failure(), lead._answer_from_history),
+            (search, preparation_data.read_history_hit, auth_failure(), preparation_data.answer_from_history),
             seed="Bound history evidence", before_script_response=2,
             action_policy=replace(CONTEXT_ACTION_POLICY,
                                   max_search_actions=1, max_read_actions=1))
@@ -749,7 +750,7 @@ class ContextRecoveryTests(fixture_execution_fixture.ContextExecutionTestCase):
         self.assertIs(ctx_provider.context_provider_failure_facts(failure).accounting.state, ProviderCallState.SUBMITTED)
 
 
-class RecoveryCoordinationTests(lead.LeadOrchestrationTestCase):
+class RecoveryCoordinationTests(runtime_setup.LeadOrchestrationTestCase):
     async def test_next_request_order_is_stable_across_provider_insertions(self):
         expected = (("antigravity", 1), ("antigravity", 2), ("codex", 0))
         insertion = (expected[2], expected[1], expected[0])
@@ -852,10 +853,10 @@ class RecoveryCoordinationTests(lead.LeadOrchestrationTestCase):
                 'requires separate exact confirmation.'
             ), authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded story-direction review judgments',))))
                 failure = auth_failure("codex", safe=safe)
-                self.backend.enqueue_for(PLOT_ARCHITECT, lead._SubmittedFailure(failure, submission_uncertain=not safe))
-                self.backend.enqueue_for(CHARACTER_CUSTODIAN, lead.lead_specialist_outcome())
+                self.backend.enqueue_for(PLOT_ARCHITECT, provider_responses.SubmittedFailure(failure, submission_uncertain=not safe))
+                self.backend.enqueue_for(CHARACTER_CUSTODIAN, preparation_data.lead_specialist_outcome())
                 with self.assertRaises(ProviderAuthenticationRequiredError) as caught:
-                    await self.runtime.decide_lead_step(lead.lead_confirmation_decision(proposed, CollaborationConfirmationDecision.CONFIRM))
+                    await self.runtime.decide_lead_step(preparation_data.lead_confirmation_decision(proposed, CollaborationConfirmationDecision.CONFIRM))
                 self.assertIs(caught.exception, failure)
                 events = self.history(conversation)
                 self.assertEqual(sum(isinstance(e.payload, CollaborationSpecialistReplyPayload) for e in events), 1)
@@ -866,18 +867,18 @@ class RecoveryCoordinationTests(lead.LeadOrchestrationTestCase):
                 restarted = StoryRuntime(self.control_workspace, self.backend)
                 self.assertEqual(self.backend.calls, before)
                 with self.assertRaises(ValueError):
-                    await restarted.decide_lead_step(lead.lead_confirmation_decision(proposed, CollaborationConfirmationDecision.CONFIRM))
+                    await restarted.decide_lead_step(preparation_data.lead_confirmation_decision(proposed, CollaborationConfirmationDecision.CONFIRM))
                 self.assertEqual(self.backend.calls, before)
                 self.assertEqual(self.history(conversation), events)
 
     async def test_partial_timeout_auth_is_assisted_without_replay_and_closes_lead(self):
         from story_writing_agents.conversations import project_collaboration_history
 
-        self.backend = lead._LeadBackend(persist_context_threads=True, test_case=self)
+        self.backend = provider_responses.LeadBackend(persist_context_threads=True, test_case=self)
         self.runtime = StoryRuntime(self.workspace, self.backend)
         conversation = self.conversation("Authentication and timeout")
-        with (mock.patch.object(lead._LeadContextProvider, 'provider_id', 'antigravity')):
-            self.backend.enqueue(lead._visible_outcome("answer"),
+        with (mock.patch.object(provider_responses.LeadContextProvider, 'provider_id', 'antigravity')):
+            self.backend.enqueue(preparation_data.visible_outcome("answer"),
                                  control_plan=selection_plan("answer.workflow"))
             await self.runtime.lead_turn(self.session_id, conversation, 'Seed the existing provider thread.')
             assert self.backend.context_threads is not None
@@ -886,7 +887,7 @@ class RecoveryCoordinationTests(lead.LeadOrchestrationTestCase):
 
             failure = auth_failure("antigravity", safe=True)
             self.backend.enqueue(control_plan=((0, LeadGroupPhase.SELECT,
-                lead._SubmittedFailure(failure, timed_out=True, submission_uncertain=True)),))
+                provider_responses.SubmittedFailure(failure, timed_out=True, submission_uncertain=True)),))
             assisted = []
             with self.assertRaises(ProviderAuthenticationRequiredError) as caught:
                 await drive_recovery(self.runtime.lead_turn(self.session_id, conversation,
@@ -924,7 +925,7 @@ class RecoveryCoordinationTests(lead.LeadOrchestrationTestCase):
                 'bounded story-direction review judgments; preserve supplied facts and do not write files. Execution '
                 'requires separate exact confirmation.'
             ), authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded story-direction review judgments',))))
-        original = lead._LeadContextProvider.invoke_context
+        original = provider_responses.LeadContextProvider.invoke_context
         failed = set()
         both_active = asyncio.Event()
         async def physical(provider, request):
@@ -941,12 +942,12 @@ class RecoveryCoordinationTests(lead.LeadOrchestrationTestCase):
                     ctx_provider.record_context_provider_failure(failure, ctx_provider.ContextProviderFailureFacts(accounting))
                     raise failure
                 return await original(provider, request)
-        self.backend.enqueue_for(PLOT_ARCHITECT, lead.lead_specialist_outcome())
-        self.backend.enqueue_for(CHARACTER_CUSTODIAN, lead.lead_specialist_outcome())
-        self.backend.enqueue_for(LEAD_ORCHESTRATOR, lead._synthesis_outcome())
-        with mock.patch.object(lead._LeadContextProvider, "invoke_context", new=physical):
+        self.backend.enqueue_for(PLOT_ARCHITECT, preparation_data.lead_specialist_outcome())
+        self.backend.enqueue_for(CHARACTER_CUSTODIAN, preparation_data.lead_specialist_outcome())
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, preparation_data.synthesis_outcome())
+        with mock.patch.object(provider_responses.LeadContextProvider, "invoke_context", new=physical):
             result, keys = await drive_recovery(self.runtime.decide_lead_step(
-                lead.lead_confirmation_decision(proposed, CollaborationConfirmationDecision.CONFIRM)))
+                preparation_data.lead_confirmation_decision(proposed, CollaborationConfirmationDecision.CONFIRM)))
         self.assertEqual(keys, [("codex", 0)])
         self.assertIs(result.turn.state, CollaborationStepState.COMPLETED)
         events = self.history(conversation)

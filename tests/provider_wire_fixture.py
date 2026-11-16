@@ -896,7 +896,9 @@ class CallbackContextViews:
             self.fail_fixture("invalid_input_view")
 
     def _observe(self, request):
-        from tests.test_agent_context_accounting import _expanded_context_payload
+        from tests.lead_fixtures.material_values import (
+            expanded_context_payload as _expanded_context_payload,
+        )
         raw = copy.deepcopy(dict(request.payload))
         key = self.key(request)
         state = self.scopes.setdefault(key, {"views": {}, "latest": {}})

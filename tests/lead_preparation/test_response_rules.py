@@ -862,6 +862,7 @@ class SpecialistRoutingTests(unittest.TestCase):
         from tests.agent_context.invocation.execution_fixture import make_group_control as _group_control
         from tests.test_provider_schema_spec import check_schema
         from tests import test_lead_artifact_objectives as document_fixture
+        from story_writing_agents.agents import LEAD_ORCHESTRATOR
         facts = LeadProviderConstraints(input_ids=("user_input",), task_revisions=((task.task_id, task.task_revision),))
         seed = lead_front_result_contract(c.LeadProposalRelation.NEW_STEP, facts.input_ids, constraints=facts)
         def deny_authority(_result, _authorization):
@@ -869,7 +870,7 @@ class SpecialistRoutingTests(unittest.TestCase):
         factory = OrchestrationLeadCallFactory(facts, seed, "lead.front", "EN", deny_authority,
             lambda _path: document_fixture.PLOT_ARCHITECT, schema_group_protocol=True)
         offers = ContextCallOffers(call_id="formal-question-select", scope=ContextScope("workspace", task.session_id,
-            ContextSubjectKind.CONVERSATION, task.conversation_id, document_fixture.lead.LEAD_ORCHESTRATOR),
+            ContextSubjectKind.CONVERSATION, task.conversation_id, LEAD_ORCHESTRATOR),
             action_index=1, allowed_actions=("answer",), action_limits=(), search_source_kinds=(), issued_handle_aliases=(),
             completed_read_facts=(), delivery_read_facts=(), core_status_facts=(), remaining_provider_calls=2)
         question_basis = LeadGroupRequestBasis("question-operation", "question-result", "question-scope")
@@ -903,11 +904,13 @@ class SpecialistRoutingTests(unittest.TestCase):
         from story_writing_agents.lead_preparation.call_rule_factory import OrchestrationLeadCallFactory
         from tests.test_provider_schema_spec import check_schema
         from tests import test_lead_artifact_objectives as document_fixture
+        from tests.lead_fixtures import preparation_data, provider_responses
+        from story_writing_agents.agents import LEAD_ORCHESTRATOR
         facts = LeadProviderConstraints(input_ids=("user_input",), task_revisions=((task.task_id, task.task_revision),))
         def deny_authority(_result, _authorization):
             raise ValueError("Pure fixture contract check grants no host authority")
         offers = ContextCallOffers(call_id="formal-question-select", scope=ContextScope("workspace", task.session_id,
-            ContextSubjectKind.CONVERSATION, task.conversation_id, document_fixture.lead.LEAD_ORCHESTRATOR),
+            ContextSubjectKind.CONVERSATION, task.conversation_id, LEAD_ORCHESTRATOR),
             action_index=1, allowed_actions=("answer",), action_limits=(), search_source_kinds=(), issued_handle_aliases=(),
             completed_read_facts=(), delivery_read_facts=(), core_status_facts=(), remaining_provider_calls=2)
         from story_writing_agents.agent_context.actions import ContextCallReadFact
@@ -950,9 +953,9 @@ class SpecialistRoutingTests(unittest.TestCase):
         self.assertEqual(check_schema(result_bound.schema_value()), ())
         replacement_text = "USER supplied Global revision; preserve the promised ending.\n"
         producer = document_fixture._document_global_candidate_script(global_path, old_global, replacement_text)
-        fixture_backend = document_fixture.lead._LeadBackend(test_case=self, vendor="codex")
+        fixture_backend = provider_responses.LeadBackend(test_case=self, vendor="codex")
         fixture_backend.enqueue(producer)
-        fixture_provider = document_fixture.lead._LeadContextProvider(fixture_backend, document_fixture.lead.LEAD_ORCHESTRATOR,
+        fixture_provider = provider_responses.LeadContextProvider(fixture_backend, LEAD_ORCHESTRATOR,
             "selected-v9-fixture", fixture_backend.scripts.pop(0), None)
         payload = {"task_input": {"workflow": "lead_front_channel", "input_aliases": [
             {"input_id": "reference_1", "kind": "core_document"}]},
@@ -999,7 +1002,7 @@ class SpecialistRoutingTests(unittest.TestCase):
                     physical.finalizer.accepted()
                     token = current_payload["request_correlation_token"]
                     tokens.append(token)
-                    material = document_fixture.lead._LIVE_CONTEXT[token]
+                    material = provider_responses.LIVE_CONTEXT[token]
                     if initial_material is None:
                         initial_material = material
                     self.assertIs(material, initial_material)
@@ -1013,9 +1016,9 @@ class SpecialistRoutingTests(unittest.TestCase):
             missing_call = fixture_request(result_bound, missing_payload)
             async with fixture_provider.invocation(offers.scope, "sha256:" + "0" * 64):
                 self.assertFalse(hasattr(fixture_provider, "_live_material"))
-                self.assertNotIn(missing_payload["request_correlation_token"], document_fixture.lead._LIVE_CONTEXT)
+                self.assertNotIn(missing_payload["request_correlation_token"], provider_responses.LIVE_CONTEXT)
                 with self.assertRaises(KeyError):
-                    document_fixture.lead._live_material(missing_call)
+                    preparation_data.live_material(missing_call)
             return current_payload, current_call
         current_payload, current_call = asyncio.run(check_current_v9_frames())
         self.assertEqual(fixture_provider.responses, [])
@@ -1041,7 +1044,7 @@ class SpecialistRoutingTests(unittest.TestCase):
         ordinary_call = fixture_request(ordinary_bound, current_payload)
         with self.assertRaisesRegex(ValueError, "Positive document fixture requires exactly one current offered member: 0"):
             document_fixture._document_plan_native_response(ordinary_call, artifact_value)
-        review_scope = document_fixture.lead.lead_fixture_authoring_scope(current_call, activity="review", domains=("plot_structure",),
+        review_scope = preparation_data.lead_fixture_authoring_scope(current_call, activity="review", domains=("plot_structure",),
             paths=(global_path,), contributions=[{"domain": "plot_structure", "role": "constraint_assessor"}])
         review_scope["intent"] = "review_only"
         review_packet = document_fixture._document_plan_native_response(current_call, {"kind": "proposal", "message": "Review only the current Global input.",
@@ -1058,13 +1061,16 @@ class SpecialistRoutingTests(unittest.TestCase):
             result_bound.decode_response(json.dumps(illegal_readonly_artifact))
 
     def test_legacy_proposal_bytes_stay_omitted_and_new_scope_changes_digest(self):
-        from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF, _fixture_assessment
+        from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF
+        from tests.lead_fixtures.preparation_data import (
+            fixture_assessment as _fixture_assessment,
+        )
         legacy = fixture.make_proposal()
         before = c.encode_collaboration_proposal(legacy)
         self.assertNotIn(b'authoring_scope', before)
         self.assertNotIn(b'review_basis', before)
         self.assertEqual(c.encode_collaboration_proposal(c.decode_collaboration_proposal(before)), before)
-        from tests.test_lead_orchestration import LeadOrchestrationTestCase
+        from tests.lead_fixtures.runtime_setup import LeadOrchestrationTestCase
         readiness_case = LeadOrchestrationTestCase()
         readiness_case._setupAsyncioRunner()
         self.addCleanup(readiness_case._tearDownAsyncioRunner)

@@ -411,7 +411,7 @@ class LiveHarnessAuditTests(unittest.TestCase):
         from story_writing_agents import conversations as contracts
         from story_writing_agents.specialist_routing import ArtifactReviewDomain, AuthoringActivity
         from tests.recommendation_fixture import RecommendationCase, action, recommendation, task_assessment
-        from tests.test_lead_orchestration import lead_fixture_authoring_scope
+        from tests.lead_fixtures.preparation_data import lead_fixture_authoring_scope
 
         runtime_case = RecommendationCase()
         self.addCleanup(runtime_case.doCleanups)

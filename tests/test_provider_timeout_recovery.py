@@ -11,7 +11,7 @@ from story_writing_agents import StoryRuntime
 from story_writing_agents.agent_context.manifest import ContextSourceKind
 from story_writing_agents.agents import LEAD_ORCHESTRATOR
 from story_writing_agents.conversations import CollaborationConfirmationDecision, CollaborationEventKind, CollaborationInvocationKind, CollaborationLeadOutcomeFailureCode, CollaborationLeadOutcomeFailurePayload, CollaborationMessagePayload, CollaborationNextAction, CollaborationProviderCallPayload, CollaborationProviderCallState, CollaborationStepState, LeadOutcomeKind, project_collaboration_history
-from tests import test_lead_orchestration as lead
+from tests.lead_fixtures import preparation_data, provider_responses, runtime_setup
 from tests.collaboration_contract_fixture import LEAD, USER, make_draft, provider_call_drafts
 from story_writing_agents.agent_context.contracts import planning_inputs as ctx_planning_inputs
 from story_writing_agents.agent_context.invocation import provider as ctx_provider
@@ -20,10 +20,10 @@ from story_writing_agents.runtime_resources import collaboration_event_journal a
 
 
 
-class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
+class ProviderTimeoutRecoveryTests(runtime_setup.LeadOrchestrationTestCase):
     def setUp(self):
         super().setUp()
-        self.backend = lead._LeadBackend(persist_context_threads=True, test_case=self)
+        self.backend = provider_responses.LeadBackend(persist_context_threads=True, test_case=self)
         self.runtime = StoryRuntime(self.workspace, self.backend)
 
     def failures(self, conversation):
@@ -39,7 +39,7 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
     async def answer(self, conversation, text, *, runtime=None, backend=None):
         backend = backend or self.backend
         call_start = len(backend.calls)
-        backend.enqueue(lead._visible_outcome("answer", "Synthetic retry succeeded."), control_plan=selection_plan('answer.workflow'))
+        backend.enqueue(preparation_data.visible_outcome("answer", "Synthetic retry succeeded."), control_plan=selection_plan('answer.workflow'))
         result = await (runtime or self.runtime).lead_turn(self.session_id, conversation, text)
         self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
         self.assertEqual(tuple(call.contract.schema_group_phase.value for call in backend.calls[call_start:]), ("select", "generate"))
@@ -95,7 +95,7 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
                 prefix = self.history(conversation)
                 self.assertIs(self.checkpoint()[1].record.state, owner_record_values.ContextLedgerRecordState.TAINTED)
 
-                backend = lead._LeadBackend(persist_context_threads=True, test_case=self)
+                backend = provider_responses.LeadBackend(persist_context_threads=True, test_case=self)
                 backend.context_threads.update(self.backend.context_threads)
                 restarted = StoryRuntime(self.workspace, backend)
                 self.assertEqual(backend.calls, [])
@@ -157,7 +157,7 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
 
     async def test_abandoned_turn_preserves_other_conversation_successful_checkpoint(self):
         failed_conversation, successful_conversation = self.conversation(), self.conversation()
-        self.backend.enqueue(control_plan=((0, LeadGroupPhase.SELECT, lead._SubmittedFailure(TimeoutError(), timed_out=True)),))
+        self.backend.enqueue(control_plan=((0, LeadGroupPhase.SELECT, provider_responses.SubmittedFailure(TimeoutError(), timed_out=True)),))
         await self.runtime.lead_turn(self.session_id, failed_conversation, "Failed conversation input.")
         await self.answer(successful_conversation, "Successful other conversation input.")
         _, checkpoint = self.checkpoint()
@@ -184,7 +184,7 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
                 'bounded story-direction review judgments; preserve supplied facts and do not write files. Execution '
                 'requires separate exact confirmation.'
             ), authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded story-direction review judgments',))))
-        revision_failure = lead._SubmittedFailure(TimeoutError(), timed_out=True)
+        revision_failure = provider_responses.SubmittedFailure(TimeoutError(), timed_out=True)
         grouped_revision = proposed.proposal.authoring_scope is None
         if grouped_revision:
             self.backend.enqueue(control_plan=((0, LeadGroupPhase.SELECT, revision_failure),))
@@ -192,7 +192,7 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
             self.backend.enqueue(revision_failure)
         revision_start = len(self.backend.calls)
         result = await self.runtime.decide_lead_step(
-            lead.lead_confirmation_decision(proposed, CollaborationConfirmationDecision.REVISE))
+            preparation_data.lead_confirmation_decision(proposed, CollaborationConfirmationDecision.REVISE))
         self.assertIs(result.turn.next_action, CollaborationNextAction.RETRY_LEAD_TURN)
         self.assertEqual(len(self.backend.calls), revision_start + 1)
         revision_call = self.backend.calls[revision_start]
@@ -208,11 +208,11 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
         before = len(self.backend.calls)
         restarted = StoryRuntime(self.workspace, self.backend)
         with self.assertRaisesRegex(ValueError, "no authoritative pending request"):
-            await restarted.decide_lead_step(lead.lead_confirmation_decision(proposed, CollaborationConfirmationDecision.CONFIRM))
+            await restarted.decide_lead_step(preparation_data.lead_confirmation_decision(proposed, CollaborationConfirmationDecision.CONFIRM))
         self.assertEqual(len(self.backend.calls), before)
         retry_findings = []
         def retry_answer(call, provider):
-            action = json.loads(lead._discussion_reply("Synthetic retry succeeded."))["agent_action"]
+            action = json.loads(preparation_data.discussion_reply("Synthetic retry succeeded."))["agent_action"]
             evidence_offers = call.contract.eligibility_offers
             writing_ids = tuple(dict.fromkeys(
                 fact.evidence_id
@@ -277,7 +277,7 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
 
     async def test_failure_closure_write_error_keeps_history_gated(self):
         conversation = self.conversation()
-        self.backend.enqueue(control_plan=((0, LeadGroupPhase.SELECT, lead._SubmittedFailure(TimeoutError(), timed_out=True)),))
+        self.backend.enqueue(control_plan=((0, LeadGroupPhase.SELECT, provider_responses.SubmittedFailure(TimeoutError(), timed_out=True)),))
         store_type = type(self.runtime.conversation_storage_services.event_store)
         append = store_type.append_batch
 
@@ -300,7 +300,7 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
 
     async def test_corrupt_failed_history_cannot_admit_provider_work(self):
         conversation = self.conversation()
-        self.backend.enqueue(control_plan=((0, LeadGroupPhase.SELECT, lead._SubmittedFailure(TimeoutError(), timed_out=True)),))
+        self.backend.enqueue(control_plan=((0, LeadGroupPhase.SELECT, provider_responses.SubmittedFailure(TimeoutError(), timed_out=True)),))
         await self.runtime.lead_turn(self.session_id, conversation, "Original failed input.")
         events = self.history(conversation)
         store_type = type(self.runtime.conversation_storage_services.event_store)

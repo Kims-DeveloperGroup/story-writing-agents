@@ -1,7 +1,11 @@
 """End-to-end Antigravity parity tests with a deterministic fake CLI."""
 from __future__ import annotations
 from tests.test_provider_schema_spec import check_schema
-from tests.test_lead_orchestration import _exploration_native_contract, _exploration_outcome, _premise_native_contract
+from tests.lead_fixtures.preparation_data import (
+    exploration_native_contract as _exploration_native_contract,
+    exploration_outcome as _exploration_outcome,
+    premise_native_contract as _premise_native_contract,
+)
 import asyncio
 import hashlib
 import inspect
@@ -884,33 +888,37 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
 
     async def _require_actual_bound_transport(self, vendor):
         from story_writing_agents.provider_process import ProcessResult
-        from tests import test_lead_orchestration as lead
+        from tests.lead_fixtures import preparation_data, provider_responses, runtime_setup
+        from story_writing_agents.conversations import (
+            CollaborationNextAction,
+            CollaborationLeadJudgmentPayload,
+        )
         from story_writing_agents.antigravity_adapter import AntigravityAdapter
         from story_writing_agents.provider_message_catalog import WireShapeError
         from story_writing_agents.agent_context.invocation.provider import BoundContextProviderCallRequest
-        case = lead._task_fixture(self)
+        case = runtime_setup.task_fixture(self)
         raw_frames, wire_responses = [], []
-        invoke_context = lead._LeadContextProvider.invoke_context
+        invoke_context = provider_responses.LeadContextProvider.invoke_context
         async def record_response(provider, call):
             result = await invoke_context(provider, call)
             wire_responses.append(result.response_text)
             return result
-        emit = lead._visible_outcome('answer', 'Current bound native frame.')
+        emit = preparation_data.visible_outcome('answer', 'Current bound native frame.')
         def original_frame(request, provider):
             raw = emit(request, provider)
             raw_frames.append(raw)
             return raw
         case.backend.enqueue(original_frame, control_plan=selection_plan("answer.workflow"))
         conversation = case.conversation('Current bound native transport')
-        with mock.patch.object(lead._LeadContextProvider, 'invoke_context', new=record_response):
+        with mock.patch.object(provider_responses.LeadContextProvider, 'invoke_context', new=record_response):
             outcome = await case.runtime.lead_turn(
                 case.session_id, conversation, 'Explain the workflow.')
         self.assertIsNone(outcome.state)
-        self.assertIs(outcome.next_action, lead.CollaborationNextAction.CONTINUE_WITH_LEAD)
+        self.assertIs(outcome.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD)
         self.assertEqual(outcome.message, 'Current bound native frame.')
         judgments = [event for event in case.history(conversation)
                      if event.step_id == outcome.step_id and event.turn_id == outcome.turn_id
-                     and type(event.payload) is lead.CollaborationLeadJudgmentPayload]
+                     and type(event.payload) is CollaborationLeadJudgmentPayload]
         self.assertEqual(len(judgments), 1)
         self.assertEqual(judgments[0].payload.message, 'Current bound native frame.')
         self.assertEqual(judgments[0].payload.kind, outcome.kind)
@@ -1092,13 +1100,19 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                 first.thread_id)
 
     async def test_lead_json_object_context_payload_uses_provider_neutral_wire(self) -> None:
-        from tests import test_lead_orchestration as lead
+        from tests.lead_fixtures import (
+            material_values,
+            preparation_data,
+            provider_responses,
+            runtime_setup,
+        )
+        from story_writing_agents import lead_exploration as exploration
         from contextlib import ExitStack
         from story_writing_agents.antigravity_adapter import AntigravityAdapter as AG
         from story_writing_agents.agent_context.invocation.provider import BoundContextProviderCallRequest
         invocations, setup_calls, front_call_kinds = [], [], []
         front_provider_results = []
-        original = lead._LeadContextProvider.invoke_context
+        original = provider_responses.LeadContextProvider.invoke_context
         expected = (
             (BoundContextProviderCallRequest, LEAD_ORCHESTRATOR, "lead.front", "lead-response-v8"),
             (BoundContextProviderCallRequest, LEAD_ORCHESTRATOR, "lead.front",
@@ -1107,7 +1121,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             (BoundContextProviderCallRequest, LEAD_ORCHESTRATOR, "lead_synthesis",
              "premise-decision-summary-v1"))
         for workflow in ("front", "premise"):
-            case = lead._task_fixture(self)
+            case = runtime_setup.task_fixture(self)
             case.backend.context_threads = {} if workflow == 'front' else None
             with ExitStack() as cleanup:
                 overrides = dict.fromkeys(
@@ -1168,7 +1182,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                                 self.assertNotIn("context_changes", request.payload)
                                 self.assertEqual(selection["catalog"], request.contract.group_stage.catalog.as_object())
                                 self.assertIn("core_document_statuses", request.payload)
-                                self.assertEqual(lead._expanded_context_payload(request.payload)["task_input"]["user_request_text"],
+                                self.assertEqual(material_values.expanded_context_payload(request.payload)["task_input"]["user_request_text"],
                                                  "Visible lead request.")
                                 self.assertIsNone(request.context_witness)
                                 self.assertIsNone(request.context_anchor)
@@ -1187,19 +1201,19 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                                 self.assertEqual((result.response_text, result.accounting.state),
                                                  (response, ProviderCallState.SUBMITTED))
                     return result
-                with mock.patch.object(lead._LeadContextProvider, "invoke_context", new=observe):
+                with mock.patch.object(provider_responses.LeadContextProvider, "invoke_context", new=observe):
                     if workflow == "front":
-                        case.backend.enqueue(lead._visible_outcome("answer", "Visible."), control_plan=selection_plan("answer.workflow"))
+                        case.backend.enqueue(preparation_data.visible_outcome("answer", "Visible."), control_plan=selection_plan("answer.workflow"))
                         await case.runtime.lead_turn(case.session_id,
                             case.conversation("lead-conversation"), "Visible lead request.")
-                        case.backend.enqueue(lead._current_exploration_outcome(
+                        case.backend.enqueue(preparation_data.current_exploration_outcome(
                             "Native provisional 한글 possibility.", basis_input_ids=()))
                         await case.runtime.lead_turn(case.session_id,
                             case.conversation("lead-exploration-parity"),
                             "Explore provisional directions.",
-                            interaction_mode=lead.exploration.LeadInteractionMode.EXPLORATION)
+                            interaction_mode=exploration.LeadInteractionMode.EXPLORATION)
                     else:
-                        await lead._confirmed_premise(case, case.conversation("native-premise"))
+                        await preparation_data.confirmed_premise(case, case.conversation("native-premise"))
                 setup_calls.append(len(case.backend.calls))
         self.assertEqual(([index for index, _ in invocations], setup_calls), ([0, 0, 1, 2, 3], [3, 5]))
         self.assertEqual(front_call_kinds, [ProviderCallKind.COLLABORATION_INITIAL,

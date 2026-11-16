@@ -1,5 +1,8 @@
 """Runtime routing accepts typed task facts and keeps draft/review authority separate."""
-from tests.test_lead_orchestration import _live_material, _live_task
+from tests.lead_fixtures.preparation_data import (
+    live_material as _live_material,
+    live_task as _live_task,
+)
 from tests.provider_wire_fixture import selection_plan
 from story_writing_agents.lead_schema_groups import LeadGroupPhase
 from tests.provider_wire_fixture import ( result as wire_result, lead_fixture_bound_scope, lead_fixture_assignments,
@@ -15,8 +18,10 @@ import asyncio
 import hashlib
 import json
 import story_writing_agents.lead_task_transitions as task
-from tests.test_lead_orchestration import ( _current_exploration_outcome,
-    _discussion_reply,)
+from tests.lead_fixtures.preparation_data import (
+    current_exploration_outcome as _current_exploration_outcome,
+    discussion_reply as _discussion_reply,
+)
 import subprocess
 from dataclasses import asdict, replace
 from unittest import mock
@@ -28,29 +33,47 @@ from story_writing_agents.agents import PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXE
 from story_writing_agents.specialist_routing import AuthoringActivity, AuthoringIntent, AuthoringScope, ArtifactReviewDomain, SpecialistAssignmentMode, ReviewBasis
 from story_writing_agents.writing_artifacts.repository import WritingArtifactRepository
 from story_writing_agents.interactive_terminal import _collaboration_view as view
-from tests.test_lead_orchestration import _SubmittedFailure, _confirmed_premise, _premise_choice, _selected_premise_proposal, _search_history, _read_history_hit
-from tests.test_lead_orchestration import (
-    LeadOrchestrationTestCase, _LeadBackend, _submitted_calls, _compact_scope, lead_confirmation_decision, _provider_envelope,
-    _workflow_material, lead_fixture_authoring_scope, lead_specialist_outcome, _synthesis_outcome, _visible_outcome, _exploration_outcome, _adoption_selection,
+from tests.lead_fixtures.provider_responses import SubmittedFailure as _SubmittedFailure
+from tests.lead_fixtures.preparation_data import (
+    confirmed_premise as _confirmed_premise,
+    premise_choice as _premise_choice,
+    selected_premise_proposal as _selected_premise_proposal,
+    search_history as _search_history,
+    read_history_hit as _read_history_hit,
+)
+from tests.lead_fixtures.runtime_setup import LeadOrchestrationTestCase
+from tests.lead_fixtures.provider_responses import (
+    LeadBackend as _LeadBackend,
+    workflow_material as _workflow_material,
+)
+from tests.lead_fixtures.preparation_data import (
+    submitted_calls as _submitted_calls,
+    compact_scope as _compact_scope,
+    lead_confirmation_decision,
+    provider_envelope as _provider_envelope,
+    lead_fixture_authoring_scope,
+    lead_specialist_outcome,
+    synthesis_outcome as _synthesis_outcome,
+    visible_outcome as _visible_outcome,
+    exploration_outcome as _exploration_outcome,
+    adoption_selection as _adoption_selection,
 )
 from tests.provider_wire_fixture import answer as wire_answer, contract_id as wire_contract_id
 from tests.recommendation_fixture import DRAFT, action, recommendation, decision as recommendation_decision, task_assessment
 from story_writing_agents.conversations.events import shared_premises_to_dict
 from tests.test_artifact_proposal_orchestration import artifact_review_outcome, _artifact_synthesis_outcome, artifact_evidence_status_id
 
+from tests.lead_fixtures.preparation_data import (
+    OUTLINE,
+    fixture_assessment as _fixture_assessment,
+    scoped_proposal,
+)
+
 _ADMISSION_BRIEF = ( "Nora must recover her brother's letter before a public oath. "
     "His disappearance motivates her search; this city has no magic. "
     "Draft three outline scenes preserving that motive and rule. "
     "Invent supporting dialogue and minor places; leave the ending unresolved." )
-def _fixture_assessment(*, foundation_ids=("user_input",), user_id="user_input"):
-    foundation = admission.AdmissionEvidence("Story foundations", foundation_ids, "Literal supplied fixture facts.")
-    direction = admission.AdmissionEvidence("Direction", (user_id,), "USER requests three outline scenes.")
-    latitude = admission.AdmissionEvidence("Creative scope", (user_id,), "USER permits supporting details.")
-    decision = admission.AdmissionDecision("Supporting details", admission.DecisionCoverage.DELEGATED, (user_id,), "USER explicitly delegates dialogue and minor places.",)
-    return admission.AuthoringAssessment(admission.AdmissionStatus.SUFFICIENT, (foundation,), direction, latitude,
-        ("supporting dialogue", "minor places"), ("no magic", "preserve motive", "unresolved ending"), (decision,), (), "Constructed assessment of the explicit synthetic fixture brief.",)
 
-OUTLINE = "core_documents/global_outline.md"
 CHARACTER = "core_documents/character_sheets.md"
 ROSTER = (PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST)
 
@@ -65,99 +88,6 @@ _PLOT_NATIVE_INPUTS = { 'source_choices': ('user_input',), 'input_choices': ('us
     'recipients': {'user_input': PLOT_ARCHITECT}, 'family': 0,}
 
 
-def scoped_proposal(*agents, authoring_assessment=None, activity='draft', paths=(OUTLINE,),
-        domains=(), selected=None, revision=None, candidate_ids=None, kind='proposal',
-        intent=None, mutate=None, native_inputs=None):
-    def respond(call, provider):
-        material = _workflow_material(provider.callback_payload(call))
-        tasks = [_live_task(call, i) for i, _ in enumerate(call.contract.semantic_index.policy.task_revisions)]
-        index = next((i for i, t in enumerate(tasks) if t["task_id"] == selected and (revision is None or t["task_revision"] == revision)), len(tasks)-1)
-        assert revision is None or (tasks[index]["task_id"], tasks[index]["task_revision"]) == (selected, revision)
-        scope = lead_fixture_authoring_scope(call, activity=activity, paths=paths, domains=domains, task_index=index)
-        scope["interpretation"] = "Draft from the current synthetic brief." if activity == "draft" else "Review the supplied concrete synthetic candidate."
-        scope["intent"] = "authoring" if intent is None else intent
-        mode = "review" if activity == "review" else "draft"
-        ids = ["user_input"] if candidate_ids is None else list(candidate_ids)
-        value = { 'authoring_scope': scope, 'kind': kind,
-            'message': 'The scoped work requires its disclosed specialists.',
-            **({'scope': 'story_specific', 'evidence_status': 'incomplete',
-                'evidence_ids': [], 'artifact_intent': None} if native_inputs is None else {}), 'proposal': {
-                **({'relation': 'new_step'} if native_inputs is None else {}), 'shared_premises': [],
-                **({'purpose': 'Produce the scoped synthetic material.', 'authoring_scope': scope}
-                   if native_inputs is None else {}), 'assignments': [
-                    {'agent_id': agent, 'instruction': 'Produce the bounded material.' if mode == 'draft'
-                     else 'Assess the supplied candidate.',
-                     'input_ids': list(dict.fromkeys(['user_input', *ids])), 'mode': mode}
-                    for agent in agents]} if kind == 'proposal' else None}
-        if kind == "question":
-            value["planning_target"] = None
-        if authoring_assessment is not None:
-            value["authoring_assessment"] = admission.assessment_to_dict(authoring_assessment)
-        statuses = provider.callback_payload(call).get("core_document_statuses", [])
-        status = next((s for s in statuses if s["artifact_path"] in paths), statuses[0] if statuses else None)
-        if status is not None and native_inputs is None:
-            value["evidence_ids"] = [status["evidence_id"]]
-        if native_inputs is not None and value['proposal'] is not None:
-            value['proposal']['required_input_recipients'] = dict(native_inputs['recipients'])
-        if mutate: mutate(value, material)
-        encoded = _provider_envelope(call, value)
-        if native_inputs is None:
-            return encoded
-        native_types = {'proposal': 'specialist_consultation_proposal', 'answer': 'answer',
-                        'critique': 'critique', 'question': 'clarification_question',
-                        'recommendation': 'proposal_drafting_recommendation'}
-        body = wire_result(value, None, native_types=native_types)
-        if 'schema_id' in body:
-            return encoded
-        if type(body.get('writing_task_scope')) is dict and 'task_scope' not in body:
-            body['task_scope'] = lead_fixture_bound_scope( call, body.pop('writing_task_scope'), record=True)
-        assessment = body.get('authoring_assessment')
-        if type(assessment) is dict:
-            for key in ('creative_scope', 'direction', 'foundations', 'decisions'):
-                value = assessment.get(key)
-                records = value if type(value) in (list, tuple) else (value,)
-                for record in records:
-                    if type(record) is dict and 'source_ids' in record:
-                        cells = record['source_ids']
-                        choices = native_inputs['source_choices']
-                        if (type(cells) in (list, tuple) and all(type(item) is str for item in cells)
-                                and len(set(cells)) == len(cells) and set(cells) <= set(choices)):
-                            record['source_ids'] = finite_fixture_selection(choices, tuple(cells))
-        proposal = body.get('specialist_consultation_proposal')
-        if type(proposal) is dict and 'assignments' in proposal:
-            choices = dict(call.contract.semantic_index.policy.choices)
-            proposal['assignments'] = author_positive_fixture_review_bases(
-                proposal['assignments'],
-                candidate_choices=choices['review_candidate_ids'])
-            allocation = lead_fixture_assignments(
-                proposal['assignments'], input_choices=choices['allocation_input_ids'],
-                review_choices=choices['review_candidate_ids'], anchors=native_inputs['anchors'],
-                recipients=proposal.get('required_input_recipients'))
-            proposal['assignments'] = allocation['assignments']
-        response_type = native_inputs.get('lookup_response_type', native_types.get(kind, kind))
-        branch_key = None
-        if call.contract.schema_group_phase is not None:
-            group_id = call.contract.group_workflow.active_selection.group_id
-            shape = ("preliminary_review" in body, type(proposal) is dict and "stage_plan" in proposal)
-            def offered_shape(member):
-                schema = member.rule_graph.schema_value()
-                def object_rule(node):
-                    node = fixture_schema_node(schema, node)
-                    return fixture_schema_node(schema, node["anyOf"][0]) if "anyOf" in node else node
-                root = object_rule(schema)
-                details = object_rule(root["properties"]["response_details"])
-                allocation = details.get("properties", {}).get("specialist_consultation_proposal")
-                return ("preliminary_review" in details.get("required", ()), allocation is not None
-                    and "stage_plan" in object_rule(allocation).get("required", ()))
-            branch_key, = {member.owner.variant.branch_key.partition(':partition:')[0]
-                for member in call.contract.semantic_index.contracts
-                if type(member.owner) is LeadResultContractOwner and member.owner.variant.group_id == group_id
-                and member.rule_graph.literal_at(('response_type',)) == response_type
-                and offered_shape(member) == shape}
-        return lead_fixture_response(call, lead_fixture_result(body),
-            family=0 if branch_key is not None else native_inputs['family'], branch_key=branch_key,
-            response_type=response_type)
-    return respond
 
 
 class _SpecialistRoutingRuntimeCase(LeadOrchestrationTestCase):

@@ -14,7 +14,14 @@ from tests.recommendation_fixture import (
     task_assessment, )
 from story_writing_agents.lead_schema_groups import LeadGroupPhase
 from tests.provider_wire_fixture import selection_plan
-from tests import test_lead_orchestration as lead
+from tests.lead_fixtures import preparation_data, provider_responses
+from tests.provider_wire_fixture import (
+    response as wire_response,
+    lead_fixture_response,
+    contract_id as wire_contract_id,
+)
+from story_writing_agents.structured_output_validation import diagnose_json_text
+from story_writing_agents.errors import BackendProtocolError
 
 
 class RecommendationActionContractTests(RecommendationCase):
@@ -154,7 +161,7 @@ class RecommendationActionContractTests(RecommendationCase):
                         member, replacement, 1), 1)
             if bad_route:
                 bad = recommendation(recommended_action=action(source_ids=sources, kind="prepare_consultation", specialist_ids=("plot_architect",)),
-                    authoring_scope=lambda call: lead.lead_fixture_authoring_scope(
+                    authoring_scope=lambda call: preparation_data.lead_fixture_authoring_scope(
                         call, activity="review", paths=(OUTLINE,), domains=("plot_structure",)),
                     authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=('bounded review judgments', 'separate proposal preparation')))
                 def bad(call, provider, encode=bad):
@@ -182,8 +189,8 @@ class RecommendationActionContractTests(RecommendationCase):
         def checked(offer):
             producer = preparation(offer)
             def response(call, provider):
-                raw = lead.wire_response(producer(call, provider), lead.wire_contract_id(call.payload))
-                self.assertEqual(lead.diagnose_json_text(raw, call.schema), ())
+                raw = wire_response(producer(call, provider), wire_contract_id(call.payload))
+                self.assertEqual(diagnose_json_text(raw, call.schema), ())
                 for change in ("absent", "step", "identity", "scope"):
                     bad = json.loads(raw)
                     body = bad["agent_action"]["task_result"]["response_details"]
@@ -198,7 +205,7 @@ class RecommendationActionContractTests(RecommendationCase):
                         intent["target_artifact_paths"] = {"core_documents/character_sheets.md": True}
                     else:
                         intent["document_change_request_id"] = "foreign_objective"
-                    self.assertTrue(lead.diagnose_json_text(json.dumps(bad), call.schema), change)
+                    self.assertTrue(diagnose_json_text(json.dumps(bad), call.schema), change)
                 return raw
             return response
         self.workspace.path(OUTLINE).write_text("Outline first line.\nOutline second line.\n", encoding="utf-8")
@@ -328,7 +335,7 @@ class RecommendationActionContractTests(RecommendationCase):
         self.assertNotIn("RecommendationCapability", encoded)
         self.assertEqual(self.history(conversation_id), before)
         # Decisions/revision and running/terminal states have their own readable fields.
-        self.backend.enqueue(lambda call, _: lead.lead_fixture_response(call, {
+        self.backend.enqueue(lambda call, _: lead_fixture_response(call, {
             'response_type': 'clarification_question', 'response_text': 'How do the four roles cooperate?',
             'response_details': {'planning_target': None, 'used_evidence_ids': {}}}, family=0))
         revised = await self.runtime.decide_lead_recommendation(decision(turn, c.CollaborationConfirmationDecision.REVISE))
@@ -341,7 +348,7 @@ class RecommendationActionContractTests(RecommendationCase):
         retained = next(item for item in view.available_tasks if item.ref.task_id == request.authoring_scope.task_id)
         self.assertEqual(retained.scope, request.authoring_scope)
         self.assertEqual(self.history(conversation_id)[:len(before)], before)
-        self.assertEqual(len(lead._submitted_calls(self.history(conversation_id)[len(before):])), 1)
+        self.assertEqual(len(preparation_data.submitted_calls(self.history(conversation_id)[len(before):])), 1)
         keys = {f.key for r in c.project_collaboration_readable_history(self.history(conversation_id)) for f in r.fields}
         self.assertTrue({c.CollaborationReadableFieldKey.LEAD_RECOMMENDATION_DECISION,
                          c.CollaborationReadableFieldKey.LEAD_RECOMMENDATION_REVISION,
@@ -359,7 +366,7 @@ class RecommendationActionContractTests(RecommendationCase):
         self.assertIsNone(c.project_collaboration_history(executed).current_recommendation_request)
         conversation_id = self.conversation("Runtime recovery recommendation")
         self.backend.enqueue(control_plan=((0, LeadGroupPhase.SELECT,
-            lead._SubmittedFailure(lead.BackendProtocolError("synthetic provider failure"))),))
+            provider_responses.SubmittedFailure(BackendProtocolError("synthetic provider failure"))),))
         result = await self.runtime.lead_turn(self.session_id, conversation_id, "A normal read-only question.")
         self.assertIsNone(result.recommendation_request)
         self.assertFalse(self.payload_events(conversation_id, c.LeadRecommendationRequestPayload))

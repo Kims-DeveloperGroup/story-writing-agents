@@ -19,7 +19,22 @@ from story_writing_agents.conversation_storage import ConversationStorageBackend
 from story_writing_agents.conversation_storage.migration import ConversationStorageTransferOutcome, transfer_conversation_storage, verify_conversation_storage
 from story_writing_agents.conversation_storage.sqlite import compose_sqlite_conversation_storage, provision_sqlite_conversation_storage
 from story_writing_agents.writing_artifacts.repository import WritingArtifactRepository
-from tests.test_lead_orchestration import LeadOrchestrationTestCase, _LeadBackend, LEAD_FIXTURE_READINESS_DOCUMENTS, lead_confirmation_decision, _live_material, lead_fixture_authoring_scope, _provider_envelope, _read_history_hit, _search_history, lead_specialist_outcome, _visible_outcome, _workflow_material
+from tests.lead_fixtures.runtime_setup import LeadOrchestrationTestCase
+from tests.lead_fixtures.provider_responses import (
+    LeadBackend as _LeadBackend,
+    workflow_material as _workflow_material,
+)
+from tests.lead_fixtures.preparation_data import (
+    LEAD_FIXTURE_READINESS_DOCUMENTS,
+    lead_confirmation_decision,
+    live_material as _live_material,
+    lead_fixture_authoring_scope,
+    provider_envelope as _provider_envelope,
+    read_history_hit as _read_history_hit,
+    search_history as _search_history,
+    lead_specialist_outcome,
+    visible_outcome as _visible_outcome,
+)
 
 
 
@@ -161,7 +176,10 @@ def artifact_review_outcome(
         if isinstance(call, BoundContextProviderCallRequest):
             from tests.provider_wire_fixture import (
                 result, lead_fixture_scope, lead_fixture_result, lead_fixture_response, lead_fixture_assessment)
-            from tests.test_lead_orchestration import _compact_scope, _compact_objective
+            from tests.lead_fixtures.preparation_data import (
+                compact_scope as _compact_scope,
+                compact_objective as _compact_objective,
+            )
             value = {'kind': 'proposal', 'message': message, 'artifact_intent': {'operations': resolved_operations}}
             if scope is not None:
                 value['authoring_scope'] = _compact_scope(scope)
@@ -339,7 +357,9 @@ class ArtifactProposalOrchestrationTests(ArtifactReviewFixture, LeadOrchestratio
         self.assertIn(ARTIFACT_FIXTURE_RULES_PATH, require_readiness(AuthoringTarget.MANUSCRIPT, current_readiness).required_documents)
         self.assertFalse(self.workspace.path(ARTIFACT_FIXTURE_RULES_PATH).exists())
         from tests.provider_wire_fixture import artifact_candidate as wire_candidate
-        from tests.test_agent_context_accounting import _expanded_context_payload
+        from tests.lead_fixtures.material_values import (
+            expanded_context_payload as _expanded_context_payload,
+        )
         materials = [(agent_id, (self.backend.callback_payload(call))["task_input"])
                      for agent_id, call in self.backend.call_records]
         specialist_material = next(value for agent_id, value in materials if agent_id == EXECUTION_SPECIALIST)
@@ -633,7 +653,9 @@ class ArtifactProposalOrchestrationTests(ArtifactReviewFixture, LeadOrchestratio
                 from tests.provider_wire_fixture import (
                     result as native_result, lead_fixture_result, lead_fixture_scope_record,
                     lead_fixture_assessment, finite_fixture_selection)
-                from tests.test_lead_orchestration import _compact_recommended
+                from tests.lead_fixtures.preparation_data import (
+                    compact_recommended as _compact_recommended,
+                )
                 choices = dict(call.contract.semantic_index.policy.choices)
                 self.assertEqual(choices['source_binding'], ('bound',))
                 self.assertIn('current_response', choices['source_ids'])

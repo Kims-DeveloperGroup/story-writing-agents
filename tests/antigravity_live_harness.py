@@ -332,7 +332,9 @@ def budget_synthesis_material(payload):
     """Recognize only the current named consultation summary request."""
     if type(payload) is not dict:
         return None
-    from tests.test_agent_context_accounting import _expanded_context_payload
+    from tests.lead_fixtures.material_values import (
+        expanded_context_payload as _expanded_context_payload,
+    )
     material = _expanded_context_payload(payload).get('task_input')
     return material if type(material) is dict and material.get('workflow_type') == 'consultation_summary' else None
 

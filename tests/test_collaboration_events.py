@@ -1466,7 +1466,10 @@ class CollaborationWireContractTests(unittest.TestCase):
                                    review_basis=ReviewBasis(item.input_ids, "Review selected current inputs.", 1))
                             for item in make_proposal().assignments)
         from tests.collaboration_contract_fixture import qualify_fixture_basis
-        from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF, _fixture_assessment
+        from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF
+        from tests.lead_fixtures.preparation_data import (
+            fixture_assessment as _fixture_assessment,
+        )
         basis = qualify_fixture_basis(basis, current_scope, user_text=_ADMISSION_BRIEF, assessment=_fixture_assessment())
         pinned = replace_proposal(make_proposal(), basis=basis, authoring_scope=current_scope, assignments=assignments)
         self.assertEqual(decode_collaboration_proposal(encode_collaboration_proposal(pinned)), pinned)

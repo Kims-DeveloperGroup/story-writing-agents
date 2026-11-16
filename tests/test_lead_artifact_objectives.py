@@ -14,7 +14,13 @@ from story_writing_agents.agents import PLOT_ARCHITECT
 from story_writing_agents.core_document_readiness import AuthoringTarget
 from tests import test_artifact_objectives as objectives
 from tests import test_artifact_proposal_orchestration as artifact
-from tests import test_lead_orchestration as lead
+from tests.lead_fixtures import preparation_data, provider_responses
+from story_writing_agents.agents import LEAD_ORCHESTRATOR, EXECUTION_SPECIALIST
+from tests.provider_wire_fixture import scenario_input
+from story_writing_agents.specialist_routing import (
+    ArtifactReviewDomain,
+    AuthoringActivity,
+)
 from tests import test_lead_artifact_application_authority as application
 from tests import test_lead_story_commit_authority as commit
 from tests.recommendation_fixture import RecommendationCase, action, recommendation, task_assessment
@@ -28,7 +34,7 @@ def _document_plan_native_response(call, value):
     from tests.provider_wire_fixture import (result, lead_fixture_bound_scope, lead_fixture_assessment,
         author_positive_fixture_review_bases, lead_fixture_assignments, lead_fixture_result, indexed_response)
     from story_writing_agents.lead_provider_contracts import LeadResultContractOwner
-    logical = lead._live_result(call, value)
+    logical = preparation_data.live_result(call, value)
     native = result(logical, "lead-response-v9")
     native.pop("writing_task_scope")
     native["task_scope"] = lead_fixture_bound_scope(call, logical["authoring_scope"], record=True)
@@ -64,7 +70,7 @@ def _document_plan_native_response(call, value):
 def _document_global_candidate_script(target_path, old_global_bytes, updated_global):
     return artifact.artifact_review_outcome(
         operations=lambda _call, material, input_payload: [{"kind": "replace", "evidence_id": material["qualified_read_ids"][target_path], "new_text": updated_global}],
-        authoring_scope=lambda call: lead.lead_fixture_authoring_scope(call, activity="review", domains=("plot_structure",), paths=(target_path,),
+        authoring_scope=lambda call: preparation_data.lead_fixture_authoring_scope(call, activity="review", domains=("plot_structure",), paths=(target_path,),
             contributions=[{"domain": "plot_structure", "role": "constraint_assessor"}]),
         authoring_assessment=asdict(task_assessment(foundation_ids=("user_input",), actions=('Review only the exact USER-supplied global-outline replacement; do not Apply or resolve the chapter ending.',))),
         read_queries=((target_path, old_global_bytes.decode("utf-8").splitlines()[0]),), read_prefix="core_documents/")
@@ -73,7 +79,7 @@ def _document_global_candidate_script(target_path, old_global_bytes, updated_glo
 def _document_global_draft_recommendation_script(target_path, purpose, chosen_ending):
     """Reuse the exact explicitly authored Global DRAFT recommendation callback."""
     def respond(call, provider):
-        scope = lead.lead_fixture_authoring_scope(call, activity="draft", domains=("plot_structure",), paths=(target_path,), contributions=[{"domain": "plot_structure", "role": "draft_owner"}])
+        scope = preparation_data.lead_fixture_authoring_scope(call, activity="draft", domains=("plot_structure",), paths=(target_path,), contributions=[{"domain": "plot_structure", "role": "draft_owner"}])
         return recommendation(message=purpose,
             recommended_action=action(kind="prepare_consultation", source_ids=("user_input",), purpose=purpose,
                 instruction=purpose + " " + chosen_ending, specialist_ids=(PLOT_ARCHITECT,)),
@@ -84,7 +90,7 @@ def _document_global_draft_recommendation_script(target_path, purpose, chosen_en
 def _planning_question_response(call, _provider):
     return _document_plan_native_response(call, {
         "kind": "question", "message": "Next Plot step: resolve the ending decision, then update the global outline before the part outline.",
-        "authoring_scope": lead.lead_fixture_authoring_scope(call, activity="draft", domains=("plot_structure",), paths=()),
+        "authoring_scope": preparation_data.lead_fixture_authoring_scope(call, activity="draft", domains=("plot_structure",), paths=()),
         "planning_target": AuthoringTarget.MANUSCRIPT.value})
 
 
@@ -242,7 +248,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.backend.enqueue(recommendation(message=brief,
             recommended_action=action(source_ids=(source.event_id,),
                 target_paths=(path,), instruction="Preserve the exact approved draft.", specialist_ids=ROSTER),
-            authoring_scope=lambda call: lead._live_material(call)["current_scope"],
+            authoring_scope=lambda call: preparation_data.live_material(call)["current_scope"],
             authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=("bounded artifact review judgments", "separate exact proposal preparation"))), control_plan=selection_plan('prepare.artifact'))
         offered = await self.runtime.lead_turn(self.session_id, conversation_id,
             ("Approve the previous draft and prepare it as a new document." + f" Target: {path}. {brief}"
@@ -286,7 +292,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
             authoring_scope=prepared.proposal.authoring_scope, basis=replace(prepared.proposal.basis,
             editorial_refs=(), editorial_context_digest=None)).proposal_digest)
         self.assertNotIn(memory.record.event_id, {item.input_id for item in prepared.proposal.basis.inputs})
-        self.assertEqual(prepared.proposal.authoring_scope, replace(request.authoring_scope, activity=lead.AuthoringActivity.REVIEW))
+        self.assertEqual(prepared.proposal.authoring_scope, replace(request.authoring_scope, activity=AuthoringActivity.REVIEW))
         self.assertEqual(request.authoring_scope.interpretation, 'Draft from the current synthetic brief.')
         historical = next(item for item in prepared.proposal.basis.inputs if item.input_id == source.event_id)
         self.assertIs(historical.kind, c.CollaborationInputKind.CONVERSATION_EVENT)
@@ -296,11 +302,11 @@ class LeadArtifactObjectiveTests(RecommendationCase):
                          ("create", path, text.encode()))
         self.assertEqual(self.objective(conversation_id).draft_sources, (source,))
         for assignment in prepared.proposal.assignments:
-            self.backend.enqueue_for(assignment.specialist_id, lead.lead_specialist_outcome(
-                "concern" if assignment.specialist_id == lead.EXECUTION_SPECIALIST else "supports",
-                "The source-bound bridge crossing remains uncertain." if assignment.specialist_id == lead.EXECUTION_SPECIALIST else "Preserve the intentional ambiguity; strengthen hesitation."))
-        self.backend.enqueue_for(lead.LEAD_ORCHESTRATOR, artifact._artifact_synthesis_outcome(message=account))
-        reviewed = (await self.runtime.decide_lead_step(lead.lead_confirmation_decision(prepared, c.CollaborationConfirmationDecision.CONFIRM))).turn
+            self.backend.enqueue_for(assignment.specialist_id, preparation_data.lead_specialist_outcome(
+                "concern" if assignment.specialist_id == EXECUTION_SPECIALIST else "supports",
+                "The source-bound bridge crossing remains uncertain." if assignment.specialist_id == EXECUTION_SPECIALIST else "Preserve the intentional ambiguity; strengthen hesitation."))
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, artifact._artifact_synthesis_outcome(message=account))
+        reviewed = (await self.runtime.decide_lead_step(preparation_data.lead_confirmation_decision(prepared, c.CollaborationConfirmationDecision.CONFIRM))).turn
         self.assertIsNotNone(reviewed.artifact_application_request, reviewed)
         self.assertEqual(len(self.backend.calls) - source_positive_call_start, 12)
         review = self.projection(conversation_id).current_reviewed_artifact_proposal
@@ -326,12 +332,12 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.assertEqual(pending_plan.remaining_physical_calls, 0)
         self.assertEqual(pending_plan.rounds_spent, 2)
         for call in self.backend.calls:
-            self.assertNotIn("response_correction", lead._workflow_material(self.backend.callback_payload(call)))
+            self.assertNotIn("response_correction", provider_responses.workflow_material(self.backend.callback_payload(call)))
             self.assertNotIn("structured_response_repair", call.payload)
-            if "replies" in lead._live_material(call):
+            if "replies" in preparation_data.live_material(call):
                 self.assertIn("residual costs", json.dumps(call.schema, default=dict))
-        materials = [lead.scenario_input((self.backend.callback_payload(call))["task_input"]) for call in self.backend.calls]
-        for is_review, expected_scope in ((False, scope), (True, replace(request.authoring_scope, activity=lead.AuthoringActivity.REVIEW))):
+        materials = [scenario_input((self.backend.callback_payload(call))["task_input"]) for call in self.backend.calls]
+        for is_review, expected_scope in ((False, scope), (True, replace(request.authoring_scope, activity=AuthoringActivity.REVIEW))):
             phase = [item for item in materials if ("assignment" in item or "replies" in item) and (item.get("assignment", {}).get("mode") == "review" or "artifact_candidate" in item) == is_review]
             self.assertEqual(len(phase), len(ROSTER) + 1)
             self.assertTrue(all(item["editorial_state"]["selected_refs"] == [editorial.editorial_ref_to_dict(memory.record_ref)] for item in phase))
@@ -489,7 +495,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         global_node = next(node for node in goal_plan.nodes if node.target_kind is AuthoringTarget.GLOBAL_OUTLINE)
         part_node = next(node for node in goal_plan.nodes if node.target_kind is AuthoringTarget.PART_OUTLINES)
         self.assertEqual(part_node.predecessor_node_ids, (global_node.node_id,))
-        self.assertEqual(global_node.scope_rule.domains, (lead.ArtifactReviewDomain.PLOT_STRUCTURE,))
+        self.assertEqual(global_node.scope_rule.domains, (ArtifactReviewDomain.PLOT_STRUCTURE,))
         from story_writing_agents import core_document_readiness as readiness
         ending_decision_id = "chapter3_ending"
         ending_decision_text = "Which closing action ends Chapter 3 (the return unit), while retaining the established whole-book outcome?"
@@ -505,12 +511,12 @@ class LeadArtifactObjectiveTests(RecommendationCase):
                 if row.document_path == AuthoringTarget.PART_OUTLINES.value else row for row in assessment.document_judgments)
             return replace(assessment, book_basis=replace(assessment.book_basis, author_decisions=(*assessment.book_basis.author_decisions, decision)), document_judgments=rows)
         def current_readiness(call, provider):
-            return lead._whole_book_assessment(call, "Global outline remains established; the part outline needs its Chapter 3 ending decision.",
+            return preparation_data.whole_book_assessment(call, "Global outline remains established; the part outline needs its Chapter 3 ending decision.",
                 offered_inputs=provider.callback_payload(call)["task_input"]["available_input_sources"], logical_transform=incomplete_parts)
         self.backend.enqueue(current_readiness, control_plan=selection_plan("readiness.core_documents"))
         readiness_call_start, readiness_read_start = len(self.backend.calls), len(self.backend.reference_calls)
         readiness_turn = await self.runtime.lead_turn(self.session_id, planning_conversation,
-            lead._READINESS_USER + " Chapter 3 is the return unit. I have not supplied or delegated this decision: " + ending_decision_text
+            preparation_data.READINESS_USER + " Chapter 3 is the return unit. I have not supplied or delegated this decision: " + ending_decision_text
             + " Assess current documents: " + " ".join("${" + node.target_path + "}" for node in goal_plan.nodes))
         self.assertIs(readiness_turn.kind, c.LeadOutcomeKind.ANSWER)
         self.assertIsNone(readiness_turn.proposal)
@@ -533,7 +539,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.assertIs(next_plot.next_action, c.DocumentNodeNextAction.REQUEST_INFORMATION)
         self.assertIn(ending_decision_id, next_plot.required_inputs)
         self.assertTrue(any(ending_decision_text in reason for reason in next_plot.blocking_conditions))
-        self.assertEqual(part_node.scope_rule.domains, (lead.ArtifactReviewDomain.PLOT_STRUCTURE,))
+        self.assertEqual(part_node.scope_rule.domains, (ArtifactReviewDomain.PLOT_STRUCTURE,))
         self.assertTrue(part_node.source_input_ids)
         self.assertTrue(part_node.preservation_conditions)
         self.assertTrue(part_node.expected_result)
@@ -593,7 +599,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
             sources = provider.callback_payload(call)["task_input"]["available_input_sources"]
             selected_source = next(item for item in sources if item["source_locator"] == "artifact-candidate/" + candidate_ref.candidate_id)
             alias = selected_source["input_source_id"]
-            scope = lead.lead_fixture_authoring_scope(call, activity="draft" if draft else "review", domains=("plot_structure",), paths=(part_node.target_path,),
+            scope = preparation_data.lead_fixture_authoring_scope(call, activity="draft" if draft else "review", domains=("plot_structure",), paths=(part_node.target_path,),
                 contributions=[{"domain": "plot_structure", "role": "draft_owner" if draft else "constraint_assessor"}])
             scope["intent"] = "authoring" if draft else "review_only"
             assignment = {"agent_id": PLOT_ARCHITECT, "instruction": purpose, "mode": "draft" if draft else "review",
@@ -613,7 +619,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         consumer = consumer_control.turn
         self.assertIsNotNone(consumer)
         self.assertIs(consumer.kind, c.LeadOutcomeKind.PROPOSAL)
-        self.assertEqual(tuple(agent for agent, _call in self.backend.call_records[consumer_start:]), (lead.LEAD_ORCHESTRATOR,))
+        self.assertEqual(tuple(agent for agent, _call in self.backend.call_records[consumer_start:]), (LEAD_ORCHESTRATOR,))
         self.assertEqual(consumer.proposal.participants, (PLOT_ARCHITECT,))
         self.assertEqual(consumer.proposal.document_node.plan_ref, goal_plan.ref)
         self.assertEqual(consumer.proposal.document_node.node_id, part_node.node_id)
@@ -625,15 +631,15 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         selected_input = next(item for item in consumer.proposal.basis.inputs if item.kind is c.CollaborationInputKind.ARTIFACT_CANDIDATE)
         self.assertEqual(selected_input.revision_digest, candidate_ref.candidate_digest)
         self.assertIsNone(next(view for view in self.runtime.inspect_document_plans(self.session_id) if view.plan.ref == goal_plan.ref).current_node_id)
-        self.backend.enqueue_for(PLOT_ARCHITECT, lead.lead_specialist_outcome("supports", "The provisional outline can guide part planning; the closing decision is still required before formal drafting."))
-        self.backend.enqueue_for(lead.LEAD_ORCHESTRATOR, lead._synthesis_outcome(message="Retain the original Chapter 3 goal and ask for its closing decision; no writing or publication is approved."))
+        self.backend.enqueue_for(PLOT_ARCHITECT, preparation_data.lead_specialist_outcome("supports", "The provisional outline can guide part planning; the closing decision is still required before formal drafting."))
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, preparation_data.synthesis_outcome(message="Retain the original Chapter 3 goal and ask for its closing decision; no writing or publication is approved."))
         dispatch_start = len(self.backend.call_records)
-        consumed = (await self.runtime.decide_lead_step(lead.lead_confirmation_decision(consumer, c.CollaborationConfirmationDecision.CONFIRM))).turn
+        consumed = (await self.runtime.decide_lead_step(preparation_data.lead_confirmation_decision(consumer, c.CollaborationConfirmationDecision.CONFIRM))).turn
         self.assertIs(consumed.state, c.CollaborationStepState.COMPLETED)
         review_confirmation = next(event for event in self.payload_events(planning_conversation, c.CollaborationConfirmationPayload)
             if event.payload.proposal_id == consumer.proposal.proposal_id)
         actual_consumers = self.backend.call_records[dispatch_start:]
-        self.assertEqual(tuple(agent for agent, _call in actual_consumers), (PLOT_ARCHITECT, lead.LEAD_ORCHESTRATOR))
+        self.assertEqual(tuple(agent for agent, _call in actual_consumers), (PLOT_ARCHITECT, LEAD_ORCHESTRATOR))
         from story_writing_agents.artifact_proposals import serialize_artifact_review_candidate
         from tests.provider_wire_fixture import artifact_candidate as wire_candidate
         expected_candidate = wire_candidate(json.loads(serialize_artifact_review_candidate(provisional)))
@@ -682,12 +688,12 @@ class LeadArtifactObjectiveTests(RecommendationCase):
                 if row.document_path == part_node.target_path else row for row in partial.document_judgments)
             return replace(partial, book_basis=book, document_judgments=rows)
         def qualify_chosen_ending(call, provider):
-            return lead._whole_book_assessment(call, "The USER has resolved the chapter-ending decision; the existing Part file still needs its separate writing task.",
+            return preparation_data.whole_book_assessment(call, "The USER has resolved the chapter-ending decision; the existing Part file still needs its separate writing task.",
                 offered_inputs=provider.callback_payload(call)["task_input"]["available_input_sources"], logical_transform=resolved_parts)
         self.backend.enqueue(qualify_chosen_ending, control_plan=selection_plan("readiness.core_documents"))
         decision_call_start = len(self.backend.calls)
         resolved_turn = await self.runtime.lead_turn(self.session_id, planning_conversation,
-            lead._READINESS_USER + " Chapter 3 is the return unit. I now explicitly choose this ending action: " + chosen_ending
+            preparation_data.READINESS_USER + " Chapter 3 is the return unit. I now explicitly choose this ending action: " + chosen_ending
             + " Reassess the current documents; do not claim the old Part file already contains this action. "
             + " ".join("${" + node.target_path + "}" for node in goal_plan.nodes))
         self.assertIs(resolved_turn.kind, c.LeadOutcomeKind.ANSWER)
@@ -721,7 +727,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.assertEqual(global_recommendation.recommendation_request.document_node.plan_ref, goal_plan.ref)
         def prepare_global_draft(call, _provider):
             return _document_plan_native_response(call, {"kind": "proposal", "message": global_draft_purpose,
-                "authoring_scope": lead.lead_fixture_authoring_scope(call, activity="draft", domains=("plot_structure",), paths=(global_node.target_path,), contributions=[{"domain": "plot_structure", "role": "draft_owner"}]),
+                "authoring_scope": preparation_data.lead_fixture_authoring_scope(call, activity="draft", domains=("plot_structure",), paths=(global_node.target_path,), contributions=[{"domain": "plot_structure", "role": "draft_owner"}]),
                 "authoring_assessment": asdict(task_assessment(foundation_ids=("user_input",), actions=(global_draft_purpose,))),
                 "proposal": {"relation": "new_step", "purpose": global_draft_purpose, "assignments": [{"agent_id": PLOT_ARCHITECT,
                     "instruction": global_draft_purpose, "mode": "draft", "input_ids": list(dict(call.contract.semantic_index.policy.choices)["input_ids"])}]}})
@@ -735,14 +741,14 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.assertEqual(global_draft_offer.proposal.authoring_scope.target_paths, (global_node.target_path,))
         self.assertEqual(tuple((row.specialist_id, row.mode.value) for row in global_draft_offer.proposal.assignments), ((PLOT_ARCHITECT, "draft"),))
         global_draft_text = "# Global outline\nNora preserves the promise, then hands her brother the sealed letter as Chapter 3 closes.\n"
-        self.backend.enqueue_for(PLOT_ARCHITECT, lead.lead_specialist_outcome("drafted", global_draft_text))
-        self.backend.enqueue_for(lead.LEAD_ORCHESTRATOR, lead._synthesis_outcome(message=global_draft_text))
+        self.backend.enqueue_for(PLOT_ARCHITECT, preparation_data.lead_specialist_outcome("drafted", global_draft_text))
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, preparation_data.synthesis_outcome(message=global_draft_text))
         global_writing_start = len(self.backend.call_records)
-        global_written = (await self.runtime.decide_lead_step(lead.lead_confirmation_decision(global_draft_offer, c.CollaborationConfirmationDecision.CONFIRM))).turn
+        global_written = (await self.runtime.decide_lead_step(preparation_data.lead_confirmation_decision(global_draft_offer, c.CollaborationConfirmationDecision.CONFIRM))).turn
         self.assertIs(global_written.state, c.CollaborationStepState.COMPLETED)
         global_writers = self.backend.call_records[global_writing_start:]
-        self.assertEqual(tuple(agent for agent, _call in global_writers), (PLOT_ARCHITECT, lead.LEAD_ORCHESTRATOR))
-        self.assertEqual(lead.scenario_input(self.backend.callback_payload(global_writers[0][1])["task_input"])["assignment"]["mode"], "draft")
+        self.assertEqual(tuple(agent for agent, _call in global_writers), (PLOT_ARCHITECT, LEAD_ORCHESTRATOR))
+        self.assertEqual(scenario_input(self.backend.callback_payload(global_writers[0][1])["task_input"])["assignment"]["mode"], "draft")
         self.assertEqual(self.projection(planning_conversation).offered_draft_sources[-1].content_digest, objectives.digest(global_draft_text))
         self.assertIsNone(global_written.artifact_application_request)
         self.assertEqual(self.workspace.path(global_node.target_path).read_bytes(), old_global_bytes)
@@ -763,7 +769,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         def recommend_part_draft(call, provider):
             sources = provider.callback_payload(call)["task_input"]["available_input_sources"]
             alias = next(item["input_source_id"] for item in sources if item["source_locator"] == "artifact-candidate/" + candidate_ref.candidate_id)
-            scope = lead.lead_fixture_authoring_scope(call, activity="draft", domains=("plot_structure",), paths=(part_node.target_path,),
+            scope = preparation_data.lead_fixture_authoring_scope(call, activity="draft", domains=("plot_structure",), paths=(part_node.target_path,),
                 contributions=[{"domain": "plot_structure", "role": "draft_owner"}])
             return recommendation(message=draft_purpose,
                 recommended_action=action(kind="prepare_consultation", source_ids=("user_input", alias), purpose=draft_purpose,
@@ -779,7 +785,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         draft_recommendation_turn = drafted_control.turn
         self.assertIsNotNone(draft_recommendation_turn)
         self.assertIs(draft_recommendation_turn.kind, c.LeadOutcomeKind.RECOMMENDATION, draft_recommendation_turn.message[:1200])
-        self.assertEqual(tuple(agent for agent, _call in self.backend.call_records[draft_start:]), (lead.LEAD_ORCHESTRATOR,))
+        self.assertEqual(tuple(agent for agent, _call in self.backend.call_records[draft_start:]), (LEAD_ORCHESTRATOR,))
         draft_request = draft_recommendation_turn.recommendation_request
         self.assertIs(draft_request.kind, c.LeadRecommendationActionKind.PREPARE_CONSULTATION)
         self.assertEqual(draft_request.target_paths, ())
@@ -813,15 +819,15 @@ class LeadArtifactObjectiveTests(RecommendationCase):
                          (review_confirmation.event_id,))
         self.assertEqual(pending_draft.cumulative_plan_physical_calls, len(self.backend.calls) - planning_calls)
         part_draft = chr(10).join(("Return unit / Chapter 3:", "- Nora approaches her brother with the sealed letter.", "- Nora hands him the letter, closing the established return unit.")) + chr(10)
-        self.backend.enqueue_for(PLOT_ARCHITECT, lead.lead_specialist_outcome("drafted", part_draft))
-        self.backend.enqueue_for(lead.LEAD_ORCHESTRATOR, lead._synthesis_outcome(message=part_draft))
+        self.backend.enqueue_for(PLOT_ARCHITECT, preparation_data.lead_specialist_outcome("drafted", part_draft))
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, preparation_data.synthesis_outcome(message=part_draft))
         writing_start = len(self.backend.call_records)
-        written = (await self.runtime.decide_lead_step(lead.lead_confirmation_decision(draft_offer, c.CollaborationConfirmationDecision.CONFIRM))).turn
+        written = (await self.runtime.decide_lead_step(preparation_data.lead_confirmation_decision(draft_offer, c.CollaborationConfirmationDecision.CONFIRM))).turn
         self.assertIs(written.state, c.CollaborationStepState.COMPLETED)
         writers = self.backend.call_records[writing_start:]
-        self.assertEqual(tuple(agent for agent, _call in writers), (PLOT_ARCHITECT, lead.LEAD_ORCHESTRATOR))
+        self.assertEqual(tuple(agent for agent, _call in writers), (PLOT_ARCHITECT, LEAD_ORCHESTRATOR))
         writer_material = self.backend.callback_payload(writers[0][1])["task_input"]
-        self.assertEqual(lead.scenario_input(writer_material)["assignment"]["mode"], "draft")
+        self.assertEqual(scenario_input(writer_material)["assignment"]["mode"], "draft")
         writer_source = next(item for item in writer_material["inputs"] if item["input_source_type"] == "artifact_candidate")
         self.assertEqual(writer_source["artifact_candidate"], expected_candidate)
         self.assertEqual(self.projection(draft_conversation).offered_draft_sources[-1].content_digest, objectives.digest(part_draft))
@@ -924,7 +930,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         def partial_start(call, _provider):
             input_ids = tuple(dict(call.contract.semantic_index.policy.choices)["input_ids"])
             return _document_plan_native_response(call, {"kind": "proposal", "message": multi_request,
-                "authoring_scope": lead.lead_fixture_authoring_scope(call, activity="draft", domains=("plot_structure",), paths=full_targets,
+                "authoring_scope": preparation_data.lead_fixture_authoring_scope(call, activity="draft", domains=("plot_structure",), paths=full_targets,
                     contributions=[{"domain": "plot_structure", "role": "draft_owner"}]),
                 "authoring_assessment": asdict(task_assessment(foundation_ids=input_ids, actions=("Draft both requested documents in separate sequential Plot work.",))),
                 "objective_intent": {"action": "start", "target_paths": [global_node.target_path], "next_step": "consult"},
@@ -933,7 +939,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.backend.enqueue(partial_start, control_plan=selection_plan("consultation.authoring.content"))
         multi_start = len(self.backend.call_records)
         clarified = await self.runtime.lead_turn(self.session_id, multi_conversation, multi_request)
-        self.assertEqual(tuple(agent for agent, _call in self.backend.call_records[multi_start:]), (lead.LEAD_ORCHESTRATOR, lead.LEAD_ORCHESTRATOR))
+        self.assertEqual(tuple(agent for agent, _call in self.backend.call_records[multi_start:]), (LEAD_ORCHESTRATOR, LEAD_ORCHESTRATOR))
         self.assertIs(clarified.kind, c.LeadOutcomeKind.QUESTION)
         self.assertIsNone(clarified.proposal)
         self.assertIsNone(clarified.artifact_application_request)
@@ -968,7 +974,7 @@ class LeadDefaultBudgetRefusalTests(unittest.IsolatedAsyncioTestCase):
                 rows = [(assignment.specialist_id, result) for assignment, result in
                     zip(proposal.assignments, arguments["assignment_results"], strict=True)][:3]
                 if arguments["synthesis_result"] is not None:
-                    rows.append((lead.LEAD_ORCHESTRATOR, arguments["synthesis_result"]))
+                    rows.append((LEAD_ORCHESTRATOR, arguments["synthesis_result"]))
                 execution_notes.append({"results": [{"agent": agent, "value_type": type(result.value).__name__,
                     "failure_type": None if result.failure is None else type(result.failure).__name__,
                     "failure_message": None if result.failure is None else str(result.failure)[:500],
@@ -978,9 +984,9 @@ class LeadDefaultBudgetRefusalTests(unittest.IsolatedAsyncioTestCase):
             except Exception as diagnostic_error:
                 execution_notes.append({"diagnostic_error_type": type(diagnostic_error).__name__})
             return original_persistence(**arguments)
-        original_result = lead._live_result
+        original_result = preparation_data.live_result
         with mock.patch.object(case.runtime.collaboration_result_publication, "_persist_collaboration_results_with_generation_pin", new=observed_persistence):
-            with mock.patch.object(lead, "_live_result", side_effect=lambda call, value: original_result(
+            with mock.patch.object(preparation_data, 'live_result', side_effect=lambda call, value: original_result(
                 call, {**value, "message": brief} if value.get("kind") == "proposal" else value)):
                 try:
                     await case.start(conversation_id, message=text, target_path=None, specialist_ids=ROSTER,

@@ -12,7 +12,7 @@ from tests.recommendation_fixture import (
     DRAFT, OUTLINE, RecommendationCase, action, decision, digest,
     preparation, recommendation, rewrite_history,
     task_assessment, )
-from tests import test_lead_orchestration as lead
+from tests.lead_fixtures import provider_responses
 
 
 
@@ -55,7 +55,7 @@ class LeadRecommendationRecoveryTests(RecommendationCase):
             self.assertIsNotNone(turn.provider_invocation_id)
             self.assertEqual(self.runtime.known_result_finalization.recommendation_turn_result(request_event).provider_invocation_id, turn.provider_invocation_id)
             error = BackendProtocolError("Synthetic unresolved preparation")
-            self.backend.enqueue(lead._SubmittedFailure(error, submission_uncertain=fault == "uncertain"))
+            self.backend.enqueue(provider_responses.SubmittedFailure(error, submission_uncertain=fault == "uncertain"))
             inspect_type = type(self.runtime.artifacts)
             inspect_original = inspect_type.inspect_reference_operation
             def broken(repository, operation_id):

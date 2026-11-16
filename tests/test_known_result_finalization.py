@@ -17,7 +17,8 @@ from story_writing_agents.conversations import (
     CollaborationStepState,
     project_collaboration_history,
 )
-from tests import test_lead_orchestration as lead, test_specialist_orchestration_accounting as accounting
+from tests.lead_fixtures import preparation_data, provider_responses, runtime_setup
+from tests import test_specialist_orchestration_accounting as accounting
 from tests.known_result_finalization_fixture import finalize_known_result
 from tests.provider_wire_fixture import selection_plan
 from tests.test_artifact_proposal_orchestration import (
@@ -27,8 +28,8 @@ from tests.test_artifact_proposal_orchestration import (
     artifact_evidence_status_id,
     artifact_review_outcome,
 )
-from tests.test_lead_orchestration import (
-    BudgetConsultationFixture,
+from tests.lead_fixtures.runtime_setup import BudgetConsultationFixture
+from tests.lead_fixtures.preparation_data import (
     LEAD_FIXTURE_READINESS_DOCUMENTS,
     lead_confirmation_decision,
     lead_fixture_authoring_scope,
@@ -41,28 +42,28 @@ from tests.test_specialist_orchestration_execution import (
 )
 
 
-class KnownResultRecoveryTests(ExecutionInputFixture, lead.LeadOrchestrationTestCase):
+class KnownResultRecoveryTests(ExecutionInputFixture, runtime_setup.LeadOrchestrationTestCase):
     async def test_restarted_finalization_restores_only_this_execution_diagnostics(self) -> None:
         conversation_id = self.conversation("Restart diagnostic finalization")
         proposed = await self.proposal(conversation_id, text=accounting._REVIEW_BRIEF + "\n\nPlease check the story direction.", authoring_assessment=asdict(accounting._review_assessment()))
         private = "PRIVATE_RESTARTED_SPECIALIST_VALUE"
         self.backend.enqueue_for(agents.PLOT_ARCHITECT, specialist_raw_outcome({'message': 0,
             'assessment': 'supports', private: private}))
-        self.backend.enqueue_for(agents.PLOT_ARCHITECT, lead.lead_specialist_outcome())
-        self.backend.enqueue_for(agents.LEAD_ORCHESTRATOR, lead._synthesis_outcome())
+        self.backend.enqueue_for(agents.PLOT_ARCHITECT, preparation_data.lead_specialist_outcome())
+        self.backend.enqueue_for(agents.LEAD_ORCHESTRATOR, preparation_data.synthesis_outcome())
         with stop_after_durable_result_patch(self.runtime):
             with self.assertRaisesRegex(RuntimeError, "durable execution result"):
                 await self.runtime.decide_lead_step(
-                    lead.lead_confirmation_decision(proposed, conversations.CollaborationConfirmationDecision.CONFIRM)
+                    preparation_data.lead_confirmation_decision(proposed, conversations.CollaborationConfirmationDecision.CONFIRM)
                 )
 
         known = self.history(conversation_id)
         projection = conversations.project_collaboration_history(known)
         self.assertIs(projection.current_state, conversations.CollaborationStepState.RUNNING)
-        self.assertEqual(len(lead._event_payloads(known, conversations.CollaborationExecutionResult)), 1)
-        expected = tuple((chunk for payload in lead._submitted_calls( known) for chunk in payload.validation_details))
+        self.assertEqual(len(preparation_data.event_payloads(known, conversations.CollaborationExecutionResult)), 1)
+        expected = tuple((chunk for payload in preparation_data.submitted_calls( known) for chunk in payload.validation_details))
         self.assertTrue(expected)
-        restarted_backend = lead._LeadBackend(test_case=self)
+        restarted_backend = provider_responses.LeadBackend(test_case=self)
         restarted = StoryRuntime(self.control_workspace, restarted_backend)  # type: ignore[arg-type]
         restored = await restarted.lead_turn(self.session_id, conversation_id, 'Finalize the known result.')
         self.assertIs(restored.state, conversations.CollaborationStepState.COMPLETED)
@@ -81,31 +82,31 @@ class KnownResultRecoveryTests(ExecutionInputFixture, lead.LeadOrchestrationTest
                     f"Restart domain rejection from {rejected_role}" )
                 proposed = await self.proposal(conversation_id, text=accounting._REVIEW_BRIEF + "\n\nPlease check the story direction.", authoring_assessment=asdict(accounting._review_assessment()))
                 if rejected_role == agents.PLOT_ARCHITECT:
-                    self.backend.enqueue_for(agents.PLOT_ARCHITECT, lead.lead_specialist_outcome(message=''))
+                    self.backend.enqueue_for(agents.PLOT_ARCHITECT, preparation_data.lead_specialist_outcome(message=''))
                     self.backend.enqueue_for(
-                        agents.PLOT_ARCHITECT, lead.lead_specialist_outcome(),
+                        agents.PLOT_ARCHITECT, preparation_data.lead_specialist_outcome(),
                     )
                 else:
                     self.backend.enqueue_for(
-                        agents.PLOT_ARCHITECT, lead.lead_specialist_outcome(),
+                        agents.PLOT_ARCHITECT, preparation_data.lead_specialist_outcome(),
                     )
                     self.backend.enqueue_for(
-                        agents.LEAD_ORCHESTRATOR, lead._synthesis_outcome(message=""),
+                        agents.LEAD_ORCHESTRATOR, preparation_data.synthesis_outcome(message=""),
                     )
                 self.backend.enqueue_for(
-                    agents.LEAD_ORCHESTRATOR, lead._synthesis_outcome(),
+                    agents.LEAD_ORCHESTRATOR, preparation_data.synthesis_outcome(),
                 )
                 with stop_after_durable_result_patch(self.runtime):
                     with self.assertRaisesRegex(RuntimeError, "durable execution result"):
-                        await self.runtime.decide_lead_step(lead.lead_confirmation_decision(proposed,
+                        await self.runtime.decide_lead_step(preparation_data.lead_confirmation_decision(proposed,
                             conversations.CollaborationConfirmationDecision.CONFIRM))
 
                 known = self.history(conversation_id)
                 projection = conversations.project_collaboration_history(known)
                 self.assertIs(projection.current_state, conversations.CollaborationStepState.RUNNING)
-                self.assertEqual(len(lead._event_payloads(known, conversations.CollaborationExecutionResult)), 1)
-                submitted = lead._submitted_calls(known)
-                expected = tuple((detail for payload in lead._event_payloads(known,
+                self.assertEqual(len(preparation_data.event_payloads(known, conversations.CollaborationExecutionResult)), 1)
+                submitted = preparation_data.submitted_calls(known)
+                expected = tuple((detail for payload in preparation_data.event_payloads(known,
                     conversations.CollaborationMessagePayload) for detail in payload.validation_details))
                 self.assertEqual(
                     tuple(p.validation_details for p in submitted if p.validation_details),
@@ -120,7 +121,7 @@ class KnownResultRecoveryTests(ExecutionInputFixture, lead.LeadOrchestrationTest
                 self.assertEqual(expected[0],
                     "Original response\n$.agent_action.task_result.response_text: " + requirement)
 
-                restarted_backend = lead._LeadBackend(test_case=self)
+                restarted_backend = provider_responses.LeadBackend(test_case=self)
                 restarted = StoryRuntime(
                 self.control_workspace, restarted_backend,  # type: ignore[arg-type]
                 )
@@ -134,7 +135,7 @@ class KnownResultRecoveryTests(ExecutionInputFixture, lead.LeadOrchestrationTest
                 self.assertEqual(self.history(conversation_id), complete)
 
 
-class KnownResultBudgetTests(BudgetConsultationFixture, lead.LeadOrchestrationTestCase):
+class KnownResultBudgetTests(BudgetConsultationFixture, runtime_setup.LeadOrchestrationTestCase):
     async def test_unaffordable_continuation_finalizes_exact_result_without_authority(self):
         await self.record_book_readiness()
         artifacts = {path: path.read_bytes() for path in self.workspace.root.rglob("*.md")}
@@ -160,7 +161,7 @@ class KnownResultBudgetTests(BudgetConsultationFixture, lead.LeadOrchestrationTe
         self.assertEqual({path: path.read_bytes() for path in artifacts}, artifacts)
 
 
-class KnownResultAssessmentTests(ArtifactReviewFixture, lead.LeadOrchestrationTestCase):
+class KnownResultAssessmentTests(ArtifactReviewFixture, runtime_setup.LeadOrchestrationTestCase):
     async def test_all_assessments_are_preserved_and_partial_failure_never_reviews(
         self,
     ) -> None:
@@ -261,7 +262,9 @@ class KnownResultAssessmentTests(ArtifactReviewFixture, lead.LeadOrchestrationTe
             tuple(agent_id for agent_id, _call in specialist_calls),
             tuple(item.specialist_id for item in proposed.proposal.assignments) + (PLOT_ARCHITECT,), )
         from tests.provider_wire_fixture import artifact_candidate as wire_candidate
-        from tests.test_agent_context_accounting import _expanded_context_payload
+        from tests.lead_fixtures.material_values import (
+            expanded_context_payload as _expanded_context_payload,
+        )
         for assignment in proposed.proposal.assignments:
             with self.subTest(specialist=assignment.specialist_id):
                 for call in (call for agent_id, call in specialist_calls
