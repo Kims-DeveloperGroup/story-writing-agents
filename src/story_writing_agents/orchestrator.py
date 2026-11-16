@@ -3294,7 +3294,7 @@ class StoryRuntime:
         records = {record.ref: record for record in state.current_records}
         return tuple(ref for ref in refs if (
             records[ref].draft.scope.kind is EditorialScopeKind.UNKNOWN
-            or any(target.path in scope.target_paths
+            or any(target.path not in scope.target_paths
                    for target in records[ref].draft.scope.targets)
         ))
 
