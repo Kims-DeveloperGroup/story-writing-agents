@@ -404,7 +404,7 @@ class SuiteBudgetTests(unittest.TestCase):
         ):
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(material_current, subtest_caps=caps), recommendation_current)
         self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, material_current, dict(recommendation_current, subtest_caps={**recommendation_current["subtest_caps"], matrix_id: 2}))
-        self.assertEqual(fixture_current["max_test_source_lines"], 152661)
+        self.assertEqual(fixture_current["max_test_source_lines"], 152665)
         self.assertIsNone(suite_budget.check_monotonic(fixture_current, material_current))
         self._assert_source_limit_neighbors_rejected(fixture_current, material_current)
         for field, value in (("schema_version", 2), ("max_sequential_wall_seconds", 18001), ("max_shard_wall_seconds", 3601)):

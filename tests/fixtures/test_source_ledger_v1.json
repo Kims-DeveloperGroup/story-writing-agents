@@ -966,9 +966,9 @@
           ]
         }
       ],
-      "counting": "Move each of 1469 original ordinary body rows once; +426 extraction/retarget plus15 existing BudgetCase rows =+441. legacy1550 unchanged; no ID moves or historical receipt edits.",
-      "approved_source_delta": 441,
-      "planned_raw_delta": -1199,
+      "counting": "Move each of1469 original ordinary body rows once; +426 extraction/retarget +15 existing BudgetCase rows +4 necessary consumer import-restoration rows =+445,152220→152665. Correction batch restores accounting mixed-import binding,9 actual peer namespace targets and1 actual type ForwardRef; no scenarios/assertions removed, legacy1550 unchanged. Existing generic helper11 and generic consumer5 rows remain outside frozen charge scope and are disclosed.",
+      "approved_source_delta": 445,
+      "planned_raw_delta": -1195,
       "planned_support_delta": 1640,
       "legacy_unresolved_lines": 1550,
       "expected_caps_sha256": "d72ded85920beccddd24ee08ca2be40c8963d0832366ce07d211f67684033335",

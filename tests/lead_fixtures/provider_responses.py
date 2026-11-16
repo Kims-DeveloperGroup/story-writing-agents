@@ -44,7 +44,7 @@ from collections.abc import Mapping
 from tests.lead_fixtures.material_values import expanded_context_payload
 
 
-Response = str | BaseException | Callable[[ctx_provider.ContextProviderCallRequest, '_LeadContextProvider'],
+Response = str | BaseException | Callable[[ctx_provider.ContextProviderCallRequest, 'LeadContextProvider'],
     str | BaseException | Awaitable[str | BaseException]]
 
 

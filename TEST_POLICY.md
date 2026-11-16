@@ -105,9 +105,12 @@ Story runtime 기능 Case에는 이 예외를 적용하지 않는다. 전체 시
 사용자의 행 추가 포괄 승인을 이 전달에 적용한다. 기준 main
 `16c93d236373e44f841675dc2cc6c26f14a95dbe`의 raw148885/support1785/legacy1550,
 총152220행에서, 기존 50개 선언의 본문1469행을 네 실제 fixture owner로 한 번씩 옮긴다.
-실제 이동·import 이관은 raw-1214/support+1640으로 +426행이고,
-기존 예산 정책 Case의 필수 전이 검증15행을 더해 raw147686/support3425/legacy1550,
-총152661행(+441)과 정확한 source-only `152220→152661` 예외를 계상한다.
+실제 이동·import 이관은 raw-1210/support+1640으로 +430행이고,
+기존 예산 정책 Case의 필수 전이 검증15행을 더해 raw147690/support3425/legacy1550,
+총152665행(+445)과 정확한 source-only `152220→152665` 예외를 계상한다.
+초기152661행 이후 기존 소비자의 accounting import와 옛 peer-export 참조를
+실제 owner에 연결하는 필수 import4행을 복원했다. 기존 오류 Case를 삭제하거나
+import를 비정상 압축하지 않으며 사용자 포괄 승인을 이 정확한 비용에 적용한다.
 generic guard11행과 기존 정책 도구 소비자5행은 기존 counter scope 밖의 물리 비용으로
 별도 공개하며, 그곳으로 assertion이나 시나리오를 옮겨 소스를 공제하지 않는다.
 

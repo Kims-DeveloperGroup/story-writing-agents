@@ -6411,6 +6411,7 @@
         "context-execution-fixture",
         "lead-fixtures.material-values",
         "lead-fixtures.preparation-data",
+        "lead-fixtures.provider-responses",
         "lead-fixtures.runtime-setup",
         "tests.test_lead_artifact_objectives",
         "tests.test_specialist_routing_runtime"
@@ -14959,6 +14960,7 @@
         "lead-fixtures.runtime-setup",
         "tests.test_artifact_objectives",
         "tests.test_artifact_proposal_orchestration",
+        "tests.test_specialist_orchestration_accounting",
         "tests.test_specialist_orchestration_execution"
       ]
     },
