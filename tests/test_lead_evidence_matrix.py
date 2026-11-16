@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from dataclasses import replace
 from story_writing_agents.errors import BackendProtocolError
+from story_writing_agents.lead_preparation import lead_proposal_inputs as owner
 from story_writing_agents.conversations import (
     CollaborationEvidenceAcquisition,
     CollaborationInputKind,
@@ -185,7 +186,6 @@ class DurableLeadEvidenceMatrixTests(unittest.TestCase):
                 "The duplicated receipt cannot prove a conflict.", evidence,
             )
 
-        from story_writing_agents.lead_preparation import lead_proposal_inputs as owner
         from story_writing_agents.conversations import CollaborationInputRevision
         receipt = replace(_attached("read_3_1"), acquisition=CollaborationEvidenceAcquisition.READ,
             source_kind=CollaborationInputKind.CONVERSATION_EVENT, locator="conversation/original",
