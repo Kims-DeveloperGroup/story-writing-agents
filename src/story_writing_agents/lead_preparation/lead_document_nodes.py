@@ -263,7 +263,7 @@ def document_candidate_inputs(
         raise ValueError("document candidate input IDs are ambiguous")
     additions = []
     for number, use in enumerate(binding.candidate_uses, 1):
-        alias = f"plan_candidate_{number}"
+        alias = f"plan_candidate_broken_{number}"
         expected = CollaborationInputRevision(alias, CollaborationInputKind.ARTIFACT_CANDIDATE,
             f"artifact-candidate/{use.candidate.candidate_id}", CollaborationInputState.PRESENT,
             use.candidate.candidate_digest)
