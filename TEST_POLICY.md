@@ -1029,3 +1029,35 @@ raw147690/support3425/legacy1550, 총152665행에서
 새 Case·시나리오·입력·subTest·시간·worker 상한 증가는 없다.
 이 배정은 소스 구조 변경에 필요한 검증 비용만 계상하며
 Storyruntime의 실제 성능 회귀를 허용하는 예외가 아니다.
+
+## #1040의 현재 Lead 근거 재검증과 기존 Case 분리 배정
+
+사용자의 테스트 source 행 추가 포괄 승인을 이 전달에도 적용한다.
+기준 main `263a252ff09c5c9708df93ca0627aff27a8177c1`의
+raw147752/support3425/legacy1550, 총152727행에서
+기존 두 메서드 본문은 1:1 이동하고 일반 import·클래스 선언20행,
+기존 converter 호출의 공개 인자 연결12행,
+기존 graph 검증의 새 owner·Root incoming 확인26행,
+기존 공개 helper 소유권 검증6행과 packaging 경로1행,
+기존 예산 정책 Case19행 및 id_moves 지원3행을 계상한다.
+최종 raw147836/support3428/legacy1550, 총152814행(+87)이다.
+일반 combined 정책 guard16행은 기존 비계상 scope이며 별도로 공개한다.
+
+허용 전이는 정확한 source `152727→152814`와 기존 두 ID의 1:1 이동을
+결합한다. schema1, 전체18000초·shard3600초,2544 ID·cap합8690을 유지하고
+cap digest는 `d72ded85920beccddd24ee08ca2be40c8963d0832366ce07d211f67684033335`에서
+`c2a287a57fa759f2c1b984c2a3aedf171aa8a08f1ef8032fbd09180079b3fc34`로만 전이한다.
+actual origin263a와 기존 receipt 단계를 보존한 닫힌 두 ID 이동을 검증한다.
+과거 source/ID 전이, 인접 source·cap·복합 변경의 거부 검증은 유지한다.
+
+기존 class pool3548418706µs를 canonical quotient/remainder 규칙으로 분배해
+기존9메서드2903251668µs와 이동2메서드645167038µs로 나눈다.
+전체 weight pool53351213361µs를 보존하며 group394→395를 계상한다.
+hosted162개 ID는 1:1 이름 전환하고 class25→26, profile은
+`audited-162-v7→audited-162-v8`로 갱신한다. runner/LPT 알고리즘과 최대4worker는 유지한다.
+실제 편성은504/676/631/732/1이며 기존1773개 메서드의 shard 배치가 달라진다.
+이를 같은 전후 실행 편성으로 간주하지 않고 전체 CI·시간 비교에 반영한다.
+
+새 Case·시나리오·subTest·시간·worker 상한 증가는 없다.
+필요한 검증 소스 배정과 profile 이름 전환은 실제 Storyruntime 성능 회귀를
+허용하는 예외가 아니다. 변경 전 정상 측정으로 고정한 오차 범위를 유지한다.

@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 RECEIPT_PATH = Path(__file__).parent / "fixtures" / "test_id_moves_v1.json"
-RECEIPT_SHA256 = "e23b2fdd21828f33dfb47fdd177b5a05bc16bd325187e81348d1f3c4fbb66c13"
+RECEIPT_SHA256 = "a1d3a112f14188bd683634f36c72648db26e8a5e54aff21f689f8e92068986f9"
 ORIGINAL_CAPS_SHA256 = "fc586b3eaa147b4ad4bc06e42e98378c50bd56a9fb09954219c20c45e882b99b"
 S02_CAPS_SHA256 = "b554b945803dd496796fd0bf7cad3201c7f729c37821a90231fc734074576c52"
 S03_CAPS_SHA256 = "7f3bdd0982191c0adef51815ae3445fa4a55c11dfcb5d7574179e0c542b0310c"
@@ -16,7 +16,8 @@ BEFORE_998_CAPS_SHA256 = "52d0575e721cf829d7ca7cc0409cd28861ac1db33b587b684d4611
 BEFORE_FINALIZATION_CAPS_SHA256 = "2823d24a5e6436e5b6fbe2356047375707e88c3e73c5f784011e8efa37e30fe5"
 BEFORE_RECOMMENDATION_CAPS_SHA256 = "d9bd3023ba2ac0c68de7f8fb8de964f5e528db92a43e9a48a176445cee8bd28f"
 BEFORE_MATERIAL_CAPS_SHA256 = "08f9cb2779f4e5c5be98c8982edaedb178b0b7ae83caf31b74f1e2530d19cda7"
-EXPECTED_CAPS_SHA256 = "d72ded85920beccddd24ee08ca2be40c8963d0832366ce07d211f67684033335"
+BEFORE_CURRENT_EVIDENCE_CAPS_SHA256 = "d72ded85920beccddd24ee08ca2be40c8963d0832366ce07d211f67684033335"
+EXPECTED_CAPS_SHA256 = "c2a287a57fa759f2c1b984c2a3aedf171aa8a08f1ef8032fbd09180079b3fc34"
 ORIGINAL_ID = "tests.test_agent_context_planning.PlanningSurfaceTests.test_exact_dataclass_fields_and_immutability"
 SECOND_ID = "tests.test_agent_context_sources.SourceSurfacePolicyAndValueTests.test_descriptor_snapshot_records_are_exact_immutable_and_content_hidden"
 THIRD_ID = "tests.test_specialist_routing.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip"
@@ -27,6 +28,7 @@ SEVENTH_ID = "tests.test_lead_orchestration.LeadSchemaFactoringTests.test_small_
 EIGHTH_ID = "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_restarted_finalization_restores_only_this_execution_diagnostics"
 NINTH_ID = "tests.test_lead_recommendations.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review"
 TENTH_ID = "tests.test_lead_evidence_grounding.DurableLeadEvidenceMatrixTests.test_all_sixty_scope_status_kind_cells_are_closed_and_exact"
+ELEVENTH_ID = "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_empty_core_status_evidence_requires_selected_fresh_zero_byte_source"
 STAGES = (
     (964, "d198abaf60edb1956acbd1f410ad3b1b9fbbedd8", ORIGINAL_CAPS_SHA256, S02_CAPS_SHA256, 45),
     (965, "a18dfc6b3faa8dc326668c77d0da12441be388f8", S02_CAPS_SHA256, S03_CAPS_SHA256, 117),
@@ -37,7 +39,8 @@ STAGES = (
     (998, "65ad7c277d1da5ad7b1cab931f48364607067d67", BEFORE_998_CAPS_SHA256, BEFORE_FINALIZATION_CAPS_SHA256, 2),
     (1021, "8e730b3e8f5b092d34e8d249da56a1275fc3ded4", BEFORE_FINALIZATION_CAPS_SHA256, BEFORE_RECOMMENDATION_CAPS_SHA256, 4),
     (1027, "b7061d17229aa7a61d2b85fd689a7792262a1073", BEFORE_RECOMMENDATION_CAPS_SHA256, BEFORE_MATERIAL_CAPS_SHA256, 2),
-    (1028, "e61b70a0d6985fe62316bb02fb478864616a2d75", BEFORE_MATERIAL_CAPS_SHA256, EXPECTED_CAPS_SHA256, 2),
+    (1028, "e61b70a0d6985fe62316bb02fb478864616a2d75", BEFORE_MATERIAL_CAPS_SHA256, BEFORE_CURRENT_EVIDENCE_CAPS_SHA256, 2),
+    (1040, "263a252ff09c5c9708df93ca0627aff27a8177c1", BEFORE_CURRENT_EVIDENCE_CAPS_SHA256, EXPECTED_CAPS_SHA256, 2),
 )
 
 def caps_digest(caps: dict[str, int]) -> str:
@@ -67,7 +70,7 @@ def load_receipt() -> list[dict]:
 
 def remap_base_caps(current: dict[str, int], base: dict[str, int], *, digests: tuple[str, str] | None = None) -> dict[str, int]:
     """Rekey exact approved inventories; digests are hints and every resulting stage is independently verified."""
-    if ORIGINAL_ID in current or (ORIGINAL_ID not in base and SECOND_ID not in base and THIRD_ID not in base and FOURTH_ID not in base and FIFTH_ID not in base and SIXTH_ID not in base and SEVENTH_ID not in base and EIGHTH_ID not in base and NINTH_ID not in base and TENTH_ID not in base) or current == base:
+    if ORIGINAL_ID in current or (ORIGINAL_ID not in base and SECOND_ID not in base and THIRD_ID not in base and FOURTH_ID not in base and FIFTH_ID not in base and SIXTH_ID not in base and SEVENTH_ID not in base and EIGHTH_ID not in base and NINTH_ID not in base and TENTH_ID not in base and ELEVENTH_ID not in base) or current == base:
         return base
     base_digest = caps_digest(base) if digests is None else digests[0]
     before = [stage[2] for stage in STAGES]

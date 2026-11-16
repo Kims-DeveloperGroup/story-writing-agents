@@ -14913,6 +14913,47 @@
           "expected_method_ast_sha256": "dcdb42a4566968d1323873039464c749ce4e0cf389788442d9c1d70ae912cbc8"
         }
       ]
+    },
+    {
+      "schema_version": 1,
+      "issue": 1040,
+      "origin_commit": "263a252ff09c5c9708df93ca0627aff27a8177c1",
+      "original_caps_sha256": "d72ded85920beccddd24ee08ca2be40c8963d0832366ce07d211f67684033335",
+      "expected_caps_sha256": "c2a287a57fa759f2c1b984c2a3aedf171aa8a08f1ef8032fbd09180079b3fc34",
+      "class_moves": [
+        {
+          "source": "tests/test_artifact_proposal_orchestration.py",
+          "class": "ArtifactProposalOrchestrationTests",
+          "destination": "tests/test_current_lead_evidence.py",
+          "destination_class": "CurrentLeadEvidenceTests",
+          "methods": [
+            "test_empty_core_status_evidence_requires_selected_fresh_zero_byte_source",
+            "test_read_evidence_translates_whole_content_and_range_boundary_digests"
+          ]
+        }
+      ],
+      "moves": [
+        {
+          "old_id": "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_empty_core_status_evidence_requires_selected_fresh_zero_byte_source",
+          "new_id": "tests.test_current_lead_evidence.CurrentLeadEvidenceTests.test_empty_core_status_evidence_requires_selected_fresh_zero_byte_source",
+          "subtest_cap": 6,
+          "source": "tests/test_artifact_proposal_orchestration.py",
+          "destination": "tests/test_current_lead_evidence.py",
+          "original_file_sha256": "3461153d00b04c237fa79f1a7fb1f162b726ed82e3366cd13b29ad737b229725",
+          "original_method_ast_sha256": "7d752e04bf9e55bf5e375d221f426bb5100daf1f68c9de153a494cca5bbb9ac9",
+          "expected_method_ast_sha256": "68dd6b9bc4f7837c692b2c7e444c6abb44d977e5f8d5e2bf4b713fe81e7b98dd"
+        },
+        {
+          "old_id": "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_read_evidence_translates_whole_content_and_range_boundary_digests",
+          "new_id": "tests.test_current_lead_evidence.CurrentLeadEvidenceTests.test_read_evidence_translates_whole_content_and_range_boundary_digests",
+          "subtest_cap": 2,
+          "source": "tests/test_artifact_proposal_orchestration.py",
+          "destination": "tests/test_current_lead_evidence.py",
+          "original_file_sha256": "3461153d00b04c237fa79f1a7fb1f162b726ed82e3366cd13b29ad737b229725",
+          "original_method_ast_sha256": "c1e496fb5ad4f6d99c7d47d24c027684dc53df2c664d4126d9367ffa72876529",
+          "expected_method_ast_sha256": "159d6c6de4365bbe959c0e14dd18b8ff61f49f97e1e931ad6409db7ada7d6bd1"
+        }
+      ]
     }
   ]
 }

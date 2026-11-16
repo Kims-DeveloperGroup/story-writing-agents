@@ -1423,12 +1423,10 @@
       ],
       "focused_ids": [
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_core_conflict_revision_and_manuscript_atomic_rename_workflows",
-        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_empty_core_status_evidence_requires_selected_fresh_zero_byte_source",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_incomplete_core_workflow_is_reviewed_only_after_confirmation",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_missing_synthesis_message_fails_and_reviewed_restart_has_no_authority",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_ordinary_discussion_captures_current_state_without_specialists",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_provider_authority_fields_fall_back_without_candidate",
-        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_read_evidence_translates_whole_content_and_range_boundary_digests",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_reviewed_history_transfers_with_filesystem_sqlite_parity",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_revised_artifact_intent_replaces_candidate_in_the_same_step",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_search_read_answer_can_add_an_artifact_candidate",
@@ -1437,12 +1435,10 @@
       ],
       "affected_ids": [
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_core_conflict_revision_and_manuscript_atomic_rename_workflows",
-        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_empty_core_status_evidence_requires_selected_fresh_zero_byte_source",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_incomplete_core_workflow_is_reviewed_only_after_confirmation",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_missing_synthesis_message_fails_and_reviewed_restart_has_no_authority",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_ordinary_discussion_captures_current_state_without_specialists",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_provider_authority_fields_fall_back_without_candidate",
-        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_read_evidence_translates_whole_content_and_range_boundary_digests",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_reviewed_history_transfers_with_filesystem_sqlite_parity",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_revised_artifact_intent_replaces_candidate_in_the_same_step",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_search_read_answer_can_add_an_artifact_candidate",
@@ -1456,6 +1452,29 @@
         "lead-fixtures.provider-responses",
         "lead-fixtures.runtime-setup",
         "tests.test_artifact_objectives"
+      ]
+    },
+    {
+      "name": "tests.test_current_lead_evidence",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/test_current_lead_evidence.py"
+      ],
+      "focused_ids": [
+        "tests.test_current_lead_evidence.CurrentLeadEvidenceTests.test_empty_core_status_evidence_requires_selected_fresh_zero_byte_source",
+        "tests.test_current_lead_evidence.CurrentLeadEvidenceTests.test_read_evidence_translates_whole_content_and_range_boundary_digests"
+      ],
+      "affected_ids": [
+        "tests.test_current_lead_evidence.CurrentLeadEvidenceTests.test_empty_core_status_evidence_requires_selected_fresh_zero_byte_source",
+        "tests.test_current_lead_evidence.CurrentLeadEvidenceTests.test_read_evidence_translates_whole_content_and_range_boundary_digests"
+      ],
+      "depends_on": [
+        "context-execution-fixture",
+        "lead-fixtures.material-values",
+        "lead-fixtures.preparation-data",
+        "lead-fixtures.runtime-setup",
+        "tests.test_artifact_objectives",
+        "tests.test_artifact_proposal_orchestration"
       ]
     },
     {
@@ -14222,7 +14241,7 @@
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_missing_synthesis_message_fails_and_reviewed_restart_has_no_authority",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_ordinary_discussion_captures_current_state_without_specialists",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_provider_authority_fields_fall_back_without_candidate",
-        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_read_evidence_translates_whole_content_and_range_boundary_digests",
+        "tests.test_current_lead_evidence.CurrentLeadEvidenceTests.test_read_evidence_translates_whole_content_and_range_boundary_digests",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_reviewed_history_transfers_with_filesystem_sqlite_parity",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_revised_artifact_intent_replaces_candidate_in_the_same_step",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_search_read_answer_can_add_an_artifact_candidate",
@@ -14371,7 +14390,7 @@
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_missing_synthesis_message_fails_and_reviewed_restart_has_no_authority",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_ordinary_discussion_captures_current_state_without_specialists",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_provider_authority_fields_fall_back_without_candidate",
-        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_read_evidence_translates_whole_content_and_range_boundary_digests",
+        "tests.test_current_lead_evidence.CurrentLeadEvidenceTests.test_read_evidence_translates_whole_content_and_range_boundary_digests",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_reviewed_history_transfers_with_filesystem_sqlite_parity",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_revised_artifact_intent_replaces_candidate_in_the_same_step",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_search_read_answer_can_add_an_artifact_candidate",
@@ -14523,7 +14542,7 @@
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_missing_synthesis_message_fails_and_reviewed_restart_has_no_authority",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_ordinary_discussion_captures_current_state_without_specialists",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_provider_authority_fields_fall_back_without_candidate",
-        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_read_evidence_translates_whole_content_and_range_boundary_digests",
+        "tests.test_current_lead_evidence.CurrentLeadEvidenceTests.test_read_evidence_translates_whole_content_and_range_boundary_digests",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_reviewed_history_transfers_with_filesystem_sqlite_parity",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_revised_artifact_intent_replaces_candidate_in_the_same_step",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_search_read_answer_can_add_an_artifact_candidate",
@@ -14675,7 +14694,7 @@
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_missing_synthesis_message_fails_and_reviewed_restart_has_no_authority",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_ordinary_discussion_captures_current_state_without_specialists",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_provider_authority_fields_fall_back_without_candidate",
-        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_read_evidence_translates_whole_content_and_range_boundary_digests",
+        "tests.test_current_lead_evidence.CurrentLeadEvidenceTests.test_read_evidence_translates_whole_content_and_range_boundary_digests",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_reviewed_history_transfers_with_filesystem_sqlite_parity",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_revised_artifact_intent_replaces_candidate_in_the_same_step",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_search_read_answer_can_add_an_artifact_candidate",
@@ -14828,7 +14847,7 @@
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_missing_synthesis_message_fails_and_reviewed_restart_has_no_authority",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_ordinary_discussion_captures_current_state_without_specialists",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_provider_authority_fields_fall_back_without_candidate",
-        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_read_evidence_translates_whole_content_and_range_boundary_digests",
+        "tests.test_current_lead_evidence.CurrentLeadEvidenceTests.test_read_evidence_translates_whole_content_and_range_boundary_digests",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_reviewed_history_transfers_with_filesystem_sqlite_parity",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_revised_artifact_intent_replaces_candidate_in_the_same_step",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_search_read_answer_can_add_an_artifact_candidate",
@@ -15293,6 +15312,47 @@
       ]
     },
     {
+      "name": "lead-preparation.current-lead-evidence",
+      "boundary": "authority",
+      "paths": [
+        "src/story_writing_agents/lead_preparation/current_lead_evidence.py"
+      ],
+      "focused_ids": [
+        "tests.test_current_lead_evidence.CurrentLeadEvidenceTests.test_empty_core_status_evidence_requires_selected_fresh_zero_byte_source",
+        "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_zero_hit_source_drift_blocks_confirmation_before_specialists"
+      ],
+      "affected_ids": [
+        "tests.test_current_lead_evidence.CurrentLeadEvidenceTests.test_empty_core_status_evidence_requires_selected_fresh_zero_byte_source",
+        "tests.test_current_lead_evidence.CurrentLeadEvidenceTests.test_read_evidence_translates_whole_content_and_range_boundary_digests",
+        "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_durable_zero_hit_history_contains_no_search_or_source_content",
+        "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_empty_whole_is_evidence_but_missing_and_invalid_range_fail",
+        "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_failure_correlation_and_post_closure_calls_fail_closed",
+        "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_mixed_zero_hit_survives_self_appended_history_without_mutation",
+        "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_unknown_duplicate_reordered_and_prior_turn_ids_fail_once",
+        "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_unread_and_truncated_search_fall_back_while_reads_attach_locally",
+        "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_validation_failure_closes_once_and_restart_uses_fresh_turn",
+        "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_whole_and_range_conflict_bind_proposal_and_detect_drift",
+        "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_zero_hit_source_drift_blocks_confirmation_before_specialists",
+        "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_zero_hits_and_scoped_status_evidence_are_derived_locally"
+      ],
+      "depends_on": [
+        "agent-context.invocation.context_execution",
+        "agent-context.sources.capture_values",
+        "agent-context.sources.focused_conversation",
+        "agent-context.sources.own_agent_state",
+        "agent-context.sources.writing_artifact",
+        "lead-preparation.call_rule_factory",
+        "lead-preparation.lead_evidence_receipts",
+        "lead-preparation.lead_material_inputs",
+        "lead-preparation.outcome_decoding",
+        "lead-preparation.reply_contract_values",
+        "lead-preparation.response_rules",
+        "runtime-resources",
+        "runtime-resources.session_worktree_access",
+        "workspace.session-source-workspace"
+      ]
+    },
+    {
       "name": "lead-fixtures.material-values",
       "boundary": "test-support",
       "paths": [
@@ -15394,12 +15454,12 @@
         "tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_readable_and_session_context_include_objectives_without_new_records",
         "tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_v1_objective_wire_round_trips_without_changing_legacy_bytes",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_core_conflict_revision_and_manuscript_atomic_rename_workflows",
-        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_empty_core_status_evidence_requires_selected_fresh_zero_byte_source",
+        "tests.test_current_lead_evidence.CurrentLeadEvidenceTests.test_empty_core_status_evidence_requires_selected_fresh_zero_byte_source",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_incomplete_core_workflow_is_reviewed_only_after_confirmation",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_missing_synthesis_message_fails_and_reviewed_restart_has_no_authority",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_ordinary_discussion_captures_current_state_without_specialists",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_provider_authority_fields_fall_back_without_candidate",
-        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_read_evidence_translates_whole_content_and_range_boundary_digests",
+        "tests.test_current_lead_evidence.CurrentLeadEvidenceTests.test_read_evidence_translates_whole_content_and_range_boundary_digests",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_reviewed_history_transfers_with_filesystem_sqlite_parity",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_revised_artifact_intent_replaces_candidate_in_the_same_step",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_search_read_answer_can_add_an_artifact_candidate",
@@ -15874,12 +15934,12 @@
         "tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_readable_and_session_context_include_objectives_without_new_records",
         "tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_v1_objective_wire_round_trips_without_changing_legacy_bytes",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_core_conflict_revision_and_manuscript_atomic_rename_workflows",
-        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_empty_core_status_evidence_requires_selected_fresh_zero_byte_source",
+        "tests.test_current_lead_evidence.CurrentLeadEvidenceTests.test_empty_core_status_evidence_requires_selected_fresh_zero_byte_source",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_incomplete_core_workflow_is_reviewed_only_after_confirmation",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_missing_synthesis_message_fails_and_reviewed_restart_has_no_authority",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_ordinary_discussion_captures_current_state_without_specialists",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_provider_authority_fields_fall_back_without_candidate",
-        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_read_evidence_translates_whole_content_and_range_boundary_digests",
+        "tests.test_current_lead_evidence.CurrentLeadEvidenceTests.test_read_evidence_translates_whole_content_and_range_boundary_digests",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_reviewed_history_transfers_with_filesystem_sqlite_parity",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_revised_artifact_intent_replaces_candidate_in_the_same_step",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_search_read_answer_can_add_an_artifact_candidate",
@@ -16358,12 +16418,12 @@
         "tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_readable_and_session_context_include_objectives_without_new_records",
         "tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_v1_objective_wire_round_trips_without_changing_legacy_bytes",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_core_conflict_revision_and_manuscript_atomic_rename_workflows",
-        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_empty_core_status_evidence_requires_selected_fresh_zero_byte_source",
+        "tests.test_current_lead_evidence.CurrentLeadEvidenceTests.test_empty_core_status_evidence_requires_selected_fresh_zero_byte_source",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_incomplete_core_workflow_is_reviewed_only_after_confirmation",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_missing_synthesis_message_fails_and_reviewed_restart_has_no_authority",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_ordinary_discussion_captures_current_state_without_specialists",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_provider_authority_fields_fall_back_without_candidate",
-        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_read_evidence_translates_whole_content_and_range_boundary_digests",
+        "tests.test_current_lead_evidence.CurrentLeadEvidenceTests.test_read_evidence_translates_whole_content_and_range_boundary_digests",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_reviewed_history_transfers_with_filesystem_sqlite_parity",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_revised_artifact_intent_replaces_candidate_in_the_same_step",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_search_read_answer_can_add_an_artifact_candidate",
@@ -16841,12 +16901,12 @@
         "tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_readable_and_session_context_include_objectives_without_new_records",
         "tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_v1_objective_wire_round_trips_without_changing_legacy_bytes",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_core_conflict_revision_and_manuscript_atomic_rename_workflows",
-        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_empty_core_status_evidence_requires_selected_fresh_zero_byte_source",
+        "tests.test_current_lead_evidence.CurrentLeadEvidenceTests.test_empty_core_status_evidence_requires_selected_fresh_zero_byte_source",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_incomplete_core_workflow_is_reviewed_only_after_confirmation",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_missing_synthesis_message_fails_and_reviewed_restart_has_no_authority",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_ordinary_discussion_captures_current_state_without_specialists",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_provider_authority_fields_fall_back_without_candidate",
-        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_read_evidence_translates_whole_content_and_range_boundary_digests",
+        "tests.test_current_lead_evidence.CurrentLeadEvidenceTests.test_read_evidence_translates_whole_content_and_range_boundary_digests",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_reviewed_history_transfers_with_filesystem_sqlite_parity",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_revised_artifact_intent_replaces_candidate_in_the_same_step",
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_search_read_answer_can_add_an_artifact_candidate",
