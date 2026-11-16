@@ -14,7 +14,12 @@
     "tests/module_graph_fixture.py",
     "tests/terminal_input_fixture.py",
     "tests/provider_response_contract_fixture.py",
-    "tests/known_result_finalization_fixture.py"
+    "tests/known_result_finalization_fixture.py",
+    "tests/lead_fixtures/__init__.py",
+    "tests/lead_fixtures/material_values.py",
+    "tests/lead_fixtures/preparation_data.py",
+    "tests/lead_fixtures/provider_responses.py",
+    "tests/lead_fixtures/runtime_setup.py"
   ],
   "origins": {
     "test_git_external_operation_inspection.py": {
@@ -726,6 +731,249 @@
         }
       ],
       "legacy_unresolved_lines": 1550
+    },
+    {
+      "issue": 1022,
+      "origin_commit": "16c93d236373e44f841675dc2cc6c26f14a95dbe",
+      "origins": [
+        {
+          "source": "tests/test_agent_context_accounting.py",
+          "sha256": "30799b978b792e2391c48e5b855e1807bf6b539b41b968d1169de4bd9cefa429",
+          "source_ranges": [
+            [
+              49,
+              96
+            ]
+          ],
+          "destinations": [
+            "tests/lead_fixtures/material_values.py"
+          ]
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "sha256": "b8c26d1c15b4c098e389e8a3881cc0154508255917917edbce845465c61eae41",
+          "source_ranges": [
+            [
+              61,
+              62
+            ],
+            [
+              65,
+              65
+            ],
+            [
+              245,
+              258
+            ],
+            [
+              261,
+              266
+            ],
+            [
+              269,
+              417
+            ],
+            [
+              420,
+              435
+            ],
+            [
+              438,
+              497
+            ],
+            [
+              668,
+              693
+            ],
+            [
+              800,
+              821
+            ],
+            [
+              68,
+              69
+            ],
+            [
+              75,
+              177
+            ],
+            [
+              180,
+              185
+            ],
+            [
+              188,
+              204
+            ],
+            [
+              211,
+              238
+            ],
+            [
+              500,
+              502
+            ],
+            [
+              505,
+              507
+            ],
+            [
+              510,
+              516
+            ],
+            [
+              519,
+              526
+            ],
+            [
+              529,
+              610
+            ],
+            [
+              613,
+              617
+            ],
+            [
+              620,
+              623
+            ],
+            [
+              626,
+              629
+            ],
+            [
+              632,
+              636
+            ],
+            [
+              639,
+              654
+            ],
+            [
+              657,
+              660
+            ],
+            [
+              663,
+              665
+            ],
+            [
+              696,
+              697
+            ],
+            [
+              707,
+              735
+            ],
+            [
+              738,
+              759
+            ],
+            [
+              762,
+              797
+            ],
+            [
+              824,
+              831
+            ],
+            [
+              834,
+              835
+            ],
+            [
+              838,
+              841
+            ],
+            [
+              844,
+              877
+            ],
+            [
+              880,
+              890
+            ],
+            [
+              893,
+              902
+            ],
+            [
+              905,
+              910
+            ],
+            [
+              913,
+              922
+            ],
+            [
+              925,
+              929
+            ],
+            [
+              932,
+              935
+            ],
+            [
+              938,
+              990
+            ],
+            [
+              1426,
+              1428
+            ],
+            [
+              993,
+              1003
+            ],
+            [
+              1006,
+              1423
+            ],
+            [
+              1431,
+              1435
+            ],
+            [
+              7011,
+              7130
+            ]
+          ],
+          "destinations": [
+            "tests/lead_fixtures/preparation_data.py",
+            "tests/lead_fixtures/provider_responses.py",
+            "tests/lead_fixtures/runtime_setup.py"
+          ]
+        },
+        {
+          "source": "tests/test_specialist_routing_runtime.py",
+          "sha256": "9d78827e1c7308fa2738a50a59b3a6ad7fdc01fdb2bb30a7cc94ab3a0b6fabb5",
+          "source_ranges": [
+            [
+              45,
+              51
+            ],
+            [
+              53,
+              53
+            ],
+            [
+              68,
+              160
+            ]
+          ],
+          "destinations": [
+            "tests/lead_fixtures/preparation_data.py"
+          ]
+        }
+      ],
+      "counting": "Move each of 1469 original ordinary body rows once; +426 extraction/retarget plus15 existing BudgetCase rows =+441. legacy1550 unchanged; no ID moves or historical receipt edits.",
+      "approved_source_delta": 441,
+      "planned_raw_delta": -1199,
+      "planned_support_delta": 1640,
+      "legacy_unresolved_lines": 1550,
+      "expected_caps_sha256": "d72ded85920beccddd24ee08ca2be40c8963d0832366ce07d211f67684033335",
+      "generic_execution_tool_rows_disclosed": 11,
+      "generic_consumer_rows_disclosed": 5
     }
   ]
 }

@@ -1,7 +1,11 @@
 """Concrete Codex CLI backend tests with no credentials or network access."""
 from __future__ import annotations
 from tests.test_provider_schema_spec import check_schema
-from tests.test_lead_orchestration import _exploration_native_contract, _exploration_outcome, _premise_native_contract
+from tests.lead_fixtures.preparation_data import (
+    exploration_native_contract as _exploration_native_contract,
+    exploration_outcome as _exploration_outcome,
+    premise_native_contract as _premise_native_contract,
+)
 import asyncio
 import contextlib
 import hashlib
@@ -3657,7 +3661,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
     async def _exercise_preliminary_capture(self, *, repair=False, seed=False, failure=None):
         with mock.patch.object(self, "workspace", pristine_initialized_workspace(self)):
             from tests.provider_wire_fixture import ExplicitPhaseScript, selection_plan, lead_fixture_response, lead_fixture_bound_scope, finite_fixture_selection, CallbackContextViews
-            from tests.test_lead_orchestration import lead_fixture_authoring_scope
+            from tests.lead_fixtures.preparation_data import lead_fixture_authoring_scope
             from story_writing_agents.runtime_resources import provider_call_accounting as accounting_module
             from story_writing_agents.agent_context.ledger.checkpoint_ledger import ContextLedger
             from story_writing_agents import conversations as c
@@ -3828,7 +3832,10 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(evaluate(parse_jsonl(raw), catalog, filters, next(e.event_id for e in history if e.payload is judgment), -1).items)
 
             if seed:
-                from tests.test_lead_orchestration import lead_confirmation_decision, _synthesis_outcome
+                from tests.lead_fixtures.preparation_data import (
+                    lead_confirmation_decision,
+                    synthesis_outcome as _synthesis_outcome,
+                )
                 from tests.provider_wire_fixture import answer as wire_answer, contract_id as wire_contract_id
                 from jsonl_viewer.inspection import MISSING
                 task = proposed.proposal.authoring_scope

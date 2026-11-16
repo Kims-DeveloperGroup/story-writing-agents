@@ -14,7 +14,8 @@ from story_writing_agents import conversations as c
 from story_writing_agents.agents import LEAD_ORCHESTRATOR, PLOT_ARCHITECT
 from story_writing_agents.workspace.initialization import provision_session_resources
 from story_writing_agents.writing_artifacts.repository import WritingArtifactRepository
-from tests import test_lead_orchestration as lead
+from tests.lead_fixtures import preparation_data, provider_responses, runtime_setup
+from story_writing_agents.specialist_routing import AuthoringActivity
 from tests.provider_wire_fixture import FixedBusinessFactory as _SourceOnlyFactory, selection_plan
 from tests import test_artifact_proposal_orchestration as artifact
 from tests import test_lead_artifact_application_authority as application
@@ -64,7 +65,7 @@ def _native_objective_response(call, *, response_type, message, scope, update, b
         branch_key=branch if selection_group is None else branch + ":group:" + selection_group)
 
 
-class ObjectiveCase(lead.LeadOrchestrationTestCase):
+class ObjectiveCase(runtime_setup.LeadOrchestrationTestCase):
     """Shared setup only; importing it does not duplicate concrete test IDs."""
 
     def setUp(self):
@@ -74,7 +75,7 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
         ready = provision_session_resources(main.root, self.session_id)
         self.session_resources = ready
         self.workspace = Workspace(ready.identity.worktree_root).require_ready()
-        self.backend = lead._LeadBackend(persist_context_threads=True, vendor="fixture", test_case=self)
+        self.backend = provider_responses.LeadBackend(persist_context_threads=True, vendor="fixture", test_case=self)
         self.runtime = StoryRuntime(self.control_workspace, self.backend)
         self.objective_tasks = {}
 
@@ -97,7 +98,7 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
                 return _native_objective_response(call, response_type='clarification_question', message=message,
                     scope={**self.scope(call, intent=intent, activity='draft'), 'domains': ['plot_structure']},
                     update=native_update, branch='lead-response-v8:family:1', selection_group=selection_group)
-            return lead._provider_envelope(call, {"recommended_action": None,
+            return preparation_data.provider_envelope(call, {"recommended_action": None,
                 "scope": "story_specific", "evidence_status": "empty",
                 "evidence_ids": [artifact.artifact_evidence_status_id(_provider.callback_payload(call), OUTLINE)],
                 "kind": "question", "message": message, "proposal": None,
@@ -107,12 +108,12 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
         return respond
 
     def scope(self, call, *, intent=None, activity="review"):
-        return lead.lead_fixture_authoring_scope(call, activity=activity, paths=(OUTLINE,))
+        return preparation_data.lead_fixture_authoring_scope(call, activity=activity, paths=(OUTLINE,))
 
     async def start(self, conversation_id=None, *, message=DRAFT, objective_id=None,
                     target_path=OUTLINE, specialist_ids=(PLOT_ARCHITECT,), authoring_paths=None,
             native_continuation=False, native_inputs=None, response_text=None):
-        from tests.test_specialist_routing_runtime import scoped_proposal
+        from tests.lead_fixtures.preparation_data import scoped_proposal
         from tests.recommendation_fixture import task_assessment
 
         native_start = (specialist_ids == (PLOT_ARCHITECT,)
@@ -143,7 +144,7 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
                     value['proposal'].update(objective_intent={
                         'action': 'start', 'target_paths': list(paths), 'next_step': 'consult'})
                 elif native_continuation:
-                    value['proposal'].update(objective_intent=lead._compact_objective(intent))
+                    value['proposal'].update(objective_intent=preparation_data.compact_objective(intent))
                 elif native_inputs is None or intent is not None:
                     value.update(objective_intent=intent)
                 if response_text is not None:
@@ -167,9 +168,9 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
         if intent is not None:
             self.objective_tasks[self.objective(conversation_id).facts.objective_id] = proposed.proposal.authoring_scope.task_id
         for agent in specialist_ids:
-            self.backend.enqueue_for(agent, lead.lead_specialist_outcome("drafted", message))
-        self.backend.enqueue_for(LEAD_ORCHESTRATOR, lead._synthesis_outcome(message=message))
-        completed = await self.runtime.decide_lead_step(lead.lead_confirmation_decision(proposed, c.CollaborationConfirmationDecision.CONFIRM))
+            self.backend.enqueue_for(agent, preparation_data.lead_specialist_outcome("drafted", message))
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, preparation_data.synthesis_outcome(message=message))
+        completed = await self.runtime.decide_lead_step(preparation_data.lead_confirmation_decision(proposed, c.CollaborationConfirmationDecision.CONFIRM))
         turn = completed.turn
         self.assertIs(turn.state, c.CollaborationStepState.COMPLETED, turn)
         self.assertEqual(turn.message, message + "\n\n"
@@ -207,14 +208,14 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
         source = self.projection(conversation_id).offered_draft_sources[-1]
         from tests.recommendation_fixture import action, recommendation, decision, task_assessment
         scope = next(event.payload.authoring_scope for event in self.history(conversation_id) if event.event_id == source.event_id)
-        self.assertEqual((scope.schema_version, scope.activity), (3, lead.AuthoringActivity.DRAFT))
+        self.assertEqual((scope.schema_version, scope.activity), (3, AuthoringActivity.DRAFT))
         intent = {"action": "continue", "objective_id": objective.facts.objective_id,
                   "next_step": "prepare", "draft_source_event_ids": [source.event_id] if select else []}
         evidence = (lambda call, material, *, input_payload: artifact._reference_ids(material)) if attached else (
             lambda call, _material, *, input_payload: [artifact.artifact_evidence_status_id(input_payload, OUTLINE)])
         def offer_current_task(call, provider):
             sources = ((source.event_id,) if select else ("user_input",)) + (
-                tuple(evidence(call, lead._workflow_material(provider.callback_payload(call)), input_payload=provider.callback_payload(call))) if attached else ())
+                tuple(evidence(call, provider_responses.workflow_material(provider.callback_payload(call)), input_payload=provider.callback_payload(call))) if attached else ())
             return recommendation(message=scope.interpretation, authoring_scope=c.authoring_scope_to_dict(scope),
                 recommended_action=action(source_ids=sources, objective_id=objective.facts.objective_id, target_paths=objective.facts.target_paths),
                 authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=('candidate preparation', 'separate proposal preparation')))(call, provider)
@@ -240,9 +241,9 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
 
     async def review(self, proposed):
         for assignment in proposed.proposal.assignments:
-            self.backend.enqueue_for(assignment.specialist_id, lead.lead_specialist_outcome("supports"))
+            self.backend.enqueue_for(assignment.specialist_id, preparation_data.lead_specialist_outcome("supports"))
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, artifact._artifact_synthesis_outcome("propose"))
-        result = await self.runtime.decide_lead_step(lead.lead_confirmation_decision(proposed, c.CollaborationConfirmationDecision.CONFIRM))
+        result = await self.runtime.decide_lead_step(preparation_data.lead_confirmation_decision(proposed, c.CollaborationConfirmationDecision.CONFIRM))
         self.assertIsNotNone(result.turn.artifact_application_request, result.turn)
         return result.turn
 
@@ -402,7 +403,7 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
             first = await self.prepare(conversation_id)
             self.assertEqual(len(self.backend.calls) - source_call_start, 5)
             selected = self.objective(conversation_id).draft_sources
-            await self.runtime.decide_lead_step(lead.lead_confirmation_decision(first, c.CollaborationConfirmationDecision.REJECT))
+            await self.runtime.decide_lead_step(preparation_data.lead_confirmation_decision(first, c.CollaborationConfirmationDecision.REJECT))
             second = await self.prepare(conversation_id, select=False)
             self.assertEqual(len(self.backend.calls) - source_call_start, 7)
             self.assertEqual(self.objective(conversation_id).draft_sources, selected)
@@ -424,7 +425,7 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
         self.assertEqual(tuple(self.backend.calls[source_call_start + index].contract.schema_group_phase for index in (0, 3, 4, 5, 6)), (None,) * 5)
         objective_id = self.objective(conversation_id).facts.objective_id
         self.backend.enqueue(lambda call, _provider: _native_objective_response(call, response_type='answer',
-            message='Objective cancelled.', scope=lead.lead_fixture_authoring_scope(call),
+            message='Objective cancelled.', scope=preparation_data.lead_fixture_authoring_scope(call),
             update={'update_type': 'cancel_request', 'document_change_request_id': objective_id},
             branch='lead-response-v8:family:0', selection_group='answer.workflow'),
                              control_plan=selection_plan("answer.workflow"))
@@ -440,7 +441,7 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
         }
         self.assertIs(self.objective(conversation_id).state, c.ArtifactObjectiveState.CANCELLED, diagnostic)
         self.assertEqual(tuple(call.contract.schema_group_phase for call in self.backend.calls[cancel_call_start:]), (LeadGroupPhase.SELECT, LeadGroupPhase.GENERATE))
-        self.assertEqual(len(lead._submitted_calls(self.history(conversation_id)[cancel_event_start:])), 2)
+        self.assertEqual(len(preparation_data.submitted_calls(self.history(conversation_id)[cancel_event_start:])), 2)
         before = self.objective(conversation_id)
         bad = self.question(intent={"action": "continue", "objective_id": objective_id, "next_step": "clarify", "draft_source_event_ids": []})
         self.backend.enqueue(bad, control_plan=selection_plan("question.authoring"))

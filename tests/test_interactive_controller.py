@@ -5769,9 +5769,12 @@ class ControllerConversationCommandTests(ControllerTestCase):
             self.assertEqual(resumed.run_session_lobby(), 0)
         self.assertEqual(observed, [("session", first.conversation_id),
                                    ("session", second.conversation_id), ("session", first.conversation_id)])
-        from tests.test_lead_orchestration import (
-            _task_fixture, _current_exploration_outcome, _submitted_calls)
-        from tests.test_specialist_routing_runtime import scoped_proposal
+        from tests.lead_fixtures.runtime_setup import task_fixture as _task_fixture
+        from tests.lead_fixtures.preparation_data import (
+            current_exploration_outcome as _current_exploration_outcome,
+            submitted_calls as _submitted_calls,
+        )
+        from tests.lead_fixtures.preparation_data import scoped_proposal
         from tests.provider_wire_fixture import selection_plan
         case = _task_fixture(self)
         source, owner = case.conversation("Installed source A"), case.conversation("Installed owner B")
@@ -6182,7 +6185,12 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
             self.assertEqual(tuple(forwarded), before_adoption_cancel)
 
 
-            from tests.test_lead_orchestration import LeadOrchestrationTestCase, _confirmed_premise, _premise_choice, _SubmittedFailure
+            from tests.lead_fixtures.runtime_setup import LeadOrchestrationTestCase
+            from tests.lead_fixtures.preparation_data import (
+                confirmed_premise as _confirmed_premise,
+                premise_choice as _premise_choice,
+            )
+            from tests.lead_fixtures.provider_responses import SubmittedFailure as _SubmittedFailure
             from story_writing_agents import lead_premise_decisions as premise
             fixture = LeadOrchestrationTestCase("runTest")
             fixture.setUp()
@@ -6223,7 +6231,8 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
             self.assertEqual(tuple(item.identity for item in adapter._picker.calls[2][1]), ("user_choice",))
             self.assertEqual(forwarded[-1]["premise_selection"].report_event_id, unranked.premise_report_ref.report_event_id)
 
-        from tests.test_lead_orchestration import _task_fixture, _discussion_reply
+        from tests.lead_fixtures.runtime_setup import task_fixture as _task_fixture
+        from tests.lead_fixtures.preparation_data import discussion_reply as _discussion_reply
         from tests.provider_wire_fixture import (
             offered_fixture_bindings, indexed_response, lead_fixture_result, finite_fixture_selection)
         case = _task_fixture(self)
@@ -6709,7 +6718,8 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
         self.assertEqual((error_frame.sender, error_frame.role, error_frame.metadata),
             ("Runtime", terminal_module.SemanticRole.ERROR, None))
 
-        from tests.test_lead_orchestration import _task_fixture, _submitted_calls
+        from tests.lead_fixtures.runtime_setup import task_fixture as _task_fixture
+        from tests.lead_fixtures.preparation_data import submitted_calls as _submitted_calls
         from tests.provider_wire_fixture import lead_fixture_response
 
         def reply(call, _provider, text, evidence):
@@ -6756,7 +6766,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                 notice = f"for rejected call {case.backend.calls[-1].call_id}:"
                 self.assertIn(notice + " no bounded literal final response_text was recoverable.", rendered)
         from tests import provider_wire_fixture as wire
-        from tests.test_lead_orchestration import lead_fixture_authoring_scope
+        from tests.lead_fixtures.preparation_data import lead_fixture_authoring_scope
         from tests.recommendation_fixture import OUTLINE
         case = _task_fixture(self)
         conversation = case.conversation("A real preparation gap remains a question")

@@ -8,7 +8,11 @@ from story_writing_agents.provider_request_mapping import project_context_payloa
 import hashlib
 from story_writing_agents.conversations import encode_collaboration_event
 from tests.test_collaboration_events import editorial, editorial_request
-from tests.test_lead_orchestration import _current_exploration_outcome, _exploration_outcome, _visible_outcome
+from tests.lead_fixtures.preparation_data import (
+    current_exploration_outcome as _current_exploration_outcome,
+    exploration_outcome as _exploration_outcome,
+    visible_outcome as _visible_outcome,
+)
 from story_writing_agents import lead_exploration as exploration
 import json
 from dataclasses import asdict, replace
@@ -22,7 +26,7 @@ from story_writing_agents.conversations import ArtifactApplicationDecisionKind, 
 from story_writing_agents.conversations.session_context import MAX_PROVIDER_PAYLOAD_UTF8_BYTES, MAX_SESSION_CONTEXT_UTF8_BYTES, SessionContextCapacityError, SessionContextHistoryChangedError, SessionHistorySnapshot
 from story_writing_agents.conversations import session_context as session_context_module
 from story_writing_agents.conversation_storage.sqlite import compose_sqlite_conversation_storage
-from tests import test_lead_orchestration as lead
+from tests.lead_fixtures import preparation_data, provider_responses, runtime_setup
 from tests import test_artifact_proposal_orchestration as artifact
 from tests.sqlite_conversation_storage_fixture import provision, initialized_workspace
 from story_writing_agents.agent_context.contracts import planning_inputs as ctx_planning_inputs
@@ -42,16 +46,16 @@ def _fields(delivery):
     return [field["field_text"] for record in _records(delivery) for field in record.get("readable_fields", [])]
 
 
-class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
+class LeadSessionContinuityTests(runtime_setup.LeadOrchestrationTestCase):
     def setUp(self):
         super().setUp()
-        self.backend = lead._LeadBackend(persist_context_threads=True, test_case=self)
+        self.backend = provider_responses.LeadBackend(persist_context_threads=True, test_case=self)
         self.runtime = StoryRuntime(self.workspace, self.backend)
 
     async def say(self, conversation, text, answer="Synthetic visible reply.", *, runtime=None, backend=None):
         backend = backend or self.backend
         call_start = len(backend.calls)
-        backend.enqueue(lead._visible_outcome("answer", answer), control_plan=selection_plan('answer.workflow'))
+        backend.enqueue(preparation_data.visible_outcome("answer", answer), control_plan=selection_plan('answer.workflow'))
         histories = []
         invoke = owner_context_execution.AgentContextService.invoke
         async def observe_history(service, request, provider, **keywords):
@@ -105,9 +109,9 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         self.assertIs(refusal.status, editorial.EditorialRecordStatus.PENDING_CONTROL_REQUIRED)
         self.assertEqual(self.snapshot(), prior)
         plan = "First inspect the outline.\nSecond review the character motive.\nThird draft the opening."
-        self.backend.enqueue_for(PLOT_ARCHITECT, lead.lead_specialist_outcome())
-        self.backend.enqueue_for(LEAD_ORCHESTRATOR, lead._synthesis_outcome(message=plan))
-        await self.runtime.decide_lead_step(lead.lead_confirmation_decision(proposed, CollaborationConfirmationDecision.CONFIRM))
+        self.backend.enqueue_for(PLOT_ARCHITECT, preparation_data.lead_specialist_outcome())
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, preparation_data.synthesis_outcome(message=plan))
+        await self.runtime.decide_lead_step(preparation_data.lead_confirmation_decision(proposed, CollaborationConfirmationDecision.CONFIRM))
         self.assertEqual(self.backend.call_records[-1][1].expected_thread_id, "thread-lead-1")
         followups = (
             'Proceed in the order you recommended. Literal JSON: {"task_id":"user-text","task_revision":17}',
@@ -125,7 +129,7 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
             self.assertIsNone(followup.document_plan)
             current = self.backend.calls[call_start:]
             self.assertEqual(len(current), 2)
-            self.assertEqual(lead._live_material(current[-1])['authoring_user_sources'], [])
+            self.assertEqual(preparation_data.live_material(current[-1])['authoring_user_sources'], [])
             self.assertEqual(dict(current[-1].contract.semantic_index.policy.choices)['historical_user_source_ids'], ())
             self.assertEqual(tuple(call.scope for call in current), (expected_scope,) * 2)
             self.assertEqual(tuple(call.payload["response_contract"]["schema_selection"]["context_delivery"]["mode"] for call in current), ("bootstrap",) * 2)
@@ -246,7 +250,7 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         self.assertEqual(latest["submitted_calls"], 2)
         self.assertEqual(latest["terminal_result"]["outcome_kind"], "answer")
         self.assertEqual(latest["terminal_result"]["source_kind"], "message")
-        self.assertEqual(lead._live_material(self.backend.calls[-1])['authoring_user_sources'], [])
+        self.assertEqual(preparation_data.live_material(self.backend.calls[-1])['authoring_user_sources'], [])
         self.assertEqual(dict(self.backend.calls[-1].contract.semantic_index.policy.choices)['historical_user_source_ids'], ())
         terminal_event = next(event for event in report_history if event.event_id == latest["terminal_result"]["source_event_id"])
         self.assertIs(terminal_event.kind, CollaborationEventKind.MESSAGE)

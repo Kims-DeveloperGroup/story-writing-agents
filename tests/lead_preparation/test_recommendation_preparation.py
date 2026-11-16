@@ -15,7 +15,9 @@ from tests.recommendation_fixture import (
     preparation, recommendation, rewrite_history,
     task_assessment, )
 from tests.provider_wire_fixture import selection_plan
-from tests import test_lead_orchestration as lead
+from tests.lead_fixtures import material_values, preparation_data, provider_responses
+from story_writing_agents.agent_context.accounting import ProviderCallKind
+from story_writing_agents.structured_output_validation import diagnose_json_text
 
 class LeadRecommendationTests(RecommendationCase):
 
@@ -33,7 +35,7 @@ class LeadRecommendationTests(RecommendationCase):
                 else: value['authoring_assessment'] = None
             rejected = await self._rejected_pair(self.conversation('Invalid preparation assessment'), 'Prepare a bounded story consultation.',
                 recommendation(recommended_action=action(kind='prepare_consultation', source_ids=('user_input',)),
-                    authoring_scope=lambda call: lead.lead_fixture_authoring_scope(call, activity='draft', domains=('plot_structure',), paths=(OUTLINE,)),
+                    authoring_scope=lambda call: preparation_data.lead_fixture_authoring_scope(call, activity='draft', domains=('plot_structure',), paths=(OUTLINE,)),
                     authoring_assessment=assessment, mutate=omit_parent), selection_group='prepare.consultation.authoring')
             self.assertIn('authoring_assessment', '\n'.join(rejected.validation_details)); self.assert_no_downstream(rejected.conversation_id)
             self.assertTrue(any(item.response.acceptance.value == 'rejected' for item in rejected.public_responses))
@@ -45,7 +47,7 @@ class LeadRecommendationTests(RecommendationCase):
         def genuine_gap(call, _provider):
             return lead_fixture_response(call, {'response_type': 'clarification_question', 'response_text': 'Memoir or fiction?',
                 'response_details': {'planning_target': None, 'task_scope': lead_fixture_bound_scope(call,
-                    lead.lead_fixture_authoring_scope(call, activity='draft', domains=('plot_structure',), paths=(OUTLINE,)), record=True)}}, family=0)
+                    preparation_data.lead_fixture_authoring_scope(call, activity='draft', domains=('plot_structure',), paths=(OUTLINE,)), record=True)}}, family=0)
         self.assertEqual(admission.assessment_from_dict(admission.assessment_to_dict(unresolved)), unresolved)
         self.backend.enqueue(genuine_gap, control_plan=selection_plan('question.authoring'))
         question = await self.runtime.lead_turn(self.session_id, cid, 'Prepare a consultation: memoir versus fiction is undecided. Ask for that choice.')
@@ -62,11 +64,11 @@ class LeadRecommendationTests(RecommendationCase):
             started = self.payload_events(conversation_id, c.LeadRecommendationStartedPayload)[0]; self.assertEqual(decision_event.batch_id, started.batch_id)
             self.assertEqual(started.payload.decision_event_id, decision_event.event_id); self.assertEqual(started.payload.request_event_id, request.request_event_id)
             initial = self.backend.calls[calls]; self.assertIs(initial.contract.factory, call.contract.factory)
-            self.assertEqual(initial.scope, call.scope); self.assertIs(initial.call_kind, lead.ProviderCallKind.COLLABORATION_INITIAL)
-            material = lead._workflow_material(provider.callback_payload(initial))["structured_recommendation_execution"]
+            self.assertEqual(initial.scope, call.scope); self.assertIs(initial.call_kind, ProviderCallKind.COLLABORATION_INITIAL)
+            material = provider_responses.workflow_material(provider.callback_payload(initial))["structured_recommendation_execution"]
             self.assertEqual(initial.payload["context_reuse"]["format"], "shared-objects-v1")
             self.assertLess(len(json.dumps(dict(initial.payload), ensure_ascii=False)),
-                            len(json.dumps(lead._expanded_context_payload(initial.payload),
+                            len(json.dumps(material_values.expanded_context_payload(initial.payload),
                                            ensure_ascii=False)))
             self.assertEqual(material["request"]["action_digest"], request.action_digest); self.assertEqual(material["decision"]["decision"]["kind"], "confirm")
             self.assertEqual(material["start"]["execution_attempt_id"], started.payload.execution_attempt_id)
@@ -168,7 +170,7 @@ class LeadRecommendationTests(RecommendationCase):
                 self.assertEqual(replayed.available_tasks[0].source_event_ids, tuple(source_id for source_id, _raw in origins))
                 captured_material = []
                 def historical_assessment(call):
-                    material = lead._live_material(call); rows = material['authoring_user_sources']; captured_material[:] = rows
+                    material = preparation_data.live_material(call); rows = material['authoring_user_sources']; captured_material[:] = rows
                     self.assertEqual([(row['source_id'], row['content_text']) for row in rows], list(origins))
                     for row, (source_id, raw) in zip(rows, origins):
                         self.assertEqual((row['source_identity'], row['revision_digest'], row['utf8_bytes'], row['original_authority']),
@@ -183,7 +185,7 @@ class LeadRecommendationTests(RecommendationCase):
                         protected_constraints=(origins[0][1],), decisions=(admission.AdmissionDecision('Preserve actual experience',
                             admission.DecisionCoverage.SUPPLIED, ('history_user_43',), 'Use only supplied experience.'),))
             self.backend.enqueue(recommendation(recommended_action=action(kind="prepare_consultation", source_ids=("user_input",)),
-                authoring_scope=lambda call: lead.lead_fixture_authoring_scope(call, activity="review", domains=("plot_structure",),
+                authoring_scope=lambda call: preparation_data.lead_fixture_authoring_scope(call, activity="review", domains=("plot_structure",),
                     contributions=[{'domain': 'plot_structure', 'role': 'draft_owner'}] if staged else None),
                 authoring_assessment=historical_assessment if staged else task_assessment(foundation_ids=("user_input",), actions=('bounded review judgments', 'separate proposal preparation'))), control_plan=selection_plan("prepare.consultation.authoring"))
             offered = await self.runtime.lead_turn(self.session_id, cid,
@@ -219,7 +221,7 @@ class LeadRecommendationTests(RecommendationCase):
             raw_observations = []
             def raw(call, _provider):
                 if staged:
-                    self.assertEqual(lead._live_material(call)['authoring_user_sources'],
+                    self.assertEqual(preparation_data.live_material(call)['authoring_user_sources'],
                         [row for row in captured_material if row['source_id'] != 'history_user_51'])
                     self.assertEqual(sum(type(e.payload) is c.CollaborationMessagePayload and
                         e.direction is c.CollaborationDirection.USER_TO_LEAD for e in self.history(cid)), ordinary_users_before_confirm)
@@ -246,7 +248,7 @@ class LeadRecommendationTests(RecommendationCase):
                     body["response_details"].pop("variant_id", None)
                     packet = json.loads(lead_fixture_response(call, body, family=1))["agent_action"]
                 encoded = json.dumps({"agent_action": packet})
-                raw_observations.append((packet, choices, call.contract.outer_inner_schema_ids, lead.diagnose_json_text(encoded, call.schema)))
+                raw_observations.append((packet, choices, call.contract.outer_inner_schema_ids, diagnose_json_text(encoded, call.schema)))
                 return encoded
             self.backend.enqueue(raw)
             if omit_source: self.backend.enqueue(raw)
@@ -421,10 +423,10 @@ class LeadRecommendationTests(RecommendationCase):
         self.runtime = StoryRuntime(self.control_workspace, self.backend)
         self.assertEqual(self.runtime.inspect_editorial_state(self.session_id), state)
         with self.assertRaises(ValueError):
-            await self.runtime.decide_lead_step(lead.lead_confirmation_decision(prepared,
+            await self.runtime.decide_lead_step(preparation_data.lead_confirmation_decision(prepared,
                 c.CollaborationConfirmationDecision.CONFIRM))
         self.assertEqual((self.history(work), len(self.backend.calls)), (before, calls))
-        await self.runtime.decide_lead_step(lead.lead_confirmation_decision(prepared,
+        await self.runtime.decide_lead_step(preparation_data.lead_confirmation_decision(prepared,
             c.CollaborationConfirmationDecision.REJECT))
         _, fresh = await self.recommend(work)
         fresh_basis = fresh.recommendation_request.basis
@@ -485,7 +487,7 @@ class LeadRecommendationTests(RecommendationCase):
                              "source_types": {"story_document": True}}]},
                 outer_schema_id=outer, inner_schema_id=inner, contract=call.contract)
         self.backend.enqueue(
-            search_outline, lead._read_history_hit, preparation(offered, read_evidence=True))
+            search_outline, preparation_data.read_history_hit, preparation(offered, read_evidence=True))
         drift_plan = await self.runtime.decide_lead_recommendation(decision(offered))
         self.assertIsNotNone(drift_plan.proposal, drift_plan)
         before, calls = self.history(drift_work), len(self.backend.calls)
@@ -493,7 +495,7 @@ class LeadRecommendationTests(RecommendationCase):
         self.workspace.path(OUTLINE).write_bytes(source_bytes + b"External drift.\n")
         try:
             with self.assertRaisesRegex(ValueError, "source is unavailable or changed"):
-                await self.runtime.decide_lead_step(lead.lead_confirmation_decision(drift_plan,
+                await self.runtime.decide_lead_step(preparation_data.lead_confirmation_decision(drift_plan,
                     c.CollaborationConfirmationDecision.CONFIRM))
             current = self.runtime.inspect_editorial_state(self.session_id)
             self.assertEqual((current.current_records,

@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from story_writing_agents.errors import BackendProtocolError
 import story_writing_agents.lead_task_transitions as task
-from tests.test_lead_orchestration import _discussion_reply, _SubmittedFailure, _submitted_calls
+from tests.lead_fixtures.preparation_data import (
+    discussion_reply as _discussion_reply,
+    submitted_calls as _submitted_calls,
+)
+from tests.lead_fixtures.provider_responses import SubmittedFailure as _SubmittedFailure
 
 from story_writing_agents import lead_exploration as exploration
 
@@ -53,9 +57,9 @@ from tests.test_artifact_proposal_orchestration import (
     _artifact_synthesis_outcome,
     _reference_ids,
 )
-from tests.test_lead_orchestration import (
-    LeadOrchestrationTestCase,
-    _LeadBackend,
+from tests.lead_fixtures.runtime_setup import LeadOrchestrationTestCase
+from tests.lead_fixtures.provider_responses import LeadBackend as _LeadBackend
+from tests.lead_fixtures.preparation_data import (
     lead_confirmation_decision,
     lead_specialist_outcome,
     lead_fixture_authoring_scope,

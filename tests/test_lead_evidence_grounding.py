@@ -2,8 +2,15 @@
 from __future__ import annotations
 from tests.provider_wire_fixture import selection_plan
 from story_writing_agents import authoring_admission as admission
-from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF, _fixture_assessment
-from tests.test_lead_orchestration import _exploration_outcome, _current_exploration_outcome, _read_history_hit
+from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF
+from tests.lead_fixtures.preparation_data import (
+    fixture_assessment as _fixture_assessment,
+)
+from tests.lead_fixtures.preparation_data import (
+    exploration_outcome as _exploration_outcome,
+    current_exploration_outcome as _current_exploration_outcome,
+    read_history_hit as _read_history_hit,
+)
 from tests.provider_wire_fixture import indexed_response, offered_fixture_bindings
 from story_writing_agents import lead_exploration as exploration
 import hashlib
@@ -17,7 +24,21 @@ from story_writing_agents.agents import EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR,
 from story_writing_agents.conversations import CollaborationAppendError, CollaborationEvidenceAcquisition, CollaborationEvidenceReceipt, CollaborationEventKind, CollaborationInputKind, CollaborationInputState, CollaborationInvocationKind, CollaborationLeadEvidence, CollaborationLeadJudgmentPayload, CollaborationLeadOutcomeFailureCode, CollaborationLeadOutcomeFailurePayload, CollaborationNextAction, CollaborationProviderCallKind, CollaborationStepState, LeadEvidenceStatus, LeadOutcomeKind, LeadOutcomeScope, collaboration_proposal_digest, encode_collaboration_event, validate_collaboration_candidate_batch
 from story_writing_agents.errors import BackendProtocolError
 from story_writing_agents.writing_artifacts import ReferenceAuthorizationErrorCode, ReferenceOperationFailure
-from tests.test_lead_orchestration import LeadOrchestrationTestCase, _LeadBackend, _LeadContextProvider, _confirmed_premise, lead_confirmation_decision, lead_fixture_authoring_scope, _provider_envelope, lead_specialist_outcome, _submitted_calls, _synthesis_outcome, _visible_outcome
+from tests.lead_fixtures.runtime_setup import LeadOrchestrationTestCase
+from tests.lead_fixtures.provider_responses import (
+    LeadBackend as _LeadBackend,
+    LeadContextProvider as _LeadContextProvider,
+)
+from tests.lead_fixtures.preparation_data import (
+    confirmed_premise as _confirmed_premise,
+    lead_confirmation_decision,
+    lead_fixture_authoring_scope,
+    provider_envelope as _provider_envelope,
+    lead_specialist_outcome,
+    submitted_calls as _submitted_calls,
+    synthesis_outcome as _synthesis_outcome,
+    visible_outcome as _visible_outcome,
+)
 from tests.collaboration_contract_fixture import LEAD, RUNTIME, USER, make_batch, make_draft, provider_call_drafts, store_batch
 from story_writing_agents.agent_context.invocation import provider as ctx_provider
 
@@ -111,7 +132,9 @@ def _missing_outcome(*, proposal: bool = False, authoring_assessment=None, input
             from tests.provider_wire_fixture import (
                 result, finite_fixture_selection, lead_fixture_scope_record,
                 lead_fixture_assessment, lead_fixture_result, lead_fixture_response)
-            from tests.test_lead_orchestration import _compact_recommended
+            from tests.lead_fixtures.preparation_data import (
+                compact_recommended as _compact_recommended,
+            )
             compact = {'kind': value['kind'], 'message': value['message'],
                        'authoring_scope': value['authoring_scope'],
                        'recommended_action': _compact_recommended(value['recommended_action'])}
@@ -356,7 +379,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             def assigned_search(call, provider):
                 observation = provider.callback_payload(call)["context_observation"]
                 self.assertEqual(observation["search_results"], [])
-                from tests.test_lead_orchestration import _search_history
+                from tests.lead_fixtures.preparation_data import search_history as _search_history
                 return _search_history(call, provider, marker)
             def specialist_read(call, provider):
                 observation = provider.callback_payload(call)["context_observation"]
@@ -369,7 +392,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                 self.assertIn(marker, json.dumps(specialist_reads))
                 self.assertNotIn(unrelated, json.dumps(specialist_reads))
                 return lead_specialist_outcome("insufficient_evidence", "The assigned record is read; other requested evidence remains unavailable.")(call, provider)
-            from tests.test_lead_orchestration import _search_history
+            from tests.lead_fixtures.preparation_data import search_history as _search_history
             self.backend.enqueue_for(PLOT_ARCHITECT, lambda call, provider: _search_history(call, provider, unrelated),
                 assigned_search, specialist_read, insufficient)
             def synthesis(call, provider):
@@ -807,10 +830,10 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         from story_writing_agents import conversations as c
         from story_writing_agents import ReplyTraceOrigin
         from story_writing_agents.lead_task_transitions import LeadPublicResponseAcceptance
-        from tests.test_lead_orchestration import _live_material
+        from tests.lead_fixtures.preparation_data import live_material as _live_material
         from story_writing_agents.agent_context.manifest import (
             ContextSourceKind, ContextSubjectKind)
-        from tests.test_lead_orchestration import _Finalizer
+        from tests.lead_fixtures.provider_responses import Finalizer as _Finalizer
         from story_writing_agents.lead_provider_contracts import (
             LeadContractRejection, lead_outcome_scope_paths)
         from story_writing_agents.specialist_routing import ArtifactReviewDomain, AuthoringActivity

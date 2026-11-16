@@ -1058,13 +1058,16 @@ class SpecialistRoutingTests(unittest.TestCase):
             result_bound.decode_response(json.dumps(illegal_readonly_artifact))
 
     def test_legacy_proposal_bytes_stay_omitted_and_new_scope_changes_digest(self):
-        from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF, _fixture_assessment
+        from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF
+        from tests.lead_fixtures.preparation_data import (
+            fixture_assessment as _fixture_assessment,
+        )
         legacy = fixture.make_proposal()
         before = c.encode_collaboration_proposal(legacy)
         self.assertNotIn(b'authoring_scope', before)
         self.assertNotIn(b'review_basis', before)
         self.assertEqual(c.encode_collaboration_proposal(c.decode_collaboration_proposal(before)), before)
-        from tests.test_lead_orchestration import LeadOrchestrationTestCase
+        from tests.lead_fixtures.runtime_setup import LeadOrchestrationTestCase
         readiness_case = LeadOrchestrationTestCase()
         readiness_case._setupAsyncioRunner()
         self.addCleanup(readiness_case._tearDownAsyncioRunner)

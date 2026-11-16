@@ -27,11 +27,27 @@ from tests.recommendation_fixture import (
 from tests.test_artifact_proposal_orchestration import (
     artifact_review_outcome, _artifact_synthesis_outcome, artifact_evidence_status_id,
 )
-from tests.test_lead_orchestration import (
-    _SubmittedFailure, _compact_scope, lead_confirmation_decision, _discussion_reply, _live_material, lead_specialist_outcome, _submitted_calls, _synthesis_outcome, _workflow_material,
+from tests.lead_fixtures.provider_responses import (
+    SubmittedFailure as _SubmittedFailure,
+    workflow_material as _workflow_material,
+)
+from tests.lead_fixtures.preparation_data import (
+    compact_scope as _compact_scope,
+    lead_confirmation_decision,
+    discussion_reply as _discussion_reply,
+    live_material as _live_material,
+    lead_specialist_outcome,
+    submitted_calls as _submitted_calls,
+    synthesis_outcome as _synthesis_outcome,
 )
 from tests.test_specialist_routing_runtime import (
-    AgentBackend, OUTLINE, _ADMISSION_BRIEF, _SpecialistRoutingRuntimeCase, _fixture_assessment,
+    AgentBackend,
+    _ADMISSION_BRIEF,
+    _SpecialistRoutingRuntimeCase,
+)
+from tests.lead_fixtures.preparation_data import (
+    OUTLINE,
+    fixture_assessment as _fixture_assessment,
 )
 from unittest import (
     mock,

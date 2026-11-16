@@ -15,7 +15,10 @@ from story_writing_agents.lead_provider_contracts import LeadContractError
 from story_writing_agents.lead_preparation import outcome_decoding
 from story_writing_agents.lead_preparation.response_rules import lead_front_result_contract
 from story_writing_agents.specialist_routing import AuthoringActivity, AuthoringScope
-from tests.test_agent_context_accounting import _expanded_context_payload, _shared_context_payload
+from tests.test_agent_context_accounting import _shared_context_payload
+from tests.lead_fixtures.material_values import (
+    expanded_context_payload as _expanded_context_payload,
+)
 from story_writing_agents.agent_context.contracts import bound_call as ctx_bound_call, call_offers as ctx_call_offers, errors as ctx_errors, events as ctx_events, planning_inputs as ctx_planning_inputs
 from story_writing_agents.agent_context.invocation import delivery as ctx_delivery, provider as ctx_provider, requests as ctx_requests
 from story_writing_agents.agent_context.invocation import context_execution as owner_context_execution
@@ -178,7 +181,9 @@ class ContextExecutionLifecycleTests(fixture_execution_fixture.ContextExecutionT
             self.assertEqual([finalizer.calls for finalizer in grouped_provider.finalizers],
                              [[("accepted", None)]] * len(responses))
             self.assertEqual(json.loads(grouped.answer)["message"], "Visible grouped lead answer.")
-            from tests.test_agent_context_accounting import _expanded_context_payload
+            from tests.lead_fixtures.material_values import (
+                expanded_context_payload as _expanded_context_payload,
+            )
             for call in grouped_provider.calls:
                 self.assertEqual(call.payload["response_contract"]["schema_selection"]["context_delivery"]["mode"], "bootstrap")
                 logical = _expanded_context_payload(call.payload)

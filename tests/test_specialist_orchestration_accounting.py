@@ -2,7 +2,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict
 from story_writing_agents import agents, conversations, models
-from tests import test_lead_orchestration as lead
+from tests.lead_fixtures import preparation_data, runtime_setup
 from tests.recommendation_fixture import task_assessment
 
 
@@ -41,9 +41,9 @@ class _FailingEventStore:
     def read_context(self, session_id, conversation_id):
         return self.delegate.read_context(session_id, conversation_id)
 
-class SpecialistAccountingAcceptanceTests(lead.LeadOrchestrationTestCase):
+class SpecialistAccountingAcceptanceTests(runtime_setup.LeadOrchestrationTestCase):
     def setUp(self) -> None:
-        self._execution_inputs = lead._capture_execution_inputs(super().setUp)
+        self._execution_inputs = runtime_setup.capture_execution_inputs(super().setUp)
 
     async def test_local_reference_and_search_answer_count_only_provider_calls(self) -> None:
         conversation_id = self.conversation("Specialist accounting")
@@ -63,7 +63,7 @@ class SpecialistAccountingAcceptanceTests(lead.LeadOrchestrationTestCase):
 
         def answer_after_read(call, provider):
             self.assertNotIn("sibling reply secret", json.dumps(dict(call.payload)))
-            return lead._provider_envelope(call, {'assessment': 'supports',
+            return preparation_data.provider_envelope(call, {'assessment': 'supports',
                 'assignment_id': assignment.assignment_id, 'input_ids': list(assignment.input_ids),
                 'message': 'The bounded evidence supports the direction.'}, used_handles=provider.used_handles)
 
@@ -84,16 +84,16 @@ class SpecialistAccountingAcceptanceTests(lead.LeadOrchestrationTestCase):
 
         self.backend.enqueue_for(agents.PLOT_ARCHITECT, search_current_proposal,
                                  read_current_proposal, answer_after_read)
-        self.backend.enqueue_for(agents.LEAD_ORCHESTRATOR, lead._synthesis_outcome())
+        self.backend.enqueue_for(agents.LEAD_ORCHESTRATOR, preparation_data.synthesis_outcome())
         decision = await self.runtime.decide_lead_step(
-            lead.lead_confirmation_decision(proposed, conversations.CollaborationConfirmationDecision.CONFIRM)
+            preparation_data.lead_confirmation_decision(proposed, conversations.CollaborationConfirmationDecision.CONFIRM)
         )
 
         self.assertIs(decision.turn.state, conversations.CollaborationStepState.COMPLETED)
         history = self.history(conversation_id)
         specialist_calls = tuple(
             payload
-            for payload in lead._event_payloads(history, conversations.CollaborationProviderCallPayload)
+            for payload in preparation_data.event_payloads(history, conversations.CollaborationProviderCallPayload)
             if payload.invocation_kind
             is conversations.CollaborationInvocationKind.SPECIALIST_ASSIGNMENT )
         self.assertEqual(tuple(((item.call_kind, item.state) for item in specialist_calls)), ((
@@ -103,7 +103,7 @@ class SpecialistAccountingAcceptanceTests(lead.LeadOrchestrationTestCase):
             conversations.CollaborationProviderCallKind.CONTINUATION, conversations.CollaborationProviderCallState.SUBMITTED), (
             conversations.CollaborationProviderCallKind.CONTINUATION, conversations.CollaborationProviderCallState.PREPARED), (
             conversations.CollaborationProviderCallKind.CONTINUATION, conversations.CollaborationProviderCallState.SUBMITTED)))
-        result = lead._event_payloads(history, conversations.CollaborationExecutionResult)[0]
+        result = preparation_data.event_payloads(history, conversations.CollaborationExecutionResult)[0]
         self.assertEqual(result.assignment_outcomes[0].submitted_physical_calls, 3)
         self.assertEqual(result.synthesis_submitted_physical_calls, 1)
         projection = conversations.project_collaboration_history(history)

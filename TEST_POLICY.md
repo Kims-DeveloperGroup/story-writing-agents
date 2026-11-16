@@ -100,6 +100,26 @@ Story runtime 기능 Case에는 이 예외를 적용하지 않는다. 전체 시
 이 결정에 따라 이 Case만을 위한 후속 digest memo 실험은 철회하고 원래 #1027 source 배정을 유지한다.
 실험의 측정·실패·취소 이력은 [#1027](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1027#구현-계획)에 보존한다.
 
+## #1022의 Lead 공통 fixture 분리 소스 배정
+
+사용자의 행 추가 포괄 승인을 이 전달에 적용한다. 기준 main
+`16c93d236373e44f841675dc2cc6c26f14a95dbe`의 raw148885/support1785/legacy1550,
+총152220행에서, 기존 50개 선언의 본문1469행을 네 실제 fixture owner로 한 번씩 옮긴다.
+실제 이동·import 이관은 raw-1214/support+1640으로 +426행이고,
+기존 예산 정책 Case의 필수 전이 검증15행을 더해 raw147686/support3425/legacy1550,
+총152661행(+441)과 정확한 source-only `152220→152661` 예외를 계상한다.
+generic guard11행과 기존 정책 도구 소비자5행은 기존 counter scope 밖의 물리 비용으로
+별도 공개하며, 그곳으로 assertion이나 시나리오를 옮겨 소스를 공제하지 않는다.
+
+양쪽 schema1·2544개 ID·cap합8690·완전한 cap-map 동등성과 digest
+`d72ded85920beccddd24ee08ca2be40c8963d0832366ce07d211f67684033335`,
+18000/3600초를 함께 요구하고 모든 기존 전이·negative·역사 receipt를 유지한다.
+과거 미적용 `151431→151651` 제안이나 예약2행을 현재 배정에 더하지 않는다.
+새 Case/scenario/subTest·ID 이동·실행 순서·profile·시간/worker 상한 변경은 없다.
+timing weight registry는394 group이며, 유지되는 Matrix class pool13440µs와 구분한다.
+정책 Case의 개별 시간 판정은 위 사용자 전체 영향 조건을 적용하고 Story runtime 기능
+Case의 실제 회귀에 확대하지 않는다. 실제 실행·성능·전체 CI는 별도로 검증한다.
+
 ## #1028의 Lead 입력 자료·영속 근거 분리 소스 배정
 
 #1027을 통합한 main `e61b70a0d6985fe62316bb02fb478864616a2d75`의 152,138행을 기준으로
