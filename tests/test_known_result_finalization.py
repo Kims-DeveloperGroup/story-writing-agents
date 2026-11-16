@@ -21,8 +21,8 @@ from tests.lead_fixtures import preparation_data, provider_responses, runtime_se
 from tests import test_specialist_orchestration_accounting as accounting
 from tests.known_result_finalization_fixture import finalize_known_result
 from tests.provider_wire_fixture import selection_plan
-from tests.test_artifact_proposal_orchestration import (
-    ARTIFACT_FIXTURE_OUTLINE_PATH,
+from tests.lead_fixtures.artifact_review import ARTIFACT_FIXTURE_OUTLINE_PATH
+from tests.lead_fixtures.artifact_review import (
     ARTIFACT_FIXTURE_RULES_PATH,
     ArtifactReviewFixture,
     artifact_evidence_status_id,

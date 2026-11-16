@@ -247,13 +247,16 @@ class SuiteBudgetTests(unittest.TestCase):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
         migrated = suite_budget.load_budget(Path(__file__).with_name("fixtures") / "test_budget_v1.json")
-        evidence_current = dict(migrated, subtest_caps=dict(migrated["subtest_caps"]))
+        authority_current = dict(migrated, subtest_caps=dict(migrated["subtest_caps"]))
         for move in load_receipt()[-1]["moves"]:
+            migrated["subtest_caps"][move["old_id"]] = migrated["subtest_caps"].pop(move["new_id"])
+        evidence_current = dict(migrated, subtest_caps=dict(migrated["subtest_caps"]))
+        for move in load_receipt()[-2]["moves"]:
             migrated["subtest_caps"][move["old_id"]] = migrated["subtest_caps"].pop(move["new_id"])
         material_current = dict(migrated, subtest_caps=dict(migrated["subtest_caps"]))
         fixture_current = dict(material_current, subtest_caps=dict(material_current["subtest_caps"]))
         document_current = dict(fixture_current, subtest_caps=dict(fixture_current["subtest_caps"]))
-        for move in load_receipt()[-2]["moves"]:
+        for move in load_receipt()[-3]["moves"]:
             migrated["subtest_caps"][move["old_id"]] = migrated["subtest_caps"].pop(move["new_id"])
         migrated["max_test_source_lines"] = 152138
         source_current, finalization_current = dict(migrated, subtest_caps=dict(migrated["subtest_caps"])), dict(migrated)
@@ -440,6 +443,7 @@ class SuiteBudgetTests(unittest.TestCase):
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(document_current, subtest_caps=caps), fixture_current)
         self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, document_current, dict(fixture_current, subtest_caps={**fixture_current["subtest_caps"], matrix_id: 2}))
 
+        evidence_current["max_test_source_lines"] = 152814
         self.assertEqual(evidence_current["max_test_source_lines"], 152814)
         self.assertIsNone(suite_budget.check_monotonic(evidence_current, document_current))
         self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, evidence_current, dict(evidence_current, max_test_source_lines=152727))
@@ -455,11 +459,26 @@ class SuiteBudgetTests(unittest.TestCase):
         ):
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(evidence_current, subtest_caps=caps), document_current)
         self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, evidence_current, dict(document_current, subtest_caps={**document_current["subtest_caps"], matrix_id: 2}))
+        self.assertEqual(authority_current["max_test_source_lines"], 153829)
+        self.assertIsNone(suite_budget.check_monotonic(authority_current, evidence_current))
+        self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, authority_current, dict(authority_current, max_test_source_lines=152814))
+        self._assert_source_limit_neighbors_rejected(authority_current, evidence_current)
+        for field, value in (("schema_version", 2), ("max_sequential_wall_seconds", 18001), ("max_shard_wall_seconds", 3601)):
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(authority_current, **{field: value}), evidence_current)
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, authority_current, dict(evidence_current, **{field: value}))
+        for caps in (
+            {key: value for key, value in authority_current["subtest_caps"].items() if key != zero_id},
+            {**authority_current["subtest_caps"], "tests.unreviewed.Case.test_extra": 0},
+            {**authority_current["subtest_caps"], matrix_id: 2},
+            {**authority_current["subtest_caps"], matrix_id: 0},
+        ):
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(authority_current, subtest_caps=caps), evidence_current)
+        self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, authority_current, dict(evidence_current, subtest_caps={**evidence_current["subtest_caps"], matrix_id: 2}))
 
         ids = runner_profile.HOSTED_METHOD_IDS
         self.assertEqual(runner_evidence.manifest(ids)["digest"],
-                         'sha256:3aad0b0a462c10b928a7d1a4c332ef3657e150211a348e8e353b4c7835801fb4')
-        self.assertEqual((len(ids), len({value.rsplit(".", 1)[0] for value in ids})), (162, 26))
+                         'sha256:b3c5557bd0cb11e6d0bc2e765941db9b217c54f29ab1b66bf2a50f8642c10fb1')
+        self.assertEqual((len(ids), len({value.rsplit(".", 1)[0] for value in ids})), (162, 29))
         cases = tuple(SimpleNamespace(id=lambda identifier=value: identifier) for value in (*ids, *runner_profile.HOSTED_MIXED_SERIAL_IDS, "unreviewed.test"))
         canonical = runner_contracts.CanonicalCollection(cases, (*ids, *runner_profile.HOSTED_MIXED_SERIAL_IDS, "unreviewed.test"))
         serial, scheduled = runner_hosted.hosted_partition(canonical, canonical)
@@ -468,7 +487,7 @@ class SuiteBudgetTests(unittest.TestCase):
                                              (suite_policy.ISOLATED_TEST_ID,))
         serial, scheduled = runner_hosted.hosted_partition(canonical, isolated)
         self.assertEqual((serial.ids, scheduled), ((), (suite_policy.ISOLATED_TEST_ID,)))
-        launch_digest = 'sha256:119c97c97980ad0d116384b12e495edec7fe5d2428feb0e2df30cf909afd8cf3'
+        launch_digest = 'sha256:30f1e3d661a6ea6df0f1e321f14d5ee0a67557e45bbb77feff2f7184bd6a80df'
         self.assertEqual(runner_evidence.manifest(runner_profile.hosted_launch_order(ids))["digest"], launch_digest)
         self.assertEqual(runner_profile.hosted_launch_order(ids[::-1]), runner_profile.hosted_launch_order(ids))
         self.assertEqual(runner_profile.hosted_launch_order((ids[-1], ids[0])), (ids[0], ids[-1]))

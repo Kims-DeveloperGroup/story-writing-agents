@@ -17,7 +17,7 @@ from story_writing_agents.writing_artifacts.repository import WritingArtifactRep
 from tests.lead_fixtures import preparation_data, provider_responses, runtime_setup
 from story_writing_agents.specialist_routing import AuthoringActivity
 from tests.provider_wire_fixture import FixedBusinessFactory as _SourceOnlyFactory, selection_plan
-from tests import test_artifact_proposal_orchestration as artifact
+from tests.lead_fixtures import artifact_review as artifact
 from tests import test_lead_artifact_application_authority as application
 from tests import test_lead_story_commit_authority as commit
 from tests.helpers import pristine_initialized_workspace

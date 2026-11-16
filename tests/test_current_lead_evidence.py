@@ -13,10 +13,8 @@ from tests.provider_wire_fixture import (
     lead_fixture_response,
     selection_plan,
 )
-from tests.test_artifact_proposal_orchestration import (
-    ARTIFACT_FIXTURE_OUTLINE_PATH,
-    ArtifactReviewFixture,
-)
+from tests.lead_fixtures.artifact_review import ARTIFACT_FIXTURE_OUTLINE_PATH
+from tests.lead_fixtures.artifact_review import ArtifactReviewFixture
 class CurrentLeadEvidenceTests(ArtifactReviewFixture, LeadOrchestrationTestCase):
 
     async def test_empty_core_status_evidence_requires_selected_fresh_zero_byte_source(self):

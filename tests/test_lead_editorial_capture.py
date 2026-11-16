@@ -1,0 +1,286 @@
+"""Existing runtime acceptance cases for LeadEditorialCaptureTests."""
+from __future__ import annotations
+
+from tests.lead_fixtures.specialist_routing import ROSTER
+from tests.recommendation_fixture import preparation_close_observer, source_start_inputs
+from tests.lead_fixtures import artifact_review as artifact
+import hashlib
+import json
+from dataclasses import replace
+from story_writing_agents import StoryRuntime, conversations as c, editorial_scope as scopes
+from story_writing_agents.agents import EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR, PLOT_ARCHITECT
+from story_writing_agents.lead_preparation import call_rule_factory
+from story_writing_agents.specialist_routing import AuthoringActivity
+from tests import test_lead_artifact_application_authority as application, test_lead_story_commit_authority as commit, test_artifact_objectives as objectives
+from tests.lead_fixtures import preparation_data, provider_responses
+from tests.provider_wire_fixture import scenario_input, selection_plan
+from tests.recommendation_fixture import (
+    RecommendationCase,
+    action,
+    recommendation,
+    task_assessment,
+)
+from tests.test_collaboration_events import editorial, editorial_request
+from unittest import mock
+
+
+
+
+class LeadEditorialCaptureTests(RecommendationCase):
+    async def _source_setup_start(self, *arguments, **keywords):
+        """Downstream Apply fixture only; default grouped budget refusal is checked separately."""
+        factory = call_rule_factory.lead_call_contract_factory
+        enqueue = self.backend.enqueue
+        source_front_flags = []
+        source_enqueues = []
+        call_start = len(self.backend.calls)
+        def source_factory(**values):
+            if values.get("stage") == "lead.front":
+                self.assertIs(values["schema_group_protocol"], True)
+                source_front_flags.append(values["schema_group_protocol"])
+                return objectives._SourceOnlyFactory(factory(**values), 'consultation.authoring.content')
+            return factory(**values)
+        def source_enqueue(*responses, **values):
+            source_enqueues.append(1)
+            self.assertEqual(len(source_enqueues), 1)
+            return enqueue(*responses, **{**values, "control_plan": ()})
+        with mock.patch.object(call_rule_factory, "lead_call_contract_factory", new=source_factory), \
+                mock.patch.object(self.backend, "enqueue", new=source_enqueue):
+            result = await self.start(*arguments, **keywords)
+        self.assertEqual(source_front_flags, [True])
+        self.assertEqual(len(source_enqueues), 1)
+        self.assertEqual(len(self.backend.calls) - call_start, 5)
+        self.assertFalse(self.backend.calls[call_start].contract.factory.schema_group_protocol)
+        self.assertIsNone(self.backend.calls[call_start].contract.schema_group_phase)
+        objectives._assert_source_only_call(self, self.backend.calls[call_start], 'consultation.authoring.content')
+        return result
+
+    async def test_only_matching_successful_apply_satisfies_objective(self):
+        path = "manuscript/part-01/approved-draft.md"
+        text = "# 승인된 초안\r\nThe bridge collapsed at 09:00. At 21:00 Mina claims she crossed it; her account is deliberately unreliable.\r\n" + objectives.DRAFT
+        brief = "Reader effect: unease. Goal: restrained tension. Protect unreliable narration and unresolved allegiance; change only rhythm and gestures; exclude exposition and new crossings. Success: preserve ambiguity while exposing factual uncertainty."
+        account = "Fact: the bridge collapsed. Interpretation: Mina may be unreliable. Adopt Character: preserve ambiguity. Modify Plot: strengthen hesitation without revealing allegiance. Reject an invented crossing; no source supports it. Defer Execution’s literal-crossing concern pending evidence, retaining every concern ID. Cost: the physical route remains unknown. A gesture is a provisional idea. Reviewed does not mean unanimous support, publication, or a fulfilled document request."
+        conversation_id = self.conversation("Editorial authoring")
+        memory = await self.runtime.record_editorial_decision(self.session_id, conversation_id,
+            replace(editorial_request("authoring_memory"),
+            draft=replace(editorial_request("authoring_memory").draft,
+                          scope=scopes.EditorialScope.whole(path))))
+        await self.record_book_readiness(seed_before_capture=True)
+        pristine = self.snapshots()
+        source_inputs = source_start_inputs
+        source_positive_call_start = len(self.backend.calls)
+        conversation_id, _ = await self._source_setup_start(
+            conversation_id, message=text, target_path=None, specialist_ids=ROSTER,
+            authoring_paths=(path,), native_inputs=source_inputs, response_text=brief)
+        source = self.projection(conversation_id).offered_draft_sources[-1]
+        scope = next(e.payload.authoring_scope for e in self.history(conversation_id) if e.event_id == source.event_id)
+        self.assertEqual(scope.target_paths, (path,))
+        source_objectives = self.projection(conversation_id).artifact_objectives
+        self.assertEqual(len(source_objectives), 1)
+        self.assertIs(source_objectives[0].state, c.ArtifactObjectiveState.OPEN)
+        self.assertEqual(source_objectives[0].facts.target_paths, (path,))
+        followup_call_start = len(self.backend.calls)
+        self.backend.enqueue(recommendation(message=brief,
+            recommended_action=action(source_ids=(source.event_id,),
+                target_paths=(path,), instruction="Preserve the exact approved draft.", specialist_ids=ROSTER),
+            authoring_scope=lambda call: preparation_data.live_material(call)["current_scope"],
+            authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=("bounded artifact review judgments", "separate exact proposal preparation"))), control_plan=selection_plan('prepare.artifact'))
+        offered = await self.runtime.lead_turn(self.session_id, conversation_id,
+            ("Approve the previous draft and prepare it as a new document." + f" Target: {path}. {brief}"
+             + "\nSupplied selected draft:\n" + text
+             + "\nYou may give bounded artifact review judgments and prepare a separate exact proposal; preserve supplied facts. Execution requires separate confirmation."))
+        followup_calls = self.backend.calls[followup_call_start:]
+        self.assertEqual(tuple(call.contract.schema_group_phase.value for call in followup_calls), ("select", "generate"))
+        self.assertTrue(all(call.contract.factory.schema_group_protocol for call in followup_calls))
+        self.assertIs(offered.kind, c.LeadOutcomeKind.RECOMMENDATION, offered)
+        request = offered.recommendation_request
+        self.assertEqual(request.basis.editorial_refs, (memory.record_ref,))
+        self.assertIsNone(request.objective_id)
+        self.assertEqual(self.projection(conversation_id).artifact_objectives, source_objectives)
+        self.assertEqual(request.draft_sources, (source,))
+        self.assertEqual((request.authoring_scope.task_id, request.authoring_scope.task_revision),
+                         (scope.task_id, scope.task_revision))
+        self.assertEqual(source.content_digest, objectives.digest(text))
+        calls = len(self.backend.calls)
+        self.runtime = StoryRuntime(self.control_workspace, self.backend)
+        preparation_failures = []
+        observed_close = preparation_close_observer(self.runtime, preparation_failures)
+        planning_measurements = self._observe_context_budget()
+        with mock.patch.object(self.runtime, "_close_failed_lead_attempt", new=observed_close):
+            prepared = await self.confirm(offered, text=text)
+        self.assertIs(prepared.kind, c.LeadOutcomeKind.PROPOSAL, (prepared, preparation_failures, planning_measurements))
+        self.assertEqual(len(self.backend.calls), calls + 1)
+        self.assertEqual(prepared.proposal.participants, ROSTER)
+        binding = prepared.proposal.document_node
+        self.assertIsNotNone(binding)
+        self.assertIsNotNone(prepared.document_plan)
+        self.assertEqual(prepared.document_plan.plan.ref, binding.plan_ref)
+        self.assertEqual(binding.task_ref.task_id, prepared.proposal.authoring_scope.task_id)
+        self.assertEqual(binding.task_ref.task_revision, prepared.proposal.authoring_scope.task_revision)
+        self.assertEqual(binding.budget_lineage_ref.task_id, scope.task_id)
+        self.assertEqual(binding.budget_origin_step_id, next(event.step_id for event in self.history(conversation_id) if event.event_id == source.event_id))
+        requested_node = next(node for node in prepared.document_plan.plan.nodes if node.node_id == binding.node_id)
+        self.assertEqual(requested_node.target_path, path)
+        self.assertEqual(prepared.proposal.basis.editorial_refs, request.basis.editorial_refs)
+        from tests.collaboration_contract_fixture import replace_proposal
+        self.assertNotEqual(prepared.proposal.proposal_digest, replace_proposal(prepared.proposal,
+            authoring_scope=prepared.proposal.authoring_scope, basis=replace(prepared.proposal.basis,
+            editorial_refs=(), editorial_context_digest=None)).proposal_digest)
+        self.assertNotIn(memory.record.event_id, {item.input_id for item in prepared.proposal.basis.inputs})
+        self.assertEqual(prepared.proposal.authoring_scope, replace(request.authoring_scope, activity=AuthoringActivity.REVIEW))
+        self.assertEqual(request.authoring_scope.interpretation, 'Draft from the current synthetic brief.')
+        historical = next(item for item in prepared.proposal.basis.inputs if item.input_id == source.event_id)
+        self.assertIs(historical.kind, c.CollaborationInputKind.CONVERSATION_EVENT)
+        self.assertEqual(historical.revision_digest, source.content_digest)
+        operation = prepared.artifact_proposal.candidate.candidate.change_set.operations[0]
+        self.assertEqual((operation.operation_kind.value, operation.path, operation.content),
+                         ("create", path, text.encode()))
+        self.assertEqual(self.objective(conversation_id).draft_sources, (source,))
+        for assignment in prepared.proposal.assignments:
+            self.backend.enqueue_for(assignment.specialist_id, preparation_data.lead_specialist_outcome(
+                "concern" if assignment.specialist_id == EXECUTION_SPECIALIST else "supports",
+                "The source-bound bridge crossing remains uncertain." if assignment.specialist_id == EXECUTION_SPECIALIST else "Preserve the intentional ambiguity; strengthen hesitation."))
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, artifact._artifact_synthesis_outcome(message=account))
+        reviewed = (await self.runtime.decide_lead_step(preparation_data.lead_confirmation_decision(prepared, c.CollaborationConfirmationDecision.CONFIRM))).turn
+        self.assertIsNotNone(reviewed.artifact_application_request, reviewed)
+        self.assertEqual(len(self.backend.calls) - source_positive_call_start, 12)
+        review = self.projection(conversation_id).current_reviewed_artifact_proposal
+        self.assertEqual([item.assessment.value for item in review.reviews], ["supports", "supports", "concern"])
+        self.assertEqual(review.unresolved_input_ids, prepared.proposal.assignments[-1].input_ids)
+        self.assertEqual(self.payload_events(conversation_id, c.ArtifactReviewSynthesisPayload)[-1].payload.message, account)
+        self.assertEqual(reviewed.artifact_application_request.application_request.candidate_digest,
+                         prepared.artifact_proposal.candidate.candidate.candidate_digest)
+        self.assertEqual(self.objective(conversation_id).candidate_binding.candidate_digest,
+                         reviewed.artifact_application_request.application_request.candidate_digest)
+        self.assertTrue(all(not turn.validation_details for turn in (offered, prepared, reviewed)))
+        self.assertEqual(self.snapshots(), pristine)
+        self.assertFalse(self.workspace.path(path).exists())
+        self.assertIsNone(reviewed.story_commit_request)
+        pending_plan = next(view for view in self.runtime.inspect_document_plans(self.session_id) if view.plan.ref == binding.plan_ref)
+        pending_node = next(node for node in pending_plan.nodes if node.node_id == binding.node_id)
+        self.assertIsNot(pending_node.state, c.DocumentNodeState.COMPLETE)
+        self.assertEqual(pending_node.completion_event_ids, ())
+        self.assertIs(pending_node.next_action, c.DocumentNodeNextAction.APPLY_CANDIDATE)
+        self.assertIsNotNone(reviewed.document_plan)
+        self.assertEqual(reviewed.document_plan.plan.ref, binding.plan_ref)
+        self.assertEqual(pending_plan.physical_calls_spent, len(self.backend.calls) - source_positive_call_start)
+        self.assertEqual(pending_plan.remaining_physical_calls, 0)
+        self.assertEqual(pending_plan.rounds_spent, 2)
+        for call in self.backend.calls:
+            self.assertNotIn("response_correction", provider_responses.workflow_material(self.backend.callback_payload(call)))
+            self.assertNotIn("structured_response_repair", call.payload)
+            if "replies" in preparation_data.live_material(call):
+                self.assertIn("residual costs", json.dumps(call.schema, default=dict))
+        materials = [scenario_input((self.backend.callback_payload(call))["task_input"]) for call in self.backend.calls]
+        for is_review, expected_scope in ((False, scope), (True, replace(request.authoring_scope, activity=AuthoringActivity.REVIEW))):
+            phase = [item for item in materials if ("assignment" in item or "replies" in item) and (item.get("assignment", {}).get("mode") == "review" or "artifact_candidate" in item) == is_review]
+            self.assertEqual(len(phase), len(ROSTER) + 1)
+            self.assertTrue(all(item["editorial_state"]["selected_refs"] == [editorial.editorial_ref_to_dict(memory.record_ref)] for item in phase))
+            self.assertTrue(all(item["authoring_scope"] == {key: value for key, value in c.authoring_scope_to_dict(expected_scope).items() if key not in {'task_id', 'task_revision'}} for item in phase))
+            self.assertTrue(all(item["inputs"] == phase[0]["inputs"] for item in phase))
+        self.assertEqual(next(item for item in phase[0]["inputs"] if item["input_id"] == source.event_id)["revision_digest"], source.content_digest)
+        dispatches = self.payload_events(conversation_id, c.CollaborationAssignmentDispatchPayload)
+        self.assertEqual([e.payload.assignment.mode.value for e in dispatches].count("draft"), len(ROSTER))
+        self.assertEqual([e.payload.assignment.mode.value for e in dispatches].count("review"), len(ROSTER))
+        before = self.snapshots()
+        wrong = replace(application._application_decision(reviewed, c.ArtifactApplicationDecisionKind.APPLY), candidate_digest=objectives.digest("wrong"))
+        with self.assertRaises(ValueError):
+            await self.runtime.decide_artifact_application(wrong)
+        self.assertIs(self.objective(conversation_id).state, c.ArtifactObjectiveState.OPEN)
+        self.assertEqual(self.snapshots(), before)
+        self.assertEqual(next(view for view in self.runtime.inspect_document_plans(self.session_id) if view.plan.ref == binding.plan_ref), pending_plan)
+        applied = await self.apply(reviewed)
+        self.assertIs(applied.outcome.outcome, c.ArtifactApplicationOutcomeKind.APPLIED)
+        objective = self.objective(conversation_id)
+        self.assertIs(objective.state, c.ArtifactObjectiveState.SATISFIED)
+        satisfied = next(e for e in self.history(conversation_id) if e.event_id == objective.satisfied_by_event_id)
+        self.assertIsInstance(satisfied.payload, c.ArtifactApplicationResultPayload)
+        self.assertEqual(satisfied.payload.application_id, applied.request.application_request.application_id)
+        completed_plan = next(view for view in self.runtime.inspect_document_plans(self.session_id) if view.plan.ref == binding.plan_ref)
+        completed_node = next(node for node in completed_plan.nodes if node.node_id == binding.node_id)
+        self.assertIs(completed_node.state, c.DocumentNodeState.COMPLETE)
+        self.assertEqual(completed_node.completion_event_ids, (satisfied.event_id,))
+        self.assertIs(completed_node.next_action, c.DocumentNodeNextAction.COMPLETE)
+        self.assertEqual((completed_plan.physical_calls_spent, completed_plan.rounds_spent),
+                         (pending_plan.physical_calls_spent, pending_plan.rounds_spent))
+        self.assertEqual(self.workspace.path(path).read_bytes(), text.encode())
+        self.assertEqual(self.snapshots()[1:], pristine[1:])
+        self.assertIsNotNone(applied.commit_request)
+        rejected = await self.runtime.decide_story_commit(commit._commit_decision(applied, commit.StoryCommitDecision.REJECT))
+        self.assertIs(rejected.outcome.outcome, commit.StoryCommitOutcomeKind.REJECTED)
+        facts = self.runtime.inspect_editorial_state(self.session_id).applied_facts
+        self.assertEqual(len(facts), 1)
+        fact = facts[0]
+        self.assertEqual((fact.record_ref, fact.task_id, fact.task_revision, fact.candidate_digest, fact.application_event.event_id, fact.application_id, fact.affected_paths),
+                         (memory.record_ref, scope.task_id, scope.task_revision, review.candidate.candidate_digest, satisfied.event_id, satisfied.payload.application_id, (path,)))
+        self.assertEqual(fact.application_event.event_digest, hashlib.sha256(c.encode_collaboration_event(satisfied)).hexdigest())
+        superseded_memory = await self.runtime.record_editorial_decision(self.session_id, conversation_id, editorial.EditorialRecordRequest("supersede_after_apply", editorial.EditorialAction.SUPERSEDE, "Later explicit USER choice.", expected_ref=memory.record_ref))
+        self.assertIs(superseded_memory.record.approval_state, editorial.EditorialApprovalState.SUPERSEDED)
+        self.assertEqual(self.runtime.inspect_editorial_state(self.session_id).applied_facts, facts)
+        self.assertEqual(self.runtime.inspect_editorial_state(self.session_id).selected_records, ())
+        origin_draft = replace(memory.record.draft, origin_task_id=scope.task_id, origin_task_revision=scope.task_revision)
+        origin = await self.runtime.record_editorial_decision(self.session_id, conversation_id, editorial.EditorialRecordRequest("known_task_origin", editorial.EditorialAction.PROPOSE, "Retain the actual completed task.", draft=origin_draft))
+        self.assertEqual((origin.record.draft.origin_task_id, origin.record.draft.origin_task_revision), (scope.task_id, scope.task_revision))
+        invalid_request = replace(origin.record.request, request_id="unknown_task_origin", draft=replace(origin_draft, origin_task_id="missing_task"))
+        invalid = await self.runtime.record_editorial_decision(self.session_id, conversation_id, invalid_request)
+        self.assertIs(invalid.status, editorial.EditorialRecordStatus.INVALID_PROVENANCE)
+        self.assertEqual(self.snapshots()[1:], pristine[1:])
+        self.assertEqual({type(e.payload) for e in self.history(conversation_id)
+                          if e.kind is c.CollaborationEventKind.ARTIFACT_OBJECTIVE}, {c.ArtifactObjectivePayload, c.ArtifactObjectivePayloadV2})
+        self.assertEqual(self.projection(conversation_id).artifact_objectives, (*source_objectives, objective))
+        self.assertEqual(objective.facts.origin_recommendation_request_event_id, request.request_event_id)
+        self.assertEqual(objective.facts.origin_recommendation_decision_event_id,
+                         self.payload_events(conversation_id, c.LeadRecommendationDecisionPayload)[0].event_id)
+        from story_writing_agents.writing_artifacts import ArtifactApplicationState
+        unchanged_payload = replace(satisfied.payload, outcome=c.ArtifactApplicationOutcomeKind.UNCHANGED,
+                                    result=replace(satisfied.payload.result, state=ArtifactApplicationState.UNCHANGED))
+        unchanged_history = objectives.rewrite_history(self.history(conversation_id), satisfied.event_id, payload=unchanged_payload)
+        self.assertIs(next(item for item in c.project_collaboration_history(unchanged_history).artifact_objectives
+            if item.facts.objective_id == objective.facts.objective_id).state, c.ArtifactObjectiveState.SATISFIED)
+        other_case = objectives.ObjectiveCase()
+        other_case.setUp()
+        # Adopt synchronous cleanup from this setup-only async fixture.
+        for cleanup, args, kwargs in other_case._cleanups:
+            self.addCleanup(cleanup, *args, **kwargs)
+        other_case._cleanups.clear()
+        origin, _ = await other_case.start()
+        foreign, _ = await other_case.start(other_case.conversation("Other objective"))
+        await other_case.apply(await other_case.review(await other_case.prepare(foreign)))
+        self.assertIs(other_case.objective(origin).state, c.ArtifactObjectiveState.OPEN)
+        self.assertIs(other_case.objective(foreign).state, c.ArtifactObjectiveState.SATISFIED)
+
+        state = self.runtime.inspect_editorial_state(self.session_id)
+        attempt = next(item for item in state.application_attempts if item.record_ref == memory.record_ref)
+        self.assertEqual((attempt.phase, attempt.candidate_digest, attempt.affected_paths),
+                         ("applied", review.candidate.candidate_digest, (path,)))
+        self.assertEqual(state.scope_state(superseded_memory.record_ref).coverage.scope,
+                         memory.record.draft.scope)
+        changed = replace(memory.record.draft, text="A new USER direction, not yet reflected.")
+        direction = await self.runtime.record_editorial_decision(self.session_id, conversation_id,
+            editorial.EditorialRecordRequest.directive(changed,
+                transition_reason="Explicit fresh direction."))
+        current = self.runtime.inspect_editorial_state(self.session_id)
+        self.assertEqual(current.selected_records, (direction.record,))
+        self.assertEqual(current.applied_facts, facts)
+        self.assertFalse(
+            any(item.record_ref == direction.record_ref for item in current.application_attempts))
+        from story_writing_agents import RuntimeSession
+        from story_writing_agents.agent_context.sources.session_history import SessionHistorySourceAdapter
+        calls_before_inspection = len(self.backend.calls)
+        session_plans = self.runtime.inspect_document_plans(self.session_id)
+        other_conversation = self.conversation("Unrelated provider-free plan inspection")
+        storage = self.runtime.conversation_storage_services
+        snapshot = SessionHistorySourceAdapter(storage.catalog, storage.event_store, self.session_id).capture()
+        self.assertEqual(next(row for row in snapshot.conversations if row.metadata.conversation_id == other_conversation).document_plans(), ())
+        durable_plan = next(view for view in snapshot.document_plans() if view.plan.ref == binding.plan_ref)
+        self.assertEqual(durable_plan.plan, completed_plan.plan)
+        self.assertEqual((durable_plan.current_node_id, durable_plan.physical_calls_spent, durable_plan.rounds_spent, durable_plan.cumulative_plan_physical_calls),
+                         (completed_plan.current_node_id, completed_plan.physical_calls_spent, completed_plan.rounds_spent, completed_plan.cumulative_plan_physical_calls))
+        durable_node = next(node for node in durable_plan.nodes if node.node_id == binding.node_id)
+        self.assertEqual(durable_node.prerequisite_sources, ())
+        self.assertEqual(durable_node, replace(completed_node, prerequisite_sources=()))
+        restarted = StoryRuntime(self.control_workspace, self.backend)
+        self.assertEqual(restarted.inspect_document_plans(self.session_id), session_plans)
+        self.assertEqual(RuntimeSession(restarted, self.session_id).inspect_document_plans(), session_plans)
+        self.assertEqual(len(self.backend.calls), calls_before_inspection)
+        self.runtime = restarted

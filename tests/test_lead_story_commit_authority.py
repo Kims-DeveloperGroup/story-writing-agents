@@ -51,7 +51,7 @@ from tests import test_lead_artifact_application_authority as lead_artifact_appl
 from tests.known_result_finalization_fixture import seed_reviewed_artifact
 from tests.helpers import pristine_initialized_workspace
 from tests.provider_wire_fixture import selection_plan, lead_fixture_result, lead_fixture_response
-from tests.test_artifact_proposal_orchestration import (
+from tests.lead_fixtures.artifact_review import (
     ARTIFACT_FIXTURE_RULES_PATH,
     artifact_review_outcome,
     _artifact_synthesis_outcome,

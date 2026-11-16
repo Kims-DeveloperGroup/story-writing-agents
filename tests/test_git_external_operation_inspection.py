@@ -341,8 +341,8 @@ class GitExternalOperationInspectionTests(DisposableGitTestCase):
         )
 
         modules, edges = module_graph(_SOURCE_ROOT)
-        self.assertEqual(len(modules), 264)
-        self.assertEqual(len(edges), 1466)
+        self.assertEqual(len(modules), 270)
+        self.assertEqual(len(edges), 1536)
         git_contracts = "story_writing_agents.git.contracts"
         git_adapter = "story_writing_agents.git.adapter"
         self.assertEqual(

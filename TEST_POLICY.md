@@ -1061,3 +1061,34 @@ hosted162개 ID는 1:1 이름 전환하고 class25→26, profile은
 새 Case·시나리오·subTest·시간·worker 상한 증가는 없다.
 필요한 검증 소스 배정과 profile 이름 전환은 실제 Storyruntime 성능 회귀를
 허용하는 예외가 아니다. 변경 전 정상 측정으로 고정한 오차 범위를 유지한다.
+
+
+## #1043의 현재 작성 권한·편집 자료·입력 자격 분리 배정
+
+사용자의 필요한 테스트 source 행 추가 포괄 승인을 적용한다.
+기준 main `d66b50e93f3a5a09748fb9a90feecf326124333e`의
+raw147836/support3428/legacy1550, 총152814행에서
+raw147608/support4671/legacy1550, 총153829행으로 +1015행을 계상한다.
+raw는 -228행, support는 +1243행이며 기존 미확인1550행은 유지한다.
+이동 본문은 한 번만 세며 source ledger와 실제 counter를 정확히 맞춘다.
+
+Recommendation support의 순증 +799행은 기존 미계상797행과 실제 추가 import2행이다.
+앞선 +798 예상은 공유 source-start의 실제 ROSTER import1행이 더 필요해 정정했다.
+이동된 기존 helper89행과 specialist/artifact fixture·producer 본문은
+기존 charge의 단일 전이이며 별도 신규 코드로 중복 계상하지 않는다.
+나머지216행은 실제 새 파일 header·소비 import·공개 인자 연결·기존 구조 검증 등의 비용이다.
+`tests/suite_budget.py`의 기존 엄격 pair 검증 추가16행은
+기존 frozen source charge 밖의 generic 도구 비용으로 별도 공개한다.
+이 계상은 새 Story runtime 기능이나 새 테스트 Case·시나리오를 추가하지 않는다.
+
+기존 Case3개를 1:1 이동하며2544 ID·cap합8690과 나머지 모든 ID별 cap을 보존한다.
+`152814→153829`는 해당3개 ID 재편·source ledger·기존 대표 정책 Case의
+정확한 closed 검증과 함께 적용한다. schema/format/token은 유지하고
+`audited-162-v8`의 실제 내용·manifest digest만 재계산한다.
+hosted ID162개·전체 timing weight pool을 유지하면서 실제 class26→29,
+weight group395→398을 명시한다. 전체18000초·shard3600초와 최대4worker는 유지한다.
+
+최종 공식 CI와 변경 전 고정 오차범위에 따른 실제 시간 비교는 별도 완료 조건이다.
+양의 개별 변화를 기록하고 실제 Story runtime 회귀는 실패로 판단한다.
+사용자가 허용한 미세 변동·전체 시간에 큰 지장이 없는 정책 검증 비용은
+실제 변화와 근거를 공개해 판단하며 영향이 없다고 표시하지 않는다.

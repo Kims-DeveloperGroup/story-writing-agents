@@ -35,7 +35,8 @@ from story_writing_agents.workspace.initialization import (
     provision_session_resources,
 )
 
-from tests.test_artifact_proposal_orchestration import _INDEX, ARTIFACT_FIXTURE_RULES_PATH, _SECOND, _THIRD
+from tests.test_artifact_proposal_orchestration import _INDEX, _SECOND, _THIRD
+from tests.lead_fixtures.artifact_review import ARTIFACT_FIXTURE_RULES_PATH
 from tests.known_result_finalization_fixture import seed_reviewed_artifact
 from tests.lead_fixtures.runtime_setup import LeadOrchestrationTestCase
 from tests.lead_fixtures.provider_responses import LeadBackend as _LeadBackend
