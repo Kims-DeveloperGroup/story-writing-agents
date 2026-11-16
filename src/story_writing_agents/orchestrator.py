@@ -8865,7 +8865,7 @@ class StoryRuntime:
                     or not empty_core_status_evidence(
                         locator=receipt.locator,
                         present=receipt.source_state is CollaborationInputState.PRESENT,
-                        utf8_bytes=receipt.utf8_bytes,
+                        utf8_bytes=receipt.utf8_bytes + 1,
                         content_digest=receipt.content_digest,
                     )
                 ):
