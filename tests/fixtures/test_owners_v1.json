@@ -1029,7 +1029,7 @@
       ],
       "depends_on": [
         "context-execution-fixture",
-        "tests.test_agent_context_accounting"
+        "lead-fixtures.material-values"
       ]
     },
     {
@@ -1092,8 +1092,10 @@
       ],
       "depends_on": [
         "context-execution-fixture",
+        "lead-fixtures.material-values",
         "lead-fixtures.preparation-data",
-        "tests.test_agent_context_accounting",
+        "lead-fixtures.provider-responses",
+        "lead-fixtures.runtime-setup",
         "tests.test_artifact_objectives",
         "tests.test_artifact_proposal_orchestration"
       ]
@@ -1153,8 +1155,7 @@
         "lead-fixtures.material-values",
         "lead-fixtures.preparation-data",
         "lead-fixtures.provider-responses",
-        "lead-fixtures.runtime-setup",
-        "tests.test_agent_context_accounting"
+        "lead-fixtures.runtime-setup"
       ]
     },
     {
@@ -1405,10 +1406,10 @@
       ],
       "depends_on": [
         "context-execution-fixture",
+        "lead-fixtures.material-values",
         "lead-fixtures.preparation-data",
         "lead-fixtures.provider-responses",
         "lead-fixtures.runtime-setup",
-        "tests.test_agent_context_accounting",
         "tests.test_artifact_proposal_orchestration",
         "tests.test_lead_artifact_application_authority",
         "tests.test_lead_story_commit_authority"
@@ -2053,6 +2054,7 @@
       ],
       "depends_on": [
         "context-execution-fixture",
+        "lead-fixtures.material-values",
         "lead-fixtures.preparation-data",
         "tests.test_agent_context_accounting",
         "tests.test_agent_exchange_viewer",
@@ -3815,9 +3817,10 @@
       ],
       "depends_on": [
         "context-execution-fixture",
+        "lead-fixtures.material-values",
         "lead-fixtures.preparation-data",
         "lead-fixtures.provider-responses",
-        "tests.test_agent_context_accounting",
+        "lead-fixtures.runtime-setup",
         "tests.test_artifact_objectives",
         "tests.test_artifact_proposal_orchestration",
         "tests.test_lead_artifact_application_authority",
@@ -4088,11 +4091,11 @@
       ],
       "depends_on": [
         "context-execution-fixture",
+        "lead-fixtures.material-values",
         "lead-fixtures.preparation-data",
         "lead-fixtures.provider-responses",
         "lead-fixtures.runtime-setup",
         "tests.lead_preparation.test_response_rules",
-        "tests.test_agent_context_accounting",
         "tests.test_artifact_objectives",
         "tests.test_artifact_proposal_orchestration",
         "tests.test_collaboration_events"
@@ -5264,9 +5267,10 @@
       ],
       "depends_on": [
         "context-execution-fixture",
+        "lead-fixtures.material-values",
         "lead-fixtures.preparation-data",
         "lead-fixtures.provider-responses",
-        "tests.test_agent_context_accounting",
+        "lead-fixtures.runtime-setup",
         "tests.test_artifact_objectives",
         "tests.test_artifact_proposal_orchestration",
         "tests.test_collaboration_events",
@@ -5307,10 +5311,10 @@
       ],
       "depends_on": [
         "context-execution-fixture",
+        "lead-fixtures.material-values",
         "lead-fixtures.preparation-data",
         "lead-fixtures.provider-responses",
         "lead-fixtures.runtime-setup",
-        "tests.test_agent_context_accounting",
         "tests.test_artifact_objectives",
         "tests.test_artifact_proposal_orchestration",
         "tests.test_specialist_routing_runtime"
@@ -5458,8 +5462,10 @@
       ],
       "depends_on": [
         "context-execution-fixture",
+        "lead-fixtures.material-values",
+        "lead-fixtures.preparation-data",
         "lead-fixtures.provider-responses",
-        "tests.test_agent_context_accounting",
+        "lead-fixtures.runtime-setup",
         "tests.test_artifact_objectives",
         "tests.test_artifact_proposal_orchestration"
       ]
@@ -5478,10 +5484,10 @@
       ],
       "depends_on": [
         "context-execution-fixture",
+        "lead-fixtures.material-values",
         "lead-fixtures.preparation-data",
         "lead-fixtures.provider-responses",
         "lead-fixtures.runtime-setup",
-        "tests.test_agent_context_accounting",
         "tests.test_artifact_objectives",
         "tests.test_artifact_proposal_orchestration",
         "tests.test_collaboration_events"
@@ -5504,10 +5510,10 @@
       "depends_on": [
         "context-execution-fixture",
         "known-result-finalization-fixture",
+        "lead-fixtures.material-values",
         "lead-fixtures.preparation-data",
         "lead-fixtures.provider-responses",
         "lead-fixtures.runtime-setup",
-        "tests.test_agent_context_accounting",
         "tests.test_artifact_objectives",
         "tests.test_artifact_proposal_orchestration",
         "tests.test_lead_artifact_application_authority"
@@ -5669,10 +5675,10 @@
       ],
       "depends_on": [
         "context-execution-fixture",
+        "lead-fixtures.material-values",
         "lead-fixtures.preparation-data",
         "lead-fixtures.provider-responses",
         "lead-fixtures.runtime-setup",
-        "tests.test_agent_context_accounting",
         "tests.test_artifact_objectives",
         "tests.test_artifact_proposal_orchestration",
         "tests.test_interactive_auth",
@@ -5865,10 +5871,10 @@
       ],
       "depends_on": [
         "context-execution-fixture",
+        "lead-fixtures.material-values",
         "lead-fixtures.preparation-data",
         "lead-fixtures.provider-responses",
         "lead-fixtures.runtime-setup",
-        "tests.test_agent_context_accounting",
         "tests.test_artifact_objectives",
         "tests.test_artifact_proposal_orchestration"
       ]
@@ -6025,9 +6031,10 @@
       ],
       "depends_on": [
         "context-execution-fixture",
+        "lead-fixtures.material-values",
         "lead-fixtures.preparation-data",
         "lead-fixtures.provider-responses",
-        "tests.test_agent_context_accounting",
+        "lead-fixtures.runtime-setup",
         "tests.test_artifact_objectives",
         "tests.test_artifact_proposal_orchestration"
       ]
@@ -6306,9 +6313,10 @@
       ],
       "depends_on": [
         "context-execution-fixture",
+        "lead-fixtures.material-values",
         "lead-fixtures.preparation-data",
+        "lead-fixtures.provider-responses",
         "lead-fixtures.runtime-setup",
-        "tests.test_agent_context_accounting",
         "tests.test_artifact_objectives",
         "tests.test_artifact_proposal_orchestration"
       ]
@@ -6360,10 +6368,10 @@
       "depends_on": [
         "context-execution-fixture",
         "known-result-finalization-fixture",
+        "lead-fixtures.material-values",
         "lead-fixtures.preparation-data",
         "lead-fixtures.provider-responses",
         "lead-fixtures.runtime-setup",
-        "tests.test_agent_context_accounting",
         "tests.test_specialist_orchestration_accounting"
       ]
     },
@@ -6401,9 +6409,9 @@
       ],
       "depends_on": [
         "context-execution-fixture",
+        "lead-fixtures.material-values",
         "lead-fixtures.preparation-data",
         "lead-fixtures.runtime-setup",
-        "tests.test_agent_context_accounting",
         "tests.test_lead_artifact_objectives",
         "tests.test_specialist_routing_runtime"
       ]
@@ -6444,10 +6452,10 @@
       ],
       "depends_on": [
         "context-execution-fixture",
+        "lead-fixtures.material-values",
         "lead-fixtures.preparation-data",
         "lead-fixtures.provider-responses",
         "lead-fixtures.runtime-setup",
-        "tests.test_agent_context_accounting",
         "tests.test_agent_exchange_viewer",
         "tests.test_artifact_objectives",
         "tests.test_artifact_proposal_orchestration",
@@ -8137,7 +8145,7 @@
       ],
       "depends_on": [
         "context-execution-fixture",
-        "tests.test_agent_context_accounting"
+        "lead-fixtures.material-values"
       ]
     },
     {
@@ -8515,7 +8523,7 @@
       "depends_on": [
         "context-contract-fixtures",
         "context-execution-fixture",
-        "tests.test_agent_context_accounting"
+        "lead-fixtures.material-values"
       ]
     },
     {
@@ -8663,7 +8671,7 @@
         "tests.agent_context.invocation.test_scope_serialization.ContextExecutionConcurrencyTests.test_same_scope_calls_serialize_and_second_observes_committed_delta"
       ],
       "depends_on": [
-        "tests.test_agent_context_accounting"
+        "lead-fixtures.material-values"
       ]
     },
     {
@@ -14073,6 +14081,7 @@
         "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_synthesis_cancellation_preserves_specialist_result_and_never_reruns_it"
       ],
       "depends_on": [
+        "lead-fixtures.material-values",
         "lead-fixtures.preparation-data",
         "lead-fixtures.provider-responses",
         "lead-fixtures.runtime-setup",
@@ -14950,7 +14959,6 @@
         "lead-fixtures.runtime-setup",
         "tests.test_artifact_objectives",
         "tests.test_artifact_proposal_orchestration",
-        "tests.test_specialist_orchestration_accounting",
         "tests.test_specialist_orchestration_execution"
       ]
     },
@@ -15090,7 +15098,7 @@
         "lead-fixtures.material-values",
         "lead-fixtures.preparation-data",
         "lead-fixtures.provider-responses",
-        "tests.test_agent_context_accounting",
+        "lead-fixtures.runtime-setup",
         "tests.test_artifact_objectives",
         "tests.test_artifact_proposal_orchestration",
         "tests.test_collaboration_events"
@@ -16242,6 +16250,7 @@
       ],
       "depends_on": [
         "context-execution-fixture",
+        "lead-fixtures.material-values",
         "lead-fixtures.provider-responses"
       ]
     },
@@ -16724,6 +16733,7 @@
         "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_wrong_task_pair_rejects_before_dispatch"
       ],
       "depends_on": [
+        "context-execution-fixture",
         "lead-fixtures.material-values"
       ]
     },
@@ -17206,6 +17216,8 @@
         "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_wrong_task_pair_rejects_before_dispatch"
       ],
       "depends_on": [
+        "context-execution-fixture",
+        "lead-fixtures.material-values",
         "lead-fixtures.preparation-data",
         "lead-fixtures.provider-responses"
       ]

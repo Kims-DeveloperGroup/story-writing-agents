@@ -27,3 +27,5 @@
 현재 카운터는 raw 147,686 + support 3,425 + legacy 1,550 = 152,661행이다. 이동·import 이관 +426행과 기존 정책 Case 검증 +15행을 계상했다. Case 2,544개, cap 합 8,690과 394개 timing weight group은 유지했다.
 
 변경 전 공식 CI의 first 2개 선택은 3회 모두 성공했다. 실제 취소 결과 게시의 CANCELLED→FAILED 진단은 기존 overall outcome assertion에서 실패했다. 진단 실패는 정상 성능 및 전체 CI 성공 근거로 사용하지 않는다. 변경 후 동일 선택·진단과 전체 CI는 이 구현 커밋에서 별도로 검증한다.
+
+초기 구현의 공식 실행 8개는 기존 owner 간접 import edge 누락으로 정적 단계에서 실패했다. 이 결과는 보존하고 기능·성능·취소 assertion RED 근거에서 제외한다. 기존 Case owner 191개와 새 support owner 4개를 실제 AST import 규칙으로 대조해 기존 25개와 새 3개 owner의 depends_on만 교정했다. focused/affected ID 집합과 152,661행 카운터는 동일하다. 수정 소스의 공식 검증은 별도로 확인한다.
