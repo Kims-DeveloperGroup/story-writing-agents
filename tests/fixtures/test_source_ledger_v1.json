@@ -1001,6 +1001,37 @@
       "counting": "Source-only152665→152727(+62): Candidate same-Case adapter32 + existing RAG graph/packaging14 + existing BudgetCase16. Nine count readers update literals only. Generic suite_budget guard11 physical rows outside frozen charge scope disclosed; legacy1550 and all receipts/profile/weights unchanged.",
       "expected_caps_sha256": "d72ded85920beccddd24ee08ca2be40c8963d0832366ce07d211f67684033335",
       "generic_execution_tool_rows_disclosed": 11
+    },
+    {
+      "issue": 1040,
+      "origin_commit": "263a252ff09c5c9708df93ca0627aff27a8177c1",
+      "origins": [
+        {
+          "source": "tests/test_artifact_proposal_orchestration.py",
+          "sha256": "3461153d00b04c237fa79f1a7fb1f162b726ed82e3366cd13b29ad737b229725",
+          "source_ranges": [
+            [
+              1205,
+              1249
+            ],
+            [
+              1251,
+              1318
+            ]
+          ],
+          "destinations": [
+            "tests/test_current_lead_evidence.py"
+          ],
+          "counting": "Two complete existing methods1:1, unchanged11/10assertions and cap6/2; same fixture/base/constant/resource lifetimes. Only four actual public converter call transports change."
+        }
+      ],
+      "approved_source_delta": 87,
+      "planned_raw_delta": 84,
+      "planned_support_delta": 3,
+      "legacy_unresolved_lines": 1550,
+      "counting": "152727→152814(+87): normal domain header20 + actual4call adapter12 + newowner graph26 + existing2incoming-set expansion6 + packaging1 + existingBudgetCase19 + counted id_moves support3. Nine reader numeric literals change0 rows. Generic combined source+closed2-ID guard16 physical rows outside frozen charge, disclosed. No new Case/scenario/subTest; global weight pool conserved through existing canonical quotient/remainder rule.",
+      "expected_caps_sha256": "c2a287a57fa759f2c1b984c2a3aedf171aa8a08f1ef8032fbd09180079b3fc34",
+      "generic_execution_tool_rows_disclosed": 16
     }
   ]
 }

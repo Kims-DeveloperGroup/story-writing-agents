@@ -546,6 +546,7 @@ from .lead_control_events import (
 from .agent_context.contracts.events import validate_context_event_sink
 from .lead_preparation import lead_material_inputs, lead_evidence_receipts, lead_proposal_inputs
 from .lead_preparation import lead_document_nodes
+from .lead_preparation import current_lead_evidence
 
 
 
@@ -2775,12 +2776,7 @@ class StoryRuntime:
                         raise ValueError("recommendation authoring scope is stale or absent")
                     if request.kind is LeadRecommendationActionKind.PREPARE_CONSULTATION:
                         validate_specialist_routing(scope, request.specialist_ids)
-                    evidence_inputs = self._validate_current_lead_evidence(
-                        session_id=session_id,
-                        events=events,
-                        proposal=request,
-                        artifact_binding=artifact_binding,
-                    ) if request.basis.evidence.receipts else {}
+                    evidence_inputs = current_lead_evidence.validate_current_lead_evidence(session_id=session_id, events=events, proposal=request, artifact_binding=artifact_binding, context_service=self.agent_context_service, conversation_storage_services=self.conversation_storage_services, bind_session_artifacts=self.bind_session_artifacts, current_lead_read_input=self.current_lead_read_input) if request.basis.evidence.receipts else {}
                     current_inputs = self._current_lead_inputs(
                         session_id,
                         events,
@@ -5262,7 +5258,7 @@ class StoryRuntime:
                         raise BackendProtocolError(
                             "assignment READ source is outside the focused conversation"
                         )
-                    snapshot = self._current_lead_read_snapshot(
+                    snapshot = self.current_lead_read_snapshot(
                         session_id=session_id,
                         conversation_id=conversation_id,
                         scope=scope,
@@ -8795,12 +8791,7 @@ class StoryRuntime:
         with artifact_binding.open_ready_resources() as access:
             snapshots = access.repository.capture_complete_state()
         base_state = {item.path: item.content for item in snapshots}
-        artifact_evidence = self._artifact_intent_evidence(
-            evidence,
-            session_id=session_id,
-            conversation_id=conversation_id,
-            artifact_binding=artifact_binding,
-        )
+        artifact_evidence = current_lead_evidence.artifact_intent_evidence(evidence, session_id=session_id, conversation_id=conversation_id, artifact_binding=artifact_binding, context_service=self.agent_context_service, current_lead_read_snapshot=self.current_lead_read_snapshot)
         with artifact_binding.open_ready_resources() as access:
             if access.repository.capture_complete_state() != snapshots:
                 raise reply_contract_values.LeadOutcomeValidationError(
@@ -8829,136 +8820,6 @@ class StoryRuntime:
             attached_core_paths=attached_core_paths,
         )
 
-    def _artifact_intent_evidence(
-        self,
-        evidence: CollaborationLeadEvidence,
-        *,
-        session_id: str,
-        conversation_id: str,
-        artifact_binding: SessionArtifactBinding,
-    ) -> tuple[ArtifactIntentEvidence, ...]:
-        """Validate current selected receipts before resolving artifact content."""
-
-        scope = self.agent_context_service.scope(
-            session_id,
-            ContextSubjectKind.CONVERSATION,
-            conversation_id,
-            LEAD_ORCHESTRATOR,
-        )
-        repository_access = partial(
-            session_worktree_access.open_session_artifact_repository,
-            artifact_binding,
-        )
-        writing_adapter = create_guarded_writing_artifact_source_adapter(
-            repository_access,
-            scope,
-        )
-        session_sources = SessionSourceWorkspace.from_artifact_binding(
-            artifact_binding
-        )
-        current_statuses: dict[str, CollaborationEvidenceReceipt] | None = None
-        result: list[ArtifactIntentEvidence] = []
-        for receipt in evidence.receipts:
-            if receipt.acquisition is CollaborationEvidenceAcquisition.CORE_STATUS:
-                if (
-                    receipt.source_kind is not CollaborationInputKind.CORE_DOCUMENT
-                    or not empty_core_status_evidence(
-                        locator=receipt.locator,
-                        present=receipt.source_state is CollaborationInputState.PRESENT,
-                        utf8_bytes=receipt.utf8_bytes,
-                        content_digest=receipt.content_digest,
-                    )
-                ):
-                    continue
-                if current_statuses is None:
-                    current_statuses = {
-                        item.evidence_id: lead_evidence_receipts.durable_core_status_receipt(
-                            item,
-                            operation_id=receipt.operation_id,
-                            result_correlation_id=receipt.result_correlation_id,
-                        )
-                        for item in writing_adapter.canonical_core_statuses(
-                            receipt.manifest_digest,
-                            CONTEXT_SOURCE_POLICY,
-                        )
-                    }
-                if current_statuses.get(receipt.evidence_id) != receipt:
-                    raise validation_failure(
-                        reply_contract_values.LeadOutcomeValidationError(
-                            'artifact empty-core status evidence is no longer current',
-                        ),
-                        '$.artifact_intent.operations',
-                        'artifact empty-core status evidence is no longer current',
-                    )
-                assert receipt.locator is not None
-                assert receipt.content_digest is not None
-                result.append(ArtifactIntentEvidence(
-                    evidence_id=receipt.evidence_id,
-                    path=receipt.locator,
-                    source_digest=receipt.content_digest,
-                    boundary_digest=receipt.content_digest,
-                ))
-                continue
-            if receipt.source_kind not in {
-                CollaborationInputKind.CORE_DOCUMENT,
-                CollaborationInputKind.MANUSCRIPT,
-                CollaborationInputKind.WRITING_ARTIFACT,
-            } or receipt.acquisition not in {
-                CollaborationEvidenceAcquisition.ATTACHED_REFERENCE,
-                CollaborationEvidenceAcquisition.READ,
-            }:
-                continue
-            if (
-                receipt.locator is None
-                or receipt.revision_digest is None
-                or receipt.content_digest is None
-            ):
-                raise validation_failure(
-                    reply_contract_values.LeadOutcomeValidationError('artifact evidence is missing runtime identity'),
-                    '$.artifact_intent.operations',
-                    'artifact evidence is missing runtime identity',
-                )
-            locator = receipt.locator
-            whole_read = False
-            if (
-                receipt.acquisition
-                is CollaborationEvidenceAcquisition.ATTACHED_REFERENCE
-            ):
-                batch = parse_artifact_references(locator)
-                if len(batch.references) != 1:
-                    raise validation_failure(
-                        reply_contract_values.LeadOutcomeValidationError('artifact reference evidence is ambiguous'),
-                        '$.artifact_intent.operations',
-                        'artifact reference evidence is ambiguous',
-                    )
-                path = batch.references[0].path
-                source_digest = receipt.revision_digest
-            else:
-                path = locator
-                snapshot = self._current_lead_read_snapshot(
-                    session_id=session_id,
-                    conversation_id=conversation_id,
-                    scope=scope,
-                    receipt=receipt,
-                    writing_adapter=writing_adapter,
-                    session_sources=session_sources,
-                )
-                source_digest = snapshot.descriptor.content_digest
-                whole_read = (
-                    receipt.content_digest == snapshot.descriptor.content_digest
-                    and receipt.utf8_bytes == snapshot.descriptor.utf8_bytes
-                )
-            result.append(
-                ArtifactIntentEvidence(
-                    evidence_id=receipt.evidence_id,
-                    path=path,
-                    source_digest=source_digest,
-                    boundary_digest=receipt.content_digest,
-                    start_line=None if whole_read else receipt.start_line,
-                    end_line=None if whole_read else receipt.end_line,
-                )
-            )
-        return tuple(result)
 
     def _recovered_lead_reference_failure(
         self,
@@ -9742,8 +9603,7 @@ class StoryRuntime:
             raise ValueError("final review qualification requires its exact existing consultation")
         try:
             self.validate_exact_candidate_reviews(session_id, consultation, reviewed_proposal.candidate, events)
-            evidence_inputs = self._validate_current_lead_evidence(
-                session_id=session_id, events=events, proposal=consultation)
+            evidence_inputs = current_lead_evidence.validate_current_lead_evidence(session_id=session_id, events=events, proposal=consultation, context_service=self.agent_context_service, conversation_storage_services=self.conversation_storage_services, bind_session_artifacts=self.bind_session_artifacts, current_lead_read_input=self.current_lead_read_input)
             current_inputs = self._current_lead_inputs(session_id, events, consultation,
                 evidence_inputs=evidence_inputs)
         except (ValueError, BackendProtocolError):
@@ -10579,12 +10439,7 @@ class StoryRuntime:
                     authoring_authority.validate_draft_provenance(current_task, task_events)
             elif projection.rounds_spent != 0:
                 raise ValueError("premise analysis cannot reopen a completed analyst round")
-            evidence_inputs = self._validate_current_lead_evidence(
-                session_id=session_id,
-                events=events,
-                proposal=proposal,
-                artifact_binding=artifact_binding,
-            )
+            evidence_inputs = current_lead_evidence.validate_current_lead_evidence(session_id=session_id, events=events, proposal=proposal, artifact_binding=artifact_binding, context_service=self.agent_context_service, conversation_storage_services=self.conversation_storage_services, bind_session_artifacts=self.bind_session_artifacts, current_lead_read_input=self.current_lead_read_input)
             inputs = self._current_lead_inputs(
                 session_id,
                 events,
@@ -10772,166 +10627,9 @@ class StoryRuntime:
         with artifact_binding.open_ready_resources():
             pass
 
-    def _validate_current_lead_evidence(
-        self,
-        *,
-        session_id: str,
-        events: tuple[CollaborationEvent, ...],
-        proposal: CollaborationProposal | LeadRecommendationRequestPayload,
-        artifact_binding: SessionArtifactBinding | None = None,
-    ) -> dict[str, CollaborationInputRevision]:
-        """Re-derive selected evidence without replaying provider SEARCH text."""
-
-        if artifact_binding is None:
-            artifact_binding = self.bind_session_artifacts(session_id)
-        if any(event.session_id != session_id for event in events):
-            raise ValueError("lead evidence history has cross-session events")
-        evidence = proposal.basis.evidence
-        if evidence is None:
-            return {}
-        conversation_ids = {event.conversation_id for event in events}
-        if len(conversation_ids) != 1:
-            raise ValueError("lead evidence conversation identity is ambiguous")
-        conversation_id = next(iter(conversation_ids))
-        if not evidence.receipts:
-            if (
-                type(proposal) is CollaborationProposal
-                and proposal.premise_decision is not None
-                and proposal.step_kind is CollaborationStepKind.LEAD_SPECIALIST_CONSULTATION
-                and proposal.authoring_scope is None
-                and evidence.scope is LeadOutcomeScope.PREMISE_ANALYSIS
-                and evidence.status is LeadEvidenceStatus.NOT_APPLICABLE
-            ):
-                return {}
-            raise ValueError("story-specific proposal evidence cannot be empty")
-        operation_id = evidence.receipts[0].operation_id
-        result_correlation_id = evidence.receipts[0].result_correlation_id
-        manifest_digest = evidence.receipts[0].manifest_digest
-        status_receipts = tuple(
-            item
-            for item in evidence.receipts
-            if item.acquisition is CollaborationEvidenceAcquisition.CORE_STATUS
-        )
-        scope = self.agent_context_service.scope(
-            session_id,
-            ContextSubjectKind.CONVERSATION,
-            conversation_id,
-            LEAD_ORCHESTRATOR,
-        )
-        repository_access = partial(
-            session_worktree_access.open_session_artifact_repository,
-            artifact_binding,
-        )
-        writing_adapter = create_guarded_writing_artifact_source_adapter(
-            repository_access,
-            scope,
-        )
-        session_sources = SessionSourceWorkspace.from_artifact_binding(
-            artifact_binding
-        )
-        if status_receipts:
-            current_statuses = {
-                item.evidence_id: lead_evidence_receipts.durable_core_status_receipt(
-                    item,
-                    operation_id=operation_id,
-                    result_correlation_id=result_correlation_id,
-                )
-                for item in writing_adapter.canonical_core_statuses(
-                    manifest_digest,
-                    CONTEXT_SOURCE_POLICY,
-                )
-            }
-            if any(
-                current_statuses.get(item.evidence_id) != item
-                for item in status_receipts
-            ):
-                raise ValueError("lead core-status evidence is no longer current")
-
-        zero_hits = tuple(
-            item
-            for item in evidence.receipts
-            if item.acquisition is CollaborationEvidenceAcquisition.ZERO_HIT_SEARCH
-        )
-        if zero_hits:
-            descriptors = writing_adapter.inventory(CONTEXT_SOURCE_POLICY)
-            for item in zero_hits:
-                current_descriptors: list[Any] = []
-                if (
-                    CollaborationInputKind.WRITING_ARTIFACT
-                    in item.authorized_source_kinds
-                ):
-                    current_descriptors.extend(
-                        sorted(
-                            (
-                                descriptor
-                                for descriptor in descriptors
-                                if item.artifact_path_prefix is None
-                                or descriptor.provenance.locator.startswith(
-                                    item.artifact_path_prefix
-                                )
-                            ),
-                            key=lambda descriptor: descriptor.source_id,
-                        )
-                    )
-                if (
-                    CollaborationInputKind.CONVERSATION_EVENT
-                    in item.authorized_source_kinds
-                ):
-                    services = self.conversation_storage_services
-                    current_descriptors.extend(
-                        sorted(
-                            FocusedConversationSourceAdapter(
-                                services.catalog,
-                                services.event_store,
-                                scope,
-                                conversation_id,
-                                include_same_session_active=True,
-                                include_searchable_history=True,
-                            ).inventory(CONTEXT_SOURCE_POLICY),
-                            key=lambda descriptor: descriptor.source_id,
-                        )
-                    )
-                if CollaborationInputKind.AGENT_STATE in item.authorized_source_kinds:
-                    current_descriptors.extend(
-                        sorted(
-                            OwnAgentStateSourceAdapter(
-                                session_sources,
-                                scope,
-                            ).inventory(CONTEXT_SOURCE_POLICY),
-                            key=lambda descriptor: descriptor.source_id,
-                        )
-                    )
-                if (
-                    tuple(descriptor.source_id for descriptor in current_descriptors)
-                    != item.authorized_source_ids
-                    or lead_material_inputs.lead_authorized_source_fingerprint(
-                        tuple(current_descriptors)
-                    )
-                    != item.authorized_source_fingerprint
-                ):
-                    raise ValueError(
-                        "lead zero-hit evidence source manifest has drifted"
-                    )
-
-        read_inputs: dict[str, CollaborationInputRevision] = {}
-        for receipt in evidence.receipts:
-            if receipt.acquisition is not CollaborationEvidenceAcquisition.READ:
-                continue
-            current_input = self._current_lead_read_input(
-                session_id=session_id,
-                conversation_id=conversation_id,
-                scope=scope,
-                receipt=receipt,
-                writing_adapter=writing_adapter,
-                session_sources=session_sources,
-            )
-            if receipt.evidence_id in read_inputs:
-                raise ValueError("lead READ evidence identity is duplicated")
-            read_inputs[receipt.evidence_id] = current_input
-        return read_inputs
 
 
-    def _current_lead_read_input(
+    def current_lead_read_input(
         self,
         *,
         session_id: str,
@@ -10943,7 +10641,7 @@ class StoryRuntime:
     ) -> CollaborationInputRevision:
         """Capture and compare one cited READ boundary through its source owner."""
 
-        self._current_lead_read_snapshot(
+        self.current_lead_read_snapshot(
             session_id=session_id,
             conversation_id=conversation_id,
             scope=scope,
@@ -10973,7 +10671,7 @@ class StoryRuntime:
             end_line=receipt.end_line,
         )
 
-    def _current_lead_read_snapshot(
+    def current_lead_read_snapshot(
         self,
         *,
         session_id: str,

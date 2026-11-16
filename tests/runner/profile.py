@@ -6,7 +6,7 @@ from .contracts import RunnerError
 from .evidence import manifest, required_dict
 
 
-HOSTED_PROFILE = 'audited-162-v7'
+HOSTED_PROFILE = 'audited-162-v8'
 
 
 HOSTED_CLEANUP_SECONDS = 30.0
@@ -83,9 +83,9 @@ HOSTED_LAUNCH_IDS = (
     'tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_review_rejects_empty_reference_but_accepts_explicit_user_candidate',
     'tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_restart_and_repeated_known_result_finalization_are_idempotent',
     'tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_validation_failure_closes_once_and_restart_uses_fresh_turn',
-    'tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_read_evidence_translates_whole_content_and_range_boundary_digests',
+    'tests.test_current_lead_evidence.CurrentLeadEvidenceTests.test_read_evidence_translates_whole_content_and_range_boundary_digests',
     'tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_objective_history_round_trips_through_filesystem_sqlite_and_archive',
-    'tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_empty_core_status_evidence_requires_selected_fresh_zero_byte_source',
+    'tests.test_current_lead_evidence.CurrentLeadEvidenceTests.test_empty_core_status_evidence_requires_selected_fresh_zero_byte_source',
     'tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_history_rejects_foreign_or_changed_origin_predecessor_sources_and_targets',
     'tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_matching_unfinished_legacy_operation_retires_native_context',
     'tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_v1_objective_wire_round_trips_without_changing_legacy_bytes',
