@@ -974,6 +974,33 @@
       "expected_caps_sha256": "d72ded85920beccddd24ee08ca2be40c8963d0832366ce07d211f67684033335",
       "generic_execution_tool_rows_disclosed": 11,
       "generic_consumer_rows_disclosed": 5
+    },
+    {
+      "issue": 1039,
+      "origin_commit": "6e5ede108f572ee411f0311c3fd504bcc559363e",
+      "origins": [
+        {
+          "source": "tests/test_collaboration_context.py",
+          "sha256": "508c5750f4197b957944a91a84da32d0e3aade0612b7a040ac3d10c81135ff31",
+          "source_ranges": [
+            [
+              561,
+              590
+            ]
+          ],
+          "destinations": [
+            "tests/test_collaboration_context.py"
+          ],
+          "counting": "Retain same composite Case and all input/assertion/negative/lifetime; actual public function and same validator-recording lookup adapter only. No Case move/split."
+        }
+      ],
+      "approved_source_delta": 62,
+      "planned_raw_delta": 62,
+      "planned_support_delta": 0,
+      "legacy_unresolved_lines": 1550,
+      "counting": "Source-only152665→152727(+62): Candidate same-Case adapter32 + existing RAG graph/packaging14 + existing BudgetCase16. Nine count readers update literals only. Generic suite_budget guard11 physical rows outside frozen charge scope disclosed; legacy1550 and all receipts/profile/weights unchanged.",
+      "expected_caps_sha256": "d72ded85920beccddd24ee08ca2be40c8963d0832366ce07d211f67684033335",
+      "generic_execution_tool_rows_disclosed": 11
     }
   ]
 }
