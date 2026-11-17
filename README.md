@@ -656,11 +656,10 @@ x64 runners. They retain the same locked dependencies and test inventory.
 Full-suite selection includes test-only changes. The fixed timing limits still apply to every
 selected full shard; a diagnostic run never replaces this evidence.
 
-The original four-bin assignment is retained, with only
-`LeadOutcomeAndProposalTests.test_front_schema_is_minimal_closed_and_provider_strict`
-extracted into dedicated shard `5/5`. The five selections contain
-577/554/704/691/1 tests, covering all 2,527 IDs exactly once. The other schema tests
-keep their original assignments.
+The full suite uses four regular shards and a dedicated shard `5/5` for
+`LeadOutcomeAndProposalTests.test_front_schema_is_minimal_closed_and_provider_strict`.
+The five selections contain 570/540/627/806/1 tests, covering all 2,544 IDs exactly
+once.
 
 To measure whole-front independently, manually dispatch `pr-validation` with
 `validation_scope: whole-front`. That mode runs static validation, focused policy
@@ -674,12 +673,10 @@ The dedicated canonical selector is:
 PYTHONPATH=src python -m tests.runner run --shard 5/5 --json whole-front.json
 ```
 
-Hosted full shards use the fixed `audited-147-v3` profile of 147 fixture-audited
-methods across 17 classes to run at most four fresh test processes after their
-original noneligible serial suite. The frozen launch order starts whole-front,
-then seven other v40 failed or unexecuted methods in canonical order, then 139
-passed methods by descending v40 observed duration with canonical tie-breaks.
-Runtime history cannot change this order, and final report rows stay canonical.
+Hosted full shards use the fixed `audited-163-v9` profile: 163 fixture-audited
+methods across 30 classes run in at most four fresh test processes after the
+original noneligible serial suite. The checked-in launch order and priority are
+fixed. Runtime history cannot change this order, and final report rows stay canonical.
 Every process shares the shard's original one-hour work cutoff; shutdown has a
 separate 30-second bound. Fast, affected and local runs remain serial. See
 [TEST_POLICY.md](TEST_POLICY.md) for eligibility, source reconciliation and cleanup
