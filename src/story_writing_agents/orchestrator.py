@@ -513,6 +513,8 @@ from .lead_preparation import (
     outcome_decoding,
     authoring_authority,
 )
+from .lead_preparation import recommendation_requests
+from .lead_preparation import recommendation_decisions
 from .lead_preparation import recommendation_preparation, proposal_basis_values
 
 from .artifact_transactions.artifact_application_authority import ArtifactApplicationAuthority
@@ -2176,16 +2178,16 @@ class StoryRuntime:
             ),
         ) for agent_id in ROSTER if agent_id in {LEAD_ORCHESTRATOR, *specialist_ids})
         route = "lead_recommendation_" + kind.value
-        return CollaborationProposalBasis(
+        route_fingerprint = reply_contract_values.canonical_digest([route, specialist_ids, [asdict(p) for p in profiles]])
+        return recommendation_requests.recommendation_basis(
             core_document_readiness=core_document_readiness,
             authoring_admission=authoring_admission,
             route=route,
-            route_fingerprint=reply_contract_values.canonical_digest([route, specialist_ids, [asdict(p) for p in profiles]]),
+            route_fingerprint=route_fingerprint,
             agent_profiles=profiles,
             context_policy_fingerprint=self.agent_context_service.policy_fingerprint,
-            budget_policy_fingerprint=authoring_authority.basis_budget_fingerprint(authoring_scope),
+            authoring_scope=authoring_scope,
             inputs=inputs, evidence=evidence,
-            schema_version=2 if authoring_scope is not None and authoring_scope.schema_version == 3 else 1,
             shared_premises=shared_premises,
             editorial_refs=editorial_refs, editorial_context_digest=editorial_context_digest,
         )
@@ -2218,376 +2220,29 @@ class StoryRuntime:
             if pending_window is not None:
                 raise reply_contract_values.LeadOutcomeValidationError("For a replacement document window, propose the exact node for its own Confirm, or ask for missing inputs; a preparation-only recommendation cannot carry that window.")
             source = replace(source, payload=replace(source.payload, document_node=selected_node))
-        objective = next((item for item in projection.artifact_objectives
-                          if item.facts.objective_id == action.objective_id), None)
-        if action.objective_id is not None and (
-            objective is None or objective.state is not ArtifactObjectiveState.OPEN
-            or objective.facts.origin_conversation_id != source.conversation_id
-            or (action.kind is LeadRecommendationActionKind.PREPARE_ARTIFACT
-                and objective.facts.target_paths != action.target_paths)
-        ):
-            raise validation_failure(
-                reply_contract_values.LeadOutcomeValidationError(
-                    'recommended objective scope is not an offered OPEN owner objective',
-                ),
-                '$.recommended_action.objective_id',
-                'recommended objective scope is not an offered OPEN owner objective',
-            )
-        offered = {item.event_id: item for item in projection.offered_draft_sources}
-        current = ArtifactDraftSource(source.conversation_id, source.event_id, reply_contract_values.recommendation_event_digest(source))
-        aliases = {item.input_id: item for item in lead_proposal_inputs.materialize_lead_evidence_inputs(
-            inputs, evidence, validation_path='$.recommended_action.source_ids',
-        )}
-        selected: list[CollaborationInputRevision] = []
-        drafts: list[ArtifactDraftSource] = []
-        for alias in action.source_ids:
-            draft = current if alias == "current_response" else offered.get(alias)
-            if draft is not None:
-                drafts.append(draft)
-                selected.append(CollaborationInputRevision(
-                    input_id=draft.event_id, kind=CollaborationInputKind.CONVERSATION_EVENT,
-                    locator=f"conversation/{draft.event_id}", state=CollaborationInputState.PRESENT,
-                    revision_digest=draft.content_digest,
-                ))
-            elif alias in aliases:
-                selected.append(aliases[alias])
-            else:
-                raise validation_failure(
-                    reply_contract_values.LeadOutcomeValidationError('recommended source alias is not runtime offered'),
-                    '$.recommended_action.source_ids',
-                    'recommended source alias is not runtime offered',
-                )
-        if objective is not None and not drafts:
-            for draft in objective.draft_sources:
-                if offered.get(draft.event_id) != draft:
-                    raise validation_failure(
-                        reply_contract_values.LeadOutcomeValidationError('objective draft lineage is no longer offered'),
-                        '$.recommended_action.source_ids',
-                        'objective draft lineage is no longer offered',
-                    )
-                drafts.append(draft)
-                selected.append(CollaborationInputRevision(
-                    input_id=draft.event_id, kind=CollaborationInputKind.CONVERSATION_EVENT,
-                    locator=f"conversation/{draft.event_id}", state=CollaborationInputState.PRESENT,
-                    revision_digest=draft.content_digest,
-                ))
-        artifact_ordinal = 0
-        for index, item in enumerate(selected):
-            if item.kind in {CollaborationInputKind.CORE_DOCUMENT, CollaborationInputKind.MANUSCRIPT,
-                             CollaborationInputKind.WRITING_ARTIFACT}:
-                artifact_ordinal += 1
-                selected[index] = replace(item, input_id=f"reference_{artifact_ordinal}")
-        admission = (source.payload.authoring_admission
-                     if type(source.payload) is CollaborationLeadJudgmentPayload else None)
-        if admission is None and type(source.payload) is CollaborationLeadSynthesisPayload:
-            original = projection.current_proposal
-            if original is not None and original.step_id == source.step_id:
-                admission = original.basis.authoring_admission
-        if admission is not None:
-            historical_by_id = {fact.source_id: fact for fact, _text in
-                authoring_source_history.historical_authoring_users(source.session_id, source.conversation_id, source.payload.authoring_scope, inputs, events=events, admission=admission, read_collaboration_events=self.read_collaboration_events)}
-            for fact in admission.sources:
-                if fact.source_id in historical_by_id:
-                    if historical_by_id[fact.source_id] != fact:
-                        raise reply_contract_values.LeadOutcomeValidationError("recommendation historical USER source changed")
-                    continue
-                actual = aliases.get(fact.source_id)
-                if actual is None:
-                    raise reply_contract_values.LeadOutcomeValidationError("recommendation admission source is not offered")
-                if all(item.input_id != actual.input_id for item in selected):
-                    selected.append(actual)
-        selected_inputs = tuple(selected)
-        scope = source.payload.authoring_scope
-        if scope is None or scope.activity is AuthoringActivity.WORKFLOW:
-            raise validation_failure(
-                reply_contract_values.LeadOutcomeValidationError(
-                    'recommended preparation requires substantive authoring scope',
-                ),
-                '$.authoring_scope.activity',
-                'recommended preparation requires substantive authoring scope',
-            )
-        if (
-            action.kind is LeadRecommendationActionKind.PREPARE_CONSULTATION
-            and scope.schema_version == 3
-            and scope.intent is AuthoringIntent.AUTHORING
-            and scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}
-        ):
-            capture_events = {event.event_id: event for event in events}
-            source_proposal = projection.current_proposal
-            bound_capture_basis = (
-                {item.input_id: item for item in source_proposal.basis.inputs}
-                if (
-                    type(source.payload) is CollaborationLeadSynthesisPayload
-                    and source_proposal is not None
-                    and source.payload.proposal_id == source_proposal.proposal_id
-                    and source.step_id == source_proposal.step_id
-                    and source_proposal.authoring_scope == scope
-                ) else None
-            )
-            for control in events:
-                if type(control.payload) is not CollaborationLeadTaskTransitionPayload:
-                    continue
-                receipt = control.payload.receipt
-                if (
-                    not receipt.material_capture_event_ids
-                    or (receipt.target_task_id, receipt.target_task_revision)
-                    != (scope.task_id, scope.task_revision)
-                    or receipt.action not in {LeadTaskAction.RESUME, LeadTaskAction.NEW_TASK}
-                ):
-                    continue
-                captured_aliases = tuple(
-                    (f"selected_material_{ordinal}", identity)
-                    for ordinal, identity in enumerate(receipt.material_capture_event_ids, 1)
-                )
-                if receipt.planning_step_id != source.step_id:
-                    if bound_capture_basis is None or any(
-                        alias not in bound_capture_basis
-                        or bound_capture_basis[alias].locator != f"conversation/{identity}"
-                        for alias, identity in captured_aliases
-                    ):
-                        continue
-                origin = capture_events.get(receipt.origin_event_id)
-                if (
-                    receipt.origin_kind != "task_decision"
-                    or control.sender != event_journal.RUNTIME_ACTOR
-                    or origin is None
-                    or type(origin.payload) is not CollaborationLeadTaskDecisionPayload
-                    or origin.sender != event_journal.USER_ACTOR
-                    or origin.batch_id != control.batch_id
-                    or (origin.session_id, origin.conversation_id, origin.turn_id, origin.step_id)
-                    != (control.session_id, control.conversation_id, control.turn_id, control.step_id)
-                    or origin.payload.decision.action is not receipt.action
-                    or len(origin.payload.decision.material_refs) != len(captured_aliases)
-                ):
-                    raise reply_contract_values.LeadOutcomeValidationError("selected task inputs require their exact USER control")
-                for ordinal, (alias, identity) in enumerate(captured_aliases):
-                    capture_event = capture_events.get(identity)
-                    item = aliases.get(alias)
-                    if (
-                        capture_event is None
-                        or type(capture_event.payload) is not CollaborationLeadMaterialCapturePayload
-                    ):
-                        raise reply_contract_values.LeadOutcomeValidationError("selected task input capture is unavailable")
-                    captured = capture_event.payload.capture
-                    if (
-                        capture_event.sender != event_journal.RUNTIME_ACTOR
-                        or capture_event.batch_id != control.batch_id
-                        or (
-                            capture_event.session_id, capture_event.conversation_id,
-                            capture_event.turn_id, capture_event.step_id,
-                        )
-                        != (control.session_id, control.conversation_id, control.turn_id, control.step_id)
-                        or captured.origin_event_id != origin.event_id
-                        or captured.source != origin.payload.decision.material_refs[ordinal]
-                        or (captured.target_task_id, captured.target_task_revision)
-                        != (scope.task_id, scope.task_revision)
-                        or item is None
-                        or item.kind is not CollaborationInputKind.CONVERSATION_EVENT
-                        or item.state is not CollaborationInputState.PRESENT
-                        or item.locator != f"conversation/{identity}"
-                        or item.revision_digest != f"sha256:{captured.material_digest}"
-                        or item.start_line is not None or item.end_line is not None
-                        or (bound_capture_basis is not None and bound_capture_basis.get(alias) != item)
-                    ):
-                        raise reply_contract_values.LeadOutcomeValidationError(
-                            "selected task input must retain its exact whole capture"
-                        )
-                    matching = tuple(value for value in selected if value.input_id == alias)
-                    if matching and matching != (item,):
-                        raise reply_contract_values.LeadOutcomeValidationError(
-                            "selected task input changed in recommendation sources"
-                        )
-                    if not matching:
-                        selected.append(item)
-            selected_inputs = tuple(selected)
-        if previous is not None and previous.authoring_scope is None:
-            raise validation_failure(
-                reply_contract_values.LeadOutcomeValidationError('legacy recommendation requires fresh scoped planning'),
-                '$.authoring_scope',
-                'legacy recommendation requires fresh scoped planning',
-            )
-        if scope.schema_version == 3:
-            if any(artifact_domain(path) not in required_authoring_domains(scope)
-                   for path in action.target_paths):
-                raise reply_contract_values.LeadOutcomeValidationError("new destination domains require a fresh task revision")
-        else:
-            scope = replace(scope, target_paths=tuple(dict.fromkeys((*scope.target_paths, *action.target_paths))))
-        scope = authoring_authority.resolve_authoring_scope(
-            scope, selected_inputs, evidence,
-            None if previous is None else previous.authoring_scope,
+        request_policy = recommendation_requests.prepare_recommendation_request_policy(
+            source=source,
+            action=action,
+            inputs=inputs,
+            evidence=evidence,
+            events=events,
+            projection=projection,
+            previous=previous,
+            preview_replies=preview_replies,
+            read_collaboration_events=self.read_collaboration_events,
+            read_session_authoring_events=self.read_session_authoring_events,
         )
-        if previous is not None and scope.task_id != previous.authoring_scope.task_id:
-            raise validation_failure(
-                reply_contract_values.LeadOutcomeValidationError('recommendation revision cannot replace its authoring task'),
-                '$.authoring_scope.task',
-                'recommendation revision cannot replace its authoring task',
-            )
-        prior_events = tuple(
-            event for event in events
-            if event.event_id != source.event_id
-            and (not hasattr(source, "sequence") or event.sequence < source.sequence)
-        )
-        prior_scope = authoring_authority.authoring_tasks(prior_events).get(scope.task_id)
-        fresh_pair = (
-            (
-                scope.task_id == task_identity_for_origin(source.step_id)
-                and scope.task_revision == 1
-            ) or is_new_task_recommendation_source(source, scope, events)
-            if prior_scope is None
-            else (
-                scope.task_revision == prior_scope.task_revision + 1
-                or (
-                    (scope.task_id, scope.task_revision)
-                    == (prior_scope.task_id, prior_scope.task_revision)
-                    and not confirmed_authoring_proposals(prior_scope, prior_events)
-                )
-            )
-        )
-        fresh_consultation = (
-            scope.schema_version == 3
-            and scope.intent is AuthoringIntent.AUTHORING
-            and scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}
-            and action.kind is LeadRecommendationActionKind.PREPARE_CONSULTATION
-            and type(source.payload) is CollaborationLeadJudgmentPayload
-            and fresh_pair
-            and not any(
-                event.step_id == source.step_id
-                and type(event.payload) is CollaborationStepStatePayload
-                and event.payload.state is CollaborationStepState.RUNNING
-                for event in events
-            )
-        )
-        by_id = {event.event_id: event for event in events}
-        for draft in drafts:
-            selected_event = source if draft.event_id == source.event_id else by_id.get(draft.event_id)
-            selected_scope = None if selected_event is None else getattr(selected_event.payload, "authoring_scope", None)
-            if (not authoring_source_scope_is_eligible(
-                selected_scope, scope, allow_prior_revision_input=fresh_consultation,
-            )):
-                raise validation_failure(
-                    reply_contract_values.LeadOutcomeValidationError(
-                        'recommendation draft sources require their existing authoring task',
-                    ),
-                    '$.recommended_action',
-                    'recommendation draft sources require their existing authoring task',
-                )
-        if action.kind is LeadRecommendationActionKind.PREPARE_CONSULTATION:
-            try:
-                validation_call(
-                    '$.recommended_action.specialist_ids',
-                    validate_specialist_routing,
-                    scope,
-                    action.specialist_ids,
-                )
-            except (TypeError, ValueError) as validation_cause:
-                raise carry_validation(
-                    validation_failure(
-                        reply_contract_values.LeadOutcomeValidationError('recommended route omits required specialists'),
-                        '$.recommended_action.specialist_ids',
-                        'recommended route omits required specialists',
-                    ),
-                    validation_cause,
-                ) from None
-        remaining = COLLABORATION_PHYSICAL_CALL_LIMIT - projection.physical_calls_spent
-        mandatory = 1
-        if remaining < mandatory:
-            raise validation_failure(
-                reply_contract_values.LeadOutcomeValidationError(
-                    'recommended preparation cannot fit its source-lineage budget',
-                ),
-                '$.recommended_action.source_ids',
-                'recommended preparation cannot fit its source-lineage budget',
-            )
-        request_event_id = event_journal.new_id("e")
-        source_proposal = None
-        source_attempt = None
-        if type(source.payload) is CollaborationLeadSynthesisPayload:
-            source_proposal = projection.current_proposal
-            source_attempt = source.payload.execution_attempt_id
-        elif projection.current_proposal is not None and any(
-            event.turn_id == source.turn_id and event.step_id == source.step_id
-            and type(event.payload) is CollaborationConfirmationPayload
-            and event.payload.decision is CollaborationConfirmationDecision.REVISE
-            for event in events
-        ):
-            source_proposal = projection.current_proposal
-        lineage_spent = projection.physical_calls_spent
-        source_rounds = projection.rounds_spent
-        if fresh_consultation:
-            lineage_spent = sum(
-                type(event.payload) is CollaborationProviderCallPayload
-                and event.payload.state is CollaborationProviderCallState.SUBMITTED
-                and event.step_id == source.step_id
-                for event in events
-            )
-            source_rounds = 0
-        if (scope.schema_version == 3 and not fresh_consultation
-                and scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}):
-            preview = type(source.payload) is CollaborationLeadSynthesisPayload and projection.current_state is CollaborationStepState.RUNNING
-            if preview:
-                if projection.current_proposal is None or (
-                    projection.current_proposal.proposal_id, projection.current_proposal.proposal_revision,
-                    projection.current_proposal.proposal_digest, projection.execution_attempt_id
-                ) != (source.payload.proposal_id, source.payload.proposal_revision,
-                      source.payload.proposal_digest, source.payload.execution_attempt_id):
-                    raise reply_contract_values.LeadOutcomeValidationError("synthesis preview must bind the current confirmed execution")
-                bound_source = projection.current_proposal
-                completed_synthesis = source
-                source_projection = projection
-            else:
-                bound_source, completed_synthesis, source_projection = authoring_authority.completed_authoring_source(scope, events)
-            if source_proposal is not None and source_proposal != bound_source:
-                raise reply_contract_values.LeadOutcomeValidationError("recommendation source is not the current confirmed draft")
-            source_proposal = bound_source
-            source_attempt = completed_synthesis.payload.execution_attempt_id
-            source_rounds = source_projection.rounds_spent
-            related_steps = {source.step_id, *(event.step_id for event in events
-                             if type(event.payload) is LeadRecommendationRequestPayload
-                             and event.payload.source_proposal_id == bound_source.proposal_id
-                             and event.payload.source_proposal_revision == bound_source.proposal_revision
-                             and event.payload.source_proposal_digest == bound_source.proposal_digest)}
-            related_steps.discard(bound_source.step_id)
-            source_rounds += sum(
-                1 for event in events if event.step_id in related_steps
-                and type(event.payload) is CollaborationStepStatePayload
-                and event.payload.state is CollaborationStepState.RUNNING
-            )
-            lineage_spent = source_projection.physical_calls_spent + sum(
-                1 for event in events if event.step_id in related_steps
-                and type(event.payload) is CollaborationProviderCallPayload
-                and event.payload.state is CollaborationProviderCallState.SUBMITTED
-            )
-        remaining = COLLABORATION_PHYSICAL_CALL_LIMIT - lineage_spent
-        inherited_capture = ()
-        preparation_cap = min(reply_contract_values.CONTEXT_INVOCATION_CALL_LIMIT, remaining)
-        if scope.schema_version == 3:
-            if fresh_consultation:
-                read = int(authoring_authority.has_present_references(selected_inputs))
-                draft_floor = (len(action.specialist_ids) + 1) * (1 + read)
-                floor = authoring_authority.future_authoring_floor(scope, selected_inputs) + draft_floor
-                if remaining < floor + 1 + read:
-                    raise reply_contract_values.LeadOutcomeValidationError(
-                        "fresh drafting preparation and full review are infeasible; clarify and freshly propose"
-                    )
-                preparation_cap = min(preparation_cap, remaining - floor)
-            elif scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}:
-                if action.kind is not LeadRecommendationActionKind.PREPARE_ARTIFACT or source_proposal is None or source_attempt is None:
-                    raise reply_contract_values.LeadOutcomeValidationError("v3 authoring requires completed draft synthesis and artifact preparation; clarify or freshly propose")
-                if source_rounds != 1 or source_proposal.authoring_scope is None:
-                    raise reply_contract_values.LeadOutcomeValidationError("final review cannot reset rounds or add round three; clarify or freshly propose")
-                authoring_authority.validate_draft_provenance(scope, self.read_session_authoring_events(source.session_id),
-                    pending_attempt_id=source_attempt if preview else None,
-                    pending_replies=preview_replies if preview else ())
-                inherited_capture = proposal_basis_values.remap_shared_premises(source_proposal.basis, selected_inputs)
-                if authoring_capture_identity(scope, source_proposal.basis) != authoring_capture_identity(source_proposal.authoring_scope, source_proposal.basis):
-                    raise reply_contract_values.LeadOutcomeValidationError("preparation cannot change the confirmed authoring task")
-                floor = authoring_authority.final_review_floor(scope, selected_inputs, preparation=False)
-                minimum_preparation = 1 + int(authoring_authority.has_present_references(selected_inputs))
-                if remaining < floor + minimum_preparation:
-                    raise reply_contract_values.LeadOutcomeValidationError("declared preparation and full final review are infeasible; clarify or freshly propose")
-                preparation_cap = min(preparation_cap, remaining - floor)
-            elif source_proposal is not None and source_proposal.basis.schema_version == 2:
-                inherited_capture = proposal_basis_values.remap_shared_premises(source_proposal.basis, selected_inputs)
+        current = request_policy.current
+        drafts = request_policy.drafts
+        admission = request_policy.admission
+        selected_inputs = request_policy.selected_inputs
+        scope = request_policy.scope
+        request_event_id = request_policy.request_event_id
+        source_proposal = request_policy.source_proposal
+        source_attempt = request_policy.source_attempt
+        lineage_spent = request_policy.lineage_spent
+        inherited_capture = request_policy.inherited_capture
+        preparation_cap = request_policy.preparation_cap
         _bound_editorial_refs, _bound_editorial_digest = editorial_capture.editorial_context_for_scope(source.session_id, scope, session_history, capture_editorial_snapshot=self.capture_editorial_snapshot, qualify_editorial_scopes=self.qualify_editorial_scopes)
         qualified_admission = None
         if admission is not None and scope is not None:
@@ -2697,63 +2352,19 @@ class StoryRuntime:
             )
             if normalized is not None:
                 return normalized
-            request = projection.current_recommendation_request
-            if request is None or projection.current_recommendation_state is not LeadRecommendationState.PENDING:
-                raise BackendProtocolError("recommendation decision is no longer pending")
-            expected = LeadRecommendationDecision(
-                session_id, conversation_id, request.request_event_id, request.tail_sequence,
-                request.request_id, request.action_id, request.action_revision, request.action_digest,
-                decision.kind, decision.revision_request,
+            prepared_decision = recommendation_decisions.prepare_recommendation_decision(
+                session_id, conversation_id, decision, events, projection,
             )
-            if decision != expected or events[-1].event_id != request.request_event_id:
-                raise BackendProtocolError("recommendation decision does not match its exact current tail")
-            request_event = events[-1]
-            turn_id = event_journal.new_id("t")
-            decision_draft = event_journal.draft(
-                session_id=session_id, conversation_id=conversation_id, turn_id=turn_id,
-                step_id=request_event.step_id, kind=CollaborationEventKind.LEAD_RECOMMENDATION_DECISION,
-                sender=event_journal.USER_ACTOR, recipient=event_journal.RUNTIME_ACTOR,
-                payload=LeadRecommendationDecisionPayload(decision),
-            )
-            if decision.kind is CollaborationConfirmationDecision.REVISE:
-                source = next((view.ref for view in projection.available_tasks
-                               if request.authoring_scope is not None
-                               and (view.ref.task_id, view.ref.task_revision)
-                               == (request.authoring_scope.task_id, request.authoring_scope.task_revision)), None)
-                if request.authoring_scope is not None and source is None:
-                    raise ValueError("recommendation revision requires exact current source task")
-                planning_step = request_event.step_id if source is None else event_journal.new_id("s")
-                user_message = event_journal.draft(
-                    session_id=session_id, conversation_id=conversation_id, turn_id=turn_id,
-                    step_id=planning_step, kind=CollaborationEventKind.MESSAGE,
-                    sender=event_journal.USER_ACTOR, recipient=event_journal.LEAD_ACTOR,
-                    payload=CollaborationMessagePayload(decision.revision_request),
-                )
-                receipt = LeadTaskTransitionReceipt(
-                    origin_event_id=decision_draft.event_id, origin_kind="revise_decision",
-                    action=LeadTaskAction.DISCUSS if source is None else LeadTaskAction.RESUME,
-                    origin_message_event_id=user_message.event_id, source_task_ref=source,
-                    target_task_id=None if source is None else source.task_id,
-                    target_task_revision=None if source is None else source.task_revision + 1,
-                    planning_step_id=None if source is None else planning_step,
-                )
-                transition = event_journal.draft(
-                    session_id=session_id, conversation_id=conversation_id, turn_id=turn_id,
-                    step_id=planning_step, kind=CollaborationEventKind.LEAD_TASK_TRANSITION,
-                    sender=event_journal.RUNTIME_ACTOR, recipient=event_journal.USER_ACTOR,
-                    payload=CollaborationLeadTaskTransitionPayload(receipt),
-                )
-                closure = event_journal.draft(
-                    session_id=session_id, conversation_id=conversation_id, turn_id=turn_id,
-                    step_id=request_event.step_id, kind=CollaborationEventKind.LEAD_RECOMMENDATION_RESULT,
-                    sender=event_journal.RUNTIME_ACTOR, recipient=event_journal.USER_ACTOR,
-                    payload=LeadRecommendationResultPayload(
-                        request.request_event_id, request.request_id, request.action_id,
-                        request.action_revision, request.action_digest, LeadRecommendationState.STALE,
-                        "Revise closed the exact pending recommendation for a fresh discussion or proposal.",
-                        decision_event_id=decision_draft.event_id,
-                    ),
-                )
+            request_event = prepared_decision.request_event
+            request = prepared_decision.request
+            turn_id = prepared_decision.turn_id
+            decision_draft = prepared_decision.decision_draft
+            if type(prepared_decision) is recommendation_decisions.PreparedRecommendationRevision:
+                source = prepared_decision.source
+                planning_step = prepared_decision.planning_step
+                user_message = prepared_decision.user_message
+                transition = prepared_decision.transition
+                closure = prepared_decision.closure
                 event_journal.append_drafts(projection.last_sequence,
                                     (decision_draft, closure, user_message, transition),
                     append_batch=self.append_collaboration_event_batch,
@@ -2842,37 +2453,20 @@ class StoryRuntime:
                     )
                 except Exception:
                     stale = True
-            if stale or decision.kind is CollaborationConfirmationDecision.REJECT:
-                state = LeadRecommendationState.STALE if stale else LeadRecommendationState.REJECTED
-                message = ("The recommendation changed and needs fresh planning and confirmation."
-                           if stale else "The recommendation was rejected; the authoring objective remains open.")
-                closure = event_journal.draft(
-                    session_id=session_id, conversation_id=conversation_id, turn_id=turn_id,
-                    step_id=request_event.step_id, kind=CollaborationEventKind.LEAD_RECOMMENDATION_RESULT,
-                    sender=event_journal.RUNTIME_ACTOR, recipient=event_journal.USER_ACTOR,
-                    payload=LeadRecommendationResultPayload(
-                        request.request_event_id, request.request_id, request.action_id,
-                        request.action_revision, request.action_digest, state, message,
-                        decision_event_id=decision_draft.event_id,
-                    ),
-                )
+            decision_outcome = recommendation_decisions.build_recommendation_decision_outcome(
+                session_id, conversation_id, turn_id, request_event, request,
+                decision, decision_draft, stale=stale,
+            )
+            if type(decision_outcome) is recommendation_decisions.RecommendationDecisionClosure:
+                message = decision_outcome.message
+                closure = decision_outcome.draft
                 event_journal.append_drafts(projection.last_sequence, (decision_draft, closure),
                     append_batch=self.append_collaboration_event_batch,
                 )
                 return LeadTurnResult(session_id, conversation_id, turn_id, request_event.step_id,
                     LeadOutcomeKind.ANSWER, message, None, None, None, CollaborationNextAction.CONTINUE_WITH_LEAD,
                     CollaborationLeadEvidence(LeadOutcomeScope.WORKFLOW_META, LeadEvidenceStatus.NOT_APPLICABLE, ()))
-            start_id = event_journal.new_id("e")
-            start = event_journal.draft_with_id(
-                event_id=start_id, session_id=session_id, conversation_id=conversation_id,
-                turn_id=turn_id, step_id=request_event.step_id,
-                kind=CollaborationEventKind.LEAD_RECOMMENDATION_STARTED,
-                sender=event_journal.RUNTIME_ACTOR, recipient=event_journal.LEAD_ACTOR,
-                payload=LeadRecommendationStartedPayload(
-                    start_id, request.request_event_id, decision_draft.event_id, request.request_id,
-                    request.action_id, request.action_revision, request.action_digest, event_journal.new_id("raexec"),
-                ),
-            )
+            start = decision_outcome
             event_journal.append_drafts(projection.last_sequence, (decision_draft, start),
                 append_batch=self.append_collaboration_event_batch,
             )
@@ -2968,33 +2562,14 @@ class StoryRuntime:
         if failure is not None or events is None or projection is None:
             return blocking_lead_result(session_id, conversation_id,
                 CollaborationStepState.RECOVERY_REQUIRED, "Recommendation closure requires repair.")
-        start = projection.current_recommendation_start
-        if start is None or projection.current_recommendation_state is not LeadRecommendationState.RUNNING:
+        matched_failure = recommendation_decisions.match_recommendation_failure(events, projection)
+        if matched_failure is None:
             return None
-        by_id = {event.event_id: event for event in events}
-        request_event = by_id[start.request_event_id]
-        decision_event = by_id[start.decision_event_id]
-        start_event = by_id[start.start_event_id]
-        tail = events[-1]
-        lead_result = next(
-            (
-                event for event in reversed(events)
-                if type(event.payload) is CollaborationLeadOutcomeFailurePayload
-                and event.turn_id == start_event.turn_id
-                and event.step_id == start_event.step_id
-                and event.sequence >= start_event.sequence
-            ),
-            tail,
-        )
-        if (type(lead_result.payload) is not CollaborationLeadOutcomeFailurePayload
-            or lead_result.turn_id != start_event.turn_id
-            or lead_result.step_id != start_event.step_id):
-            return None
-        request = cast(LeadRecommendationRequestPayload, request_event.payload)
-        uses_references = any(item.kind in {
-            CollaborationInputKind.CORE_DOCUMENT, CollaborationInputKind.MANUSCRIPT,
-            CollaborationInputKind.WRITING_ARTIFACT,
-        } for item in request.basis.inputs)
+        request_event = matched_failure.request_event
+        decision_event = matched_failure.decision_event
+        start_event = matched_failure.start_event
+        lead_result = matched_failure.lead_result
+        uses_references = matched_failure.uses_references
         if uses_references and lead_result.payload.code is not CollaborationLeadOutcomeFailureCode.REQUEST_NOT_SUBMITTED:
             operation_id = None if preparation is None else preparation.reference_operation_id
             terminal_proof = False
@@ -3018,25 +2593,8 @@ class StoryRuntime:
                         turn_id=start_event.turn_id,
                         step_id=start_event.step_id,
                     )
-                permitted = {None, ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
-                             ReferenceAuthorizationErrorCode.PROVIDER_FAILURE}
-                terminal_proof = bool(
-                    type(reference_history) is ReferenceOperationHistory
-                    and reference_history.manifest.operation_id == operation_id
-                    and reference_history.operation_events[-1].operation_state in {
-                        ReferenceOperationState.ACCEPTED, ReferenceOperationState.TERMINATED,
-                    }
-                    and reference_history.operation_events[-1].outcome in permitted
-                    and reference_history.invocation_events
-                    and all(invocation[-1].correlation is not None
-                        and invocation[-1].correlation.operation_id == operation_id
-                        and invocation[-1].correlation.agent_id == LEAD_ORCHESTRATOR
-                        and invocation[-1].correlation.phase == ContextInvocationKind.LEAD.value
-                        and invocation[-1].correlation.round_number is None
-                        and invocation[-1].invocation_state in {
-                            ReferenceInvocationState.ACCEPTED, ReferenceInvocationState.TERMINATED,
-                        } and invocation[-1].outcome in permitted
-                        for invocation in reference_history.invocation_events)
+                terminal_proof = recommendation_decisions.terminal_recommendation_failure_is_accounted(
+                    reference_history, operation_id,
                 )
             if not terminal_proof:
                 return blocking_lead_result(session_id, conversation_id,
@@ -3044,17 +2602,8 @@ class StoryRuntime:
                     "The Lead failure is durable, but its exact terminal reference accounting cannot be proved. "
                     "Inspect and repair the operation; this preparation will not be replayed.",
                     turn_id=start_event.turn_id, step_id=start_event.step_id)
-        closure = recommendation_preparation.recommendation_closure_draft(lead_result, request_event=request_event,
-            decision_event=decision_event, start_event=start_event)
-        validation_details = tuple(
-            detail
-            for event in events
-            if event.turn_id == start_event.turn_id
-            and event.step_id == start_event.step_id
-            and type(event.payload) is CollaborationMessagePayload
-            and event.sender == event_journal.RUNTIME_ACTOR
-            and event.recipient == event_journal.USER_ACTOR
-            for detail in event.payload.validation_details
+        closure, validation_details = recommendation_decisions.build_recommendation_failure_closure(
+            events, matched_failure,
         )
         event_journal.append_drafts(projection.last_sequence, (closure,),
             append_batch=self.append_collaboration_event_batch,

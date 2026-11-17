@@ -13,7 +13,7 @@
 합집합으로 한 번만 더한다. 원본 commit·hash·범위로 이동 출처를 추적한다. 기존
 미확인 보조 코드 **1,550행**은 중복·종료가 입증되기 전까지 유지한다. 기존 범용
 러너·queue·reporting 도구 전체를 새로 청구하는 범위 확대는 하지 않으며, 테스트
-내용을 도구로 옮겨 비용을 누락시키는 것은 금지한다. 이슈별 승인 배정을 포함한 현행 상한은 **153,941행**이다.
+내용을 도구로 옮겨 비용을 누락시키는 것은 금지한다. 이슈별 승인 배정을 포함한 현행 상한은 **154,078행**이다.
 
 개발 반복에서는 최소 유효 focused 선택을 사용하고, 공유 계약·fixture·상태·권한
 변경은 필요한 실제 소비자와 host 경계로 확대한다. 영향이 불명확하면 전체를 선택한다.
@@ -1116,3 +1116,31 @@ weight는398→399 group으로 편성하지만 총pool53,351,213,361µs는 같�
 Runtime1개 ID만 rekey하고 hosted class29·기존 launch 위치37·worker4·audited-162-v8
 token/format/version을 보존한다. 새 Case·subTest·시간/worker 상한 증가는 없다.
 실제 실행·성능·공식 리뷰·통합은 별도 증거로 판정하며 source 예외로 면제하지 않는다.
+
+## #1045의 추천 요청·결정·실패 종료 정책 분리 소스 배정
+
+사용자의 필요한 테스트 source 행 추가 포괄 승인을 적용한다.
+기준 main `d34eee7385bc869b60cda45c69f6ffaf68c3cf9b`의
+raw147,717/support4,674/legacy1,550, 합계153,941행에서
+raw147,854/support4,674/legacy1,550, 합계**154,078행(+137)**을 계상한다.
+공개 API·결과 타입 및 패키징의 기존 경계 검증은73행, 실제 새 의존을 반영한
+graph 검증은48행, 기존 예산 정책 Case의 정확 전이·snapshot 복원·인접 및
+schema/time/cap 복합 거절 검증은16행이다. support 순증은0이며 기존 미확인
+1,550행을 유지한다. generic strict guard11행은 기존 frozen counter 밖의
+물리 비용으로 별도 공개하고, 테스트 본문이나 시나리오를 이곳으로 옮기지 않는다.
+
+정확한 source-only `153941→154078` 전이는 schema1·전체2,544 ID와 각 cap의
+완전한 동일성·cap합8,690·시간18,000/3,600초를 함께 요구한다.
+새 raw 배정만 source ledger에 기록하고, support 파일·기존 Case 이동 receipt와
+과거 모든 source/ID 전이·부정 경계·snapshot 복원은 보존한다.
+Case/ID/class/module 이동이나 빈 Case 이동 receipt를 추가하지 않는다.
+timing weight와 전체 pool53,351,213,361µs, hosted162개·class29·기존 실행 순서와
+`audited-162-v8` token/format/version·최대4worker도 그대로 유지한다.
+
+새 requests owner의 기본 focused 선택은 실제 순서 오류를 검출한 기존 응답 별칭
+Case이며, 새 decisions owner는 기존 first2를 기본 선택으로 둔다. 기존 preparation의
+생산 파일과 owner 선언은 원본 그대로 보존해 기존 full 영향 경로를 유지한다. 기존6Case와
+수정 전 first2 정상3회·전체 before full3·별도 원 assertion RED/GREEN은 각 모집단과
+source를 구분해 보존한다. 이번 계상으로 기능·시나리오·Case/subTest·시간 상한을
+늘리지 않는다. 실제 Story 회귀·미세 변동·예산 정책 Case의 시간은 앞의 현행 기준으로
+판정하며, 최종 같은 source의 영향/전체 CI·리뷰·통합은 별도 완료 조건이다.

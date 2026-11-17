@@ -247,6 +247,8 @@ class SuiteBudgetTests(unittest.TestCase):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
         migrated = suite_budget.load_budget(Path(__file__).with_name("fixtures") / "test_budget_v1.json")
+        request_policy_current = dict(migrated, subtest_caps=dict(migrated["subtest_caps"]))
+        migrated["max_test_source_lines"] = 153941
         document_policy_current = dict(migrated, subtest_caps=dict(migrated["subtest_caps"]))
         for move in load_receipt()[-1]["moves"]:
             migrated["subtest_caps"][move["old_id"]] = migrated["subtest_caps"].pop(move["new_id"])
@@ -494,6 +496,21 @@ class SuiteBudgetTests(unittest.TestCase):
         ):
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(document_policy_current, subtest_caps=caps), authority_current)
         self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, document_policy_current, dict(authority_current, subtest_caps={**authority_current["subtest_caps"], matrix_id: 2}))
+
+        self.assertEqual(request_policy_current["max_test_source_lines"], 154078)
+        self.assertIsNone(suite_budget.check_monotonic(request_policy_current, document_policy_current))
+        self._assert_source_limit_neighbors_rejected(request_policy_current, document_policy_current)
+        for field, value in (("schema_version", 2), ("max_sequential_wall_seconds", 18001), ("max_shard_wall_seconds", 3601)):
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(request_policy_current, **{field: value}), document_policy_current)
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, request_policy_current, dict(document_policy_current, **{field: value}))
+        for caps in (
+            {key: value for key, value in request_policy_current["subtest_caps"].items() if key != zero_id},
+            {**request_policy_current["subtest_caps"], "tests.unreviewed.Case.test_extra": 0},
+            {**request_policy_current["subtest_caps"], matrix_id: 2},
+            {**request_policy_current["subtest_caps"], matrix_id: 0},
+        ):
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(request_policy_current, subtest_caps=caps), document_policy_current)
+        self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, request_policy_current, dict(document_policy_current, subtest_caps={**document_policy_current["subtest_caps"], matrix_id: 2}))
 
         ids = runner_profile.HOSTED_METHOD_IDS
         self.assertEqual(runner_evidence.manifest(ids)["digest"],

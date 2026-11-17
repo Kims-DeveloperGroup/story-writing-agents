@@ -50,6 +50,12 @@ PYTHONPATH=src python -m tests.runner run --changed-from origin/main --scope aff
 읽기 전용 검증한다. import 관계를 바꾼 뒤에는 `--write`로 갱신하고 diff를 검토한다.
 생산 책임의 사례·소비자 경계는 해당 리팩토링 PR에서 명시적으로 등록한다.
 
+helper 이동의 소비자는 단순 이름 참조뿐 아니라 module alias의 Attribute 접근과
+함수 내부 local import에서도 찾는다. 원래 모듈을 통해 helper를 호출하는 기존
+소비자가 새 공개 소유자를 가리키는지 확인하고, 그 소비자의 실제 owner
+`depends_on`도 함께 갱신한다. 옮긴 Case와 helper 내부의 참조만 확인해서는
+공유 fixture의 영향 범위를 닫았다고 판단하지 않는다.
+
 ## 실제 피드백 시간을 비교한다
 
 대표 사례에서 같은 오류를 발견하는 RED와 올바른 결과의 GREEN을 기록한다.
@@ -80,8 +86,9 @@ controller hash를 확인하고, checkout 준비 시간과 RED/GREEN 명령 시�
 
 개발 중 선택 검증과 최종 통합 검증을 구분한다. 각 PR의 최종 동일 HEAD에서 fast,
 영향 테스트, 전체 5개 shard와 조정을 완료한다. 기존 최대 4 worker, 전체 18,000초와
-shard별 3,600초, 테스트 소스 151,431행 상한을 유지한다. 이동한 테스트·fixture는
-출처를 추적해 한 번만 계상하고, 하위 패키지 이동으로 비용을 누락시키지 않는다.
+shard별 3,600초 상한을 유지한다. 테스트 소스는 [현행 정책](../../TEST_POLICY.md)의
+승인 상한과 이슈별 정확한 전이를 따른다. 이동한 테스트·fixture는 출처를 추적해
+한 번만 계상하고, 하위 패키지 이동으로 비용을 누락시키지 않는다.
 현재 기준 실패와 새 실패를 구분하고 미완료·시간 회귀를 완료로 표시하지 않는다.
 
 ## 계약 경계 분리와 사례 이동 — S02

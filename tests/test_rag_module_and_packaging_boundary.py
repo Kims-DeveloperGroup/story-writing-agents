@@ -18,7 +18,12 @@ import tomllib
 import unittest
 import zipfile
 from pathlib import Path
+from typing import get_type_hints
 import story_writing_agents
+from story_writing_agents import conversations
+from story_writing_agents.lead_preparation import recommendation_preparation, recommendation_requests
+from story_writing_agents.lead_preparation import recommendation_decisions
+from story_writing_agents.lead_task_transitions import LeadTaskRef
 from story_writing_agents import conversation_rag, conversation_rag_cli, conversation_rag_composition, conversation_rag_local, conversation_rag_runtime, conversation_rag_store
 
 
@@ -346,8 +351,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 272)
-        self.assertEqual(len(edges), 1552)
+        self.assertEqual(len(modules), 274)
+        self.assertEqual(len(edges), 1581)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -1124,7 +1129,45 @@ class RagModuleBoundaryTests(unittest.TestCase):
             "story_writing_agents.specialist_routing",
             "story_writing_agents.structured_output_validation",
         })
-        self.assertEqual({source for source, target in edges if target == lead_proposal_inputs}, {"story_writing_agents.orchestrator"})
+        self.assertEqual({source for source, target in edges if target == lead_proposal_inputs}, {
+            "story_writing_agents.lead_preparation.recommendation_requests",
+            "story_writing_agents.orchestrator",
+        })
+        recommendation_requests_owner = "story_writing_agents.lead_preparation.recommendation_requests"
+        self.assertEqual({target for source, target in edges if source == recommendation_requests_owner}, {
+            "story_writing_agents.authoring_admission",
+            "story_writing_agents.authoring_task_lifecycle",
+            "story_writing_agents.conversations",
+            "story_writing_agents.conversations.events",
+            "story_writing_agents.core_document_readiness",
+            "story_writing_agents.editorial_state",
+            "story_writing_agents.lead_preparation",
+            "story_writing_agents.lead_preparation.authoring_authority",
+            "story_writing_agents.lead_preparation.authoring_source_history",
+            "story_writing_agents.lead_preparation.lead_proposal_inputs",
+            "story_writing_agents.lead_preparation.proposal_basis_values",
+            "story_writing_agents.lead_preparation.reply_contract_values",
+            "story_writing_agents.lead_task_transitions",
+            "story_writing_agents.runtime_resources",
+            "story_writing_agents.runtime_resources.collaboration_event_journal",
+            "story_writing_agents.specialist_routing",
+            "story_writing_agents.structured_output_validation",
+        })
+        self.assertEqual({source for source, target in edges if target == recommendation_requests_owner}, {"story_writing_agents.orchestrator"})
+        recommendation_decisions_owner = "story_writing_agents.lead_preparation.recommendation_decisions"
+        self.assertEqual({target for source, target in edges if source == recommendation_decisions_owner}, {
+            "story_writing_agents.agent_context.contracts.call_offers",
+            "story_writing_agents.agents",
+            "story_writing_agents.conversations",
+            "story_writing_agents.errors",
+            "story_writing_agents.lead_preparation",
+            "story_writing_agents.lead_preparation.recommendation_preparation",
+            "story_writing_agents.lead_task_transitions",
+            "story_writing_agents.runtime_resources",
+            "story_writing_agents.runtime_resources.collaboration_event_journal",
+            "story_writing_agents.writing_artifacts.authorization",
+        })
+        self.assertEqual({source for source, target in edges if target == recommendation_decisions_owner}, {"story_writing_agents.orchestrator"})
         recommendation_owner = "story_writing_agents.lead_preparation.recommendation_preparation"
         self.assertEqual({target for source, target in edges if source == recommendation_owner}, {
             "story_writing_agents.conversations",
@@ -1137,7 +1180,11 @@ class RagModuleBoundaryTests(unittest.TestCase):
             "story_writing_agents.specialist_routing",
             "story_writing_agents.structured_output_validation",
         })
-        self.assertEqual({source for source, target in edges if target == recommendation_owner}, {"story_writing_agents.orchestrator", "story_writing_agents.lead_preparation.lead_material_inputs"})
+        self.assertEqual({source for source, target in edges if target == recommendation_owner}, {
+            "story_writing_agents.lead_preparation.lead_material_inputs",
+            "story_writing_agents.lead_preparation.recommendation_decisions",
+            "story_writing_agents.orchestrator",
+        })
         proposal_values_owner = "story_writing_agents.lead_preparation.proposal_basis_values"
         self.assertEqual({target for source, target in edges if source == proposal_values_owner}, {
             "story_writing_agents.agent_task_projection",
@@ -1158,7 +1205,10 @@ class RagModuleBoundaryTests(unittest.TestCase):
             "story_writing_agents.specialist_routing",
             "story_writing_agents.writing_artifacts",
         })
-        self.assertEqual({source for source, target in edges if target == proposal_values_owner}, {"story_writing_agents.orchestrator"})
+        self.assertEqual({source for source, target in edges if target == proposal_values_owner}, {
+            "story_writing_agents.lead_preparation.recommendation_requests",
+            "story_writing_agents.orchestrator",
+        })
 
         lead_document_nodes = "story_writing_agents.lead_preparation.lead_document_nodes"
         self.assertEqual({target for source, target in edges if source == lead_document_nodes}, {
@@ -1213,7 +1263,10 @@ class RagModuleBoundaryTests(unittest.TestCase):
             'story_writing_agents.runtime_resources.collaboration_event_journal',
             'story_writing_agents.specialist_routing',
         })
-        self.assertEqual({source for source, target in edges if target == authoring_source_history_owner}, {"story_writing_agents.orchestrator"})
+        self.assertEqual({source for source, target in edges if target == authoring_source_history_owner}, {
+            "story_writing_agents.lead_preparation.recommendation_requests",
+            "story_writing_agents.orchestrator",
+        })
 
         current_lead_inputs_owner = 'story_writing_agents.lead_preparation.current_lead_inputs'
         self.assertEqual({target for source, target in edges if source == current_lead_inputs_owner}, {
@@ -1354,13 +1407,80 @@ class RagModuleBoundaryTests(unittest.TestCase):
             ),
         )
 
+        self.assertEqual(tuple(recommendation_requests.__all__), (
+            "RecommendationRequestPolicyResult",
+            "prepare_recommendation_request_policy",
+            "recommendation_basis",
+        ))
+        self.assertEqual(tuple(recommendation_preparation.__all__), (
+            "RecommendationCapability",
+            "active_recommendation_origin",
+            "bind_recommendation_preparation",
+            "validate_recommendation_preparation",
+            "recommendation_closure_draft",
+        ))
+        self.assertEqual(tuple(recommendation_decisions.__all__), (
+            "PreparedRecommendationDecision",
+            "PreparedRecommendationRevision",
+            "RecommendationDecisionClosure",
+            "RecommendationFailureMatch",
+            "prepare_recommendation_decision",
+            "build_recommendation_decision_outcome",
+            "match_recommendation_failure",
+            "terminal_recommendation_failure_is_accounted",
+            "build_recommendation_failure_closure",
+        ))
+        self.assertTrue(all(getattr(recommendation_requests, name).__module__ == recommendation_requests.__name__
+                            for name in recommendation_requests.__all__))
+        self.assertTrue(all(getattr(recommendation_preparation, name).__module__ == recommendation_preparation.__name__
+                            for name in recommendation_preparation.__all__))
+        self.assertTrue(all(getattr(recommendation_decisions, name).__module__ == recommendation_decisions.__name__
+                            for name in recommendation_decisions.__all__))
+        self.assertIs(get_type_hints(recommendation_requests.prepare_recommendation_request_policy)["return"],
+                      recommendation_requests.RecommendationRequestPolicyResult)
+        self.assertIs(get_type_hints(recommendation_requests.recommendation_basis)["return"],
+                      conversations.CollaborationProposalBasis)
+        self.assertEqual(get_type_hints(recommendation_decisions.prepare_recommendation_decision)["return"],
+                         recommendation_decisions.PreparedRecommendationDecision
+                         | recommendation_decisions.PreparedRecommendationRevision)
+        self.assertEqual(get_type_hints(recommendation_decisions.build_recommendation_decision_outcome)["return"],
+                         recommendation_decisions.RecommendationDecisionClosure | conversations.CollaborationEventDraft)
+        self.assertEqual(get_type_hints(recommendation_decisions.match_recommendation_failure)["return"],
+                         recommendation_decisions.RecommendationFailureMatch | None)
+        self.assertIs(get_type_hints(recommendation_decisions.terminal_recommendation_failure_is_accounted)["return"], bool)
+        self.assertEqual(get_type_hints(recommendation_decisions.build_recommendation_failure_closure)["return"],
+                         tuple[conversations.CollaborationEventDraft, tuple[str, ...]])
+        self.assertIs(get_type_hints(recommendation_requests.RecommendationRequestPolicyResult)["current"],
+                      conversations.ArtifactDraftSource)
+        self.assertIs(get_type_hints(recommendation_decisions.PreparedRecommendationDecision)["request_event"],
+                      conversations.CollaborationEvent)
+        self.assertEqual(get_type_hints(recommendation_decisions.PreparedRecommendationRevision)["source"],
+                         LeadTaskRef | None)
+        self.assertIs(get_type_hints(recommendation_decisions.RecommendationDecisionClosure)["draft"],
+                      conversations.CollaborationEventDraft)
+        self.assertIs(get_type_hints(recommendation_decisions.RecommendationFailureMatch)["lead_result"],
+                      conversations.CollaborationEvent)
+
         for module_name in ("group_observation", "group_reporting"):
             spec = importlib.util.find_spec("story_writing_agents.agent_context." + module_name)
             self.assertIsNotNone(spec)
             self.assertEqual(Path(spec.origin), _SOURCE_ROOT / "agent_context" / (module_name + ".py"))
         for name in ("LeadGroupObservation", "LeadGroupObservationKind", "LeadGroupObservationSink",
                      "LeadGroupTrace", "LeadGroupRequestMeasurement", "group_request_size_report",
-                     "group_trace_report"):
+                     "group_trace_report",
+                     "prepare_recommendation_request_policy",
+                     "recommendation_basis",
+                     "RecommendationRequestPolicyResult",
+                     "prepare_recommendation_decision",
+                     "build_recommendation_decision_outcome",
+                     "match_recommendation_failure",
+                     "terminal_recommendation_failure_is_accounted",
+                     "build_recommendation_failure_closure",
+                     "PreparedRecommendationDecision",
+                     "PreparedRecommendationRevision",
+                     "RecommendationDecisionClosure",
+                     "RecommendationFailureMatch",
+                     ):
             self.assertNotIn(name, story_writing_agents.__all__)
             self.assertFalse(hasattr(story_writing_agents, name))
 
@@ -1592,6 +1712,8 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             'story_writing_agents/provider_response_mapping.py',
             'story_writing_agents/provider_schema_projection.py',
             "story_writing_agents/lead_preparation/recommendation_preparation.py",
+            "story_writing_agents/lead_preparation/recommendation_requests.py",
+            "story_writing_agents/lead_preparation/recommendation_decisions.py",
             "story_writing_agents/lead_preparation/proposal_basis_values.py",
             "story_writing_agents/lead_preparation/lead_material_inputs.py",
             "story_writing_agents/lead_preparation/lead_evidence_receipts.py",
