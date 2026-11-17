@@ -514,8 +514,8 @@ class SuiteBudgetTests(unittest.TestCase):
 
         ids = runner_profile.HOSTED_METHOD_IDS
         self.assertEqual(runner_evidence.manifest(ids)["digest"],
-                         'sha256:65bc821c24a2675173d11df7b86776be27591df09d2e40c3d05a89db74b7a343')
-        self.assertEqual((len(ids), len({value.rsplit(".", 1)[0] for value in ids})), (162, 29))
+                         'sha256:6b7a6aee7e6557ef274a6ff18f3205c75132e0b1e043d3f4de11ff075e104a54')
+        self.assertEqual((len(ids), len({value.rsplit(".", 1)[0] for value in ids})), (163, 30))
         cases = tuple(SimpleNamespace(id=lambda identifier=value: identifier) for value in (*ids, *runner_profile.HOSTED_MIXED_SERIAL_IDS, "unreviewed.test"))
         canonical = runner_contracts.CanonicalCollection(cases, (*ids, *runner_profile.HOSTED_MIXED_SERIAL_IDS, "unreviewed.test"))
         serial, scheduled = runner_hosted.hosted_partition(canonical, canonical)
@@ -524,7 +524,7 @@ class SuiteBudgetTests(unittest.TestCase):
                                              (suite_policy.ISOLATED_TEST_ID,))
         serial, scheduled = runner_hosted.hosted_partition(canonical, isolated)
         self.assertEqual((serial.ids, scheduled), ((), (suite_policy.ISOLATED_TEST_ID,)))
-        launch_digest = 'sha256:a99a37c803ec886a867c0b885d7005ec79b1f4029da6454f6e27f345018aeb96'
+        launch_digest = 'sha256:522c56638a26ec136d74f347449718a87b5e9151329a7eb318f397e379cd9956'
         self.assertEqual(runner_evidence.manifest(runner_profile.hosted_launch_order(ids))["digest"], launch_digest)
         self.assertEqual(runner_profile.hosted_launch_order(ids[::-1]), runner_profile.hosted_launch_order(ids))
         self.assertEqual(runner_profile.hosted_launch_order((ids[-1], ids[0])), (ids[0], ids[-1]))
@@ -536,10 +536,10 @@ class SuiteBudgetTests(unittest.TestCase):
         self.assertEqual(set(real_serial.ids) & set(runner_profile.HOSTED_MIXED_SERIAL_IDS), set(runner_profile.HOSTED_MIXED_SERIAL_IDS))
         self.assertFalse(set(real_scheduled) & set(runner_profile.HOSTED_MIXED_SERIAL_IDS))
         self.assertIn("tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip", real_serial.ids)
-        self.assertEqual(len(runner_profile.HOSTED_MIXED_SERIAL_IDS), 9)
+        self.assertEqual(len(runner_profile.HOSTED_MIXED_SERIAL_IDS), 19)
         missing = runner_contracts.CanonicalCollection(cases, (*ids[:-1], *runner_profile.HOSTED_MIXED_SERIAL_IDS))
         self.assertRaises(runner_contracts.RunnerError, runner_hosted.hosted_partition, missing, missing)
-        args = SimpleNamespace(command="run", hosted_methods='audited-162-v8', hosted_deadline_epoch=time.time()+3500,
+        args = SimpleNamespace(command="run", hosted_methods='audited-163-v9', hosted_deadline_epoch=time.time()+3500,
                                shard="1/5", id=[], module=[], tier=[], failfast=False, json="report.json")
         env = dict(GITHUB_ACTIONS="true", TEST_RUN_DEADLINE=str(time.time()+4500),
                    TEST_JOB_DEADLINE=str(time.time()+4500))
@@ -592,7 +592,7 @@ class SuiteBudgetTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             paths = self._reports(directory, (0, 0)); rows = self.report_data
-            metadata = {"version": 1, "mode": "hosted-whole-method", "profile": 'audited-162-v8',
+            metadata = {"version": 1, "mode": "hosted-whole-method", "profile": 'audited-163-v9',
                         "profile_manifest": runner_evidence.manifest(runner_profile.HOSTED_METHOD_IDS),
                         "capacity": 2, "peak_children": 0, "work_deadline_epoch": 10000.0,
                         "cleanup_deadline_epoch": 10030.0, "launch_manifest": runner_evidence.manifest(()),

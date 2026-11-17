@@ -6,7 +6,7 @@ from .contracts import RunnerError
 from .evidence import manifest, required_dict
 
 
-HOSTED_PROFILE = 'audited-162-v8'
+HOSTED_PROFILE = 'audited-163-v9'
 
 
 HOSTED_CLEANUP_SECONDS = 30.0
@@ -175,6 +175,7 @@ HOSTED_LAUNCH_IDS = (
     'tests.test_interactive_controller.InteractiveLeadAdapterTests.test_ordinary_lead_progress_sink_finishes_before_lead_and_elapsed_output',
     'tests.test_interactive_controller.InteractiveLeadAdapterTests.test_confirmed_execution_writes_specialists_then_lead_then_elapsed',
     'tests.test_interactive_controller.InteractiveLeadAdapterTests.test_provider_invocation_failure_surfaces_transient_stream_error_in_final_output',
+    'tests.test_interactive_terminal_external_view.RawExternalViewLifecycleTests.test_live_host_owns_geometry_color_events_screen_and_restoration',
 )
 
 
@@ -191,6 +192,16 @@ HOSTED_MIXED_SERIAL_IDS = (
     'tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip',
     'tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_is_strict_versioned_immutable_and_content_safe',
     'tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_result_persistence_failure_cleans_marker_after_provider_completion',
+    'tests.test_interactive_terminal_external_view.RawExternalViewLifecycleTests.test_active_failure_survives_screen_and_restoration_cleanup',
+    'tests.test_interactive_terminal_external_view.RawExternalViewLifecycleTests.test_driver_rejects_non_boolean_transient_flag_before_terminal_access',
+    'tests.test_interactive_terminal_external_view.RawExternalViewLifecycleTests.test_escape_drain_bound_fails_closed_and_restores_terminal',
+    'tests.test_interactive_terminal_external_view.RawExternalViewLifecycleTests.test_escape_partial_utf8_deadline_stops_byte_reads_and_restores_terminal',
+    'tests.test_interactive_terminal_external_view.RawExternalViewLifecycleTests.test_escape_sequences_are_physical_bounded_and_drained',
+    'tests.test_interactive_terminal_external_view.RawExternalViewLifecycleTests.test_fallback_never_acquires_raw_or_ansi_and_maps_interrupt_eof',
+    'tests.test_interactive_terminal_external_view.RawExternalViewLifecycleTests.test_physical_input_has_no_viewer_bindings_prompts_or_history',
+    'tests.test_interactive_terminal_external_view.RawExternalViewLifecycleTests.test_real_library_raw_and_line_fallback_have_equal_search_behavior',
+    'tests.test_interactive_terminal_external_view.RawExternalViewLifecycleTests.test_reentry_and_progress_overlap_are_rejected_then_latch_releases',
+    'tests.test_interactive_terminal_external_view.RawExternalViewLifecycleTests.test_transient_view_refuses_line_fallback_before_writing_content',
 )
 
 

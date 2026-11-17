@@ -1135,7 +1135,7 @@ schema/time/cap 복합 거절 검증은16행이다. support 순증은0이며 기
 과거 모든 source/ID 전이·부정 경계·snapshot 복원은 보존한다.
 Case/ID/class/module 이동이나 빈 Case 이동 receipt를 추가하지 않는다.
 timing weight와 전체 pool53,351,213,361µs, hosted162개·class29·기존 실행 순서와
-`audited-162-v8` token/format/version·최대4worker도 그대로 유지한다.
+명시적 hosted profile 전이는 아래 격리 보완을 따르며, format·최대4worker를 유지한다.
 
 새 requests owner의 기본 focused 선택은 실제 순서 오류를 검출한 기존 응답 별칭
 Case이며, 새 decisions owner는 기존 first2를 기본 선택으로 둔다. 기존 preparation의
@@ -1144,3 +1144,39 @@ Case이며, 새 decisions owner는 기존 first2를 기본 선택으로 둔다. 
 source를 구분해 보존한다. 이번 계상으로 기능·시나리오·Case/subTest·시간 상한을
 늘리지 않는다. 실제 Story 회귀·미세 변동·예산 정책 Case의 시간은 앞의 현행 기준으로
 판정하며, 최종 같은 source의 영향/전체 CI·리뷰·통합은 별도 완료 조건이다.
+
+
+### #1045의 기존 터미널 Case process 격리 보완
+
+원래 전체44101936014와동일source 재수집44113371385에서 기존
+`RawExternalViewLifecycleTests.test_live_host_owns_geometry_color_events_screen_and_restoration`
+한Case가 ESC byte당50ms 경계에서오류로종료됐다. 관련production/test11파일과
+806Case 선택·serial/launch 순서는같으며, 단독before/current는각PASS였다.
+원인과격리효과는미확정이다. 원실패와source/환경/Case13내부시나리오를보존한다.
+
+현재명시profile은 `audited-163-v9`로개정한다. 기존162launch 상대순서와priority를
+유지한채해당기존1ID만마지막에명시한다. 같은class의나머지기존10Case는
+명시serial목록으로닫아mixed9→19, hosted class29→30을기록한다.
+Case본문·MRO·per-Case setUp/cleanup·실제IO·50ms·defaultGC/clock은바꾸지않는다.
+unknown/new/missing method·disjointness·full-class union·환경/deadline/capacity/cleanup
+거절은유지하고자동eligibility확장을허용하지않는다.
+
+전체2,544Case·cap합8,690·실제subTest8,340·18,000/3,600초·최대4worker를유지한다.
+399개classweight group과53,351,213,361µs 수치pool·class/mixed/LPT알고리즘 및
+전체shard ID배정을유지한다. full-4의같은806Case는serial754→753/guest52→53으로
+배치한다. 추가process·startup·cold import/discovery·정리는실제추가작업이며
+Case/원본합산/wholewall의관측과기존사전band로판정한다. 비용0·감소상쇄·clock/GC/order
+보정으로인정하지않는다. 격리실패나실제회귀를새상한·skip·Case완화로숨기지않는다.
+
+profile등록11행은현재counted_support_files밖의기존runner설정데이터비용으로
+별도공개한다. Case본문/시나리오/검증내용을도구로이관하지않는다.
+기존contract7개상수갱신의ordinary행증감0이며현재raw147,854/support4,674/
+legacy1,550, source상한154,078을그대로유지한다. source-only153941→154078배정과
+기존Case receipt·budget fixture·numeric weights는변경하지않는다. 기존generic
+strict guard11행의별도공개와구분하여추가profile설정11행을공개한다.
+
+같은current HEAD의첫전체N1안에있는full-4를격리canary로검증한다. 806Case·target의
+실제guest진입·53guest receipt/최대4/정리를확인하고, 나머지4shard까지성공·source/env/
+전체receipt가검증된경우에만이동일실행을정상전체N1로인정한다. 별도canary와전체N1을
+중복실행하지않는다. 새profile의정상전체3회·모든Case시간/원본합산/wholewall·리뷰종료를
+완료조건으로두며원실패2회는정상표본으로재사용하지않는다.

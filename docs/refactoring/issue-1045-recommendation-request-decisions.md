@@ -93,7 +93,16 @@ generic strict guard11행은 frozen counter 밖의 물리 비용으로 별도 �
 [현행 테스트 정책](../../TEST_POLICY.md)을 따른다.
 
 기존2,544Case·cap합8,690, receipt13·weight399그룹의 전체 수치,
-hosted162/v8·class29·실행 순서와18,000/3,600초·최대4worker를 유지한다.
+명시적 실행 profile은 `audited-163-v9`로, hosted163/class30/mixed19를 사용한다.
+기존162 launch 상대순서와priority·기존9 mixed순서는 유지하고, 기존 terminal Case1개만
+마지막guest로등록하며같은class의나머지10Case는명시serial로닫는다.
+Case·cap·399개weights·LPT·18,000/3,600초·최대4worker·50ms·defaultGC/clock을 유지한다.
+원Case의13시나리오·본문·MRO·per-Case fixture/cleanup은그대로이며, 추가process의
+cold import/discovery/startup/정리는실제비용으로검증한다. profile설정11행은현재
+frozen counter밖의데이터비용으로별도공개하며, source상한154,078과원배정+137은유지한다.
+첫전체N1의806Case shard4를격리canary로함께검증하고전체5shard·모든source/env/receipt가
+성공했을때만정상N1로인정한다. 원실패2회는별도보존하며새profile정상전체3회와
+성능처분·리뷰closure후통합한다. 최신실행상태는연결한PR의현재검증기록을따른다.
 새 모듈 초기화·결과형 할당·공개 함수 호출도 실제 비용으로 시간 관측에 포함한다.
 양의 변화와 고정 오차범위·원인 판정을 기록하며 실제 Story 회귀는 실패로 판단한다.
 진단 실행은 정상 표본이나 최종 전체 CI를 대체하지 않는다.
