@@ -2108,8 +2108,7 @@
         "tests.test_collaboration_context.CollaborationReadableProjectionTests.test_default_context_is_content_free_and_selection_is_bounded_additive",
         "tests.test_collaboration_context.CollaborationReadableProjectionTests.test_every_event_projects_once_with_complete_identity_and_closed_fields",
         "tests.test_collaboration_context.CollaborationReadableProjectionTests.test_readable_projection_rejects_v1_and_every_corrupt_history_shape",
-        "tests.test_collaboration_context.CollaborationTransitionTests.test_all_legal_and_illegal_transition_pairs_are_exact",
-        "tests.test_collaboration_context.CollaborationTransitionTests.test_projection_is_deterministic_ordered_typed_and_history_only"
+        "tests.test_collaboration_context.CollaborationTransitionTests.test_all_legal_and_illegal_transition_pairs_are_exact"
       ],
       "affected_ids": [
         "tests.test_collaboration_context.CollaborationAtomicBatchTests.test_all_required_co_batch_families_and_split_rejections",
@@ -2131,8 +2130,7 @@
         "tests.test_collaboration_context.CollaborationReadableProjectionTests.test_default_context_is_content_free_and_selection_is_bounded_additive",
         "tests.test_collaboration_context.CollaborationReadableProjectionTests.test_every_event_projects_once_with_complete_identity_and_closed_fields",
         "tests.test_collaboration_context.CollaborationReadableProjectionTests.test_readable_projection_rejects_v1_and_every_corrupt_history_shape",
-        "tests.test_collaboration_context.CollaborationTransitionTests.test_all_legal_and_illegal_transition_pairs_are_exact",
-        "tests.test_collaboration_context.CollaborationTransitionTests.test_projection_is_deterministic_ordered_typed_and_history_only"
+        "tests.test_collaboration_context.CollaborationTransitionTests.test_all_legal_and_illegal_transition_pairs_are_exact"
       ],
       "depends_on": [
         "tests.test_artifact_proposals",
@@ -5279,11 +5277,9 @@
         "tests/test_lead_artifact_objectives.py"
       ],
       "focused_ids": [
-        "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_lead_artifact_objectives.LeadDefaultBudgetRefusalTests.test_default_grouped_budget_refuses_unfunded_artifact_preparation"
       ],
       "affected_ids": [
-        "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_lead_artifact_objectives.LeadDefaultBudgetRefusalTests.test_default_grouped_budget_refuses_unfunded_artifact_preparation"
       ],
       "depends_on": [
@@ -13054,7 +13050,7 @@
         "tests.test_codex_backend.CodexBackendTestCase.test_completed_rejections_report_each_attempt_and_repaired_success",
         "tests.test_codex_backend.CodexBackendTestCase.test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread",
         "tests.test_codex_backend.CodexBackendTestCase.test_diagnostic_failure_does_not_replace_provider_failure_or_taint",
-        "tests.test_collaboration_context.CollaborationTransitionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
         "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_persistent_validation_publication_failure_keeps_result_unknown",
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_artifact_input_uses_authorized_reference_read_and_stale_digest_fails",
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_interrupt_cancels_all_matching_auditors_and_cleans_registry",
@@ -13115,7 +13111,7 @@
         "tests.test_codex_backend.CodexBackendTestCase.test_completed_rejections_report_each_attempt_and_repaired_success",
         "tests.test_codex_backend.CodexBackendTestCase.test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread",
         "tests.test_codex_backend.CodexBackendTestCase.test_diagnostic_failure_does_not_replace_provider_failure_or_taint",
-        "tests.test_collaboration_context.CollaborationTransitionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
         "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_persistent_validation_publication_failure_keeps_result_unknown",
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_artifact_input_uses_authorized_reference_read_and_stale_digest_fails",
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_interrupt_cancels_all_matching_auditors_and_cleans_registry",
@@ -13176,7 +13172,7 @@
         "tests.test_codex_backend.CodexBackendTestCase.test_completed_rejections_report_each_attempt_and_repaired_success",
         "tests.test_codex_backend.CodexBackendTestCase.test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread",
         "tests.test_codex_backend.CodexBackendTestCase.test_diagnostic_failure_does_not_replace_provider_failure_or_taint",
-        "tests.test_collaboration_context.CollaborationTransitionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
         "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_persistent_validation_publication_failure_keeps_result_unknown",
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_artifact_input_uses_authorized_reference_read_and_stale_digest_fails",
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_interrupt_cancels_all_matching_auditors_and_cleans_registry",
@@ -13233,7 +13229,7 @@
         "tests.test_codex_backend.CodexBackendTestCase.test_completed_rejections_report_each_attempt_and_repaired_success",
         "tests.test_codex_backend.CodexBackendTestCase.test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread",
         "tests.test_codex_backend.CodexBackendTestCase.test_diagnostic_failure_does_not_replace_provider_failure_or_taint",
-        "tests.test_collaboration_context.CollaborationTransitionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
         "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_persistent_validation_publication_failure_keeps_result_unknown",
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_artifact_input_uses_authorized_reference_read_and_stale_digest_fails",
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_interrupt_cancels_all_matching_auditors_and_cleans_registry",
@@ -13293,7 +13289,7 @@
         "tests.test_codex_backend.CodexBackendTestCase.test_completed_rejections_report_each_attempt_and_repaired_success",
         "tests.test_codex_backend.CodexBackendTestCase.test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread",
         "tests.test_codex_backend.CodexBackendTestCase.test_diagnostic_failure_does_not_replace_provider_failure_or_taint",
-        "tests.test_collaboration_context.CollaborationTransitionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
         "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_persistent_validation_publication_failure_keeps_result_unknown",
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_artifact_input_uses_authorized_reference_read_and_stale_digest_fails",
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_interrupt_cancels_all_matching_auditors_and_cleans_registry",
@@ -13356,7 +13352,7 @@
         "tests.test_codex_backend.CodexBackendTestCase.test_completed_rejections_report_each_attempt_and_repaired_success",
         "tests.test_codex_backend.CodexBackendTestCase.test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread",
         "tests.test_codex_backend.CodexBackendTestCase.test_diagnostic_failure_does_not_replace_provider_failure_or_taint",
-        "tests.test_collaboration_context.CollaborationTransitionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
         "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_persistent_validation_publication_failure_keeps_result_unknown",
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_artifact_input_uses_authorized_reference_read_and_stale_digest_fails",
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_interrupt_cancels_all_matching_auditors_and_cleans_registry",
@@ -13419,7 +13415,7 @@
         "tests.test_codex_backend.CodexBackendTestCase.test_completed_rejections_report_each_attempt_and_repaired_success",
         "tests.test_codex_backend.CodexBackendTestCase.test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread",
         "tests.test_codex_backend.CodexBackendTestCase.test_diagnostic_failure_does_not_replace_provider_failure_or_taint",
-        "tests.test_collaboration_context.CollaborationTransitionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
         "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_persistent_validation_publication_failure_keeps_result_unknown",
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_artifact_input_uses_authorized_reference_read_and_stale_digest_fails",
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_interrupt_cancels_all_matching_auditors_and_cleans_registry",
@@ -13707,13 +13703,13 @@
         "runtime-resources.provider_call_accounting"
       ],
       "focused_ids": [
-        "tests.test_collaboration_context.CollaborationTransitionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
         "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_initial_budget_rejection_remains_failure",
         "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_direct_scope_is_required_and_substantive_outcomes_cannot_bypass_routing"
       ],
       "affected_ids": [
         "tests.test_codex_backend.CodexBackendTestCase.test_conversation_projects_exact_payload_schema_and_no_artifacts",
-        "tests.test_collaboration_context.CollaborationTransitionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
         "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_initial_budget_rejection_remains_failure",
         "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_direct_scope_is_required_and_substantive_outcomes_cannot_bypass_routing"
       ],
@@ -14275,6 +14271,7 @@
         "tests.test_collaboration_events.CollaborationWireContractTests.test_validation_message_correlation_round_trips_and_old_message_decodes",
         "tests.test_current_lead_evidence.CurrentLeadEvidenceTests.test_read_evidence_translates_whole_content_and_range_boundary_digests",
         "tests.test_current_lead_inputs.CurrentLeadInputsTests.test_reviewed_history_transfers_with_filesystem_sqlite_parity",
+        "tests.test_document_plan_views.DocumentPlanViewsTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_git_external_operation_inspection.GitExternalOperationInspectionTests.test_contract_adapter_exports_and_dependencies_are_exact",
         "tests.test_historical_material_workflow.HistoricalMaterialWorkflowTests.test_prior_draft_and_rejected_response_remain_input_only_in_new_task",
         "tests.test_interactive_controller.ControllerContractTests.test_direct_import_is_clean_and_package_graph_is_acyclic",
@@ -14283,7 +14280,6 @@
         "tests.test_interactive_controller.InteractiveLeadAdapterTests.test_retry_lead_turn_keeps_fixed_diagnostic_copy_and_renders_error_role",
         "tests.test_interactive_pty.InteractiveCliPtyTests.test_conversation_management_routes_controls_and_main_interrupt",
         "tests.test_known_result_finalization.KnownResultAssessmentTests.test_all_assessments_are_preserved_and_partial_failure_never_reviews",
-        "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_lead_editorial_capture.LeadEditorialCaptureTests.test_only_matching_successful_apply_satisfies_objective",
         "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_durable_zero_hit_history_contains_no_search_or_source_content",
         "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_empty_whole_is_evidence_but_missing_and_invalid_range_fail",
@@ -14424,6 +14420,7 @@
         "tests.test_collaboration_events.CollaborationWireContractTests.test_validation_message_correlation_round_trips_and_old_message_decodes",
         "tests.test_current_lead_evidence.CurrentLeadEvidenceTests.test_read_evidence_translates_whole_content_and_range_boundary_digests",
         "tests.test_current_lead_inputs.CurrentLeadInputsTests.test_reviewed_history_transfers_with_filesystem_sqlite_parity",
+        "tests.test_document_plan_views.DocumentPlanViewsTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_git_external_operation_inspection.GitExternalOperationInspectionTests.test_contract_adapter_exports_and_dependencies_are_exact",
         "tests.test_historical_material_workflow.HistoricalMaterialWorkflowTests.test_prior_draft_and_rejected_response_remain_input_only_in_new_task",
         "tests.test_interactive_controller.ControllerContractTests.test_direct_import_is_clean_and_package_graph_is_acyclic",
@@ -14432,7 +14429,6 @@
         "tests.test_interactive_controller.InteractiveLeadAdapterTests.test_retry_lead_turn_keeps_fixed_diagnostic_copy_and_renders_error_role",
         "tests.test_interactive_pty.InteractiveCliPtyTests.test_conversation_management_routes_controls_and_main_interrupt",
         "tests.test_known_result_finalization.KnownResultAssessmentTests.test_all_assessments_are_preserved_and_partial_failure_never_reviews",
-        "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_lead_editorial_capture.LeadEditorialCaptureTests.test_only_matching_successful_apply_satisfies_objective",
         "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_durable_zero_hit_history_contains_no_search_or_source_content",
         "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_empty_whole_is_evidence_but_missing_and_invalid_range_fail",
@@ -14576,6 +14572,7 @@
         "tests.test_collaboration_events.CollaborationWireContractTests.test_validation_message_correlation_round_trips_and_old_message_decodes",
         "tests.test_current_lead_evidence.CurrentLeadEvidenceTests.test_read_evidence_translates_whole_content_and_range_boundary_digests",
         "tests.test_current_lead_inputs.CurrentLeadInputsTests.test_reviewed_history_transfers_with_filesystem_sqlite_parity",
+        "tests.test_document_plan_views.DocumentPlanViewsTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_git_external_operation_inspection.GitExternalOperationInspectionTests.test_contract_adapter_exports_and_dependencies_are_exact",
         "tests.test_historical_material_workflow.HistoricalMaterialWorkflowTests.test_prior_draft_and_rejected_response_remain_input_only_in_new_task",
         "tests.test_interactive_controller.ControllerContractTests.test_direct_import_is_clean_and_package_graph_is_acyclic",
@@ -14584,7 +14581,6 @@
         "tests.test_interactive_controller.InteractiveLeadAdapterTests.test_retry_lead_turn_keeps_fixed_diagnostic_copy_and_renders_error_role",
         "tests.test_interactive_pty.InteractiveCliPtyTests.test_conversation_management_routes_controls_and_main_interrupt",
         "tests.test_known_result_finalization.KnownResultAssessmentTests.test_all_assessments_are_preserved_and_partial_failure_never_reviews",
-        "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_lead_editorial_capture.LeadEditorialCaptureTests.test_only_matching_successful_apply_satisfies_objective",
         "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_durable_zero_hit_history_contains_no_search_or_source_content",
         "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_empty_whole_is_evidence_but_missing_and_invalid_range_fail",
@@ -14728,6 +14724,7 @@
         "tests.test_collaboration_events.CollaborationWireContractTests.test_validation_message_correlation_round_trips_and_old_message_decodes",
         "tests.test_current_lead_evidence.CurrentLeadEvidenceTests.test_read_evidence_translates_whole_content_and_range_boundary_digests",
         "tests.test_current_lead_inputs.CurrentLeadInputsTests.test_reviewed_history_transfers_with_filesystem_sqlite_parity",
+        "tests.test_document_plan_views.DocumentPlanViewsTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_git_external_operation_inspection.GitExternalOperationInspectionTests.test_contract_adapter_exports_and_dependencies_are_exact",
         "tests.test_historical_material_workflow.HistoricalMaterialWorkflowTests.test_prior_draft_and_rejected_response_remain_input_only_in_new_task",
         "tests.test_interactive_controller.ControllerContractTests.test_direct_import_is_clean_and_package_graph_is_acyclic",
@@ -14736,7 +14733,6 @@
         "tests.test_interactive_controller.InteractiveLeadAdapterTests.test_retry_lead_turn_keeps_fixed_diagnostic_copy_and_renders_error_role",
         "tests.test_interactive_pty.InteractiveCliPtyTests.test_conversation_management_routes_controls_and_main_interrupt",
         "tests.test_known_result_finalization.KnownResultAssessmentTests.test_all_assessments_are_preserved_and_partial_failure_never_reviews",
-        "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_lead_editorial_capture.LeadEditorialCaptureTests.test_only_matching_successful_apply_satisfies_objective",
         "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_durable_zero_hit_history_contains_no_search_or_source_content",
         "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_empty_whole_is_evidence_but_missing_and_invalid_range_fail",
@@ -14881,6 +14877,7 @@
         "tests.test_collaboration_events.CollaborationWireContractTests.test_validation_message_correlation_round_trips_and_old_message_decodes",
         "tests.test_current_lead_evidence.CurrentLeadEvidenceTests.test_read_evidence_translates_whole_content_and_range_boundary_digests",
         "tests.test_current_lead_inputs.CurrentLeadInputsTests.test_reviewed_history_transfers_with_filesystem_sqlite_parity",
+        "tests.test_document_plan_views.DocumentPlanViewsTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_git_external_operation_inspection.GitExternalOperationInspectionTests.test_contract_adapter_exports_and_dependencies_are_exact",
         "tests.test_historical_material_workflow.HistoricalMaterialWorkflowTests.test_prior_draft_and_rejected_response_remain_input_only_in_new_task",
         "tests.test_interactive_controller.ControllerContractTests.test_direct_import_is_clean_and_package_graph_is_acyclic",
@@ -14889,7 +14886,6 @@
         "tests.test_interactive_controller.InteractiveLeadAdapterTests.test_retry_lead_turn_keeps_fixed_diagnostic_copy_and_renders_error_role",
         "tests.test_interactive_pty.InteractiveCliPtyTests.test_conversation_management_routes_controls_and_main_interrupt",
         "tests.test_known_result_finalization.KnownResultAssessmentTests.test_all_assessments_are_preserved_and_partial_failure_never_reviews",
-        "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_lead_editorial_capture.LeadEditorialCaptureTests.test_only_matching_successful_apply_satisfies_objective",
         "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_durable_zero_hit_history_contains_no_search_or_source_content",
         "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_empty_whole_is_evidence_but_missing_and_invalid_range_fail",
@@ -15150,9 +15146,9 @@
         "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review",
         "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority",
         "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip",
-        "tests.test_collaboration_context.CollaborationTransitionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_document_plan_views.DocumentPlanViewsTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_historical_material_workflow.HistoricalMaterialWorkflowTests.test_prior_draft_and_rejected_response_remain_input_only_in_new_task",
-        "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_lead_editorial_capture.LeadEditorialCaptureTests.test_only_matching_successful_apply_satisfies_objective",
         "tests.test_lead_recommendations.LeadRecommendationRecoveryTests.test_missing_corrupt_or_unresolved_origin_accounting_never_authorizes_retry",
         "tests.test_recommendation_actions.RecommendationActionContractTests.test_confirm_origin_v2_and_continuing_v1_preserve_exact_wire_facts",
@@ -15186,9 +15182,9 @@
         "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review",
         "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority",
         "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip",
-        "tests.test_collaboration_context.CollaborationTransitionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_document_plan_views.DocumentPlanViewsTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_historical_material_workflow.HistoricalMaterialWorkflowTests.test_prior_draft_and_rejected_response_remain_input_only_in_new_task",
-        "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_lead_editorial_capture.LeadEditorialCaptureTests.test_only_matching_successful_apply_satisfies_objective",
         "tests.test_lead_recommendations.LeadRecommendationRecoveryTests.test_missing_corrupt_or_unresolved_origin_accounting_never_authorizes_retry",
         "tests.test_recommendation_actions.RecommendationActionContractTests.test_confirm_origin_v2_and_continuing_v1_preserve_exact_wire_facts",
@@ -15612,6 +15608,7 @@
         "tests.test_current_lead_evidence.CurrentLeadEvidenceTests.test_empty_core_status_evidence_requires_selected_fresh_zero_byte_source",
         "tests.test_current_lead_evidence.CurrentLeadEvidenceTests.test_read_evidence_translates_whole_content_and_range_boundary_digests",
         "tests.test_current_lead_inputs.CurrentLeadInputsTests.test_reviewed_history_transfers_with_filesystem_sqlite_parity",
+        "tests.test_document_plan_views.DocumentPlanViewsTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_historical_material_workflow.HistoricalMaterialWorkflowTests.test_prior_draft_and_rejected_response_remain_input_only_in_new_task",
         "tests.test_interactive_controller.ControllerAuthTests.test_auth_cancel_keeps_an_already_established_live_default",
         "tests.test_interactive_controller.ControllerAuthTests.test_auth_uses_live_status_and_new_authentication_wins_default",
@@ -15695,7 +15692,6 @@
         "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
         "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
         "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
-        "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_lead_artifact_objectives.LeadDefaultBudgetRefusalTests.test_default_grouped_budget_refuses_unfunded_artifact_preparation",
         "tests.test_lead_editorial_capture.LeadEditorialCaptureTests.test_only_matching_successful_apply_satisfies_objective",
         "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_durable_zero_hit_history_contains_no_search_or_source_content",
@@ -16092,6 +16088,7 @@
         "tests.test_current_lead_evidence.CurrentLeadEvidenceTests.test_empty_core_status_evidence_requires_selected_fresh_zero_byte_source",
         "tests.test_current_lead_evidence.CurrentLeadEvidenceTests.test_read_evidence_translates_whole_content_and_range_boundary_digests",
         "tests.test_current_lead_inputs.CurrentLeadInputsTests.test_reviewed_history_transfers_with_filesystem_sqlite_parity",
+        "tests.test_document_plan_views.DocumentPlanViewsTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_historical_material_workflow.HistoricalMaterialWorkflowTests.test_prior_draft_and_rejected_response_remain_input_only_in_new_task",
         "tests.test_interactive_controller.ControllerAuthTests.test_auth_cancel_keeps_an_already_established_live_default",
         "tests.test_interactive_controller.ControllerAuthTests.test_auth_uses_live_status_and_new_authentication_wins_default",
@@ -16175,7 +16172,6 @@
         "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
         "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
         "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
-        "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_lead_artifact_objectives.LeadDefaultBudgetRefusalTests.test_default_grouped_budget_refuses_unfunded_artifact_preparation",
         "tests.test_lead_editorial_capture.LeadEditorialCaptureTests.test_only_matching_successful_apply_satisfies_objective",
         "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_durable_zero_hit_history_contains_no_search_or_source_content",
@@ -16576,6 +16572,7 @@
         "tests.test_current_lead_evidence.CurrentLeadEvidenceTests.test_empty_core_status_evidence_requires_selected_fresh_zero_byte_source",
         "tests.test_current_lead_evidence.CurrentLeadEvidenceTests.test_read_evidence_translates_whole_content_and_range_boundary_digests",
         "tests.test_current_lead_inputs.CurrentLeadInputsTests.test_reviewed_history_transfers_with_filesystem_sqlite_parity",
+        "tests.test_document_plan_views.DocumentPlanViewsTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_historical_material_workflow.HistoricalMaterialWorkflowTests.test_prior_draft_and_rejected_response_remain_input_only_in_new_task",
         "tests.test_interactive_controller.ControllerAuthTests.test_auth_cancel_keeps_an_already_established_live_default",
         "tests.test_interactive_controller.ControllerAuthTests.test_auth_uses_live_status_and_new_authentication_wins_default",
@@ -16659,7 +16656,6 @@
         "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
         "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
         "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
-        "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_lead_artifact_objectives.LeadDefaultBudgetRefusalTests.test_default_grouped_budget_refuses_unfunded_artifact_preparation",
         "tests.test_lead_editorial_capture.LeadEditorialCaptureTests.test_only_matching_successful_apply_satisfies_objective",
         "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_durable_zero_hit_history_contains_no_search_or_source_content",
@@ -17059,6 +17055,7 @@
         "tests.test_current_lead_evidence.CurrentLeadEvidenceTests.test_empty_core_status_evidence_requires_selected_fresh_zero_byte_source",
         "tests.test_current_lead_evidence.CurrentLeadEvidenceTests.test_read_evidence_translates_whole_content_and_range_boundary_digests",
         "tests.test_current_lead_inputs.CurrentLeadInputsTests.test_reviewed_history_transfers_with_filesystem_sqlite_parity",
+        "tests.test_document_plan_views.DocumentPlanViewsTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_historical_material_workflow.HistoricalMaterialWorkflowTests.test_prior_draft_and_rejected_response_remain_input_only_in_new_task",
         "tests.test_interactive_controller.ControllerAuthTests.test_auth_cancel_keeps_an_already_established_live_default",
         "tests.test_interactive_controller.ControllerAuthTests.test_auth_uses_live_status_and_new_authentication_wins_default",
@@ -17142,7 +17139,6 @@
         "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
         "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
         "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
-        "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_lead_artifact_objectives.LeadDefaultBudgetRefusalTests.test_default_grouped_budget_refuses_unfunded_artifact_preparation",
         "tests.test_lead_editorial_capture.LeadEditorialCaptureTests.test_only_matching_successful_apply_satisfies_objective",
         "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_durable_zero_hit_history_contains_no_search_or_source_content",
@@ -17303,8 +17299,8 @@
         "src/story_writing_agents/lead_preparation/lead_document_nodes.py"
       ],
       "focused_ids": [
-        "tests.test_collaboration_context.CollaborationTransitionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
-        "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart"
+        "tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_document_plan_views.DocumentPlanViewsTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart"
       ],
       "affected_ids": [
         "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review",
@@ -17329,8 +17325,8 @@
         "tests.test_collaboration_context.CollaborationReadableProjectionTests.test_every_event_projects_once_with_complete_identity_and_closed_fields",
         "tests.test_collaboration_context.CollaborationReadableProjectionTests.test_readable_projection_rejects_v1_and_every_corrupt_history_shape",
         "tests.test_collaboration_context.CollaborationTransitionTests.test_all_legal_and_illegal_transition_pairs_are_exact",
-        "tests.test_collaboration_context.CollaborationTransitionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
-        "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
+        "tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_document_plan_views.DocumentPlanViewsTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_lead_artifact_objectives.LeadDefaultBudgetRefusalTests.test_default_grouped_budget_refuses_unfunded_artifact_preparation",
         "tests.test_lead_editorial_capture.LeadEditorialCaptureTests.test_only_matching_successful_apply_satisfies_objective"
       ],
@@ -17451,8 +17447,8 @@
         "tests.test_consensus_projection.ConsensusProjectionTests.test_next_phase_preparation_preserves_identity_tail_and_revision_rules",
         "tests.test_consensus_projection.ConsensusProjectionTests.test_projection_rejects_stale_free_form_duplicate_and_reordered_history",
         "tests.test_consensus_projection.ConsensusProjectionTests.test_request_digest_revision_tail_and_exact_correlations",
+        "tests.test_document_plan_views.DocumentPlanViewsTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_historical_material_workflow.HistoricalMaterialWorkflowTests.test_prior_draft_and_rejected_response_remain_input_only_in_new_task",
-        "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_lead_artifact_objectives.LeadDefaultBudgetRefusalTests.test_default_grouped_budget_refuses_unfunded_artifact_preparation",
         "tests.test_lead_editorial_capture.LeadEditorialCaptureTests.test_only_matching_successful_apply_satisfies_objective",
         "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_durable_zero_hit_history_contains_no_search_or_source_content",
@@ -17565,6 +17561,7 @@
         "tests.test_current_lead_evidence.CurrentLeadEvidenceTests.test_empty_core_status_evidence_requires_selected_fresh_zero_byte_source",
         "tests.test_current_lead_evidence.CurrentLeadEvidenceTests.test_read_evidence_translates_whole_content_and_range_boundary_digests",
         "tests.test_current_lead_inputs.CurrentLeadInputsTests.test_reviewed_history_transfers_with_filesystem_sqlite_parity",
+        "tests.test_document_plan_views.DocumentPlanViewsTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_historical_material_workflow.HistoricalMaterialWorkflowTests.test_prior_draft_and_rejected_response_remain_input_only_in_new_task",
         "tests.test_known_result_finalization.KnownResultAssessmentTests.test_all_assessments_are_preserved_and_partial_failure_never_reviews",
         "tests.test_known_result_finalization.KnownResultBudgetTests.test_unaffordable_continuation_finalizes_exact_result_without_authority",
@@ -17576,7 +17573,6 @@
         "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
         "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
         "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
-        "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_lead_artifact_objectives.LeadDefaultBudgetRefusalTests.test_default_grouped_budget_refuses_unfunded_artifact_preparation",
         "tests.test_lead_editorial_capture.LeadEditorialCaptureTests.test_only_matching_successful_apply_satisfies_objective",
         "tests.test_lead_session_continuity.LeadSessionContinuityTests.test_confirmed_plan_survives_three_followups_and_conversation_switch",
@@ -17615,8 +17611,8 @@
       ],
       "affected_ids": [
         "tests.test_current_lead_inputs.CurrentLeadInputsTests.test_reviewed_history_transfers_with_filesystem_sqlite_parity",
+        "tests.test_document_plan_views.DocumentPlanViewsTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_historical_material_workflow.HistoricalMaterialWorkflowTests.test_prior_draft_and_rejected_response_remain_input_only_in_new_task",
-        "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_lead_artifact_objectives.LeadDefaultBudgetRefusalTests.test_default_grouped_budget_refuses_unfunded_artifact_preparation",
         "tests.test_lead_editorial_capture.LeadEditorialCaptureTests.test_only_matching_successful_apply_satisfies_objective",
         "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_whole_and_range_conflict_bind_proposal_and_detect_drift",
@@ -17642,8 +17638,8 @@
       ],
       "affected_ids": [
         "tests.test_current_lead_inputs.CurrentLeadInputsTests.test_reviewed_history_transfers_with_filesystem_sqlite_parity",
+        "tests.test_document_plan_views.DocumentPlanViewsTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_historical_material_workflow.HistoricalMaterialWorkflowTests.test_prior_draft_and_rejected_response_remain_input_only_in_new_task",
-        "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_lead_artifact_objectives.LeadDefaultBudgetRefusalTests.test_default_grouped_budget_refuses_unfunded_artifact_preparation",
         "tests.test_lead_editorial_capture.LeadEditorialCaptureTests.test_only_matching_successful_apply_satisfies_objective",
         "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_whole_and_range_conflict_bind_proposal_and_detect_drift",
@@ -17669,8 +17665,8 @@
       ],
       "affected_ids": [
         "tests.test_current_lead_inputs.CurrentLeadInputsTests.test_reviewed_history_transfers_with_filesystem_sqlite_parity",
+        "tests.test_document_plan_views.DocumentPlanViewsTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_historical_material_workflow.HistoricalMaterialWorkflowTests.test_prior_draft_and_rejected_response_remain_input_only_in_new_task",
-        "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_lead_artifact_objectives.LeadDefaultBudgetRefusalTests.test_default_grouped_budget_refuses_unfunded_artifact_preparation",
         "tests.test_lead_editorial_capture.LeadEditorialCaptureTests.test_only_matching_successful_apply_satisfies_objective",
         "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_whole_and_range_conflict_bind_proposal_and_detect_drift",
@@ -17696,8 +17692,8 @@
       ],
       "affected_ids": [
         "tests.test_current_lead_inputs.CurrentLeadInputsTests.test_reviewed_history_transfers_with_filesystem_sqlite_parity",
+        "tests.test_document_plan_views.DocumentPlanViewsTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_historical_material_workflow.HistoricalMaterialWorkflowTests.test_prior_draft_and_rejected_response_remain_input_only_in_new_task",
-        "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_lead_artifact_objectives.LeadDefaultBudgetRefusalTests.test_default_grouped_budget_refuses_unfunded_artifact_preparation",
         "tests.test_lead_editorial_capture.LeadEditorialCaptureTests.test_only_matching_successful_apply_satisfies_objective",
         "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_whole_and_range_conflict_bind_proposal_and_detect_drift",
@@ -17723,8 +17719,8 @@
       ],
       "affected_ids": [
         "tests.test_current_lead_inputs.CurrentLeadInputsTests.test_reviewed_history_transfers_with_filesystem_sqlite_parity",
+        "tests.test_document_plan_views.DocumentPlanViewsTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_historical_material_workflow.HistoricalMaterialWorkflowTests.test_prior_draft_and_rejected_response_remain_input_only_in_new_task",
-        "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_lead_artifact_objectives.LeadDefaultBudgetRefusalTests.test_default_grouped_budget_refuses_unfunded_artifact_preparation",
         "tests.test_lead_editorial_capture.LeadEditorialCaptureTests.test_only_matching_successful_apply_satisfies_objective",
         "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_whole_and_range_conflict_bind_proposal_and_detect_drift",
@@ -17746,13 +17742,13 @@
         "src/story_writing_agents/lead_preparation/current_proposal_authority.py"
       ],
       "focused_ids": [
-        "tests.test_lead_editorial_capture.LeadEditorialCaptureTests.test_only_matching_successful_apply_satisfies_objective",
-        "tests.test_current_lead_inputs.CurrentLeadInputsTests.test_reviewed_history_transfers_with_filesystem_sqlite_parity"
+        "tests.test_current_lead_inputs.CurrentLeadInputsTests.test_reviewed_history_transfers_with_filesystem_sqlite_parity",
+        "tests.test_lead_editorial_capture.LeadEditorialCaptureTests.test_only_matching_successful_apply_satisfies_objective"
       ],
       "affected_ids": [
         "tests.test_current_lead_inputs.CurrentLeadInputsTests.test_reviewed_history_transfers_with_filesystem_sqlite_parity",
+        "tests.test_document_plan_views.DocumentPlanViewsTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_historical_material_workflow.HistoricalMaterialWorkflowTests.test_prior_draft_and_rejected_response_remain_input_only_in_new_task",
-        "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
         "tests.test_lead_artifact_objectives.LeadDefaultBudgetRefusalTests.test_default_grouped_budget_refuses_unfunded_artifact_preparation",
         "tests.test_lead_editorial_capture.LeadEditorialCaptureTests.test_only_matching_successful_apply_satisfies_objective",
         "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_whole_and_range_conflict_bind_proposal_and_detect_drift",
@@ -17764,6 +17760,81 @@
         "tests.test_lead_session_continuity.LeadSessionContinuityTests.test_confirmed_plan_survives_three_followups_and_conversation_switch",
         "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_archived_task_is_context_without_routable_authority",
         "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_cross_conversation_selection_preserves_scope_and_rejects_workflow_relabel"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "tests.test_collaboration_history_projection",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/test_collaboration_history_projection.py"
+      ],
+      "focused_ids": [
+        "tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests.test_projection_is_deterministic_ordered_typed_and_history_only"
+      ],
+      "affected_ids": [
+        "tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests.test_projection_is_deterministic_ordered_typed_and_history_only"
+      ],
+      "depends_on": [
+        "tests.test_collaboration_events"
+      ]
+    },
+    {
+      "name": "tests.test_document_plan_views",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/test_document_plan_views.py"
+      ],
+      "focused_ids": [
+        "tests.test_document_plan_views.DocumentPlanViewsTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart"
+      ],
+      "affected_ids": [
+        "tests.test_document_plan_views.DocumentPlanViewsTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart"
+      ],
+      "depends_on": [
+        "context-execution-fixture",
+        "lead-fixtures.artifact-review",
+        "lead-fixtures.material-values",
+        "lead-fixtures.preparation-data",
+        "lead-fixtures.provider-responses",
+        "lead-fixtures.runtime-setup",
+        "lead-fixtures.specialist-routing",
+        "tests.test_artifact_objectives"
+      ]
+    },
+    {
+      "name": "lead-preparation.document-plan-selection",
+      "boundary": "source-authority",
+      "paths": [
+        "src/story_writing_agents/lead_preparation/document_plan_selection.py"
+      ],
+      "focused_ids": [
+        "tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests.test_projection_is_deterministic_ordered_typed_and_history_only"
+      ],
+      "affected_ids": [
+        "tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_intent_variants_and_objective_values_are_closed_and_content_safe",
+        "tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_document_plan_views.DocumentPlanViewsTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
+        "tests.test_lead_editorial_capture.LeadEditorialCaptureTests.test_only_matching_successful_apply_satisfies_objective",
+        "tests.test_lead_session_continuity.LeadSessionContinuityTests.test_confirmed_plan_survives_three_followups_and_conversation_switch"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "lead-preparation.document-plan-views",
+      "boundary": "source-authority",
+      "paths": [
+        "src/story_writing_agents/lead_preparation/document_plan_views.py"
+      ],
+      "focused_ids": [
+        "tests.test_document_plan_views.DocumentPlanViewsTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart"
+      ],
+      "affected_ids": [
+        "tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_intent_variants_and_objective_values_are_closed_and_content_safe",
+        "tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_document_plan_views.DocumentPlanViewsTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
+        "tests.test_lead_editorial_capture.LeadEditorialCaptureTests.test_only_matching_successful_apply_satisfies_objective",
+        "tests.test_lead_session_continuity.LeadSessionContinuityTests.test_confirmed_plan_survives_three_followups_and_conversation_switch"
       ],
       "depends_on": []
     }

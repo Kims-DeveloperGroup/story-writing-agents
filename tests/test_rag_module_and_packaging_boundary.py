@@ -346,8 +346,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 270)
-        self.assertEqual(len(edges), 1536)
+        self.assertEqual(len(modules), 272)
+        self.assertEqual(len(edges), 1552)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -1030,13 +1030,20 @@ class RagModuleBoundaryTests(unittest.TestCase):
             "story_writing_agents.core_document_readiness", "story_writing_agents.editorial_scope",
             "story_writing_agents.lead_task_transitions", "story_writing_agents.specialist_routing"})
         self.assertEqual({source for source, target in edges if target == "story_writing_agents.document_plan"}, {
-            "story_writing_agents.conversations", "story_writing_agents.conversations.context",
-            "story_writing_agents.conversations.events", "story_writing_agents.interactive_controller._lead_policy",
-            "story_writing_agents.interactive_terminal._collaboration_view", "story_writing_agents.orchestrator",
-             "story_writing_agents.runtime_resources.collaboration_event_journal",
-            "story_writing_agents.lead_preparation.proposal_basis_values",
-             "story_writing_agents.runtime_resources.provider_call_accounting", "story_writing_agents.lead_preparation.response_rules",
-            'story_writing_agents.lead_preparation.lead_document_nodes'})
+            'story_writing_agents.conversations',
+            'story_writing_agents.conversations.context',
+            'story_writing_agents.conversations.events',
+            'story_writing_agents.interactive_controller._lead_policy',
+            'story_writing_agents.interactive_terminal._collaboration_view',
+            'story_writing_agents.lead_preparation.document_plan_selection',
+            'story_writing_agents.lead_preparation.document_plan_views',
+            'story_writing_agents.lead_preparation.lead_document_nodes',
+            'story_writing_agents.lead_preparation.proposal_basis_values',
+            'story_writing_agents.lead_preparation.response_rules',
+            'story_writing_agents.orchestrator',
+            'story_writing_agents.runtime_resources.collaboration_event_journal',
+            'story_writing_agents.runtime_resources.provider_call_accounting',
+        })
         self.assertIn("story_writing_agents.blocking_work", modules)
         self.assertEqual({target for source, target in edges if source == "story_writing_agents.blocking_work"}, set())
         self.assertEqual({source for source, target in edges if target == "story_writing_agents.blocking_work"},
@@ -1286,6 +1293,30 @@ class RagModuleBoundaryTests(unittest.TestCase):
             'story_writing_agents.workspace.initialization',
         })
         self.assertEqual({source for source, target in edges if target == review_material_validation_owner}, {"story_writing_agents.orchestrator"})
+
+        document_plan_selection_owner = 'story_writing_agents.lead_preparation.document_plan_selection'
+        self.assertEqual({target for source, target in edges if source == document_plan_selection_owner}, {
+            'story_writing_agents.conversations',
+            'story_writing_agents.core_document_readiness',
+            'story_writing_agents.document_plan',
+            'story_writing_agents.lead_task_transitions',
+            'story_writing_agents.runtime_resources',
+            'story_writing_agents.runtime_resources.collaboration_event_journal',
+            'story_writing_agents.specialist_routing',
+        })
+        self.assertEqual({source for source, target in edges if target == document_plan_selection_owner}, {"story_writing_agents.orchestrator"})
+
+        document_plan_views_owner = 'story_writing_agents.lead_preparation.document_plan_views'
+        self.assertEqual({target for source, target in edges if source == document_plan_views_owner}, {
+            'story_writing_agents.authoring_admission',
+            'story_writing_agents.conversations',
+            'story_writing_agents.conversations.context',
+            'story_writing_agents.conversations.session_context',
+            'story_writing_agents.core_document_readiness',
+            'story_writing_agents.document_plan',
+            'story_writing_agents.specialist_routing',
+        })
+        self.assertEqual({source for source, target in edges if target == document_plan_views_owner}, {"story_writing_agents.orchestrator"})
 
 
     def test_supported_module_surfaces_do_not_expand_the_root_facade(self) -> None:
@@ -1567,6 +1598,8 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             "story_writing_agents/lead_preparation/lead_proposal_inputs.py",
             "story_writing_agents/lead_preparation/lead_document_nodes.py",
             "story_writing_agents/lead_preparation/current_lead_evidence.py",
+            "story_writing_agents/lead_preparation/document_plan_selection.py",
+            "story_writing_agents/lead_preparation/document_plan_views.py",
             "story_writing_agents/lead_preparation/authoring_source_history.py",
             "story_writing_agents/lead_preparation/current_lead_inputs.py",
             "story_writing_agents/lead_preparation/current_proposal_authority.py",

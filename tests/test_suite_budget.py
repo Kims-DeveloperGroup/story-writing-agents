@@ -247,16 +247,20 @@ class SuiteBudgetTests(unittest.TestCase):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
         migrated = suite_budget.load_budget(Path(__file__).with_name("fixtures") / "test_budget_v1.json")
-        authority_current = dict(migrated, subtest_caps=dict(migrated["subtest_caps"]))
+        document_policy_current = dict(migrated, subtest_caps=dict(migrated["subtest_caps"]))
         for move in load_receipt()[-1]["moves"]:
             migrated["subtest_caps"][move["old_id"]] = migrated["subtest_caps"].pop(move["new_id"])
-        evidence_current = dict(migrated, subtest_caps=dict(migrated["subtest_caps"]))
+        migrated["max_test_source_lines"] = 153829
+        authority_current = dict(migrated, subtest_caps=dict(migrated["subtest_caps"]))
         for move in load_receipt()[-2]["moves"]:
+            migrated["subtest_caps"][move["old_id"]] = migrated["subtest_caps"].pop(move["new_id"])
+        evidence_current = dict(migrated, subtest_caps=dict(migrated["subtest_caps"]))
+        for move in load_receipt()[-3]["moves"]:
             migrated["subtest_caps"][move["old_id"]] = migrated["subtest_caps"].pop(move["new_id"])
         material_current = dict(migrated, subtest_caps=dict(migrated["subtest_caps"]))
         fixture_current = dict(material_current, subtest_caps=dict(material_current["subtest_caps"]))
         document_current = dict(fixture_current, subtest_caps=dict(fixture_current["subtest_caps"]))
-        for move in load_receipt()[-3]["moves"]:
+        for move in load_receipt()[-4]["moves"]:
             migrated["subtest_caps"][move["old_id"]] = migrated["subtest_caps"].pop(move["new_id"])
         migrated["max_test_source_lines"] = 152138
         source_current, finalization_current = dict(migrated, subtest_caps=dict(migrated["subtest_caps"])), dict(migrated)
@@ -475,9 +479,25 @@ class SuiteBudgetTests(unittest.TestCase):
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(authority_current, subtest_caps=caps), evidence_current)
         self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, authority_current, dict(evidence_current, subtest_caps={**evidence_current["subtest_caps"], matrix_id: 2}))
 
+        self.assertEqual(document_policy_current["max_test_source_lines"], 153941)
+        self.assertIsNone(suite_budget.check_monotonic(document_policy_current, authority_current))
+        self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, document_policy_current, dict(document_policy_current, max_test_source_lines=152814))
+        self._assert_source_limit_neighbors_rejected(document_policy_current, authority_current)
+        for field, value in (("schema_version", 2), ("max_sequential_wall_seconds", 18001), ("max_shard_wall_seconds", 3601)):
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(document_policy_current, **{field: value}), authority_current)
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, document_policy_current, dict(authority_current, **{field: value}))
+        for caps in (
+            {key: value for key, value in document_policy_current["subtest_caps"].items() if key != zero_id},
+            {**document_policy_current["subtest_caps"], "tests.unreviewed.Case.test_extra": 0},
+            {**document_policy_current["subtest_caps"], matrix_id: 2},
+            {**document_policy_current["subtest_caps"], matrix_id: 0},
+        ):
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(document_policy_current, subtest_caps=caps), authority_current)
+        self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, document_policy_current, dict(authority_current, subtest_caps={**authority_current["subtest_caps"], matrix_id: 2}))
+
         ids = runner_profile.HOSTED_METHOD_IDS
         self.assertEqual(runner_evidence.manifest(ids)["digest"],
-                         'sha256:b3c5557bd0cb11e6d0bc2e765941db9b217c54f29ab1b66bf2a50f8642c10fb1')
+                         'sha256:65bc821c24a2675173d11df7b86776be27591df09d2e40c3d05a89db74b7a343')
         self.assertEqual((len(ids), len({value.rsplit(".", 1)[0] for value in ids})), (162, 29))
         cases = tuple(SimpleNamespace(id=lambda identifier=value: identifier) for value in (*ids, *runner_profile.HOSTED_MIXED_SERIAL_IDS, "unreviewed.test"))
         canonical = runner_contracts.CanonicalCollection(cases, (*ids, *runner_profile.HOSTED_MIXED_SERIAL_IDS, "unreviewed.test"))
@@ -487,7 +507,7 @@ class SuiteBudgetTests(unittest.TestCase):
                                              (suite_policy.ISOLATED_TEST_ID,))
         serial, scheduled = runner_hosted.hosted_partition(canonical, isolated)
         self.assertEqual((serial.ids, scheduled), ((), (suite_policy.ISOLATED_TEST_ID,)))
-        launch_digest = 'sha256:30f1e3d661a6ea6df0f1e321f14d5ee0a67557e45bbb77feff2f7184bd6a80df'
+        launch_digest = 'sha256:a99a37c803ec886a867c0b885d7005ec79b1f4029da6454f6e27f345018aeb96'
         self.assertEqual(runner_evidence.manifest(runner_profile.hosted_launch_order(ids))["digest"], launch_digest)
         self.assertEqual(runner_profile.hosted_launch_order(ids[::-1]), runner_profile.hosted_launch_order(ids))
         self.assertEqual(runner_profile.hosted_launch_order((ids[-1], ids[0])), (ids[0], ids[-1]))

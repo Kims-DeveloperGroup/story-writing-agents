@@ -1,7 +1,7 @@
 {
   "max_sequential_wall_seconds": 18000,
   "max_shard_wall_seconds": 3600,
-  "max_test_source_lines": 153829,
+  "max_test_source_lines": 153941,
   "schema_version": 1,
   "subtest_caps": {
     "tests.agent_context.contracts.test_binding.ServiceSurfaceAndBindingTests.test_binding_rejects_scope_identity_reference_order_and_unpaired_facts": 0,
@@ -892,7 +892,6 @@
     "tests.test_collaboration_context.CollaborationReadableProjectionTests.test_every_event_projects_once_with_complete_identity_and_closed_fields": 23,
     "tests.test_collaboration_context.CollaborationReadableProjectionTests.test_readable_projection_rejects_v1_and_every_corrupt_history_shape": 3,
     "tests.test_collaboration_context.CollaborationTransitionTests.test_all_legal_and_illegal_transition_pairs_are_exact": 132,
-    "tests.test_collaboration_context.CollaborationTransitionTests.test_projection_is_deterministic_ordered_typed_and_history_only": 0,
     "tests.test_collaboration_events.CollaborationPackageBoundaryTests.test_append_receipt_error_and_public_signatures_are_exact": 15,
     "tests.test_collaboration_events.CollaborationPackageBoundaryTests.test_clean_import_orders_have_no_cwd_io_or_dynamic_forwarding": 3,
     "tests.test_collaboration_events.CollaborationPackageBoundaryTests.test_leaf_and_facade_exports_identity_metadata_pickle_and_root_omission": 212,
@@ -1996,7 +1995,6 @@
     "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals": 2,
     "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority": 0,
     "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority": 0,
-    "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart": 0,
     "tests.test_lead_artifact_objectives.LeadDefaultBudgetRefusalTests.test_default_grouped_budget_refuses_unfunded_artifact_preparation": 0,
     "tests.test_lead_editorial_capture.LeadEditorialCaptureTests.test_only_matching_successful_apply_satisfies_objective": 0,
     "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_durable_zero_hit_history_contains_no_search_or_source_content": 0,
@@ -2547,6 +2545,8 @@
     "tests.test_writing_artifacts.SecureStorageTests.test_storage_rejects_traversal_symlink_hardlink_and_nonregular_files": 7,
     "tests.test_writing_artifacts.SecureStorageTests.test_two_simultaneous_first_lock_writers_serialize_without_deadlock": 0,
     "tests.test_writing_artifacts.SecureStorageTests.test_unsupported_safe_primitives_fail_on_first_artifact_operation": 0,
-    "tests.test_writing_artifacts.SecureStorageTests.test_workspace_lock_serializes_independent_repository_instances": 0
+    "tests.test_writing_artifacts.SecureStorageTests.test_workspace_lock_serializes_independent_repository_instances": 0,
+    "tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests.test_projection_is_deterministic_ordered_typed_and_history_only": 0,
+    "tests.test_document_plan_views.DocumentPlanViewsTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart": 0
   }
 }
