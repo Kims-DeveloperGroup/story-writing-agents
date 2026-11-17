@@ -2559,7 +2559,7 @@ class StoryRuntime:
             )
         remaining = COLLABORATION_PHYSICAL_CALL_LIMIT - lineage_spent
         inherited_capture = ()
-        preparation_cap = min(reply_contract_values.CONTEXT_INVOCATION_CALL_LIMIT, remaining)
+        preparation_cap = 1
         if scope.schema_version == 3:
             if fresh_consultation:
                 read = int(authoring_authority.has_present_references(selected_inputs))
