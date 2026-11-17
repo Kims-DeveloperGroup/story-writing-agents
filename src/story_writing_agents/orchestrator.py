@@ -3748,7 +3748,7 @@ class StoryRuntime:
             request = preparation.request_event.payload
             return ArtifactObjectiveFactsV2(objective_id or event_journal.new_id("obj"), scope_event.conversation_id,
                 request.request_event_id, preparation.decision_event.event_id, request.instruction,
-                request.objective_target_paths, projected.offered_draft_sources)
+                ("core_documents/part_outlines.md",), projected.offered_draft_sources)
         origins = tuple(event for event in events if event.turn_id == scope_event.turn_id
             and type(event.payload) is CollaborationMessagePayload and event.sender.kind is CollaborationActorKind.USER
             and event.recipient.kind is CollaborationActorKind.LEAD)
