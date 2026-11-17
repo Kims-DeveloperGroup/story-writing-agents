@@ -120,7 +120,7 @@ def prepare_recommendation_request_policy(
     for alias in action.source_ids:
         draft = current if alias == "current_response" else offered.get(alias)
         if draft is not None:
-            drafts.append(draft)
+            drafts.insert(0, draft)
             selected.append(CollaborationInputRevision(
                 input_id=draft.event_id, kind=CollaborationInputKind.CONVERSATION_EVENT,
                 locator=f"conversation/{draft.event_id}", state=CollaborationInputState.PRESENT,
