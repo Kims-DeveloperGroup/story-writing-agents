@@ -1,5 +1,8 @@
 """Synthetic recommendation producers and real-runtime setup; no automatic wire repair."""
 from __future__ import annotations
+
+from unittest import mock
+from tests.lead_fixtures.specialist_routing import ROSTER
 from tests.provider_wire_fixture import lead_fixture_bound_scope, selection_plan
 from dataclasses import asdict, replace
 import copy
@@ -8,7 +11,7 @@ from story_writing_agents import authoring_admission as admission, conversations
 from story_writing_agents.agents import PLOT_ARCHITECT
 from tests.lead_fixtures import preparation_data, provider_responses
 from story_writing_agents.agents import LEAD_ORCHESTRATOR
-from tests import test_artifact_proposal_orchestration as artifact
+from tests.lead_fixtures import artifact_review as artifact
 from tests.test_artifact_objectives import DRAFT, OUTLINE, ObjectiveCase, digest, rewrite_history
 
 
@@ -690,6 +693,38 @@ def preparation(turn, *, text=DRAFT, mutate=None, read_evidence=False):
     return respond
 
 
+def source_start_inputs(call):
+    choices = dict(call.contract.semantic_index.policy.choices)
+    required = tuple(choices['required_input_ids'])
+    if required != ('user_input',):
+        raise ValueError(f"Unexpected source-start required aliases: {required!r}")
+    return {'input_choices': choices['input_ids'], 'source_choices': choices['input_ids'],
+            'anchors': dict.fromkeys(ROSTER, 'user_input'),
+            'recipients': {'user_input': PLOT_ARCHITECT}, 'family': 0}
+
+
+def preparation_close_observer(runtime, preparation_failures):
+    from os.path import basename
+    from traceback import extract_tb
+    original_close = runtime._close_failed_lead_attempt
+    def failure_details(error, maximum):
+        if error is None:
+            return None
+        terminal = extract_tb(error.__traceback__, limit=-1)
+        return {"type": type(error).__name__, "message": str(error)[:maximum],
+            "terminal": None if not terminal else (basename(terminal[0].filename), terminal[0].name, terminal[0].lineno)}
+    def observed_close(*args, **kwargs):
+        failure = kwargs.get("failure")
+        if failure is not None and len(preparation_failures) < 3:
+            try:
+                preparation_failures.append({"failure": failure_details(failure, 1200),
+                    "cause": failure_details(failure.__cause__, 500)})
+            except Exception as diagnostic_error:
+                preparation_failures.append({"diagnostic_error_type": type(diagnostic_error).__name__})
+        return original_close(*args, **kwargs)
+    return observed_close
+
+
 class RecommendationCase(ObjectiveCase):
     """Disposable Git-backed workspace, public event store and controlled providers."""
 
@@ -835,3 +870,65 @@ class RecommendationCase(ObjectiveCase):
             value = answer(call, provider) if callable(answer) else answer
             return await value if inspect.isawaitable(value) else value
         self.backend.enqueue(search, read, deliver)
+
+    def _observe_context_budget(self):
+        from story_writing_agents.agent_context.invocation import context_execution as context_service
+        from story_writing_agents.agent_context.contracts.planning_inputs import ContextPlanningError
+        planning_measurements = []
+        original_plan = context_service.plan_context_projection
+        def measured_plan(manifest, materials, *, policy, conditions, checkpoint,
+                active_provider_thread_id, mandatory_references=(), fresh=False):
+            try:
+                return original_plan(manifest, materials, policy=policy, conditions=conditions,
+                    checkpoint=checkpoint, active_provider_thread_id=active_provider_thread_id,
+                    mandatory_references=mandatory_references, fresh=fresh)
+            except ContextPlanningError:
+                if len(planning_measurements) < 3:
+                    try:
+                        required = tuple(entry for entry in manifest.entries if entry.priority.value == "p0_required")
+                        measurement = {"required_count": len(required), "required_utf8_bytes": sum(entry.utf8_bytes for entry in required),
+                            "policy": {name: getattr(policy, name) for name in ("total_source_utf8_bytes", "p0_source_utf8_bytes",
+                                "p1_source_utf8_bytes", "p2_source_utf8_bytes", "p3_source_utf8_bytes")},
+                            "required_rows": [{"source_kind": entry.source_kind.value, "semantic_channel": entry.semantic_channel.value,
+                                "utf8_bytes": entry.utf8_bytes} for entry in required[:16]]}
+                        current = next((material for material in materials if material.entry.semantic_channel.value == "current_input"), None)
+                        if current is not None:
+                            body = json.loads(current.body_utf8)
+                            missing = object()
+                            def at(*path):
+                                value = body
+                                for key in path:
+                                    value = value.get(key, missing) if isinstance(value, dict) else missing
+                                return value
+                            def utf8_bytes(value):
+                                return None if value is missing else len(json.dumps(value, ensure_ascii=False, sort_keys=True,
+                                    separators=(",", ":"), allow_nan=False).encode("utf-8"))
+                            measurement["current_input_component_bytes"] = {"whole_current_input": utf8_bytes(body),
+                                "artifact_objectives": utf8_bytes(at("artifact_objectives")),
+                                "document_work_plan": utf8_bytes(at("document_work_plan")),
+                                "document_work_plan.plan": utf8_bytes(at("document_work_plan", "plan")),
+                                "document_node": utf8_bytes(at("document_node")),
+                                "execution.request": utf8_bytes(at("structured_recommendation_execution", "request")),
+                                "execution.request.basis": utf8_bytes(at("structured_recommendation_execution", "request", "basis")),
+                                "execution.request.document_node": utf8_bytes(at("structured_recommendation_execution", "request", "document_node")),
+                                "execution.selected_inputs": utf8_bytes(at("structured_recommendation_execution", "selected_inputs"))}
+                            objective_rows = at("artifact_objectives", "objectives")
+                            plans = [] if not isinstance(objective_rows, list) else [row["document_plan"] for row in objective_rows
+                                if isinstance(row, dict) and isinstance(row.get("document_plan"), dict)]
+                            work_plan = at("document_work_plan", "plan")
+                            measurement["objective_document_plans"] = {"count": len(plans), "utf8_bytes_sum": sum(utf8_bytes(plan) for plan in plans),
+                                "same_ref_count": sum(plan.get("ref") == plans[0].get("ref") for plan in plans),
+                                "all_same_ref": bool(plans) and all(plan.get("ref") == plans[0].get("ref") for plan in plans),
+                                "same_work_plan_ref_count": sum(isinstance(work_plan, dict) and plan.get("ref") == work_plan.get("ref") for plan in plans)}
+                    except Exception as diagnostic_error:
+                        measurement = {"diagnostic_error_type": type(diagnostic_error).__name__}
+                    planning_measurements.append(measurement)
+                    try:
+                        print("DOCUMENT_CONTEXT_BUDGET " + json.dumps(measurement, ensure_ascii=True, sort_keys=True, allow_nan=False), flush=True)
+                    except Exception:
+                        pass
+                raise
+        planning_patcher = mock.patch.object(context_service, "plan_context_projection", new=measured_plan)
+        planning_patcher.start()
+        self.addCleanup(planning_patcher.stop)
+        return planning_measurements

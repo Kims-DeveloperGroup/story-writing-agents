@@ -509,7 +509,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                               core_readiness.CoreDocumentReadinessNeeded)
 
     async def test_all_five_outcomes_have_exact_visible_next_actions(self) -> None:
-        from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF
+        from tests.lead_fixtures.specialist_routing import _ADMISSION_BRIEF
         from tests.lead_fixtures.preparation_data import (
             fixture_assessment as _fixture_assessment,
         )
@@ -641,7 +641,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertNotIn("private", repr(issues))
 
     async def test_front_schema_is_minimal_closed_and_provider_strict(self) -> None:
-        from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF
+        from tests.lead_fixtures.specialist_routing import _ADMISSION_BRIEF
         pending_assessment = {'status': 'needs_information', 'foundations': [], 'direction': None,
             'creative_scope': None, 'allowed_creative_actions': [], 'protected_constraints': [],
             'decisions': [], 'missing_information': ['Choose the substantive direction.'],
@@ -3804,7 +3804,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             failed.factory.for_offer(failed.offers, failed.repair_lineage(), request_basis=minted.request_basis)
         reading = self.conversation("Context during grouped repair")
         from tests.recommendation_fixture import action, recommendation, task_assessment
-        from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF
+        from tests.lead_fixtures.specialist_routing import _ADMISSION_BRIEF
         old_brief, new_brief = 'Draft after choosing the target.', 'Draft the supplied bounded outline at the first target.'
         def scope_question(call, provider, *, paths=(), brief=old_brief):
             return lead_fixture_response(call, {'response_type': 'clarification_question', 'response_text': 'A prior lead response for grouped repair.', 'response_details': {'planning_target': None,
@@ -4260,7 +4260,7 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
 
 
     async def test_mismatch_reject_revise_and_free_text_are_non_authorizing(self) -> None:
-        from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF
+        from tests.lead_fixtures.specialist_routing import _ADMISSION_BRIEF
         from tests.lead_fixtures.preparation_data import (
             fixture_assessment as _fixture_assessment,
         )
@@ -4723,7 +4723,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             proposed.conversation_id)).current_state, CollaborationStepState.CONFIRMED)
 
     async def test_confirmed_restart_preserves_evidence_and_requires_fresh_authority(self) -> None:
-        from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF
+        from tests.lead_fixtures.specialist_routing import _ADMISSION_BRIEF
         from tests.lead_fixtures.preparation_data import (
             fixture_assessment as _fixture_assessment,
         )
@@ -4788,7 +4788,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             self.assertEqual(self._execution_inputs[1], capabilities)
 
     async def test_restored_results_keep_strict_evidence_and_provider_free_compatibility(self) -> None:
-        from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF
+        from tests.lead_fixtures.specialist_routing import _ADMISSION_BRIEF
         from tests.lead_fixtures.preparation_data import (
             fixture_assessment as _fixture_assessment,
         )

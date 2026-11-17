@@ -24,9 +24,7 @@ from tests.provider_wire_fixture import (
 from tests.recommendation_fixture import (
     DRAFT, action, recommendation, decision as recommendation_decision,
 )
-from tests.test_artifact_proposal_orchestration import (
-    artifact_review_outcome, _artifact_synthesis_outcome, artifact_evidence_status_id,
-)
+from tests.lead_fixtures.artifact_review import artifact_review_outcome, _artifact_synthesis_outcome, artifact_evidence_status_id
 from tests.lead_fixtures.provider_responses import (
     SubmittedFailure as _SubmittedFailure,
     workflow_material as _workflow_material,
@@ -40,11 +38,8 @@ from tests.lead_fixtures.preparation_data import (
     submitted_calls as _submitted_calls,
     synthesis_outcome as _synthesis_outcome,
 )
-from tests.test_specialist_routing_runtime import (
-    AgentBackend,
-    _ADMISSION_BRIEF,
-    _SpecialistRoutingRuntimeCase,
-)
+from story_writing_agents import AgentBackend
+from tests.lead_fixtures.specialist_routing import _ADMISSION_BRIEF, SpecialistRoutingRuntimeCase
 from tests.lead_fixtures.preparation_data import (
     OUTLINE,
     fixture_assessment as _fixture_assessment,
@@ -54,7 +49,7 @@ from unittest import (
 )
 
 
-class HistoricalMaterialWorkflowTests(_SpecialistRoutingRuntimeCase):
+class HistoricalMaterialWorkflowTests(SpecialistRoutingRuntimeCase):
     def _set_up_workspace(self):
         temporary = tempfile.TemporaryDirectory(prefix="historical-material-")
         self.addCleanup(temporary.cleanup)

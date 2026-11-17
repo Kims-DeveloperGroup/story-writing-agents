@@ -27,7 +27,7 @@ from story_writing_agents.conversations.session_context import MAX_PROVIDER_PAYL
 from story_writing_agents.conversations import session_context as session_context_module
 from story_writing_agents.conversation_storage.sqlite import compose_sqlite_conversation_storage
 from tests.lead_fixtures import preparation_data, provider_responses, runtime_setup
-from tests import test_artifact_proposal_orchestration as artifact
+from tests.lead_fixtures import artifact_review as artifact
 from tests.sqlite_conversation_storage_fixture import provision, initialized_workspace
 from story_writing_agents.agent_context.contracts import planning_inputs as ctx_planning_inputs
 

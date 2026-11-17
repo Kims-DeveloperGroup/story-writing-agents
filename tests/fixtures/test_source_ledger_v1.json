@@ -19,7 +19,10 @@
     "tests/lead_fixtures/material_values.py",
     "tests/lead_fixtures/preparation_data.py",
     "tests/lead_fixtures/provider_responses.py",
-    "tests/lead_fixtures/runtime_setup.py"
+    "tests/lead_fixtures/runtime_setup.py",
+    "tests/recommendation_fixture.py",
+    "tests/lead_fixtures/specialist_routing.py",
+    "tests/lead_fixtures/artifact_review.py"
   ],
   "origins": {
     "test_git_external_operation_inspection.py": {
@@ -1031,6 +1034,143 @@
       "legacy_unresolved_lines": 1550,
       "counting": "152727→152814(+87): normal domain header20 + actual4call adapter12 + newowner graph26 + existing2incoming-set expansion6 + packaging1 + existingBudgetCase19 + counted id_moves support3. Nine reader numeric literals change0 rows. Generic combined source+closed2-ID guard16 physical rows outside frozen charge, disclosed. No new Case/scenario/subTest; global weight pool conserved through existing canonical quotient/remainder rule.",
       "expected_caps_sha256": "c2a287a57fa759f2c1b984c2a3aedf171aa8a08f1ef8032fbd09180079b3fc34",
+      "generic_execution_tool_rows_disclosed": 16
+    },
+    {
+      "issue": 1043,
+      "origin_commit": "d66b50e93f3a5a09748fb9a90feecf326124333e",
+      "origins": [
+        {
+          "source": "tests/test_lead_artifact_objectives.py",
+          "sha256": "5c9f16e56eee8b0cfa11e41cd636d9e4c5f9e782bd775f5199d2645ff8649037",
+          "source_ranges": [
+            [
+              97,
+              104
+            ],
+            [
+              107,
+              126
+            ],
+            [
+              132,
+              158
+            ],
+            [
+              161,
+              221
+            ],
+            [
+              223,
+              451
+            ]
+          ],
+          "declarations": [
+            "_source_start_inputs",
+            "_preparation_close_observer",
+            "_source_setup_start",
+            "_observe_context_budget",
+            "test_only_matching_successful_apply_satisfies_objective"
+          ],
+          "destinations": [
+            "tests/recommendation_fixture.py",
+            "tests/test_lead_editorial_capture.py"
+          ],
+          "counting": "Original definitions and three whole Cases move once; public helper names and actual same-origin imports only. Original fixture bodies retain default/global/local-import/MRO/resource lifetime; no copied helpers or new Cases."
+        },
+        {
+          "source": "tests/test_specialist_routing_runtime.py",
+          "sha256": "957e9b18a84b51883269b5c57bec83b37921119549d4d2f3e3b228b623fdf716",
+          "source_ranges": [
+            [
+              72,
+              75
+            ],
+            [
+              78,
+              78
+            ],
+            [
+              93,
+              196
+            ],
+            [
+              1041,
+              1103
+            ]
+          ],
+          "declarations": [
+            "_ADMISSION_BRIEF",
+            "ROSTER",
+            "_SpecialistRoutingRuntimeCase",
+            "test_review_rejects_empty_reference_but_accepts_explicit_user_candidate"
+          ],
+          "destinations": [
+            "tests/lead_fixtures/specialist_routing.py",
+            "tests/test_lead_review_material_validation.py"
+          ],
+          "counting": "Original definitions and three whole Cases move once; public helper names and actual same-origin imports only. Original fixture bodies retain default/global/local-import/MRO/resource lifetime; no copied helpers or new Cases."
+        },
+        {
+          "source": "tests/test_artifact_proposal_orchestration.py",
+          "sha256": "e9229b9e1421a4eba8334d14a697cc86fa0313d7027418a7be66de56526b0537",
+          "source_ranges": [
+            [
+              42,
+              42
+            ],
+            [
+              45,
+              45
+            ],
+            [
+              57,
+              70
+            ],
+            [
+              73,
+              75
+            ],
+            [
+              78,
+              221
+            ],
+            [
+              224,
+              235
+            ],
+            [
+              238,
+              280
+            ],
+            [
+              980,
+              1049
+            ]
+          ],
+          "declarations": [
+            "ARTIFACT_FIXTURE_OUTLINE_PATH",
+            "ARTIFACT_FIXTURE_RULES_PATH",
+            "_reference_ids",
+            "artifact_evidence_status_id",
+            "artifact_review_outcome",
+            "_artifact_synthesis_outcome",
+            "ArtifactReviewFixture",
+            "test_reviewed_history_transfers_with_filesystem_sqlite_parity"
+          ],
+          "destinations": [
+            "tests/lead_fixtures/artifact_review.py",
+            "tests/test_current_lead_inputs.py"
+          ],
+          "counting": "Original definitions and three whole Cases move once; public helper names and actual same-origin imports only. Original fixture bodies retain default/global/local-import/MRO/resource lifetime; no copied helpers or new Cases."
+        }
+      ],
+      "approved_source_delta": 1015,
+      "planned_raw_delta": -228,
+      "planned_support_delta": 1243,
+      "legacy_unresolved_lines": 1550,
+      "counting": "Actual charged raw147608 + support4671 + retained legacy1550 =153829; base152814. Recommendation previously uncounted797 rows are newly covered, not deducted from legacy. Its transferred helper89 rows are net0 and new imports2 are honest additions. Original specialist/artifact bodies transfer once with headers separately charged. Generic suite_budget guard16 physical ordinary rows remain outside frozen charge scope.",
+      "expected_caps_sha256": "87824851d24d7c54287ce730518c3ed2252ae63ea650f2435298b253b7b95491",
       "generic_execution_tool_rows_disclosed": 16
     }
   ]

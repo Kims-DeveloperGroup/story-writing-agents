@@ -14954,6 +14954,74 @@
           "expected_method_ast_sha256": "159d6c6de4365bbe959c0e14dd18b8ff61f49f97e1e931ad6409db7ada7d6bd1"
         }
       ]
+    },
+    {
+      "schema_version": 1,
+      "issue": 1043,
+      "origin_commit": "d66b50e93f3a5a09748fb9a90feecf326124333e",
+      "original_caps_sha256": "c2a287a57fa759f2c1b984c2a3aedf171aa8a08f1ef8032fbd09180079b3fc34",
+      "expected_caps_sha256": "87824851d24d7c54287ce730518c3ed2252ae63ea650f2435298b253b7b95491",
+      "class_moves": [
+        {
+          "source": "tests/test_lead_artifact_objectives.py",
+          "class": "LeadArtifactObjectiveTests",
+          "destination": "tests/test_lead_editorial_capture.py",
+          "destination_class": "LeadEditorialCaptureTests",
+          "methods": [
+            "test_only_matching_successful_apply_satisfies_objective"
+          ]
+        },
+        {
+          "source": "tests/test_specialist_routing_runtime.py",
+          "class": "SpecialistRoutingRuntimeTests",
+          "destination": "tests/test_lead_review_material_validation.py",
+          "destination_class": "LeadReviewMaterialValidationTests",
+          "methods": [
+            "test_review_rejects_empty_reference_but_accepts_explicit_user_candidate"
+          ]
+        },
+        {
+          "source": "tests/test_artifact_proposal_orchestration.py",
+          "class": "ArtifactProposalOrchestrationTests",
+          "destination": "tests/test_current_lead_inputs.py",
+          "destination_class": "CurrentLeadInputsTests",
+          "methods": [
+            "test_reviewed_history_transfers_with_filesystem_sqlite_parity"
+          ]
+        }
+      ],
+      "moves": [
+        {
+          "old_id": "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_only_matching_successful_apply_satisfies_objective",
+          "new_id": "tests.test_lead_editorial_capture.LeadEditorialCaptureTests.test_only_matching_successful_apply_satisfies_objective",
+          "subtest_cap": 0,
+          "source": "tests/test_lead_artifact_objectives.py",
+          "destination": "tests/test_lead_editorial_capture.py",
+          "original_file_sha256": "5c9f16e56eee8b0cfa11e41cd636d9e4c5f9e782bd775f5199d2645ff8649037",
+          "original_method_ast_sha256": "2bbe652e8c61d30eec22fb1a59e8384b057134e021a65bad4f6d3534e6ed26e1",
+          "expected_method_ast_sha256": "dbee81834de26da749a865b822ce363591770aa6547ad8d39e5562c7dceff297"
+        },
+        {
+          "old_id": "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_review_rejects_empty_reference_but_accepts_explicit_user_candidate",
+          "new_id": "tests.test_lead_review_material_validation.LeadReviewMaterialValidationTests.test_review_rejects_empty_reference_but_accepts_explicit_user_candidate",
+          "subtest_cap": 0,
+          "source": "tests/test_specialist_routing_runtime.py",
+          "destination": "tests/test_lead_review_material_validation.py",
+          "original_file_sha256": "957e9b18a84b51883269b5c57bec83b37921119549d4d2f3e3b228b623fdf716",
+          "original_method_ast_sha256": "f5920cddd9bc4cc09154012f0183d36f599a8b94eb4063b2c7af6032eb2738d6",
+          "expected_method_ast_sha256": "f5920cddd9bc4cc09154012f0183d36f599a8b94eb4063b2c7af6032eb2738d6"
+        },
+        {
+          "old_id": "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_reviewed_history_transfers_with_filesystem_sqlite_parity",
+          "new_id": "tests.test_current_lead_inputs.CurrentLeadInputsTests.test_reviewed_history_transfers_with_filesystem_sqlite_parity",
+          "subtest_cap": 0,
+          "source": "tests/test_artifact_proposal_orchestration.py",
+          "destination": "tests/test_current_lead_inputs.py",
+          "original_file_sha256": "e9229b9e1421a4eba8334d14a697cc86fa0313d7027418a7be66de56526b0537",
+          "original_method_ast_sha256": "ac13a11972c5250d7c62b461125393fd2e308b0e233c7c2046b60924b4dcf3c9",
+          "expected_method_ast_sha256": "ac13a11972c5250d7c62b461125393fd2e308b0e233c7c2046b60924b4dcf3c9"
+        }
+      ]
     }
   ]
 }
