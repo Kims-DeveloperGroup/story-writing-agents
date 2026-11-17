@@ -909,6 +909,7 @@
     "tests.test_collaboration_events.CollaborationWireContractTests.test_provider_result_rejected_failure_payload_round_trips_exactly": 0,
     "tests.test_collaboration_events.CollaborationWireContractTests.test_unicode_is_not_normalized_and_tampered_digest_is_rejected": 0,
     "tests.test_collaboration_events.CollaborationWireContractTests.test_validation_message_correlation_round_trips_and_old_message_decodes": 2,
+    "tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests.test_projection_is_deterministic_ordered_typed_and_history_only": 0,
     "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_confirm_starts_one_atomic_dispatch_batch_then_runs_three_in_parallel": 0,
     "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_persistent_validation_publication_failure_keeps_result_unknown": 0,
     "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_result_persistence_failure_cleans_marker_after_provider_completion": 0,
@@ -1293,6 +1294,7 @@
     "tests.test_debug_log.DebugLogStorageTests.test_unsupported_directory_relative_platform_drops_and_recovers": 8,
     "tests.test_debug_log.DebugLogStorageTests.test_workspace_root_replacement_before_or_after_log_construction_is_contained": 4,
     "tests.test_debug_log.DebugLogStorageTests.test_workspace_root_swap_after_root_or_debug_acquisition_closes_resources": 4,
+    "tests.test_document_plan_views.DocumentPlanViewsTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart": 0,
     "tests.test_filesystem_collaboration_event_store.FilesystemCollaborationEventStoreBoundaryTests.test_direct_module_export_only_and_v2_composition_are_exact": 0,
     "tests.test_filesystem_collaboration_event_store.FilesystemCollaborationEventStoreBoundaryTests.test_schema_version_and_module_have_no_dynamic_forwarder": 0,
     "tests.test_filesystem_collaboration_event_store.FilesystemCollaborationEventStoreConcurrencyTests.test_spawned_path_only_stores_serialize_without_workspace_rejection": 0,
@@ -2545,8 +2547,6 @@
     "tests.test_writing_artifacts.SecureStorageTests.test_storage_rejects_traversal_symlink_hardlink_and_nonregular_files": 7,
     "tests.test_writing_artifacts.SecureStorageTests.test_two_simultaneous_first_lock_writers_serialize_without_deadlock": 0,
     "tests.test_writing_artifacts.SecureStorageTests.test_unsupported_safe_primitives_fail_on_first_artifact_operation": 0,
-    "tests.test_writing_artifacts.SecureStorageTests.test_workspace_lock_serializes_independent_repository_instances": 0,
-    "tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests.test_projection_is_deterministic_ordered_typed_and_history_only": 0,
-    "tests.test_document_plan_views.DocumentPlanViewsTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart": 0
+    "tests.test_writing_artifacts.SecureStorageTests.test_workspace_lock_serializes_independent_repository_instances": 0
   }
 }
