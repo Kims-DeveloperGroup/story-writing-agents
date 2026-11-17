@@ -1,6 +1,5 @@
 """Recommendation request policy values and proposal-basis construction."""
 
-from __future__ import annotations
 
 from ..authoring_admission import AuthoringAdmissionBasis
 from ..authoring_task_lifecycle import task_identity_for_origin
