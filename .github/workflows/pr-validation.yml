@@ -234,8 +234,8 @@ jobs:
               core.setFailed("GC 관측은 수동 affected 선택에서만 허용합니다.");
               return;
             }
-            if (process.env.COMPARE_FEEDBACK_BASELINE === "true" && (!affectedOnly || process.env.OBSERVE_GC === "true")) {
-              core.setFailed("수정 전 피드백 비교는 GC 관측 없는 수동 affected 선택에서만 허용합니다."); return;
+            if (!manualMode || !wholeFrontOnly || process.env.COMPARE_FEEDBACK_BASELINE !== "true" || process.env.OBSERVE_GC === "true" || process.env.PROFILE_SELECTION === "true" || (process.env.REQUESTED_TEST_IDS || "") !== "") {
+              core.setFailed("이 검증 전용 workflow는 기존 whole-front 한 사례의 기본 GC·비프로파일 shared3600 전후 비교만 허용합니다."); return;
             }
             if (process.env.PROFILE_SELECTION === "true" && (!affectedOnly || process.env.OBSERVE_GC === "true")) {
               core.setFailed("함수 프로파일은 GC 관측 없는 수동 affected 선택에서만 허용합니다."); return;
@@ -1017,6 +1017,46 @@ jobs:
                   stream.write(json.dumps(data, indent=2, allow_nan=False) + '\n')
               print(json.dumps(data, sort_keys=True, allow_nan=False))
           PY_HARDWARE
+      - name: Prepare fresh paired source and recording paths
+        run: |
+          test ! -e "$GITHUB_WORKSPACE/.front-schema-whole-pair-baseline"
+          pair_root="$RUNNER_TEMP/front-schema-whole-pair"
+          test ! -e "$pair_root"
+          mkdir -m 700 "$pair_root"
+          echo "FRONT_PAIR_ROOT=$pair_root" >> "$GITHUB_ENV"
+          cat > "$pair_root/cli-wall-parent.py" <<'PY_PARENT'
+          """Normal fresh-child CLI wall recorder; stdlib only."""
+          from pathlib import Path
+          import json
+          import subprocess
+          import sys
+          import time
+          record = {"schema_version": 1, "mode": "normal-fresh-child-cli-wall",
+                    "source_role": sys.argv[2], "argv": sys.argv[3:], "returncode": None}
+          started = time.monotonic_ns()
+          try:
+              completed = subprocess.run(sys.argv[3:], check=False)
+              record["returncode"] = completed.returncode
+          finally:
+              finished = time.monotonic_ns()
+              record.update(started_monotonic_ns=started, finished_monotonic_ns=finished,
+                            observed_child_cli_wall_seconds=(finished - started) / 1_000_000_000)
+              Path(sys.argv[1]).write_text(json.dumps(record, allow_nan=False) + "\n")
+          raise SystemExit(completed.returncode)
+          PY_PARENT
+      - name: Checkout exact before source for shared-window comparison
+        uses: actions/checkout@v4
+        with:
+          ref: d34eee7385bc869b60cda45c69f6ffaf68c3cf9b
+          submodules: recursive
+          path: .front-schema-whole-pair-baseline
+      - name: Verify paired source dependency and vendor identity
+        run: |
+          test "$(git -C .front-schema-whole-pair-baseline rev-parse HEAD)" = "d34eee7385bc869b60cda45c69f6ffaf68c3cf9b"
+          cmp pyproject.toml .front-schema-whole-pair-baseline/pyproject.toml
+          cmp uv.lock .front-schema-whole-pair-baseline/uv.lock
+          cmp .gitmodules .front-schema-whole-pair-baseline/.gitmodules
+          test "$(git ls-tree HEAD vendor/)" = "$(git -C .front-schema-whole-pair-baseline ls-tree HEAD vendor/)"
       - name: Verify five-shard policy before the whole-front window
         timeout-minutes: 3
         run: |
@@ -1032,36 +1072,126 @@ jobs:
           if (( policy_status == 0 && policy_statuses[1] != 0 )); then policy_status=${policy_statuses[1]}; fi
           printf '%s\n' "$policy_status" > "$RUNNER_TEMP/whole-front-policy-exit-code.txt"
           exit "$policy_status"
-      - name: Run dedicated whole-front shard
+      - name: Grant one shared whole-front execution window
         run: |
           test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))
           if (( test_seconds > 3600 )); then test_seconds=3600; fi
-          printf '{"worker_limit_seconds":%s,"kill_grace_seconds":30,"cleanup_reserve_seconds":60,"cancellation_reserve_seconds":360}\n' "$test_seconds" > "$RUNNER_TEMP/full-5-control.json"
+          printf '{"worker_limit_seconds":%s,"kill_grace_seconds":30,"cleanup_reserve_seconds":60,"cancellation_reserve_seconds":360}\n' "$test_seconds" > "$FRONT_PAIR_ROOT/shared-control.json"
           if (( test_seconds < 3600 )); then
             printf 'Full shard requires 3600 seconds of execution plus shutdown reserve; available: %s seconds\n' "$test_seconds" >&2
-            printf '124\n' > "$RUNNER_TEMP/full-5-exit-code.txt"
+            printf '124\n' > "$FRONT_PAIR_ROOT/shared-exit-code.txt"
             exit 124
           fi
           test_work_deadline=$(.venv/bin/python -c 'import os,sys,time; w=time.time()+3600; cutoff=min(int(os.environ["TEST_JOB_DEADLINE"]),int(os.environ["TEST_RUN_DEADLINE"]))-450; sys.exit("Insufficient remaining time for a full test hour") if w > cutoff else print(w)')
-          .venv/bin/python -c 'import json,pathlib,sys; p=pathlib.Path(sys.argv[1]); d=json.loads(p.read_text()); w=float(sys.argv[2]); d.update(work_deadline_epoch=w,hard_cleanup_deadline_epoch=w+30,execution_profile="audited-163-v9",maximum_method_workers=4); p.write_text(json.dumps(d,allow_nan=False)+"\n")' "$RUNNER_TEMP/full-5-control.json" "$test_work_deadline"
+          echo "FRONT_PAIR_WORK_DEADLINE=$test_work_deadline" >> "$GITHUB_ENV"
+          .venv/bin/python - "$FRONT_PAIR_ROOT/shared-control.json" "$test_work_deadline" <<'PY_SHARED'
+          import json, pathlib, sys
+          path = pathlib.Path(sys.argv[1])
+          value = json.loads(path.read_text())
+          deadline = float(sys.argv[2])
+          value.update(schema_version=1, mode="supplementary-two-source-shared3600",
+                       shared_window_seconds=3600, shared_start_epoch=deadline-3600,
+                       work_deadline_epoch=deadline, hard_cleanup_deadline_epoch=deadline+30,
+                       maximum_method_workers=4,
+                       execution_profiles={"before": "audited-162-v8", "current": "audited-163-v9"},
+                       source_cohorts={"before": "d34eee7385bc869b60cda45c69f6ffaf68c3cf9b", "current": "975ad95ced0b8372970617e61ea55273426d0cea"})
+          path.write_text(json.dumps(value, allow_nan=False)+"\n")
+          PY_SHARED
+      - name: Run current normal shard 5/5 in remaining shared window
+        env:
+          PAIR_ROLE: current
+          PAIR_PROFILE: audited-163-v9
+        run: |
+          phase_dir="$FRONT_PAIR_ROOT/$PAIR_ROLE"
+          mkdir -m 700 "$phase_dir"
+          if [[ "$PAIR_ROLE" == "before" ]]; then
+            cd "$GITHUB_WORKSPACE/.front-schema-whole-pair-baseline"
+          elif [[ "$PAIR_ROLE" == "current" ]]; then
+            cd "$GITHUB_WORKSPACE"
+          else
+            exit 2
+          fi
+          phase_seconds=$("$GITHUB_WORKSPACE/.venv/bin/python" - "$phase_dir/full-5-control.json" "$PAIR_ROLE" "$PAIR_PROFILE" <<'PY_REMAINING'
+          import json, math, os, pathlib, sys, time
+          deadline = float(os.environ["FRONT_PAIR_WORK_DEADLINE"])
+          now = time.time()
+          remaining = deadline-now
+          seconds = max(0, math.floor(remaining))
+          value = {"schema_version": 1, "mode": "remaining-shared-window",
+                   "source_role": sys.argv[2], "execution_profile": sys.argv[3],
+                   "shared_window_seconds": 3600, "phase_start_epoch": now,
+                   "remaining_shared_seconds_raw": remaining,
+                   "worker_limit_seconds": seconds, "work_deadline_epoch": deadline,
+                   "hard_cleanup_deadline_epoch": deadline+30,
+                   "kill_grace_seconds": 30, "cleanup_reserve_seconds": 60,
+                   "cancellation_reserve_seconds": 360, "maximum_method_workers": 4}
+          pathlib.Path(sys.argv[1]).write_text(json.dumps(value, allow_nan=False)+"\n")
+          print(seconds)
+          PY_REMAINING
+          )
+          if (( phase_seconds <= 0 )); then
+            printf '124\n' > "$phase_dir/full-5-exit-code.txt"
+            exit 124
+          fi
+          phase_argv=("$GITHUB_WORKSPACE/.venv/bin/python" -m tests.runner run --shard "5/5" --hosted-methods "$PAIR_PROFILE" --hosted-deadline-epoch "$FRONT_PAIR_WORK_DEADLINE" --json "$phase_dir/full-5.json")
           set +e
-          timeout --signal=INT --kill-after=30s "${test_seconds}s" env PYTHONPATH=src .venv/bin/python -m tests.runner run --shard "5/5" --hosted-methods audited-163-v9 --hosted-deadline-epoch "$test_work_deadline" --json "$RUNNER_TEMP/full-5.json" 2>&1 | tee "$RUNNER_TEMP/full-5.log"
+          timeout --signal=INT --kill-after=30s "${phase_seconds}s" env PYTHONPATH=src "$GITHUB_WORKSPACE/.venv/bin/python" "$FRONT_PAIR_ROOT/cli-wall-parent.py" "$phase_dir/cli-wall.json" "$PAIR_ROLE" "${phase_argv[@]}" 2>&1 | tee "$phase_dir/full-5.log"
           test_statuses=("${PIPESTATUS[@]}")
           test_status=${test_statuses[0]}
           if (( test_status == 0 && test_statuses[1] != 0 )); then test_status=${test_statuses[1]}; fi
-          printf '%s\n' "$test_status" > "$RUNNER_TEMP/full-5-exit-code.txt"
+          printf '%s\n' "$test_status" > "$phase_dir/full-5-exit-code.txt"
+          exit "$test_status"
+      - name: Run before normal shard 5/5 in remaining shared window
+        env:
+          PAIR_ROLE: before
+          PAIR_PROFILE: audited-162-v8
+        run: |
+          phase_dir="$FRONT_PAIR_ROOT/$PAIR_ROLE"
+          mkdir -m 700 "$phase_dir"
+          if [[ "$PAIR_ROLE" == "before" ]]; then
+            cd "$GITHUB_WORKSPACE/.front-schema-whole-pair-baseline"
+          elif [[ "$PAIR_ROLE" == "current" ]]; then
+            cd "$GITHUB_WORKSPACE"
+          else
+            exit 2
+          fi
+          phase_seconds=$("$GITHUB_WORKSPACE/.venv/bin/python" - "$phase_dir/full-5-control.json" "$PAIR_ROLE" "$PAIR_PROFILE" <<'PY_REMAINING'
+          import json, math, os, pathlib, sys, time
+          deadline = float(os.environ["FRONT_PAIR_WORK_DEADLINE"])
+          now = time.time()
+          remaining = deadline-now
+          seconds = max(0, math.floor(remaining))
+          value = {"schema_version": 1, "mode": "remaining-shared-window",
+                   "source_role": sys.argv[2], "execution_profile": sys.argv[3],
+                   "shared_window_seconds": 3600, "phase_start_epoch": now,
+                   "remaining_shared_seconds_raw": remaining,
+                   "worker_limit_seconds": seconds, "work_deadline_epoch": deadline,
+                   "hard_cleanup_deadline_epoch": deadline+30,
+                   "kill_grace_seconds": 30, "cleanup_reserve_seconds": 60,
+                   "cancellation_reserve_seconds": 360, "maximum_method_workers": 4}
+          pathlib.Path(sys.argv[1]).write_text(json.dumps(value, allow_nan=False)+"\n")
+          print(seconds)
+          PY_REMAINING
+          )
+          if (( phase_seconds <= 0 )); then
+            printf '124\n' > "$phase_dir/full-5-exit-code.txt"
+            exit 124
+          fi
+          phase_argv=("$GITHUB_WORKSPACE/.venv/bin/python" -m tests.runner run --shard "5/5" --hosted-methods "$PAIR_PROFILE" --hosted-deadline-epoch "$FRONT_PAIR_WORK_DEADLINE" --json "$phase_dir/full-5.json")
+          set +e
+          timeout --signal=INT --kill-after=30s "${phase_seconds}s" env PYTHONPATH=src "$GITHUB_WORKSPACE/.venv/bin/python" "$FRONT_PAIR_ROOT/cli-wall-parent.py" "$phase_dir/cli-wall.json" "$PAIR_ROLE" "${phase_argv[@]}" 2>&1 | tee "$phase_dir/full-5.log"
+          test_statuses=("${PIPESTATUS[@]}")
+          test_status=${test_statuses[0]}
+          if (( test_status == 0 && test_statuses[1] != 0 )); then test_status=${test_statuses[1]}; fi
+          printf '%s\n' "$test_status" > "$phase_dir/full-5-exit-code.txt"
           exit "$test_status"
       - uses: actions/upload-artifact@v4
         timeout-minutes: 1
         if: always()
         with:
-          name: full-5
+          name: front-schema-whole-pair
           path: |
-            ${{ runner.temp }}/full-5.json
-            ${{ runner.temp }}/full-5.json.methods/
-            ${{ runner.temp }}/full-5.log
-            ${{ runner.temp }}/full-5-control.json
-            ${{ runner.temp }}/full-5-exit-code.txt
+            ${{ runner.temp }}/front-schema-whole-pair/
             ${{ runner.temp }}/runner-hardware-full-5.json
             ${{ runner.temp }}/whole-front-policy.json
             ${{ runner.temp }}/whole-front-policy.log
