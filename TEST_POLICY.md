@@ -13,7 +13,7 @@
 합집합으로 한 번만 더한다. 원본 commit·hash·범위로 이동 출처를 추적한다. 기존
 미확인 보조 코드 **1,550행**은 중복·종료가 입증되기 전까지 유지한다. 기존 범용
 러너·queue·reporting 도구 전체를 새로 청구하는 범위 확대는 하지 않으며, 테스트
-내용을 도구로 옮겨 비용을 누락시키는 것은 금지한다. 이슈별 승인 배정을 포함한 현행 상한은 **151,686행**이다.
+내용을 도구로 옮겨 비용을 누락시키는 것은 금지한다. 이슈별 승인 배정을 포함한 현행 상한은 **153,941행**이다.
 
 개발 반복에서는 최소 유효 focused 선택을 사용하고, 공유 계약·fixture·상태·권한
 변경은 필요한 실제 소비자와 host 경계로 확대한다. 영향이 불명확하면 전체를 선택한다.
@@ -1092,3 +1092,27 @@ weight group395→398을 명시한다. 전체18000초·shard3600초와 최대4wo
 양의 개별 변화를 기록하고 실제 Story runtime 회귀는 실패로 판단한다.
 사용자가 허용한 미세 변동·전체 시간에 큰 지장이 없는 정책 검증 비용은
 실제 변화와 근거를 공개해 판단하며 영향이 없다고 표시하지 않는다.
+
+## #1044의 문서 계획 선택·뷰 정책 분리 소스 배정
+
+#1043을 통합한 main `e6bf42bc3e7e9e732f80010c5c16f5c4d792d262`의
+raw147,608/support4,671/legacy1,550, 합계153,829행을 기준으로 사용자의 필요한 행
+추가 포괄 승인을 적용한다. 기존2Case·전체285assertion·음성17개·cap0/0·입력/준비·MRO와
+자원 수명을 보존한다. 순수 Case는 broad history projection의 실제 책임을 반영한
+`tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests`로 옮기고,
+Runtime Case는 `tests.test_document_plan_views.DocumentPlanViewsTests`로 옮긴다.
+
+실제 재계수는 raw147,717/support4,674/legacy1,550, 합계**153,941행(+112)**이다.
+테스트 이동·header/import·원래 goal 연산 전달·필수 graph/API/packaging 검증과
+기존 stage 지원은+93행(raw+90/support+3), 기존 예산 정책 Case의 새 정확 전이·이전 snapshot
+복원·neighbor/schema/time/caps 거절 검증은+19행이다. generic strict guard16행은 기존
+frozen counter 밖의 물리 비용으로 별도 공개하며 이곳으로 assertion이나 시나리오를 옮기지 않는다.
+기존 Recommendation 지원797행을 다시 청구하거나 legacy1,550행을 공제하지 않는다.
+
+정확한 source-only `153829→153941` 쌍, schema1·Case2,544/cap합8,690·시간18,000/3,600초와
+닫힌 before/after 전체 cap digest를 함께 요구한다. 원래 두 cap0 ID만1:1 rekey하며 다른 cap은
+동일하다. 과거 모든 receipt/stage·정책 전이·부정 경계와 snapshot 복원은 유지한다.
+weight는398→399 group으로 편성하지만 총pool53,351,213,361µs는 같다. hosted162개 중
+Runtime1개 ID만 rekey하고 hosted class29·기존 launch 위치37·worker4·audited-162-v8
+token/format/version을 보존한다. 새 Case·subTest·시간/worker 상한 증가는 없다.
+실제 실행·성능·공식 리뷰·통합은 별도 증거로 판정하며 source 예외로 면제하지 않는다.

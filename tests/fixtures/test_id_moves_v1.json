@@ -15022,6 +15022,55 @@
           "expected_method_ast_sha256": "ac13a11972c5250d7c62b461125393fd2e308b0e233c7c2046b60924b4dcf3c9"
         }
       ]
+    },
+    {
+      "schema_version": 1,
+      "issue": 1044,
+      "origin_commit": "e6bf42bc3e7e9e732f80010c5c16f5c4d792d262",
+      "original_caps_sha256": "87824851d24d7c54287ce730518c3ed2252ae63ea650f2435298b253b7b95491",
+      "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
+      "class_moves": [
+        {
+          "source": "tests/test_collaboration_context.py",
+          "class": "CollaborationTransitionTests",
+          "destination": "tests/test_collaboration_history_projection.py",
+          "destination_class": "CollaborationHistoryProjectionTests",
+          "methods": [
+            "test_projection_is_deterministic_ordered_typed_and_history_only"
+          ]
+        },
+        {
+          "source": "tests/test_lead_artifact_objectives.py",
+          "class": "LeadArtifactObjectiveTests",
+          "destination": "tests/test_document_plan_views.py",
+          "destination_class": "DocumentPlanViewsTests",
+          "methods": [
+            "test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart"
+          ]
+        }
+      ],
+      "moves": [
+        {
+          "old_id": "tests.test_collaboration_context.CollaborationTransitionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+          "new_id": "tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+          "subtest_cap": 0,
+          "source": "tests/test_collaboration_context.py",
+          "destination": "tests/test_collaboration_history_projection.py",
+          "original_file_sha256": "098671825ef146bff361312b48d700681da0c87ec5b7fdd1a829b70f4be20dea",
+          "original_method_ast_sha256": "f993b451c91f5f6aae2ce4e9bc4d186d1c2b4d41229822d2e236072584118339",
+          "expected_method_ast_sha256": "674a8c3326fed8444945fb0f34257f021a6f8eb4fe51d784ac541a4159f7800a"
+        },
+        {
+          "old_id": "tests.test_lead_artifact_objectives.LeadArtifactObjectiveTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
+          "new_id": "tests.test_document_plan_views.DocumentPlanViewsTests.test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
+          "subtest_cap": 0,
+          "source": "tests/test_lead_artifact_objectives.py",
+          "destination": "tests/test_document_plan_views.py",
+          "original_file_sha256": "bb772f94441be338b72edf75f2ff7847457d1b599f12f19c6cd609aea3fe619e",
+          "original_method_ast_sha256": "8ec08609b226ba8383fc5c6a5aed94fc3b52d439af4de2052f68b440ef31c1b5",
+          "expected_method_ast_sha256": "8ec08609b226ba8383fc5c6a5aed94fc3b52d439af4de2052f68b440ef31c1b5"
+        }
+      ]
     }
   ]
 }

@@ -1172,6 +1172,73 @@
       "counting": "Actual charged raw147608 + support4671 + retained legacy1550 =153829; base152814. Recommendation previously uncounted797 rows are newly covered, not deducted from legacy. Its transferred helper89 rows are net0 and new imports2 are honest additions. Original specialist/artifact bodies transfer once with headers separately charged. Generic suite_budget guard16 physical ordinary rows remain outside frozen charge scope.",
       "expected_caps_sha256": "87824851d24d7c54287ce730518c3ed2252ae63ea650f2435298b253b7b95491",
       "generic_execution_tool_rows_disclosed": 16
+    },
+    {
+      "issue": 1044,
+      "origin_commit": "e6bf42bc3e7e9e732f80010c5c16f5c4d792d262",
+      "origins": [
+        {
+          "source": "tests/test_collaboration_context.py",
+          "sha256": "098671825ef146bff361312b48d700681da0c87ec5b7fdd1a829b70f4be20dea",
+          "source_ranges": [
+            [
+              192,
+              693
+            ]
+          ],
+          "declarations": [
+            "test_projection_is_deterministic_ordered_typed_and_history_only"
+          ],
+          "destinations": [
+            "tests/test_collaboration_history_projection.py"
+          ],
+          "counting": "Complete existing Case and exclusive producers move once. All285 original assertions/negative17/cap0/0/MRO/resources and local/global phase retained. Only pure goal call uses public module and actual existing public reader; no new fixture/scenario."
+        },
+        {
+          "source": "tests/test_lead_artifact_objectives.py",
+          "sha256": "bb772f94441be338b72edf75f2ff7847457d1b599f12f19c6cd609aea3fe619e",
+          "source_ranges": [
+            [
+              110,
+              614
+            ],
+            [
+              34,
+              69
+            ],
+            [
+              72,
+              78
+            ],
+            [
+              81,
+              89
+            ],
+            [
+              92,
+              96
+            ]
+          ],
+          "declarations": [
+            "test_document_plan_goal_candidate_and_sequential_plot_work_survive_restart",
+            "_document_plan_native_response",
+            "_document_global_candidate_script",
+            "_document_global_draft_recommendation_script",
+            "_planning_question_response"
+          ],
+          "destinations": [
+            "tests/test_document_plan_views.py"
+          ],
+          "counting": "Complete existing Case and exclusive producers move once. All285 original assertions/negative17/cap0/0/MRO/resources and local/global phase retained. Only pure goal call uses public module and actual existing public reader; no new fixture/scenario."
+        }
+      ],
+      "approved_source_delta": 112,
+      "planned_raw_delta": 109,
+      "planned_support_delta": 3,
+      "legacy_unresolved_lines": 1550,
+      "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
+      "generic_execution_tool_rows_disclosed": 16,
+      "counting": "Final coherent actual counter raw147717+support4674+retained legacy1550=153941; base153829 delta112(raw+109/support+3). Test-role owned changes contribute93(raw+90/support+3); Root-owned existing BudgetCase adds19 charged rows. Root generic suite_budget guard16ordinary/physical rows remain outside the frozen charge. Original2methods and exclusive57producer rows transfer raw→raw once net0, no Recommendation797/799 recharge. Root-owned budget3files are observed, not edited by this test role."
     }
   ]
 }
