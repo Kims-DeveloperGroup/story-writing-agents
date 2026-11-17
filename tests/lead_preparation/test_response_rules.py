@@ -861,7 +861,7 @@ class SpecialistRoutingTests(unittest.TestCase):
         from story_writing_agents.lead_preparation.response_rules import lead_front_result_contract
         from tests.agent_context.invocation.execution_fixture import make_group_control as _group_control
         from tests.test_provider_schema_spec import check_schema
-        from tests import test_lead_artifact_objectives as document_fixture
+        from tests import test_document_plan_views as document_fixture
         from story_writing_agents.agents import LEAD_ORCHESTRATOR
         facts = LeadProviderConstraints(input_ids=("user_input",), task_revisions=((task.task_id, task.task_revision),))
         seed = lead_front_result_contract(c.LeadProposalRelation.NEW_STEP, facts.input_ids, constraints=facts)
@@ -903,7 +903,7 @@ class SpecialistRoutingTests(unittest.TestCase):
         from story_writing_agents.lead_provider_contracts import LeadProviderConstraints
         from story_writing_agents.lead_preparation.call_rule_factory import OrchestrationLeadCallFactory
         from tests.test_provider_schema_spec import check_schema
-        from tests import test_lead_artifact_objectives as document_fixture
+        from tests import test_document_plan_views as document_fixture
         from tests.lead_fixtures import preparation_data, provider_responses
         from story_writing_agents.agents import LEAD_ORCHESTRATOR
         facts = LeadProviderConstraints(input_ids=("user_input",), task_revisions=((task.task_id, task.task_revision),))

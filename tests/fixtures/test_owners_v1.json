@@ -6439,7 +6439,7 @@
         "lead-fixtures.provider-responses",
         "lead-fixtures.runtime-setup",
         "lead-fixtures.specialist-routing",
-        "tests.test_lead_artifact_objectives"
+        "tests.test_document_plan_views"
       ]
     },
     {
