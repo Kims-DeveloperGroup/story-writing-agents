@@ -671,6 +671,19 @@ jobs:
                   stream.write(json.dumps(data, indent=2, allow_nan=False) + '\n')
               print(json.dumps(data, sort_keys=True, allow_nan=False))
           PY_HARDWARE
+      - name: 요청·결정 파일의 실제 canonical 선택 기록
+        env:
+          PYTHONPATH: src
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          .venv/bin/python -m tests.runner list --path src/story_writing_agents/lead_preparation/recommendation_requests.py --scope focused --json "$RUNNER_TEMP/owner-path-requests-focused.json"
+          .venv/bin/python -m tests.runner list --path src/story_writing_agents/lead_preparation/recommendation_requests.py --scope affected --json "$RUNNER_TEMP/owner-path-requests-affected.json"
+          .venv/bin/python -m tests.runner list --path src/story_writing_agents/lead_preparation/recommendation_decisions.py --scope focused --json "$RUNNER_TEMP/owner-path-decisions-focused.json"
+          .venv/bin/python -m tests.runner list --path src/story_writing_agents/lead_preparation/recommendation_decisions.py --scope affected --json "$RUNNER_TEMP/owner-path-decisions-affected.json"
+          .venv/bin/python -m tests.runner list --path src/story_writing_agents/lead_preparation/recommendation_requests.py --path src/story_writing_agents/lead_preparation/recommendation_decisions.py --scope focused --json "$RUNNER_TEMP/owner-path-both-focused.json"
+          .venv/bin/python -m tests.runner list --path src/story_writing_agents/lead_preparation/recommendation_requests.py --path src/story_writing_agents/lead_preparation/recommendation_decisions.py --scope affected --json "$RUNNER_TEMP/owner-path-both-affected.json"
+          .venv/bin/python -m tests.runner list --path src/story_writing_agents/lead_preparation/recommendation_preparation.py --scope affected --json "$RUNNER_TEMP/owner-path-oldprep-affected.json"
+          .venv/bin/python -m tests.runner list --path src/story_writing_agents/orchestrator.py --scope affected --json "$RUNNER_TEMP/owner-path-Root-affected.json"
       - name: Run fast runtime tests
         run: |
           selector=(--tier fast)
@@ -785,6 +798,7 @@ jobs:
             ${{ runner.temp }}/case-profile-*
             ${{ runner.temp }}/fast-exit-code.txt
             ${{ runner.temp }}/fast-selection-argv.txt
+            ${{ runner.temp }}/owner-path-*.json
             ${{ runner.temp }}/runner-hardware-fast.json
           if-no-files-found: warn
 
