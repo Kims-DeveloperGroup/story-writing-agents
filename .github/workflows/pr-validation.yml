@@ -261,8 +261,8 @@ jobs:
                   core.setFailed("영향 테스트 ID는 중복·빈 줄 없이 한 줄에 하나의 정규 ID여야 합니다.");
                   return;
                 }
-                if (process.env.COMPARE_FEEDBACK_BASELINE === "true" && !ids.includes("tests.test_selected_task_material_codec.SelectedTaskMaterialCodecTests.test_two_captures_keep_closed_wire_shape_and_order")) {
-                  core.setFailed("피드백 비교에는 기존 codec 사례의 정확한 ID가 필요합니다."); return;
+                if (process.env.COMPARE_FEEDBACK_BASELINE === "true" && (process.env.PROFILE_SELECTION === "true" || process.env.OBSERVE_GC === "true" || JSON.stringify(ids) !== JSON.stringify(["tests.test_agent_context_actions.ActionValueTests.test_source_authority_boundary_matrix_and_exact_digest_bytes", "tests.test_codex_backend.CodexBackendTestCase.test_process_stop_escalates_from_terminate_to_kill", "tests.test_interactive_terminal_foundation.CapabilityAndDriverFoundationTests.test_capable_advisory_progress_orders_frames_and_serializes_writes", "tests.test_lead_orchestration.LeadDecisionAuthorityTests.test_mismatch_reject_revise_and_free_text_are_non_authorizing", "tests.test_provider_auth.ProviderAuthProcessContractTests.test_constructor_and_provider_validation_are_pre_process", "tests.test_provider_catalog.ProviderCatalogProjectionTests.test_codex_parser_rejects_non_strict_json_shapes_and_duplicates", "tests.test_public_api_and_cli.CliTests.test_module_help_lists_public_commands", "tests.test_reply_trace.ReplyTraceContractTests.test_exact_round_trip_contains_labels_only", "tests.test_writing_artifacts.ArtifactGrammarTests.test_required_output_grammar_has_no_root_or_compatibility_form", "tests.test_writing_artifacts.SecureStorageTests.test_storage_rejects_traversal_symlink_hardlink_and_nonregular_files"]))) {
+                  core.setFailed("정상 FAST10 전후 비교에는 고정된 열 ID와 순서 및 기본 GC·비프로파일 모드가 필요합니다."); return;
                 }
                 affectedIds = ids.join("\n");
               } else if (requestedIds !== "") {
@@ -671,6 +671,28 @@ jobs:
                   stream.write(json.dumps(data, indent=2, allow_nan=False) + '\n')
               print(json.dumps(data, sort_keys=True, allow_nan=False))
           PY_HARDWARE
+      - name: Prepare normal paired CLI wall recorder
+        run: |
+          cat > "$RUNNER_TEMP/fast10-pair-cli-wall-parent.py" <<'PY'
+          """Normal fresh-child CLI wall recorder; stdlib only."""
+          from pathlib import Path
+          import json
+          import subprocess
+          import sys
+          import time
+          record = {"schema_version": 1, "mode": "normal-fresh-child-cli-wall",
+                    "source_role": sys.argv[2], "argv": sys.argv[3:], "returncode": None}
+          started = time.monotonic_ns()
+          try:
+              completed = subprocess.run(sys.argv[3:], check=False)
+              record["returncode"] = completed.returncode
+          finally:
+              finished = time.monotonic_ns()
+              record.update(started_monotonic_ns=started, finished_monotonic_ns=finished,
+                            observed_child_cli_wall_seconds=(finished - started) / 1_000_000_000)
+              Path(sys.argv[1]).write_text(json.dumps(record, allow_nan=False) + "\n")
+          raise SystemExit(completed.returncode)
+          PY
       - name: Run fast runtime tests
         run: |
           selector=(--tier fast)
@@ -695,48 +717,17 @@ jobs:
             runner=(.venv/bin/python -m cProfile -o "$RUNNER_TEMP/case-profile-current.prof" -m tests.runner run "${selector[@]}" --json "$RUNNER_TEMP/case-profile-current.json")
           fi
           set +e
-          timeout --signal=INT --kill-after=30s "${test_seconds}s" env PYTHONPATH=src "${runner[@]}" 2>&1 | tee "$RUNNER_TEMP/fast.log"
+          timeout --signal=INT --kill-after=30s "${test_seconds}s" env PYTHONPATH=src .venv/bin/python "$RUNNER_TEMP/fast10-pair-cli-wall-parent.py" "$RUNNER_TEMP/fast10-pair-current-cli-wall.json" current "${runner[@]}" 2>&1 | tee "$RUNNER_TEMP/fast.log"
           test_statuses=("${PIPESTATUS[@]}")
           test_status=${test_statuses[0]}
           if (( test_status == 0 && test_statuses[1] != 0 )); then test_status=${test_statuses[1]}; fi
           printf '%s\n' "$test_status" > "$RUNNER_TEMP/fast-exit-code.txt"
           exit "$test_status"
-      - name: 기존 생산 경계의 RED와 GREEN 피드백 확인
-        if: needs.classify.outputs.affected_only == 'true' && inputs.observe_gc != true && inputs.profile_selection != true
-        run: |
-          case "$FEEDBACK_WITNESS" in
-            codec)
-              witness_ids=('tests.test_selected_task_material_codec.SelectedTaskMaterialCodecTests.test_two_captures_keep_closed_wire_shape_and_order')
-              ;;
-            source-snapshot)
-              witness_ids=(
-                'tests.test_agent_context_sources.SourceSurfacePolicyAndValueTests.test_descriptor_snapshot_records_are_exact_immutable_and_content_hidden'
-                'tests.agent_context.sources.test_source_contracts.SourceSurfacePolicyAndValueTests.test_descriptor_snapshot_records_are_exact_immutable_and_content_hidden'
-              )
-              ;;
-            provider-call-ordinal)
-              witness_ids=('tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_failure_closure_write_error_keeps_history_gated')
-              ;;
-            successor-selection)
-              witness_ids=(
-                'tests.test_specialist_routing.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip'
-                'tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip'
-              )
-              ;;
-            *) exit 2 ;;
-          esac
-          for witness_id in "${witness_ids[@]}"; do
-            if grep -Fxq "$witness_id" <<< "$AFFECTED_IDS"; then
-              PYTHONPATH=src .venv/bin/python -m tests.feedback_probe \
-                --witness "$FEEDBACK_WITNESS" --json "$RUNNER_TEMP/feedback-probe.json"
-              break
-            fi
-          done
       - name: 수정 전 피드백 소스 준비
         if: inputs.compare_feedback_baseline == true && needs.classify.outputs.affected_only == 'true'
         uses: actions/checkout@v4
         with:
-          ref: 45cf084f0d28eb5926863e90509e5f14bbd3497e
+          ref: d34eee7385bc869b60cda45c69f6ffaf68c3cf9b
           submodules: recursive
           path: .feedback-baseline
       - name: 같은 환경에서 수정 전 RED와 GREEN 측정
@@ -761,16 +752,12 @@ jobs:
             baseline_runner=("$GITHUB_WORKSPACE/.venv/bin/python" -m cProfile -o "$RUNNER_TEMP/case-profile-baseline.prof" -m tests.runner run "${baseline_ids[@]}" --json "$RUNNER_TEMP/case-profile-baseline.json")
           fi
           set +e
-          timeout --signal=INT --kill-after=30s "${baseline_seconds}s" env PYTHONPATH=src "${baseline_runner[@]}" 2>&1 | tee "$RUNNER_TEMP/feedback-probe-baseline-affected.log"
+          timeout --signal=INT --kill-after=30s "${baseline_seconds}s" env PYTHONPATH=src "$GITHUB_WORKSPACE/.venv/bin/python" "$RUNNER_TEMP/fast10-pair-cli-wall-parent.py" "$RUNNER_TEMP/fast10-pair-before-cli-wall.json" before "${baseline_runner[@]}" 2>&1 | tee "$RUNNER_TEMP/feedback-probe-baseline-affected.log"
           baseline_statuses=("${PIPESTATUS[@]}")
           set -e
           baseline_status=${baseline_statuses[0]}
           if (( baseline_status == 0 && baseline_statuses[1] != 0 )); then baseline_status=${baseline_statuses[1]}; fi
           if (( baseline_status != 0 )); then exit "$baseline_status"; fi
-          if [[ "$PROFILE_SELECTION" != "true" ]]; then
-            PYTHONPATH=src "$GITHUB_WORKSPACE/.venv/bin/python" "$GITHUB_WORKSPACE/tests/feedback_probe.py" \
-              --repository-root "$PWD" --witness "$FEEDBACK_WITNESS" --json "$RUNNER_TEMP/feedback-probe-baseline.json"
-          fi
       - uses: actions/upload-artifact@v4
         timeout-minutes: 1
         if: always()
@@ -780,6 +767,7 @@ jobs:
             ${{ runner.temp }}/fast.json
             ${{ runner.temp }}/fast.log
             ${{ runner.temp }}/fast-control.json
+            ${{ runner.temp }}/fast10-pair-*-cli-wall.json
             ${{ runner.temp }}/feedback-probe*
             ${{ runner.temp }}/gc-diagnostic*
             ${{ runner.temp }}/case-profile-*
