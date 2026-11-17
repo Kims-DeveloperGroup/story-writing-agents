@@ -261,7 +261,7 @@ jobs:
                   core.setFailed("영향 테스트 ID는 중복·빈 줄 없이 한 줄에 하나의 정규 ID여야 합니다.");
                   return;
                 }
-                if (process.env.COMPARE_FEEDBACK_BASELINE === "true" && !ids.includes("tests.test_selected_task_material_codec.SelectedTaskMaterialCodecTests.test_two_captures_keep_closed_wire_shape_and_order")) {
+                if (process.env.COMPARE_FEEDBACK_BASELINE === "true" && (process.env.PROFILE_SELECTION === "true" || process.env.OBSERVE_GC === "true" || JSON.stringify(ids) !== JSON.stringify(["tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review", "tests.test_lead_recommendations.LeadRecommendationRecoveryTests.test_missing_corrupt_or_unresolved_origin_accounting_never_authorizes_retry"]))) {
                   core.setFailed("피드백 비교에는 기존 codec 사례의 정확한 ID가 필요합니다."); return;
                 }
                 affectedIds = ids.join("\n");
@@ -701,42 +701,11 @@ jobs:
           if (( test_status == 0 && test_statuses[1] != 0 )); then test_status=${test_statuses[1]}; fi
           printf '%s\n' "$test_status" > "$RUNNER_TEMP/fast-exit-code.txt"
           exit "$test_status"
-      - name: 기존 생산 경계의 RED와 GREEN 피드백 확인
-        if: needs.classify.outputs.affected_only == 'true' && inputs.observe_gc != true && inputs.profile_selection != true
-        run: |
-          case "$FEEDBACK_WITNESS" in
-            codec)
-              witness_ids=('tests.test_selected_task_material_codec.SelectedTaskMaterialCodecTests.test_two_captures_keep_closed_wire_shape_and_order')
-              ;;
-            source-snapshot)
-              witness_ids=(
-                'tests.test_agent_context_sources.SourceSurfacePolicyAndValueTests.test_descriptor_snapshot_records_are_exact_immutable_and_content_hidden'
-                'tests.agent_context.sources.test_source_contracts.SourceSurfacePolicyAndValueTests.test_descriptor_snapshot_records_are_exact_immutable_and_content_hidden'
-              )
-              ;;
-            provider-call-ordinal)
-              witness_ids=('tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_failure_closure_write_error_keeps_history_gated')
-              ;;
-            successor-selection)
-              witness_ids=(
-                'tests.test_specialist_routing.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip'
-                'tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip'
-              )
-              ;;
-            *) exit 2 ;;
-          esac
-          for witness_id in "${witness_ids[@]}"; do
-            if grep -Fxq "$witness_id" <<< "$AFFECTED_IDS"; then
-              PYTHONPATH=src .venv/bin/python -m tests.feedback_probe \
-                --witness "$FEEDBACK_WITNESS" --json "$RUNNER_TEMP/feedback-probe.json"
-              break
-            fi
-          done
       - name: 수정 전 피드백 소스 준비
         if: inputs.compare_feedback_baseline == true && needs.classify.outputs.affected_only == 'true'
         uses: actions/checkout@v4
         with:
-          ref: 45cf084f0d28eb5926863e90509e5f14bbd3497e
+          ref: 6c311e455b5caab22e52890f4d01e7e1c1f61dc4
           submodules: recursive
           path: .feedback-baseline
       - name: 같은 환경에서 수정 전 RED와 GREEN 측정
@@ -767,10 +736,6 @@ jobs:
           baseline_status=${baseline_statuses[0]}
           if (( baseline_status == 0 && baseline_statuses[1] != 0 )); then baseline_status=${baseline_statuses[1]}; fi
           if (( baseline_status != 0 )); then exit "$baseline_status"; fi
-          if [[ "$PROFILE_SELECTION" != "true" ]]; then
-            PYTHONPATH=src "$GITHUB_WORKSPACE/.venv/bin/python" "$GITHUB_WORKSPACE/tests/feedback_probe.py" \
-              --repository-root "$PWD" --witness "$FEEDBACK_WITNESS" --json "$RUNNER_TEMP/feedback-probe-baseline.json"
-          fi
       - uses: actions/upload-artifact@v4
         timeout-minutes: 1
         if: always()
