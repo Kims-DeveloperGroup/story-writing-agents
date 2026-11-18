@@ -5086,7 +5086,7 @@ class StoryRuntime:
                 if input_id not in seen:
                     seen.add(input_id)
                     required.append(input_id)
-        return tuple(required)
+        return ()
 
     @classmethod
     def _decode_continuation_intent(
