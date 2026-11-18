@@ -1145,6 +1145,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
         self.assertEqual({source for source, target in edges if target == lead_proposal_inputs}, {
             "story_writing_agents.lead_preparation.recommendation_requests",
             "story_writing_agents.orchestrator",
+            "story_writing_agents.lead_preparation.artifact_review_planning",
         })
         recommendation_requests_owner = "story_writing_agents.lead_preparation.recommendation_requests"
         self.assertEqual({target for source, target in edges if source == recommendation_requests_owner}, {
@@ -1197,6 +1198,9 @@ class RagModuleBoundaryTests(unittest.TestCase):
             "story_writing_agents.lead_preparation.lead_material_inputs",
             "story_writing_agents.lead_preparation.recommendation_decisions",
             "story_writing_agents.orchestrator",
+            "story_writing_agents.lead_preparation.artifact_objective_planning",
+            "story_writing_agents.lead_preparation.artifact_review_planning",
+            "story_writing_agents.lead_preparation.lead_consultation_planning",
         })
         proposal_values_owner = "story_writing_agents.lead_preparation.proposal_basis_values"
         self.assertEqual({target for source, target in edges if source == proposal_values_owner}, {
@@ -1221,6 +1225,9 @@ class RagModuleBoundaryTests(unittest.TestCase):
         self.assertEqual({source for source, target in edges if target == proposal_values_owner}, {
             "story_writing_agents.lead_preparation.recommendation_requests",
             "story_writing_agents.orchestrator",
+            "story_writing_agents.lead_preparation.artifact_objective_planning",
+            "story_writing_agents.lead_preparation.artifact_review_planning",
+            "story_writing_agents.lead_preparation.lead_consultation_planning",
         })
 
         lead_document_nodes = "story_writing_agents.lead_preparation.lead_document_nodes"
@@ -1370,7 +1377,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             'story_writing_agents.runtime_resources.collaboration_event_journal',
             'story_writing_agents.specialist_routing',
         })
-        self.assertEqual({source for source, target in edges if target == document_plan_selection_owner}, {"story_writing_agents.orchestrator"})
+        self.assertEqual({source for source, target in edges if target == document_plan_selection_owner}, {"story_writing_agents.orchestrator", "story_writing_agents.lead_preparation.lead_consultation_planning"})
 
         document_plan_views_owner = 'story_writing_agents.lead_preparation.document_plan_views'
         self.assertEqual({target for source, target in edges if source == document_plan_views_owner}, {

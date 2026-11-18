@@ -388,7 +388,7 @@ class CollaborationHistoryProjectionTests(unittest.TestCase):
                 _objective_intent = _objective_outcome.objective_intent
                 _objective_candidate = None if _objective_candidate_event is None else _objective_candidate_event.payload.candidate
                 authoring_authority.validate_objective_selection(
-                    _objective_outcome, _objective_projection.artifact_objectives, _objective_candidate,
+                    _objective_outcome, _objective_projection, _objective_candidate,
                 )
                 _objective_previous = next((item for item in _objective_projection.artifact_objectives
                     if item.facts.objective_id == _objective_intent.objective_id), None)
@@ -598,7 +598,7 @@ class CollaborationHistoryProjectionTests(unittest.TestCase):
                 _objective_intent = _objective_outcome.objective_intent
                 _objective_candidate = None if _objective_candidate_event is None else _objective_candidate_event.payload.candidate
                 authoring_authority.validate_objective_selection(
-                    _objective_outcome, _objective_projection.artifact_objectives, _objective_candidate,
+                    _objective_outcome, _objective_projection, _objective_candidate,
                 )
                 _objective_previous = next((item for item in _objective_projection.artifact_objectives
                     if item.facts.objective_id == _objective_intent.objective_id), None)
