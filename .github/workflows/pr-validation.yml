@@ -701,37 +701,255 @@ jobs:
           if (( test_status == 0 && test_statuses[1] != 0 )); then test_status=${test_statuses[1]}; fi
           printf '%s\n' "$test_status" > "$RUNNER_TEMP/fast-exit-code.txt"
           exit "$test_status"
-      - name: 기존 생산 경계의 RED와 GREEN 피드백 확인
+      - name: 공유 전제의 기존 GREEN과 같은 오류 RED 확인
         if: needs.classify.outputs.affected_only == 'true' && inputs.observe_gc != true && inputs.profile_selection != true
         run: |
-          case "$FEEDBACK_WITNESS" in
-            codec)
-              witness_ids=('tests.test_selected_task_material_codec.SelectedTaskMaterialCodecTests.test_two_captures_keep_closed_wire_shape_and_order')
-              ;;
-            source-snapshot)
-              witness_ids=(
-                'tests.test_agent_context_sources.SourceSurfacePolicyAndValueTests.test_descriptor_snapshot_records_are_exact_immutable_and_content_hidden'
-                'tests.agent_context.sources.test_source_contracts.SourceSurfacePolicyAndValueTests.test_descriptor_snapshot_records_are_exact_immutable_and_content_hidden'
-              )
-              ;;
-            provider-call-ordinal)
-              witness_ids=('tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_failure_closure_write_error_keeps_history_gated')
-              ;;
-            successor-selection)
-              witness_ids=(
-                'tests.test_specialist_routing.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip'
-                'tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip'
-              )
-              ;;
-            *) exit 2 ;;
-          esac
-          for witness_id in "${witness_ids[@]}"; do
-            if grep -Fxq "$witness_id" <<< "$AFFECTED_IDS"; then
-              PYTHONPATH=src .venv/bin/python -m tests.feedback_probe \
-                --witness "$FEEDBACK_WITNESS" --json "$RUNNER_TEMP/feedback-probe.json"
-              break
-            fi
-          done
+          cat > "$RUNNER_TEMP/feedback-probe-before-premise-witness-program.py" <<'PY_1046_PREMISE_WITNESS'
+          #!/usr/bin/env python3
+          """Official-Actions-only: validate existing GREEN, run one premise mutant, restore."""
+          from __future__ import annotations
+          import argparse
+          import ast
+          import copy
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import shutil
+          import signal
+          import subprocess
+          import sys
+          import time
+          import traceback
+
+          SOURCE = '91f82aae158705efbb450482f84e117018f98094'
+          SOURCE_TREE = '29f91a5478db60a5471ae93f94c42ee603fcf580'
+          WORKFLOW = '.github/workflows/pr-validation.yml'
+          WORKFLOW_SHA = 'b7a927284295cc7a7e71f4c04e67123d897149887c20af5d17d7d446058d4cc2'
+          PRODUCER = 'src/story_writing_agents/orchestrator.py'
+          PRODUCER_SHA = '5d6822afaecce183d3da0d9e86899dcd2ca33888dcbf911432834260329c4c98'
+          CASE = 'tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_empty_inventory_does_not_add_unaffected_owners_and_mixed_scope_does'
+          SUFFIX = ' [different premise]'
+          GC_DEFAULT = {'enabled': True, 'thresholds': [700, 10, 10], 'callback_count': 0, 'profiler_none': True}
+
+          def need(condition, message):
+              if not condition:
+                  raise ValueError(message)
+
+          def sha(raw):
+              return hashlib.sha256(raw).hexdigest()
+
+          def load(path):
+              return json.loads(Path(path).read_text())
+
+          def pin(path, origin='feedback'):
+              path = Path(path)
+              return {'artifact_name': path.name, 'sha256': sha(path.read_bytes()), 'origin': origin}
+
+          def write_new(path, raw):
+              with Path(path).open('xb') as stream:
+                  stream.write(raw)
+
+          def json_new(path, value):
+              write_new(path, (json.dumps(value, ensure_ascii=False, indent=2) + '\n').encode())
+
+          def git(repo, *args):
+              return subprocess.check_output(['git', '-C', str(repo), *args])
+
+          def tracked_diff(repo):
+              return git(repo, 'status', '--porcelain', '--untracked-files=no').decode().splitlines()
+
+          def locate(tree):
+              cls = [n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'StoryRuntime']
+              need(len(cls) == 1, 'StoryRuntime must be unique')
+              methods = [n for n in cls[0].body if isinstance(n, ast.FunctionDef) and n.name == '_capture_shared_premises']
+              need(len(methods) == 1, 'capture producer must be unique')
+              calls = [n for n in ast.walk(methods[0]) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == 'CollaborationSharedPremise']
+              need(len(calls) == 1 and len(calls[0].args) == 3 and not calls[0].keywords, 'exact shared-premise constructor required')
+              return calls[0]
+
+          def mutation(raw):
+              tree = ast.parse(raw, feature_version=(3, 11))
+              target = locate(tree).args[1]
+              need(ast.dump(target, include_attributes=False) == ast.dump(ast.parse('premise.selected_premise', mode='eval').body, include_attributes=False), 'unexpected producer expression')
+              lines = raw.splitlines(keepends=True)
+              start = sum(map(len, lines[:target.lineno - 1])) + target.col_offset
+              end = sum(map(len, lines[:target.end_lineno - 1])) + target.end_col_offset
+              need(raw[start:end] == b'premise.selected_premise', 'UTF-8 byte offsets mismatch')
+              wrong = b'(premise.selected_premise + " [different premise]")'
+              mutant = raw[:start] + wrong + raw[end:]
+              mtree = ast.parse(mutant, feature_version=(3, 11))
+              arg = locate(mtree).args[1]
+              need(ast.dump(arg, include_attributes=False) == ast.dump(ast.parse('premise.selected_premise + " [different premise]"', mode='eval').body, include_attributes=False), 'mutation shape mismatch')
+              locate(mtree).args[1] = copy.deepcopy(target)
+              need(ast.dump(tree, include_attributes=False) == ast.dump(mtree, include_attributes=False), 'mutation changed another AST node')
+              compile(mutant, PRODUCER, 'exec', dont_inherit=True)  # never exec the code object
+              return mutant, {'source_span': [target.lineno, target.col_offset, target.end_lineno, target.end_col_offset], 'byte_offsets': [start, end], 'before': raw[start:end].decode(), 'after': wrong.decode(), 'logical_AST_mutations': 1}
+
+          def identity(repo):
+              actor = os.environ['GITHUB_SHA']
+              head = git(repo, 'rev-parse', 'HEAD').decode().strip()
+              need(head == actor and head != SOURCE, 'actual checkout must be workflow actor A, distinct from accepted code S')
+              need(git(repo, 'show', '-s', '--format=%P', head).decode().strip().split() == [SOURCE], 'actor A must have sole parent S')
+              need(git(repo, 'rev-parse', SOURCE + '^{tree}').decode().strip() == SOURCE_TREE, 'accepted source tree mismatch')
+              need(git(repo, 'diff', '--name-only', SOURCE, head).decode().splitlines() == [WORKFLOW], 'actor may change only the wrapper workflow')
+              need(sha(git(repo, 'show', SOURCE + ':' + WORKFLOW)) == WORKFLOW_SHA, 'original workflow pin mismatch')
+              need(not tracked_diff(repo), 'runtime checkout has pre-existing tracked edits')
+              return {'workflow_actor_sha': actor, 'actual_checkout_sha': head, 'actual_checkout_tree': git(repo, 'rev-parse', 'HEAD^{tree}').decode().strip(), 'accepted_code_source_sha': SOURCE, 'accepted_code_source_tree': SOURCE_TREE, 'actor_only_diff': [WORKFLOW], 'workflow_before_sha256': WORKFLOW_SHA, 'workflow_actor_sha256': sha((repo / WORKFLOW).read_bytes()), 'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': int(os.environ['GITHUB_RUN_ATTEMPT'])}
+
+          def check_report(report, red, ident):
+              need(report['kind'] == 'run_result' and report['runner'] == 'story-writing-agents-unittest', 'not a canonical runner result')
+              expected_manifest = {'count': 1, 'digest': 'sha256:' + sha((CASE + '\n').encode()), 'ordered_ids': [CASE]}
+              need(report['selection_manifest'] == expected_manifest, 'selection is not the exact original witness')
+              need(not report['unexecuted_ids'] and report['environment_valid'] is True, 'incomplete or changed environment')
+              s = report['source_binding']
+              need(s['checkout_sha'] == ident['actual_checkout_sha'] and s['checkout_tree'] == ident['actual_checkout_tree'], 'checkout identity mismatch')
+              need(s['source_valid'] is True and s['before_digest'] == s['after_digest'], 'source changed within canonical invocation')
+              totals = report['totals']
+              need(totals['selected'] == totals['started'] == totals['completed'] == 1, 'witness not completed exactly once')
+              need(all(totals[k] == 0 for k in ('failures', 'skipped', 'expected_failures', 'unexpected_successes', 'interrupted')), 'unexpected failure/skip/interruption family')
+              need(len(report['tests']) == 1, 'wrong Case count')
+              row = report['tests'][0]
+              need(row['canonical_id'] == CASE and row['subtest_count'] == 0, 'Case/subTest identity changed')
+              if not red:
+                  need(report['outcome'] == 'success' and row['status'] == 'passed' and totals['passed'] == 1 and totals['errors'] == 0 and not report['details'], 'original GREEN is not clean success')
+                  return
+              need(report['outcome'] == 'failure' and row['status'] == 'error' and totals['passed'] == 0 and totals['errors'] == 1, 'mutant must yield exactly one production ERROR')
+              need(len(report['details']) == 1 and report['details'][0]['kind'] == 'error' and report['details'][0]['canonical_id'] == CASE, 'extra fixture/cleanup/error detail')
+              text = report['details'][0].get('traceback', '')
+              need('ValueError: chosen premise must bind its disclosed dependency slot' in text, 'wrong underlying semantic guard')
+              need(re.search(r'CollaborationAppendError: invalid_transition(?:\n|$)', text), 'wrong append failure')
+              need('_validate_premise_history' in text and 'append_batch' in text, 'causal production guard frames absent')
+              need(re.search(r'test_specialist_routing_runtime\.py[\"\x27], line 376, in test_empty_inventory_does_not_add_unaffected_owners_and_mixed_scope_does', text), 'failure is not the original selected-proposal await')
+              need('FixturePhasePlanError' not in text, 'fixture control failure cannot qualify')
+
+          def group_alive(pgid):
+              try:
+                  os.killpg(pgid, 0)
+                  return True
+              except ProcessLookupError:
+                  return False
+
+          def reap_group(pgid, grace):
+              actions = []
+              if group_alive(pgid):
+                  actions.append('SIGINT'); os.killpg(pgid, signal.SIGINT)
+                  end = time.monotonic() + grace
+                  while group_alive(pgid) and time.monotonic() < end:
+                      time.sleep(0.05)
+                  if group_alive(pgid):
+                      actions.append('SIGKILL'); os.killpg(pgid, signal.SIGKILL)
+                      end = time.monotonic() + grace
+                      while group_alive(pgid) and time.monotonic() < end:
+                          time.sleep(0.05)
+              return {'pgid': pgid, 'actions': actions, 'process_group_absent': not group_alive(pgid)}
+
+          def main():
+              parser = argparse.ArgumentParser(description=__doc__)
+              parser.add_argument('--green-report', type=Path, required=True)
+              parser.add_argument('--green-exit-code', type=Path, required=True)
+              parser.add_argument('--green-control', type=Path, required=True)
+              parser.add_argument('--output-dir', type=Path, required=True)
+              args = parser.parse_args()
+              repo = Path.cwd().resolve(); out = args.output_dir.resolve(); out.mkdir(parents=True, exist_ok=True)
+              summary_path = out / 'feedback-probe-premise-summary.json'
+              need(not summary_path.exists(), 'refuse to overwrite an earlier witness')
+              result = {'schema_version': 1, 'issue': 1046, 'kind': 'before_shared_premise_witness', 'qualified': False, 'performance_PASS': None, 'new_scenarios': 0, 'green_runner_invocations_by_program': 0, 'mutant_runner_invocations': 0, 'same_existing_case': CASE}
+              original = None; mutant = None; target = repo / PRODUCER; modified = False; pgid = None; tee = None
+              try:
+                  need(os.environ.get('GITHUB_ACTIONS') == 'true', 'execute only in official Actions')
+                  need(os.environ.get('OBSERVE_GC') != 'true' and os.environ.get('PROFILE_SELECTION') != 'true', 'diagnostic profiling/GC is forbidden')
+                  ident = identity(repo); result['identity'] = ident
+                  original = target.read_bytes(); need(sha(original) == PRODUCER_SHA, 'actual producer pin mismatch')
+                  green = load(args.green_report); check_report(green, False, ident)
+                  need(args.green_exit_code.read_text().strip() == '0', 'GREEN process did not exit0')
+                  control = load(args.green_control)
+                  need((control['kill_grace_seconds'], control['cleanup_reserve_seconds'], control['cancellation_reserve_seconds']) == (30, 60, 360), 'fixed controls changed')
+                  need(type(control['worker_limit_seconds']) is int and 0 < control['worker_limit_seconds'] <= 3150, 'invalid normal outer timeout')
+                  sibling = args.green_report.parent
+                  hardware_path = sibling / 'runner-hardware-fast.json'; argv_path = sibling / 'fast-selection-argv.txt'; log_path = sibling / 'fast.log'
+                  hardware = load(hardware_path)
+                  need(hardware['status'] == 'passed' and hardware['cpu_count'] == hardware['available_cpu_count'] == 4, 'normal hardware not qualified')
+                  need(hardware['hardware_process_gc'] == GC_DEFAULT and not hardware['diagnostic_gc_requested'] and not hardware['diagnostic_profile_requested'], 'non-default GC/profile control')
+                  need(hardware['native_workflow_sha'] == ident['workflow_actor_sha'] and hardware['run_id'] == ident['run_id'] and hardware['run_attempt'] == ident['run_attempt'], 'hardware/native source mismatch')
+                  need(hardware['python_executable'] == sys.executable == green['environment']['executable'], 'interpreter differs from normal')
+                  need(argv_path.read_text().splitlines() == ['--id', CASE], 'normal selector differs')
+                  result['green_inputs'] = {name: pin(path, 'green') for name, path in [('report', args.green_report), ('exit_code', args.green_exit_code), ('control', args.green_control), ('hardware', hardware_path), ('selection_argv', argv_path), ('log', log_path)]}
+                  result['green_totals'] = green['totals']; result['green_durations'] = green['durations']
+                  write_new(out / 'feedback-probe-program.py', Path(__file__).read_bytes())
+                  write_new(out / 'feedback-probe-source-before.py', original)
+                  mutant, spec = mutation(original); result['mutation'] = spec
+                  write_new(out / 'feedback-probe-source-mutant.py', mutant)
+                  epoch = int(time.time()); deadline = int(os.environ['TEST_JOB_DEADLINE']); run_deadline = int(os.environ['TEST_RUN_DEADLINE'])
+                  need(deadline <= run_deadline, 'job cutoff exceeds original shared run cutoff')
+                  seconds = min(3150, deadline - epoch - 450)
+                  need(seconds > 0, 'original shared job window exhausted; do not reset it')
+                  control_red = {**control, 'worker_limit_seconds': seconds, 'budget_computed_epoch': epoch, 'original_TEST_JOB_DEADLINE': deadline, 'original_TEST_RUN_DEADLINE': run_deadline, 'budget_formula': 'min(3150, original_TEST_JOB_DEADLINE - now - 450)', 'default_gc_probe_source': 'unchanged normal hardware sidecar; fresh canonical -m interpreter, no diagnostic wrapper'}
+                  red_report = out / 'feedback-probe-mutant.json'; red_log = out / 'feedback-probe-mutant.log'
+                  command = ['timeout', '--signal=INT', '--kill-after=30s', str(seconds) + 's', 'env', 'PYTHONPATH=src', sys.executable, '-m', 'tests.runner', 'run', '--json', str(red_report), '--id', CASE]
+                  need(shutil.which('timeout') and shutil.which('tee'), 'original native timeout/tee tools missing')
+                  control_red['argv'] = command; json_new(out / 'feedback-probe-mutant-control.json', control_red)
+                  write_new(out / 'feedback-probe-mutant-selection-argv.txt', ('--id\n' + CASE + '\n').encode())
+                  target.write_bytes(mutant); modified = True
+                  need(target.read_bytes() == mutant, 'mutant source write did not persist')
+                  need(git(repo, 'diff', '--name-only').decode().splitlines() == [PRODUCER], 'mutation changed another tracked path')
+                  proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, cwd=repo, start_new_session=True)
+                  pgid = proc.pid; result['mutant_runner_invocations'] = 1
+                  tee = subprocess.Popen(['tee', str(red_log)], stdin=proc.stdout); proc.stdout.close()
+                  result['mutant_exit_code'] = proc.wait()
+                  result['process_cleanup'] = reap_group(pgid, control['kill_grace_seconds']); pgid = None
+                  result['tee_exit_code'] = tee.wait(timeout=control['kill_grace_seconds'])
+                  write_new(out / 'feedback-probe-mutant-exit-code.txt', (str(result['mutant_exit_code']) + '\n').encode())
+                  need(result['mutant_exit_code'] == 1 and result['tee_exit_code'] == 0, 'unexpected runner/pipeline return code')
+                  need(result['process_cleanup']['process_group_absent'] and not result['process_cleanup']['actions'], 'mutant outer process group required forced cleanup')
+                  red = load(red_report); check_report(red, True, ident)
+                  need(red['environment'] == green['environment'], 'normal/mutant execution environments differ')
+                  need(git(repo, 'diff', '--name-only').decode().splitlines() == [PRODUCER], 'mutant left unrelated tracked edits')
+                  result['mutant_totals'] = red['totals']; result['mutant_durations'] = red['durations']
+                  result['domain_RED_validated'] = True
+              except BaseException as error:
+                  result['error'] = {'type': type(error).__name__, 'message': str(error), 'traceback': traceback.format_exc()}
+              finally:
+                  result['cleanup_proof_scope'] = 'canonical completed1/detail1 and raw log; absence of outer timeout process group only, not an enumeration of all nested children'
+                  if tee is not None and tee.poll() is None:
+                      try:
+                          result['tee_final_exit_code'] = tee.wait(timeout=30)
+                      except subprocess.TimeoutExpired:
+                          tee.kill(); result['tee_final_exit_code'] = tee.wait(timeout=30)
+                          result['error'] = {'type': 'CleanupError', 'message': 'tee required forced cleanup'}
+                  if pgid is not None:
+                      result['interrupted_process_cleanup'] = reap_group(pgid, 30)
+                  if modified:
+                      try:
+                          need(target.read_bytes() == mutant, 'restore conflict: producer changed by another writer; not overwritten')
+                          target.write_bytes(original)
+                          need(target.read_bytes() == original, 'restored producer is not byte-identical')
+                          write_new(out / 'feedback-probe-source-restored.py', target.read_bytes())
+                          result['restoration'] = {'verified': True, 'sha256': sha(target.read_bytes()), 'tracked_diff_after': tracked_diff(repo)}
+                          need(not result['restoration']['tracked_diff_after'], 'tracked runtime source not clean after own restoration')
+                      except BaseException as error:
+                          result['restoration'] = {'verified': False, 'error': str(error)}
+                  else:
+                      result['restoration'] = {'verified': original is not None and target.read_bytes() == original, 'mutation_not_started': True}
+                  result['artifacts'] = {path.name: pin(path) for path in out.glob('feedback-probe-*') if path.is_file() and path != summary_path}
+                  result['qualified'] = bool(result.get('domain_RED_validated') and result['restoration'].get('verified') and not result.get('error'))
+                  json_new(summary_path, result)
+              print(json.dumps({'summary': str(summary_path), 'qualified': result['qualified'], 'performance_PASS': None}))
+              return 0 if result['qualified'] else 1
+
+          if __name__ == '__main__':
+              def interrupted(signum, _frame):
+                  raise InterruptedError('official witness interrupted by signal ' + str(signum))
+              signal.signal(signal.SIGTERM, interrupted)
+              signal.signal(signal.SIGINT, interrupted)
+              raise SystemExit(main())
+          PY_1046_PREMISE_WITNESS
+          .venv/bin/python "$RUNNER_TEMP/feedback-probe-before-premise-witness-program.py" \
+            --green-report "$RUNNER_TEMP/fast.json" \
+            --green-exit-code "$RUNNER_TEMP/fast-exit-code.txt" \
+            --green-control "$RUNNER_TEMP/fast-control.json" \
+            --output-dir "$RUNNER_TEMP"
       - name: 수정 전 피드백 소스 준비
         if: inputs.compare_feedback_baseline == true && needs.classify.outputs.affected_only == 'true'
         uses: actions/checkout@v4
