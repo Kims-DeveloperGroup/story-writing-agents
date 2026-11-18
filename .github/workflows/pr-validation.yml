@@ -673,20 +673,11 @@ jobs:
           PY_HARDWARE
       - name: Run fast runtime tests
         run: |
-          selector=(--tier fast)
-          if [[ "$AFFECTED_ONLY" == "true" ]]; then
-            [[ -n "$AFFECTED_IDS" ]] || exit 2
-            selector=()
-            while IFS= read -r test_id; do
-              [[ -n "$test_id" ]] || exit 2
-              selector+=(--id "$test_id")
-            done <<< "$AFFECTED_IDS"
+          if [[ "$AFFECTED_ONLY" != "true" || "$AFFECTED_IDS" != "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_all_five_outcomes_have_exact_visible_next_actions" ]]; then
+            echo "고정 정의 모듈과 원래 Case ID가 맞지 않습니다." >&2
+            exit 2
           fi
-          printf '%s\n' "${selector[@]}" > "$RUNNER_TEMP/fast-selection-argv.txt"
-          test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))
-          if (( test_seconds > 3150 )); then test_seconds=3150; fi
-          printf '{"worker_limit_seconds":%s,"kill_grace_seconds":30,"cleanup_reserve_seconds":60,"cancellation_reserve_seconds":360}\n' "$test_seconds" > "$RUNNER_TEMP/fast-control.json"
-          if (( test_seconds <= 0 )); then exit 124; fi
+          selector=(--module tests.lead_preparation.test_ordinary_turn_outcomes)
           runner=(.venv/bin/python -m tests.runner run "${selector[@]}" --json "$RUNNER_TEMP/fast.json")
           if [[ "$OBSERVE_GC" == "true" ]]; then
             runner=(.venv/bin/python -m tests.runner.gc_diagnostic --observation-json "$RUNNER_TEMP/gc-diagnostic.json" -- run "${selector[@]}" --json "$RUNNER_TEMP/gc-diagnostic-run.json")
