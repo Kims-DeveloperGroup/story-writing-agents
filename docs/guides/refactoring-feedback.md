@@ -366,3 +366,11 @@ PYTHONPATH=src python -m tests.runner run \
 ```
 
 이 경로의 Case ID는 기존 tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation이다. 정의 위치 이동만으로 전체 suite의 fixture 그룹을 다시 나누거나 관측 시간에 맞춰 weight를 조정하지 않는다. 실제 canonical ID·MRO·launch 순서·원래 weight bytes와 shard ID집합을 함께 확인한다.
+
+### Artifact·작성 목표·terminal 경계 계획 #1047
+
+[#1047의 구현 계획](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1047#구현-계획)은 기존5개 정의의 정책을4개 owner로 옮기고, 기존 Artifact8개 메서드의 정의를2/3/2/1개 도메인 파일로 나누는 수락 범위와 검증을 관리한다.
+
+이 문서 연결은 구현 전 Draft PR을 준비하는 계획 기록이다. 새 정의 모듈의 여러 기존 ID 선택은 아직 구현하지 않았다. 실제 Draft를 만든 뒤 코드와 기존 검증을 함께 갱신하고 공식 선택 결과를 기록한다.
+
+기존 canonical ID·구체 클래스·MRO·fixture·hosted/weight 구성을 보존하고, 좁은 정의 `--module` 선택과 보수적인 `--path` 의존 역closure를 구분한다. 최초3개 기존 Case의 의미 있는 피드백, 필요한 범위 확대, 실제 동일 결함 RED/GREEN, 최종 FAST/전체5shard/reconcile을 별도 단계로 확인한다.
