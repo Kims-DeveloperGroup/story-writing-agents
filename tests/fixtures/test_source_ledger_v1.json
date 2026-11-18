@@ -650,7 +650,7 @@
         }
       ],
       "legacy_unresolved_lines": 1550,
-      "counting": "Approved1021 only raw89/support289=+378,151686\u2192152064. New module description1row reallocated to actual required import. Final rendered counter required; no old assertion/helper/docstring or legacy credit.",
+      "counting": "Approved1021 only raw89/support289=+378,151686→152064. New module description1row reallocated to actual required import. Final rendered counter required; no old assertion/helper/docstring or legacy credit.",
       "approved_source_delta": 378,
       "planned_raw_delta": 89,
       "planned_support_delta": 289,
@@ -678,7 +678,7 @@
         }
       ],
       "legacy_unresolved_lines": 1550,
-      "counting": "User-approved1027 only raw65/support9=+74,152064\u2192152138: raw148806+support1782+legacy1550. Generic suite_budget.py16ordinary rows outside fee disclosed; no assertion/scenario moved there.",
+      "counting": "User-approved1027 only raw65/support9=+74,152064→152138: raw148806+support1782+legacy1550. Generic suite_budget.py16ordinary rows outside fee disclosed; no assertion/scenario moved there.",
       "approved_source_delta": 74,
       "planned_raw_delta": 65,
       "planned_support_delta": 9,
@@ -969,7 +969,7 @@
           ]
         }
       ],
-      "counting": "Move each of1469 original ordinary body rows once; +426 extraction/retarget +15 existing BudgetCase rows +4 necessary consumer import-restoration rows =+445,152220\u2192152665. Correction batch restores accounting mixed-import binding,9 actual peer namespace targets and1 actual type ForwardRef; no scenarios/assertions removed, legacy1550 unchanged. Existing generic helper11 and generic consumer5 rows remain outside frozen charge scope and are disclosed.",
+      "counting": "Move each of1469 original ordinary body rows once; +426 extraction/retarget +15 existing BudgetCase rows +4 necessary consumer import-restoration rows =+445,152220→152665. Correction batch restores accounting mixed-import binding,9 actual peer namespace targets and1 actual type ForwardRef; no scenarios/assertions removed, legacy1550 unchanged. Existing generic helper11 and generic consumer5 rows remain outside frozen charge scope and are disclosed.",
       "approved_source_delta": 445,
       "planned_raw_delta": -1195,
       "planned_support_delta": 1640,
@@ -1001,7 +1001,7 @@
       "planned_raw_delta": 62,
       "planned_support_delta": 0,
       "legacy_unresolved_lines": 1550,
-      "counting": "Source-only152665\u2192152727(+62): Candidate same-Case adapter32 + existing RAG graph/packaging14 + existing BudgetCase16. Nine count readers update literals only. Generic suite_budget guard11 physical rows outside frozen charge scope disclosed; legacy1550 and all receipts/profile/weights unchanged.",
+      "counting": "Source-only152665→152727(+62): Candidate same-Case adapter32 + existing RAG graph/packaging14 + existing BudgetCase16. Nine count readers update literals only. Generic suite_budget guard11 physical rows outside frozen charge scope disclosed; legacy1550 and all receipts/profile/weights unchanged.",
       "expected_caps_sha256": "d72ded85920beccddd24ee08ca2be40c8963d0832366ce07d211f67684033335",
       "generic_execution_tool_rows_disclosed": 11
     },
@@ -1032,7 +1032,7 @@
       "planned_raw_delta": 84,
       "planned_support_delta": 3,
       "legacy_unresolved_lines": 1550,
-      "counting": "152727\u2192152814(+87): normal domain header20 + actual4call adapter12 + newowner graph26 + existing2incoming-set expansion6 + packaging1 + existingBudgetCase19 + counted id_moves support3. Nine reader numeric literals change0 rows. Generic combined source+closed2-ID guard16 physical rows outside frozen charge, disclosed. No new Case/scenario/subTest; global weight pool conserved through existing canonical quotient/remainder rule.",
+      "counting": "152727→152814(+87): normal domain header20 + actual4call adapter12 + newowner graph26 + existing2incoming-set expansion6 + packaging1 + existingBudgetCase19 + counted id_moves support3. Nine reader numeric literals change0 rows. Generic combined source+closed2-ID guard16 physical rows outside frozen charge, disclosed. No new Case/scenario/subTest; global weight pool conserved through existing canonical quotient/remainder rule.",
       "expected_caps_sha256": "c2a287a57fa759f2c1b984c2a3aedf171aa8a08f1ef8032fbd09180079b3fc34",
       "generic_execution_tool_rows_disclosed": 16
     },
@@ -1238,7 +1238,7 @@
       "legacy_unresolved_lines": 1550,
       "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
       "generic_execution_tool_rows_disclosed": 16,
-      "counting": "Final coherent actual counter raw147717+support4674+retained legacy1550=153941; base153829 delta112(raw+109/support+3). Test-role owned changes contribute93(raw+90/support+3); Root-owned existing BudgetCase adds19 charged rows. Root generic suite_budget guard16ordinary/physical rows remain outside the frozen charge. Original2methods and exclusive57producer rows transfer raw\u2192raw once net0, no Recommendation797/799 recharge. Root-owned budget3files are observed, not edited by this test role."
+      "counting": "Final coherent actual counter raw147717+support4674+retained legacy1550=153941; base153829 delta112(raw+109/support+3). Test-role owned changes contribute93(raw+90/support+3); Root-owned existing BudgetCase adds19 charged rows. Root generic suite_budget guard16ordinary/physical rows remain outside the frozen charge. Original2methods and exclusive57producer rows transfer raw→raw once net0, no Recommendation797/799 recharge. Root-owned budget3files are observed, not edited by this test role."
     },
     {
       "issue": 1045,
@@ -1296,6 +1296,97 @@
       "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
       "generic_execution_tool_rows_disclosed": 11,
       "counting": "Final isolated V2 source-only cost 147854+4674+1550=154078; accepted base153941 delta137. API and packaging73, existing graph representative48, existing BudgetCase16. Initial shared-preparation layout117 is preserved only under history/issue-1045-initial-shared-preparation-layout, not the final allocation. Existing preparation source/owner are restored to docseed; new decisions source owner has focused2/affected6 while requests focused1/affected6. Generic exact suite_budget guard11 physical/ordinary rows remain outside prefrozen charge. No ID/cap/receipt/weight/profile/launch rekey, support additions, Recommendation recharge or legacy credit."
+    },
+    {
+      "issue": 1046,
+      "origin_commit": "91f82aae158705efbb450482f84e117018f98094",
+      "origins": [
+        {
+          "source": "tests/test_specialist_routing_runtime.py",
+          "sha256": "54235f05f96405e12d00c8534cafa6b0d294fa42577adabee489dd5d012e18c9",
+          "source_ranges": [
+            [
+              1022,
+              1105
+            ]
+          ],
+          "declarations": [
+            "test_provider_free_advisory_requires_scope_and_separate_confirmation"
+          ],
+          "destinations": [
+            "tests/lead_preparation/test_specialist_advisory_scope.py"
+          ],
+          "counting": "Whole original function definition remains in the domain file; the original concrete TestCase directly binds that same function object. No wrapper, new Case, scenario, subTest, MRO change, or ID rekey. Only the accepted public ADMISSION_BRIEF import is inverse-normalized."
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "sha256": "43a841660054a549bd1bb5af2bed00f04792233111514d07c3ffee6c0c9ae979",
+          "source_ranges": [
+            [
+              511,
+              558
+            ]
+          ],
+          "declarations": [
+            "test_all_five_outcomes_have_exact_visible_next_actions"
+          ],
+          "destinations": [
+            "tests/lead_preparation/test_ordinary_turn_outcomes.py"
+          ],
+          "counting": "Whole original function definition remains in the domain file; the original concrete TestCase directly binds that same function object. No wrapper, new Case, scenario, subTest, MRO change, or ID rekey. Only the accepted public ADMISSION_BRIEF import is inverse-normalized."
+        },
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "26b41c56589dc5e8c464dee18e2d6fe5166aa4757921da9531a090ca94404677",
+          "source_ranges": [
+            [
+              344,
+              1372
+            ],
+            [
+              1375,
+              1485
+            ],
+            [
+              1569,
+              2031
+            ]
+          ],
+          "declarations": [
+            "test_inventory_edges_cycles_and_sole_dual_importer_match_the_brief",
+            "test_supported_module_surfaces_do_not_expand_the_root_facade",
+            "test_temporary_base_and_optional_artifacts_exclude_vendored_source"
+          ],
+          "destinations": [
+            "tests/test_rag_module_and_packaging_boundary.py"
+          ],
+          "counting": "Existing representative structural/API/packaging and identity-preserving source admission checks; no new Case or subTest. All earlier receipt scenarios remain."
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "af313f09e1f155c51c71e5c134d9300c1849ccce6749adfec251c285613fd390",
+          "source_ranges": [
+            [
+              77,
+              572
+            ]
+          ],
+          "declarations": [
+            "test_new_id_increased_subtests_and_relaxed_time_are_rejected"
+          ],
+          "destinations": [
+            "tests/test_suite_budget.py"
+          ],
+          "counting": "Existing representative structural/API/packaging and identity-preserving source admission checks; no new Case or subTest. All earlier receipt scenarios remain."
+        }
+      ],
+      "approved_source_delta": 227,
+      "planned_raw_delta": 224,
+      "planned_support_delta": 3,
+      "legacy_unresolved_lines": 1550,
+      "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
+      "generic_tooling_physical_delta_excluded": 17,
+      "notes": "Original concrete Case identity and fixture MRO retained through direct function bindings; source definitions remain in two domain files. Stage14 moves=[] with unchanged caps digest. Original399 weight bytes/163 launch IDs/mixed19/physical30 are restored. Source total154305 = raw148078 + counted support4677 + unresolved1550; baseline154078, totaldelta227(raw224/support3), including41 after failed D154264. Maintainer globally approved necessary source rows; Case/scenario/subTest/time/worker limits unchanged. Generic selector and budget runner tools remain outside existing counted-support scope and are disclosed separately."
     }
   ]
 }

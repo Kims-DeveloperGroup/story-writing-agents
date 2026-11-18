@@ -673,7 +673,7 @@ The dedicated canonical selector is:
 PYTHONPATH=src python -m tests.runner run --shard 5/5 --json whole-front.json
 ```
 
-Hosted full shards use the fixed `audited-163-v9` profile: 163 fixture-audited
+Hosted full shards use the fixed `audited-163-v11` profile: 163 fixture-audited
 methods across 30 classes run in at most four fresh test processes after the
 original noneligible serial suite. The checked-in launch order and priority are
 fixed. Runtime history cannot change this order, and final report rows stay canonical.

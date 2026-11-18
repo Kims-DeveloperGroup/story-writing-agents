@@ -15071,6 +15071,15 @@
           "expected_method_ast_sha256": "8ec08609b226ba8383fc5c6a5aed94fc3b52d439af4de2052f68b440ef31c1b5"
         }
       ]
+    },
+    {
+      "schema_version": 1,
+      "issue": 1046,
+      "origin_commit": "91f82aae158705efbb450482f84e117018f98094",
+      "original_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
+      "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
+      "moves": [],
+      "class_moves": []
     }
   ]
 }

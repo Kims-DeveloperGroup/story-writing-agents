@@ -27,12 +27,48 @@ def select(
     return CanonicalCollection(tests, tuple(test.id() for test in tests))
 
 
+def definition_module_ids(
+    collection: CanonicalInventory | CanonicalCollection, modules: Sequence[str],
+) -> dict[str, tuple[str, ...]]:
+    """Resolve registered whole-method owners without changing canonical modules."""
+    requested = set(validated_values(modules, "--module")) - set(collection.modules)
+    if not requested:
+        return {}
+    from .collection import load_inventory
+    from .impact import load_owners
+
+    owners = load_owners(load_inventory())["owners"]
+    known = set(collection.ids)
+    return {
+        owner["name"]: tuple(owner["focused_ids"])
+        for owner in owners
+        if owner["name"] in requested and owner.get("boundary") == "existing-cases"
+        and owner["paths"] == [owner["name"].replace(".", "/") + ".py"]
+        and len(owner["focused_ids"]) == 1
+        and owner["focused_ids"] == owner["affected_ids"]
+        and owner["focused_ids"][0] in known
+    }
+
+
+def validate_definition_modules(collection: CanonicalCollection, modules: Sequence[str]) -> None:
+    """Verify each selected definition owner against its actual bound test method."""
+    cases = {test.id(): test for test in collection.tests}
+    for module, identifiers in definition_module_ids(collection, modules).items():
+        case = cases.get(identifiers[0])
+        method = getattr(case, identifiers[0].rpartition(".")[2], None)
+        if (getattr(method, "__module__", None) != module
+                or getattr(method, "__self__", None) is not case):
+            raise RunnerError(f"test definition module does not own its selected method: {module}")
+
+
 def selected_ids(collection: CanonicalInventory | CanonicalCollection, *,
                  ids: Sequence[str] = (), modules: Sequence[str] = ()) -> tuple[str, ...]:
     requested_ids = validated_values(ids, "--id")
     requested_modules = validated_values(modules, "--module")
     missing_ids = sorted(set(requested_ids) - set(collection.ids))
     missing_modules = sorted(set(requested_modules) - set(collection.modules))
+    definitions = definition_module_ids(collection, missing_modules) if missing_modules else {}
+    missing_modules = sorted(set(missing_modules) - set(definitions))
     if missing_ids or missing_modules:
         messages = []
         if missing_ids:
@@ -43,6 +79,7 @@ def selected_ids(collection: CanonicalInventory | CanonicalCollection, *,
     if not requested_ids and not requested_modules:
         return collection.ids
     requested_id_set = set(requested_ids)
+    requested_id_set.update(identifier for identifiers in definitions.values() for identifier in identifiers)
     requested_module_set = set(requested_modules)
     module_by_id = ({test.id(): test.__class__.__module__ for test in collection.tests}
                     if isinstance(collection, CanonicalCollection) else
@@ -53,6 +90,8 @@ def selected_ids(collection: CanonicalInventory | CanonicalCollection, *,
     )
     if not selected:
         raise RunnerError("test selection produced no tests")
+    if definitions and isinstance(collection, CanonicalCollection):
+        validate_definition_modules(collection, requested_modules)
     return selected
 
 

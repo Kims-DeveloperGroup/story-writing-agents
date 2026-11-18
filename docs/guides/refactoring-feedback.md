@@ -307,3 +307,62 @@ worker 한도와 별도 이슈의 승인량은 늘리지 않는다. 구현 전 �
 [Draft PR #1029](https://github.com/Kims-DeveloperGroup/story-writing-agents/pull/1029)를
 생성·확인했다. 실제 source/graph/receipt, 같은 오류, 정상 시간과 최종 CI의
 관측 결과 및 남은 검증은 이 PR의 검증 기록에서 확인한다.
+
+### Task·전제·조언 경계의 선택 검증 #1046
+
+Task·공유 전제·조언/admission의 책임 분리와 수락 기준은
+[#1046의 구현 계획](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1046#구현-계획)에서 관리한다.
+이 전달의 첫 선택은 기존 scope·다섯 결과·실제 조언 실행·공유 전제의 네 사례다.
+변경한 API를 실제로 통과하지 않는 경로는 해당 결정·권한 guard로 확대하고,
+Root·공통 fixture가 바뀌면 실제 역소비자와 최종 전체 검증까지 확인한다.
+첫 집합의 성공과 전체 영향 검증의 성공을 구별한다.
+
+같은 production 오류가 assertion 이전의 domain 예외로 검출돼도 RED 후보가 될 수 있다.
+원래 정상 fixture가 통과하고 변이가 실제 정책 경계를 거쳐 해당 예외를 유발했는지,
+같은 오류를 전후에 검출하는지 source·원인 체인·선택/완료·정리 증거로 확인한다.
+setup·선행 조건·cleanup 실패를 정책 오류 검출로 대신하지 않는다.
+
+파일별 첫 실행은 다음 기존 Case를 선택한다. 실행은 저장소 루트에서 하며,
+각 명령의 JSON 경로는 새 보고 디렉터리 안의 아직 존재하지 않는 파일로 둔다.
+
+| 변경 소유자 | 첫 선택 |
+| --- | --- |
+| `lead_preparation/premise_preparation.py` | `tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_empty_inventory_does_not_add_unaffected_owners_and_mixed_scope_does` |
+| `lead_preparation/lead_task_control.py` | `tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_all_five_outcomes_have_exact_visible_next_actions` |
+| `lead_preparation/specialist_advisory_values.py` | `tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation`와 `tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_provider_free_advisory_confirms_one_specialist_without_synthesis_or_chain` |
+
+예를 들어 task의 다섯 결과를 바꾸는 편집의 첫 확인은 다음과 같다.
+
+```bash
+report_dir="$(mktemp -d "${TMPDIR:-/tmp}/story-task-feedback.XXXXXXXXXX")"
+chmod 700 "$report_dir"
+PYTHONPATH=src .venv/bin/python -m tests.runner run \
+  --id tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_all_five_outcomes_have_exact_visible_next_actions \
+  --json "$report_dir/task.json"
+```
+
+추천/전제의 결정·권한·재시작 등 이 선택이 실제로 통과하지 않는 API를 편집하면
+[#1046의 기존 통합 guard 목록](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1046#구현-계획)에서
+그 경로를 추가한다. 16개 도메인 사례 목록은 전체 영향 범위의 상한이 아니다.
+특히 Root 호출자나 공유 `ADMISSION_BRIEF`의 수정은 실제 역소비자를 확인해야 한다.
+전달 전 전체 검증은 이 첫 선택과 별개로 유지한다.
+
+공유 전제의 기존 Case는 같은 Runtime·history를 이어 쓰므로 원래의 긴 준비·실행을
+보존한다. 첫 선택이라는 이유로 짧은 실행이라고 간주하거나 공개 경로를 순수 함수·spy로
+대체하지 않는다. 오류 검출 자료와 정상 성능 자료도 별개로 보존하며, 서로 다른
+부분 선택·hosted 프로필·shard 모집단의 시간을 합쳐 성능 통과로 판정하지 않는다.
+
+
+### 테스트 정의 파일과 실행 정체성 보존
+
+작은 도메인 파일로 기존 테스트 메서드를 옮길 때는 실제 Case ID·fixture 수명·weight 그룹·shard 배정도 확인한다. 함수 정의를 가진 plain class와 기존 concrete TestCase의 직접 함수 바인딩은 wrapper 없이 기존 실행 정체성을 보존할 수 있다. 함수의 실제 정의 모듈과 concrete 클래스의 모듈은 다르며, 둘을 가짜 __module__ 값으로 숨기지 않는다.
+
+등록된 도메인 정의 모듈은 기존 owner map의 실제 파일과 focused/affected ID가 같은 닫힌 선택으로 해석한다. 원래 ID/module 선택 경로를 보존하고, 실제로 로드한 bound 함수의 정의 모듈까지 검증한다. 빈 모듈이나 다른 모듈의 함수를 선택해 성공을 표시하지 않는다. 예를 들어 아래 도메인 파일 선택은 원래 SpecialistRoutingRuntimeTests의 실제 Case 한 개를 실행한다.
+
+```bash
+PYTHONPATH=src python -m tests.runner run \
+  --module tests.lead_preparation.test_specialist_advisory_scope \
+  --json "$report_dir/advisory-scope.json"
+```
+
+이 경로의 Case ID는 기존 tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation이다. 정의 위치 이동만으로 전체 suite의 fixture 그룹을 다시 나누거나 관측 시간에 맞춰 weight를 조정하지 않는다. 실제 canonical ID·MRO·launch 순서·원래 weight bytes와 shard ID집합을 함께 확인한다.

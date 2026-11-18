@@ -6,7 +6,7 @@ from .contracts import RunnerError
 from .evidence import manifest, required_dict
 
 
-HOSTED_PROFILE = 'audited-163-v9'
+HOSTED_PROFILE = 'audited-163-v11'
 
 
 HOSTED_CLEANUP_SECONDS = 30.0

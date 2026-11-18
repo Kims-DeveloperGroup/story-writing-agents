@@ -39,7 +39,7 @@ from tests.lead_fixtures.preparation_data import (
     synthesis_outcome as _synthesis_outcome,
 )
 from story_writing_agents import AgentBackend
-from tests.lead_fixtures.specialist_routing import _ADMISSION_BRIEF, SpecialistRoutingRuntimeCase
+from tests.lead_fixtures.specialist_routing import ADMISSION_BRIEF as _ADMISSION_BRIEF, SpecialistRoutingRuntimeCase
 from tests.lead_fixtures.preparation_data import (
     OUTLINE,
     fixture_assessment as _fixture_assessment,

@@ -247,22 +247,26 @@ class SuiteBudgetTests(unittest.TestCase):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
         migrated = suite_budget.load_budget(Path(__file__).with_name("fixtures") / "test_budget_v1.json")
+        task_admission_current = dict(migrated, subtest_caps=dict(migrated["subtest_caps"]))
+        for move in load_receipt()[-1]["moves"]:
+            migrated["subtest_caps"][move["old_id"]] = migrated["subtest_caps"].pop(move["new_id"])
+        migrated["max_test_source_lines"] = 154078
         request_policy_current = dict(migrated, subtest_caps=dict(migrated["subtest_caps"]))
         migrated["max_test_source_lines"] = 153941
         document_policy_current = dict(migrated, subtest_caps=dict(migrated["subtest_caps"]))
-        for move in load_receipt()[-1]["moves"]:
+        for move in load_receipt()[-2]["moves"]:
             migrated["subtest_caps"][move["old_id"]] = migrated["subtest_caps"].pop(move["new_id"])
         migrated["max_test_source_lines"] = 153829
         authority_current = dict(migrated, subtest_caps=dict(migrated["subtest_caps"]))
-        for move in load_receipt()[-2]["moves"]:
+        for move in load_receipt()[-3]["moves"]:
             migrated["subtest_caps"][move["old_id"]] = migrated["subtest_caps"].pop(move["new_id"])
         evidence_current = dict(migrated, subtest_caps=dict(migrated["subtest_caps"]))
-        for move in load_receipt()[-3]["moves"]:
+        for move in load_receipt()[-4]["moves"]:
             migrated["subtest_caps"][move["old_id"]] = migrated["subtest_caps"].pop(move["new_id"])
         material_current = dict(migrated, subtest_caps=dict(migrated["subtest_caps"]))
         fixture_current = dict(material_current, subtest_caps=dict(material_current["subtest_caps"]))
         document_current = dict(fixture_current, subtest_caps=dict(fixture_current["subtest_caps"]))
-        for move in load_receipt()[-4]["moves"]:
+        for move in load_receipt()[-5]["moves"]:
             migrated["subtest_caps"][move["old_id"]] = migrated["subtest_caps"].pop(move["new_id"])
         migrated["max_test_source_lines"] = 152138
         source_current, finalization_current = dict(migrated, subtest_caps=dict(migrated["subtest_caps"])), dict(migrated)
@@ -512,6 +516,22 @@ class SuiteBudgetTests(unittest.TestCase):
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(request_policy_current, subtest_caps=caps), document_policy_current)
         self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, request_policy_current, dict(document_policy_current, subtest_caps={**document_policy_current["subtest_caps"], matrix_id: 2}))
 
+        self.assertEqual(task_admission_current["max_test_source_lines"], 154305)
+        self.assertIsNone(suite_budget.check_monotonic(task_admission_current, request_policy_current))
+        self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, task_admission_current, dict(task_admission_current, max_test_source_lines=152814))
+        self._assert_source_limit_neighbors_rejected(task_admission_current, request_policy_current)
+        for field, value in (("schema_version", 2), ("max_sequential_wall_seconds", 18001), ("max_shard_wall_seconds", 3601)):
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(task_admission_current, **{field: value}), request_policy_current)
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, task_admission_current, dict(request_policy_current, **{field: value}))
+        for caps in (
+            {key: value for key, value in task_admission_current["subtest_caps"].items() if key != zero_id},
+            {**task_admission_current["subtest_caps"], "tests.unreviewed.Case.test_extra": 0},
+            {**task_admission_current["subtest_caps"], matrix_id: 2},
+            {**task_admission_current["subtest_caps"], matrix_id: 0},
+        ):
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(task_admission_current, subtest_caps=caps), request_policy_current)
+        self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, task_admission_current, dict(request_policy_current, subtest_caps={**request_policy_current["subtest_caps"], matrix_id: 2}))
+
         ids = runner_profile.HOSTED_METHOD_IDS
         self.assertEqual(runner_evidence.manifest(ids)["digest"],
                          'sha256:6b7a6aee7e6557ef274a6ff18f3205c75132e0b1e043d3f4de11ff075e104a54')
@@ -531,6 +551,41 @@ class SuiteBudgetTests(unittest.TestCase):
         drift = runner_contracts.CanonicalCollection(cases, (*ids, *runner_profile.HOSTED_MIXED_SERIAL_IDS, ids[0].rsplit(".", 1)[0] + ".test_unreviewed"))
         self.assertRaises(runner_contracts.RunnerError, runner_hosted.hosted_partition, drift, drift)
         real = runner_execution.source_collection_for(self) or runner_collection.discover_canonical()
+        definitions = (
+            ("tests.lead_preparation.test_specialist_advisory_scope", "SpecialistAdvisoryScopeCases",
+             "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation",
+             "tests.lead_fixtures.specialist_routing.SpecialistRoutingRuntimeCase"),
+            ("tests.lead_preparation.test_ordinary_turn_outcomes", "OrdinaryLeadTurnOutcomeCases",
+             "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_all_five_outcomes_have_exact_visible_next_actions",
+             "tests.lead_fixtures.runtime_setup.LeadOrchestrationTestCase"),
+        )
+        for module, carrier_name, identifier, fixture_name in definitions:
+            selected = runner_selection.select(real, modules=[module])
+            self.assertEqual(selected.ids, (identifier,))
+            case = selected.tests[0]
+            concrete = type(case)
+            carrier = getattr(sys.modules[module], carrier_name)
+            method = identifier.rpartition(".")[2]
+            self.assertFalse(issubclass(carrier, unittest.TestCase))
+            self.assertIs(concrete.__dict__[method], carrier.__dict__[method])
+            self.assertIs(getattr(case, method).__func__, carrier.__dict__[method])
+            self.assertEqual(getattr(case, method).__module__, module)
+            self.assertEqual(concrete.__module__, identifier.rsplit(".", 2)[0])
+            fixture, = concrete.__bases__
+            self.assertEqual(f"{fixture.__module__}.{fixture.__name__}", fixture_name)
+            self.assertEqual(concrete.__mro__, (concrete, *fixture.__mro__))
+            self.assertEqual(runner_selection.selected_ids(real, ids=[identifier]), (identifier,))
+            old_module = concrete.__module__
+            self.assertEqual(runner_selection.selected_ids(real, modules=[old_module]),
+                             tuple(value for value in real.ids if value.rsplit(".", 2)[0] == old_module))
+            owner = {"name": module, "boundary": "existing-cases",
+                     "paths": [module.replace(".", "/") + ".py"],
+                     "focused_ids": [self.id()], "affected_ids": [self.id()]}
+            with patch("tests.runner.impact.load_owners", return_value={"owners": [owner]}):
+                self.assertRaisesRegex(runner_contracts.RunnerError, "definition module",
+                                       runner_selection.select, real, modules=[module])
+        self.assertRaisesRegex(runner_contracts.RunnerError, "unknown test modules",
+                               runner_selection.select, real, modules=["tests.module_graph_fixture"])
         real_serial, real_scheduled = runner_hosted.hosted_partition(real, real)
         self.assertEqual(real_scheduled, ids)
         self.assertEqual(set(real_serial.ids) & set(runner_profile.HOSTED_MIXED_SERIAL_IDS), set(runner_profile.HOSTED_MIXED_SERIAL_IDS))
@@ -539,7 +594,7 @@ class SuiteBudgetTests(unittest.TestCase):
         self.assertEqual(len(runner_profile.HOSTED_MIXED_SERIAL_IDS), 19)
         missing = runner_contracts.CanonicalCollection(cases, (*ids[:-1], *runner_profile.HOSTED_MIXED_SERIAL_IDS))
         self.assertRaises(runner_contracts.RunnerError, runner_hosted.hosted_partition, missing, missing)
-        args = SimpleNamespace(command="run", hosted_methods='audited-163-v9', hosted_deadline_epoch=time.time()+3500,
+        args = SimpleNamespace(command="run", hosted_methods='audited-163-v11', hosted_deadline_epoch=time.time()+3500,
                                shard="1/5", id=[], module=[], tier=[], failfast=False, json="report.json")
         env = dict(GITHUB_ACTIONS="true", TEST_RUN_DEADLINE=str(time.time()+4500),
                    TEST_JOB_DEADLINE=str(time.time()+4500))
@@ -592,7 +647,7 @@ class SuiteBudgetTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             paths = self._reports(directory, (0, 0)); rows = self.report_data
-            metadata = {"version": 1, "mode": "hosted-whole-method", "profile": 'audited-163-v9',
+            metadata = {"version": 1, "mode": "hosted-whole-method", "profile": 'audited-163-v11',
                         "profile_manifest": runner_evidence.manifest(runner_profile.HOSTED_METHOD_IDS),
                         "capacity": 2, "peak_children": 0, "work_deadline_epoch": 10000.0,
                         "cleanup_deadline_epoch": 10030.0, "launch_manifest": runner_evidence.manifest(()),

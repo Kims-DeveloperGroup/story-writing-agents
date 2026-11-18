@@ -19,6 +19,12 @@ import unittest
 import zipfile
 from pathlib import Path
 from typing import get_type_hints
+from inspect import Parameter, signature
+from story_writing_agents.lead_preparation import (
+    premise_preparation,
+    lead_task_control,
+    specialist_advisory_values,
+)
 import story_writing_agents
 from story_writing_agents import conversations
 from story_writing_agents.lead_preparation import recommendation_preparation, recommendation_requests
@@ -351,8 +357,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 274)
-        self.assertEqual(len(edges), 1581)
+        self.assertEqual(len(modules), 277)
+        self.assertEqual(len(edges), 1608)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -1048,7 +1054,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
             'story_writing_agents.orchestrator',
             'story_writing_agents.runtime_resources.collaboration_event_journal',
             'story_writing_agents.runtime_resources.provider_call_accounting',
-        })
+        'story_writing_agents.lead_preparation.lead_task_control',
+                                                                                                                 })
         self.assertIn("story_writing_agents.blocking_work", modules)
         self.assertEqual({target for source, target in edges if source == "story_writing_agents.blocking_work"}, set())
         self.assertEqual({source for source, target in edges if target == "story_writing_agents.blocking_work"},
@@ -1371,6 +1378,43 @@ class RagModuleBoundaryTests(unittest.TestCase):
         })
         self.assertEqual({source for source, target in edges if target == document_plan_views_owner}, {"story_writing_agents.orchestrator"})
 
+        premise_preparation_owner = 'story_writing_agents.lead_preparation.premise_preparation'
+        self.assertEqual({target for source, target in edges if source == premise_preparation_owner}, {
+            'story_writing_agents.conversations',
+            'story_writing_agents.conversations.events',
+            'story_writing_agents.errors',
+            'story_writing_agents.lead_premise_decisions',
+            'story_writing_agents.lead_preparation',
+            'story_writing_agents.lead_preparation.authoring_authority',
+            'story_writing_agents.runtime_resources',
+            'story_writing_agents.runtime_resources.collaboration_event_journal',
+            'story_writing_agents.specialist_routing',
+        })
+        self.assertEqual({source for source, target in edges if target == premise_preparation_owner}, {"story_writing_agents.orchestrator"})
+        lead_task_control_owner = 'story_writing_agents.lead_preparation.lead_task_control'
+        self.assertEqual({target for source, target in edges if source == lead_task_control_owner}, {
+            'story_writing_agents.conversations',
+            'story_writing_agents.conversations.events',
+            'story_writing_agents.document_plan',
+            'story_writing_agents.lead_exploration',
+            'story_writing_agents.lead_premise_decisions',
+            'story_writing_agents.lead_task_transitions',
+            'story_writing_agents.runtime_resources',
+            'story_writing_agents.runtime_resources.collaboration_event_journal',
+        })
+        self.assertEqual({source for source, target in edges if target == lead_task_control_owner}, {"story_writing_agents.orchestrator"})
+        specialist_advisory_values_owner = 'story_writing_agents.lead_preparation.specialist_advisory_values'
+        self.assertEqual({target for source, target in edges if source == specialist_advisory_values_owner}, {
+            'story_writing_agents.conversations',
+            'story_writing_agents.lead_preparation',
+            'story_writing_agents.lead_preparation.authoring_authority',
+            'story_writing_agents.runtime_resources',
+            'story_writing_agents.runtime_resources.collaboration_event_journal',
+            'story_writing_agents.specialist_routing',
+            'story_writing_agents.writing_artifacts',
+        })
+        self.assertEqual({source for source, target in edges if target == specialist_advisory_values_owner}, {"story_writing_agents.orchestrator"})
+
 
     def test_supported_module_surfaces_do_not_expand_the_root_facade(self) -> None:
 
@@ -1461,6 +1505,70 @@ class RagModuleBoundaryTests(unittest.TestCase):
         self.assertIs(get_type_hints(recommendation_decisions.RecommendationFailureMatch)["lead_result"],
                       conversations.CollaborationEvent)
 
+        self.assertEqual(tuple(premise_preparation.__all__), (
+            'capture_shared_premises',
+            'prepare_premise_admission',
+            'validate_premise_control',
+        ))
+        self.assertEqual(tuple(lead_task_control.__all__), (
+            'prepare_exploration_adoption',
+            'prepare_exploration_request',
+            'prepare_lead_turn_origin',
+            'prepare_premise_selection',
+            'prepare_task_transition',
+            'superseding_turn_draft',
+        ))
+        self.assertEqual(tuple(specialist_advisory_values.__all__), (
+            'ADVISORY_USER_IMPACT',
+            'advisory_confirmation_batch',
+            'prepare_advisory_origin',
+            'prepare_specialist_advisory_intent',
+            'specialist_advisory_assignment',
+            'specialist_advisory_budget',
+        ))
+        policy_contracts = (
+            (premise_preparation, premise_preparation.capture_shared_premises,
+             ('session_id', 'intent', 'inputs', 'read_session_authoring_events'), ('read_session_authoring_events',)),
+            (premise_preparation, premise_preparation.validate_premise_control,
+             ('session_id', 'conversation_id', 'selection', 'events', 'projection', 'read_session_authoring_events'), ('read_session_authoring_events',)),
+            (premise_preparation, premise_preparation.prepare_premise_admission,
+             ('session_id', 'conversation_id', 'turn_id', 'step_id', 'invocation_id', 'question_id', 'offered_tasks', 'events', 'projection', 'premise_capture', 'read_session_authoring_events'), ('premise_capture', 'read_session_authoring_events')),
+            (lead_task_control, lead_task_control.prepare_task_transition,
+             ('session_id', 'conversation_id', 'decision', 'document_selection', 'events', 'projection', 'materials'), ()),
+            (lead_task_control, lead_task_control.prepare_lead_turn_origin,
+             ('session_id', 'conversation_id', 'text', 'projection'), ()),
+            (lead_task_control, lead_task_control.prepare_premise_selection,
+             ('session_id', 'conversation_id', 'turn_id', 'provider_step_id', 'control', 'selection', 'report', 'option'), ()),
+            (lead_task_control, lead_task_control.prepare_exploration_request,
+             ('session_id', 'conversation_id', 'turn_id', 'provider_step_id', 'user_event'), ()),
+            (lead_task_control, lead_task_control.prepare_exploration_adoption,
+             ('session_id', 'conversation_id', 'turn_id', 'provider_step_id', 'user_event', 'adoption', 'selected_text', 'adoption_source'), ()),
+            (lead_task_control, lead_task_control.superseding_turn_draft,
+             ('session_id', 'conversation_id', 'turn_id', 'provider_step_id', 'user_event', 'pending_proposal', 'projection'), ()),
+            (specialist_advisory_values, specialist_advisory_values.prepare_specialist_advisory_intent,
+             ('authoring_scope', 'specialist_id', 'text', 'inputs', 'review_basis'), ()),
+            (specialist_advisory_values, specialist_advisory_values.specialist_advisory_assignment,
+             ('specialist_id', 'text', 'projection', 'inputs', 'call_limits', 'mode', 'review_basis'), ()),
+            (specialist_advisory_values, specialist_advisory_values.specialist_advisory_budget,
+             ('projection', 'required_calls'), ()),
+            (specialist_advisory_values, specialist_advisory_values.prepare_advisory_origin,
+             ('session_id', 'conversation_id', 'turn_id', 'step_id', 'specialist_id', 'text', 'proposal'), ()),
+            (specialist_advisory_values, specialist_advisory_values.advisory_confirmation_batch,
+             ('session_id', 'conversation_id', 'turn_id', 'step_id', 'user_event', 'message', 'proposal_event', 'proposal', 'request_id'), ()),
+        )
+        for owner, function, parameter_names, keyword_only in policy_contracts:
+            self.assertEqual(function.__module__, owner.__name__)
+            parameters = signature(function).parameters
+            self.assertEqual(tuple(parameters), parameter_names)
+            self.assertEqual(tuple(name for name, value in parameters.items() if value.kind is Parameter.KEYWORD_ONLY), keyword_only)
+            self.assertEqual({name: value.default for name, value in parameters.items() if value.default is not Parameter.empty},
+                             {"premise_capture": None} if function is premise_preparation.prepare_premise_admission else {})
+            self.assertEqual(set(function.__annotations__), {*parameter_names, "return"})
+            self.assertFalse(any(isinstance(value, str) for value in function.__annotations__.values()))
+            self.assertEqual(get_type_hints(function), {
+                name: type(None) if value is None else value for name, value in function.__annotations__.items()
+            })
+        self.assertIsInstance(specialist_advisory_values.ADVISORY_USER_IMPACT, str)
         for module_name in ("group_observation", "group_reporting"):
             spec = importlib.util.find_spec("story_writing_agents.agent_context." + module_name)
             self.assertIsNotNone(spec)
@@ -1480,7 +1588,22 @@ class RagModuleBoundaryTests(unittest.TestCase):
                      "PreparedRecommendationRevision",
                      "RecommendationDecisionClosure",
                      "RecommendationFailureMatch",
-                     ):
+                     'capture_shared_premises',
+                     'prepare_premise_admission',
+                     'validate_premise_control',
+                     'prepare_exploration_adoption',
+                     'prepare_exploration_request',
+                     'prepare_lead_turn_origin',
+                     'prepare_premise_selection',
+                     'prepare_task_transition',
+                     'superseding_turn_draft',
+                     'ADVISORY_USER_IMPACT',
+                     'advisory_confirmation_batch',
+                     'prepare_advisory_origin',
+                     'prepare_specialist_advisory_intent',
+                     'specialist_advisory_assignment',
+                     'specialist_advisory_budget',
+        ):
             self.assertNotIn(name, story_writing_agents.__all__)
             self.assertFalse(hasattr(story_writing_agents, name))
 
@@ -1714,6 +1837,9 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             "story_writing_agents/lead_preparation/recommendation_preparation.py",
             "story_writing_agents/lead_preparation/recommendation_requests.py",
             "story_writing_agents/lead_preparation/recommendation_decisions.py",
+            "story_writing_agents/lead_preparation/premise_preparation.py",
+            "story_writing_agents/lead_preparation/lead_task_control.py",
+            "story_writing_agents/lead_preparation/specialist_advisory_values.py",
             "story_writing_agents/lead_preparation/proposal_basis_values.py",
             "story_writing_agents/lead_preparation/lead_material_inputs.py",
             "story_writing_agents/lead_preparation/lead_evidence_receipts.py",
