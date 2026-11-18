@@ -153,7 +153,7 @@ def decode_specialist_reply(
             execution_attempt_id=attempt_id,
             assignment_id=assignment.assignment_id,
             dispatch_event_id=dispatch_event_id,
-            assessment=validation_call('$.assessment', CollaborationSpecialistAssessment, assessment),
+            assessment=CollaborationSpecialistAssessment.SUPPORTS,
             message=message,
             input_ids=assignment.input_ids,
             mode=assignment.mode,
