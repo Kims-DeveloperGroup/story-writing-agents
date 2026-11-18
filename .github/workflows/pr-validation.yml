@@ -261,8 +261,8 @@ jobs:
                   core.setFailed("영향 테스트 ID는 중복·빈 줄 없이 한 줄에 하나의 정규 ID여야 합니다.");
                   return;
                 }
-                if (process.env.COMPARE_FEEDBACK_BASELINE === "true" && !ids.includes("tests.test_selected_task_material_codec.SelectedTaskMaterialCodecTests.test_two_captures_keep_closed_wire_shape_and_order")) {
-                  core.setFailed("피드백 비교에는 기존 codec 사례의 정확한 ID가 필요합니다."); return;
+                if (process.env.COMPARE_FEEDBACK_BASELINE === "true" && (process.env.PROFILE_SELECTION !== "true" || process.env.OBSERVE_GC === "true" || JSON.stringify(ids) !== JSON.stringify(["tests.agent_context.invocation.test_execution_events.ContextExecutionObserverTests.test_debate_observation_requires_and_preserves_phase_and_round", "tests.agent_context.invocation.test_execution_events.ContextExecutionObserverTests.test_reference_observer_failure_aborts_and_taints_before_authority", "tests.agent_context.invocation.test_execution_failures.ContextExecutionFailureTests.test_removed_correlation_field_is_rejected_without_disclosure", "tests.agent_context.invocation.test_execution_failures.ContextExecutionFailureTests.test_unmatched_strict_classification_fails_before_provider", "tests.agent_context.ledger.test_scope_checkpoints.LedgerScopeAndBootstrapTests.test_persisted_ready_checkpoint_requests_exact_bootstrap_reasons", "tests.agent_context.ledger.test_storage_atomicity.LedgerStorageSecurityAndAtomicityTests.test_post_replace_durability_failure_leaves_complete_idempotent_record", "tests.agent_context.ledger.test_storage_atomicity.LedgerStorageSecurityAndAtomicityTests.test_precommit_write_fsync_and_replace_failures_preserve_old_record_and_retry", "tests.agent_context.ledger.test_storage_atomicity.LedgerStorageSecurityAndAtomicityTests.test_workspace_root_identity_replacement_is_rejected_without_new_state", "tests.agent_context.planning.test_purity.PlanningBoundaryAndPurityTests.test_facades_remain_exact_and_clean_direct_import_works", "tests.agent_context.sources.test_authority_adapters.RealAuthorityAdapterTests.test_artifact_capture_preserves_crlf_lf_cr_and_classifies_paths", "tests.agent_context.sources.test_authority_adapters.RealAuthorityAdapterTests.test_assignment_local_artifact_allowlist_filters_inventory_and_capture", "tests.agent_context.sources.test_authority_adapters.RealAuthorityAdapterTests.test_searchable_history_is_opt_in_same_session_active_and_frozen", "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_legacy_text_delta_fails_closed_on_non_string_payload", "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_rejects_conflicting_event_discriminators", "tests.test_agent_exchange_storage.AgentExchangeStorageFaultTests.test_prune_and_retained_suffix_replace_failures_recover_next_append", "tests.test_agent_exchange_storage.AgentExchangeStorageFaultTests.test_stream_state_and_rotation_failures_leave_permitted_gaps", "tests.test_agent_exchange_storage.AgentExchangeStorageSecurityTests.test_state_high_water_below_logs_and_pending_state_are_corrupt", "tests.test_agent_exchange_viewer.AgentExchangeControllerIntegrationTests.test_latest_first_same_id_kind_separation_debate_subject_and_empty_agent", "tests.test_agent_exchange_viewer.LazyViewerAdapterTests.test_every_repaired_api_shape_mismatch_fails_before_operation_creation", "tests.test_antigravity_adapter.AntigravityAdapterTests.test_mode_failures_are_best_effort_but_controls_propagate", "tests.test_antigravity_adapter.AntigravityAdapterTests.test_model_effort_precedence_and_backend_projection_are_immutable", "tests.test_antigravity_adapter.AntigravityAdapterTests.test_rendered_schema_echo_is_exact_for_success_and_recovered_error", "tests.test_antigravity_parity.AntigravityParityTests.test_missing_executable_preserves_compatible_thread", "tests.test_antigravity_parity.AntigravityParityTests.test_mixed_provider_dispatch_and_thread_locks_are_independent", "tests.test_antigravity_parity.AntigravityParityTests.test_only_provider_known_same_state_conversations_can_resume", "tests.test_antigravity_parity.AntigravityParityTests.test_v2_lifecycle_partitions_threads_and_retains_exact_resume", "tests.test_artifact_application_store_lifecycle.ArtifactApplicationLifecycleTests.test_each_operation_enforces_presence_absence_and_source_digest_before_journal", "tests.test_artifact_reference_authorization.ReferenceDriftAndLifetimeTests.test_growth_past_default_limit_is_drift_and_new_capture_is_coded", "tests.test_artifact_reference_read_actions.ReferenceReadRepositoryTests.test_acceptance_failures_terminate_with_exact_durable_outcome", "tests.test_cli_context.CliDefaultPersistenceTests.test_identifier_symlink_and_atomic_write_failures_are_safe", "tests.test_cli_context.CliDefaultPersistenceTests.test_malformed_and_non_utf8_defaults_reject_without_rewriting", "tests.test_cli_context.CliDefaultPersistenceTests.test_symlinked_default_directory_and_file_are_rejected_safely", "tests.test_cli_context.LifecycleAutomationTests.test_lifecycle_grammar_has_no_session_option_or_legacy_actions", "tests.test_cli_context.LifecycleAutomationTests.test_pause_uses_optional_default_and_always_retains_it", "tests.test_cli_context.LifecycleAutomationTests.test_reopen_explicit_and_default_save_only_after_success", "tests.test_codex_backend.CodexBackendTestCase.test_binding_stages_isolated_agents_and_turn_omits_static_prompt", "tests.test_codex_backend.CodexBackendTestCase.test_both_native_backends_preserve_session_continuation_and_legacy_namespaces", "tests.test_codex_backend.CodexBackendTestCase.test_bound_agent_control_failures_emit_interrupted_terminal_records", "tests.test_codex_backend.CodexBackendTestCase.test_cancellation_terminates_the_codex_process", "tests.test_codex_backend.CodexBackendTestCase.test_contextual_submitted_failure_taints_only_exact_context_thread", "tests.test_codex_backend.CodexBackendTestCase.test_conversation_cancellation_taints_then_restarts_cleanly", "tests.test_codex_backend.CodexBackendTestCase.test_conversation_nonzero_exit_uses_fixed_stderr_free_error", "tests.test_codex_backend.CodexBackendTestCase.test_conversation_provider_failures_taint_without_story_mutation", "tests.test_codex_backend.CodexBackendTestCase.test_conversation_thread_spans_subjects_and_restarts_on_fingerprint", "tests.test_codex_backend.CodexBackendTestCase.test_every_sink_control_failure_is_observational_only", "tests.test_codex_backend.CodexBackendTestCase.test_failure_and_cancellation_release_retired_staging_once", "tests.test_codex_backend.CodexBackendTestCase.test_hot_same_provider_profile_applies_now_and_reuses_thread", "tests.test_codex_backend.CodexBackendTestCase.test_local_reference_handler_failures_are_durable", "tests.test_codex_backend.CodexBackendTestCase.test_malformed_usage_never_invalidates_a_valid_provider_reply", "tests.test_codex_backend.CodexBackendTestCase.test_missing_executable_nonzero_and_malformed_output_fail_cleanly", "tests.test_codex_backend.CodexBackendTestCase.test_pause_disables_invocation_and_reopen_retains_thread", "tests.test_codex_backend.CodexBackendTestCase.test_pre_result_stream_stderr_timeout_and_cancellation_do_not_capture", "tests.test_codex_backend.CodexBackendTestCase.test_provider_validation_values_fall_back_without_disclosure", "tests.test_codex_backend.CodexBackendTestCase.test_reference_read_converse_uses_one_call_and_one_context", "tests.test_codex_backend.CodexBackendTestCase.test_reference_read_pre_provider_resource_failures_terminate_exactly", "tests.test_codex_backend.CodexBackendTestCase.test_rejected_debate_attempts_return_phase_safe_deadlocks", "tests.test_codex_backend.CodexBackendTestCase.test_sink_control_failures_do_not_mask_provider_failure", "tests.test_codex_backend.CodexBackendTestCase.test_success_and_noneligible_shared_seam_failures_do_not_capture", "tests.test_codex_backend.ConversationModelContractTests.test_story_session_context_must_match_outer_conversation_identity", "tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests.test_projection_is_deterministic_ordered_typed_and_history_only", "tests.test_consensus_deadlock_continuation.ConsensusDeadlockContinuationTests.test_resume_in_place_binds_exact_lineage_and_requires_fresh_confirmation", "tests.test_consensus_event_store.DurableConsensusRestartTests.test_partial_and_complete_audit_reports_round_trip_with_old_events", "tests.test_consensus_event_store.DurableConsensusRestartTests.test_restart_exposes_state_without_replaying_confirmation_or_provider", "tests.test_conversation_rag_composition.ConversationRagCompositionTests.test_local_retrieval_maps_corrupt_store_to_literal_fallback", "tests.test_conversation_rag_local.LocalConversationRagTests.test_embedding_goldens_pin_unicode_normalization_and_binary_floats", "tests.test_conversation_rag_store.ConversationRagStoreTests.test_bounded_hostile_json_and_float_exponents_are_fixed_corruption", "tests.test_conversation_rag_store.ConversationRagStoreTests.test_confirmed_purge_is_single_session_and_derived_only", "tests.test_conversation_storage_migration.ConversationStorageTransferPlanningTests.test_dry_run_classifies_create_identical_conflict_and_destination_only", "tests.test_conversation_storage_migration_cli.ConversationStorageTransferCliTests.test_missing_workspace_is_one_content_free_schema_v1_failure", "tests.test_conversation_storage_selection_cli.ConversationStorageSelectionCliTests.test_process_rejects_dirty_workspace_before_inspecting_invalid_database", "tests.test_conversation_storage_selection_cli.ConversationStorageSelectionCliTests.test_use_dispatch_is_provider_free_and_passes_exact_selection_arguments", "tests.test_debug_log.DebugLogContractTests.test_record_does_not_swallow_process_control_exceptions", "tests.test_debug_log.DebugLogStorageTests.test_fifo_guard_is_rejected_before_open_without_blocking", "tests.test_debug_log.DebugLogStorageTests.test_rotation_reuses_the_no_follow_active_validation_stat", "tests.test_filesystem_conversation_archive.FilesystemConversationArchiveRoundTripTests.test_real_layout_round_trip_is_byte_and_codec_exact", "tests.test_git_adapter_integration.GitAdapterIntegrationTests.test_existing_wrong_baseline_and_post_commit_drift_require_recovery", "tests.test_git_adapter_integration.GitAdapterIntegrationTests.test_manifest_drift_symlink_and_missing_identity_fail_before_init", "tests.test_git_adapter_integration.GitAdapterIntegrationTests.test_status_and_diff_are_bounded_content_free_literal_metadata", "tests.test_git_linked_worktree_reads.GitLinkedWorktreeReadIntegrationTests.test_status_and_log_return_exact_linked_worktree_metadata_with_stable_markers", "tests.test_interactive_auth.InteractiveAuthBoundaryTests.test_contract_is_private_clean_source_isolated_and_acyclic", "tests.test_interactive_controller.ControllerContractTests.test_agents_and_status_ignore_message_detail_preference", "tests.test_interactive_controller.ControllerContractTests.test_controller_and_composer_have_no_generic_status_sites", "tests.test_interactive_controller.ControllerContractTests.test_surface_signatures_non_facade_and_single_use_cleanup", "tests.test_interactive_controller.ControllerSettingsTests.test_message_details_only_failures_preserve_activation_and_order", "tests.test_interactive_controller.ControllerSettingsTests.test_settings_confirmation_routes_context_without_semantic_write_for_all_outcomes", "tests.test_interactive_line_editor.EditorBoundaryTests.test_editor_does_not_parse_call_provider_or_touch_artifacts", "tests.test_interactive_line_editor.LiveEditingTests.test_main_history_navigates_edits_and_normalizes_reserved_keys", "tests.test_interactive_settings.SettingsLoadingAndUpdateTests.test_loading_preserves_exact_bytes_catalog_precedence_and_performs_no_write", "tests.test_interactive_settings.SettingsPersistenceTests.test_post_activation_restore_is_exact_and_tamper_requires_recovery", "tests.test_interactive_settings.SettingsPersistenceTests.test_post_replace_failures_restore_every_attempted_target_exactly", "tests.test_interactive_terminal.SanitizerTests.test_all_format_surrogate_and_line_separator_output_is_strict_utf8", "tests.test_interactive_terminal_input_lifecycle.DecoderAdmissionTests.test_control_bytes_decode_exactly_and_round_trip", "tests.test_interactive_terminal_input_lifecycle.InputLatchAndDriverTests.test_live_revalidation_rejects_decoder_capability_and_configuration_drift", "tests.test_interactive_terminal_viewer.ViewerDriverTests.test_physical_eof_while_discarding_overlong_sequence_is_typed", "tests.test_interactive_terminal_viewer.ViewerModelContractTests.test_fallback_projection_limit_is_exact_complete_and_precedes_all_io", "tests.test_prompts.PromptAssemblerTests.test_agent_request_optional_context_is_last_and_forwarded_canonically", "tests.test_prompts.PromptAssemblerTests.test_all_specialist_prompts_share_the_exact_bounded_assessment_contract", "tests.test_prompts.PromptAssemblerTests.test_definition_has_exact_reference_order_paths_hashes_and_language", "tests.test_prompts.PromptAssemblerTests.test_each_agent_references_only_its_allowlisted_context_in_order", "tests.test_prompts.PromptAssemblerTests.test_explicit_configuration_snapshot_is_fixed_and_overrides_stay_live", "tests.test_provider_auth_recovery.AuthClassificationTests.test_codex_completed_turn_with_historical_401_remains_success", "tests.test_provider_auth_recovery.ContextRecoveryTests.test_admission_race_abort_keeps_original_accounting_and_exchanges", "tests.test_provider_auth_recovery.ContextRecoveryTests.test_local_reference_load_does_not_consume_provider_capacity", "tests.test_provider_auth_recovery.ContextRecoveryTests.test_replay_requires_explicit_exact_true_validator", "tests.test_provider_auth_recovery.ContextRecoveryTests.test_unsafe_unconfirmed_and_repeated_auth_failure_never_replay", "tests.test_public_api_and_cli.PersistenceValidationTests.test_persisted_debate_log_rejects_noncanonical_fields_values_and_rounds", "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_unknown_liveness_errors_never_replace_claim", "tests.test_sqlite_conversation_storage.SQLiteBoundaryAndCompositionTests.test_optional_modules_import_lazily_without_io_or_sqlite_loading", "tests.test_sqlite_conversation_storage.SQLitePreflightAndProvisionTests.test_catalog_create_rejects_orphan_id_collision_before_metadata_insert", "tests.test_sqlite_database.SQLiteDatabaseTransactionTests.test_exception_and_control_flow_failures_roll_back_and_close", "tests.test_sqlite_database.SQLiteDatabaseTransactionTests.test_write_uses_begin_immediate_reverify_commit_and_close_order", "tests.test_sqlite_database.SQLiteDatabaseVerificationTests.test_invalid_utf8_subject_is_content_free_for_preflight_and_catalog", "tests.test_sqlite_database.SQLiteDatabaseVerificationTests.test_manifest_filter_is_literal_and_only_ignores_sqlite_owned_names", "tests.test_sqlite_database.SQLiteDatabaseVerificationTests.test_nonregular_and_multiply_linked_database_paths_fail_closed", "tests.test_sqlite_database.SQLiteDatabaseVerificationTests.test_schema_manifest_fingerprint_and_cookie_drift_fail_closed", "tests.test_sqlite_database.SQLiteDatabaseVerificationTests.test_schema_objects_fingerprint_and_query_plans_are_exact", "tests.test_sqlite_database.SQLiteDatabaseVerificationTests.test_verify_existing_and_preflight_remain_exhaustive", "tests.test_workspace_and_config.DebateContextSidecarTests.test_tampering_and_duplicate_fields_raise_without_rewriting", "tests.test_workspace_fixtures.WorkspaceFixtureContractTests.test_corrupt_copy_and_replaced_root_fail_closed", "tests.test_workspace_fixtures.WorkspaceFixtureContractTests.test_guarded_and_validated_tiers_bind_exact_fresh_ready_shape"]))) {
+                  core.setFailed("LOWER120 진단 비교에는 고정된 120 ID와 순서, 기본 GC 및 프로파일 모드가 필요합니다."); return;
                 }
                 affectedIds = ids.join("\n");
               } else if (requestedIds !== "") {
@@ -671,72 +671,33 @@ jobs:
                   stream.write(json.dumps(data, indent=2, allow_nan=False) + '\n')
               print(json.dumps(data, sort_keys=True, allow_nan=False))
           PY_HARDWARE
-      - name: Run fast runtime tests
+      - name: Prepare diagnostic profiled CLI wall recorder
         run: |
-          selector=(--tier fast)
-          if [[ "$AFFECTED_ONLY" == "true" ]]; then
-            [[ -n "$AFFECTED_IDS" ]] || exit 2
-            selector=()
-            while IFS= read -r test_id; do
-              [[ -n "$test_id" ]] || exit 2
-              selector+=(--id "$test_id")
-            done <<< "$AFFECTED_IDS"
-          fi
-          printf '%s\n' "${selector[@]}" > "$RUNNER_TEMP/fast-selection-argv.txt"
-          test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))
-          if (( test_seconds > 3150 )); then test_seconds=3150; fi
-          printf '{"worker_limit_seconds":%s,"kill_grace_seconds":30,"cleanup_reserve_seconds":60,"cancellation_reserve_seconds":360}\n' "$test_seconds" > "$RUNNER_TEMP/fast-control.json"
-          if (( test_seconds <= 0 )); then exit 124; fi
-          runner=(.venv/bin/python -m tests.runner run "${selector[@]}" --json "$RUNNER_TEMP/fast.json")
-          if [[ "$OBSERVE_GC" == "true" ]]; then
-            runner=(.venv/bin/python -m tests.runner.gc_diagnostic --observation-json "$RUNNER_TEMP/gc-diagnostic.json" -- run "${selector[@]}" --json "$RUNNER_TEMP/gc-diagnostic-run.json")
-          fi
-          if [[ "$PROFILE_SELECTION" == "true" ]]; then
-            runner=(.venv/bin/python -m cProfile -o "$RUNNER_TEMP/case-profile-current.prof" -m tests.runner run "${selector[@]}" --json "$RUNNER_TEMP/case-profile-current.json")
-          fi
-          set +e
-          timeout --signal=INT --kill-after=30s "${test_seconds}s" env PYTHONPATH=src "${runner[@]}" 2>&1 | tee "$RUNNER_TEMP/fast.log"
-          test_statuses=("${PIPESTATUS[@]}")
-          test_status=${test_statuses[0]}
-          if (( test_status == 0 && test_statuses[1] != 0 )); then test_status=${test_statuses[1]}; fi
-          printf '%s\n' "$test_status" > "$RUNNER_TEMP/fast-exit-code.txt"
-          exit "$test_status"
-      - name: 기존 생산 경계의 RED와 GREEN 피드백 확인
-        if: needs.classify.outputs.affected_only == 'true' && inputs.observe_gc != true && inputs.profile_selection != true
-        run: |
-          case "$FEEDBACK_WITNESS" in
-            codec)
-              witness_ids=('tests.test_selected_task_material_codec.SelectedTaskMaterialCodecTests.test_two_captures_keep_closed_wire_shape_and_order')
-              ;;
-            source-snapshot)
-              witness_ids=(
-                'tests.test_agent_context_sources.SourceSurfacePolicyAndValueTests.test_descriptor_snapshot_records_are_exact_immutable_and_content_hidden'
-                'tests.agent_context.sources.test_source_contracts.SourceSurfacePolicyAndValueTests.test_descriptor_snapshot_records_are_exact_immutable_and_content_hidden'
-              )
-              ;;
-            provider-call-ordinal)
-              witness_ids=('tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_failure_closure_write_error_keeps_history_gated')
-              ;;
-            successor-selection)
-              witness_ids=(
-                'tests.test_specialist_routing.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip'
-                'tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip'
-              )
-              ;;
-            *) exit 2 ;;
-          esac
-          for witness_id in "${witness_ids[@]}"; do
-            if grep -Fxq "$witness_id" <<< "$AFFECTED_IDS"; then
-              PYTHONPATH=src .venv/bin/python -m tests.feedback_probe \
-                --witness "$FEEDBACK_WITNESS" --json "$RUNNER_TEMP/feedback-probe.json"
-              break
-            fi
-          done
+          cat > "$RUNNER_TEMP/lower120-profile-cli-wall-parent.py" <<'PY'
+          """Diagnostic profiled fresh-child CLI wall recorder; stdlib only."""
+          from pathlib import Path
+          import json
+          import subprocess
+          import sys
+          import time
+          record = {"schema_version": 1, "mode": "diagnostic_profiled_cli",
+                    "source_role": sys.argv[2], "argv": sys.argv[3:], "returncode": None}
+          started = time.monotonic_ns()
+          try:
+              completed = subprocess.run(sys.argv[3:], check=False)
+              record["returncode"] = completed.returncode
+          finally:
+              finished = time.monotonic_ns()
+              record.update(started_monotonic_ns=started, finished_monotonic_ns=finished,
+                            observed_child_cli_wall_seconds=(finished - started) / 1_000_000_000)
+              Path(sys.argv[1]).write_text(json.dumps(record, allow_nan=False) + "\n")
+          raise SystemExit(completed.returncode)
+          PY
       - name: 수정 전 피드백 소스 준비
         if: inputs.compare_feedback_baseline == true && needs.classify.outputs.affected_only == 'true'
         uses: actions/checkout@v4
         with:
-          ref: 45cf084f0d28eb5926863e90509e5f14bbd3497e
+          ref: d34eee7385bc869b60cda45c69f6ffaf68c3cf9b
           submodules: recursive
           path: .feedback-baseline
       - name: 같은 환경에서 수정 전 RED와 GREEN 측정
@@ -761,16 +722,42 @@ jobs:
             baseline_runner=("$GITHUB_WORKSPACE/.venv/bin/python" -m cProfile -o "$RUNNER_TEMP/case-profile-baseline.prof" -m tests.runner run "${baseline_ids[@]}" --json "$RUNNER_TEMP/case-profile-baseline.json")
           fi
           set +e
-          timeout --signal=INT --kill-after=30s "${baseline_seconds}s" env PYTHONPATH=src "${baseline_runner[@]}" 2>&1 | tee "$RUNNER_TEMP/feedback-probe-baseline-affected.log"
+          timeout --signal=INT --kill-after=30s "${baseline_seconds}s" env PYTHONPATH=src "$GITHUB_WORKSPACE/.venv/bin/python" "$RUNNER_TEMP/lower120-profile-cli-wall-parent.py" "$RUNNER_TEMP/lower120-profile-before-cli-wall.json" before "${baseline_runner[@]}" 2>&1 | tee "$RUNNER_TEMP/feedback-probe-baseline-affected.log"
           baseline_statuses=("${PIPESTATUS[@]}")
           set -e
           baseline_status=${baseline_statuses[0]}
           if (( baseline_status == 0 && baseline_statuses[1] != 0 )); then baseline_status=${baseline_statuses[1]}; fi
           if (( baseline_status != 0 )); then exit "$baseline_status"; fi
-          if [[ "$PROFILE_SELECTION" != "true" ]]; then
-            PYTHONPATH=src "$GITHUB_WORKSPACE/.venv/bin/python" "$GITHUB_WORKSPACE/tests/feedback_probe.py" \
-              --repository-root "$PWD" --witness "$FEEDBACK_WITNESS" --json "$RUNNER_TEMP/feedback-probe-baseline.json"
+      - name: Run fast runtime tests
+        run: |
+          selector=(--tier fast)
+          if [[ "$AFFECTED_ONLY" == "true" ]]; then
+            [[ -n "$AFFECTED_IDS" ]] || exit 2
+            selector=()
+            while IFS= read -r test_id; do
+              [[ -n "$test_id" ]] || exit 2
+              selector+=(--id "$test_id")
+            done <<< "$AFFECTED_IDS"
           fi
+          printf '%s\n' "${selector[@]}" > "$RUNNER_TEMP/fast-selection-argv.txt"
+          test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))
+          if (( test_seconds > 3150 )); then test_seconds=3150; fi
+          printf '{"worker_limit_seconds":%s,"kill_grace_seconds":30,"cleanup_reserve_seconds":60,"cancellation_reserve_seconds":360}\n' "$test_seconds" > "$RUNNER_TEMP/fast-control.json"
+          if (( test_seconds <= 0 )); then exit 124; fi
+          runner=(.venv/bin/python -m tests.runner run "${selector[@]}" --json "$RUNNER_TEMP/fast.json")
+          if [[ "$OBSERVE_GC" == "true" ]]; then
+            runner=(.venv/bin/python -m tests.runner.gc_diagnostic --observation-json "$RUNNER_TEMP/gc-diagnostic.json" -- run "${selector[@]}" --json "$RUNNER_TEMP/gc-diagnostic-run.json")
+          fi
+          if [[ "$PROFILE_SELECTION" == "true" ]]; then
+            runner=(.venv/bin/python -m cProfile -o "$RUNNER_TEMP/case-profile-current.prof" -m tests.runner run "${selector[@]}" --json "$RUNNER_TEMP/case-profile-current.json")
+          fi
+          set +e
+          timeout --signal=INT --kill-after=30s "${test_seconds}s" env PYTHONPATH=src .venv/bin/python "$RUNNER_TEMP/lower120-profile-cli-wall-parent.py" "$RUNNER_TEMP/lower120-profile-current-cli-wall.json" current "${runner[@]}" 2>&1 | tee "$RUNNER_TEMP/fast.log"
+          test_statuses=("${PIPESTATUS[@]}")
+          test_status=${test_statuses[0]}
+          if (( test_status == 0 && test_statuses[1] != 0 )); then test_status=${test_statuses[1]}; fi
+          printf '%s\n' "$test_status" > "$RUNNER_TEMP/fast-exit-code.txt"
+          exit "$test_status"
       - uses: actions/upload-artifact@v4
         timeout-minutes: 1
         if: always()
@@ -780,6 +767,7 @@ jobs:
             ${{ runner.temp }}/fast.json
             ${{ runner.temp }}/fast.log
             ${{ runner.temp }}/fast-control.json
+            ${{ runner.temp }}/lower120-profile-*-cli-wall.json
             ${{ runner.temp }}/feedback-probe*
             ${{ runner.temp }}/gc-diagnostic*
             ${{ runner.temp }}/case-profile-*
