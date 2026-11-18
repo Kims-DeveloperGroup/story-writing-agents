@@ -307,3 +307,17 @@ worker 한도와 별도 이슈의 승인량은 늘리지 않는다. 구현 전 �
 [Draft PR #1029](https://github.com/Kims-DeveloperGroup/story-writing-agents/pull/1029)를
 생성·확인했다. 실제 source/graph/receipt, 같은 오류, 정상 시간과 최종 CI의
 관측 결과 및 남은 검증은 이 PR의 검증 기록에서 확인한다.
+
+### Task·전제·조언 경계의 선택 검증 #1046
+
+Task·공유 전제·조언/admission의 책임 분리와 수락 기준은
+[#1046의 구현 계획](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1046#구현-계획)에서 관리한다.
+이 전달의 첫 선택은 기존 scope·다섯 결과·실제 조언 실행·공유 전제의 네 사례다.
+변경한 API를 실제로 통과하지 않는 경로는 해당 결정·권한 guard로 확대하고,
+Root·공통 fixture가 바뀌면 실제 역소비자와 최종 전체 검증까지 확인한다.
+첫 집합의 성공과 전체 영향 검증의 성공을 구별한다.
+
+같은 production 오류가 assertion 이전의 domain 예외로 검출돼도 RED 후보가 될 수 있다.
+원래 정상 fixture가 통과하고 변이가 실제 정책 경계를 거쳐 해당 예외를 유발했는지,
+같은 오류를 전후에 검출하는지 source·원인 체인·선택/완료·정리 증거로 확인한다.
+setup·선행 조건·cleanup 실패를 정책 오류 검출로 대신하지 않는다.
