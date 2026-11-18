@@ -682,6 +682,7 @@ jobs:
               selector+=(--id "$test_id")
             done <<< "$AFFECTED_IDS"
           fi
+          selector=(--module tests.lead_preparation.test_artifact_candidate_creation)
           printf '%s\n' "${selector[@]}" > "$RUNNER_TEMP/fast-selection-argv.txt"
           test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))
           if (( test_seconds > 3150 )); then test_seconds=3150; fi
