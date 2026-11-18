@@ -1453,13 +1453,13 @@
           "counting": "Existing single definitions move to already counted support. No body duplication or old support recharge; existing consumers import public owners with original local aliases."
         }
       ],
-      "approved_source_delta": 140,
-      "planned_raw_delta": 131,
+      "approved_source_delta": 142,
+      "planned_raw_delta": 133,
       "planned_support_delta": 9,
       "legacy_unresolved_lines": 1550,
       "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
       "generic_tooling_physical_delta_excluded": 17,
-      "notes": "First partial delivery only: result factories2/correction constants2/decoders5 and canonical artifact revision leaf; async4+host2 remain Issue1048 unfinished. Source-only allocation from154774 to154914; no new Case/scenario/subTest/ID receipt/weights/profile/token/worker/time. Source additions globally preapproved; runtime/functional/timing evidence is official Actions only."
+      "notes": "First partial delivery only: result factories2/correction constants2/decoders5 and canonical artifact revision leaf; async4+host2 remain Issue1048 unfinished. Source-only allocation from154774 to154916; no new Case/scenario/subTest/ID receipt/weights/profile/token/worker/time. Source additions globally preapproved; runtime/functional/timing evidence is official Actions only."
     }
   ]
 }

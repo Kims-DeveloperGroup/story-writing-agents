@@ -512,6 +512,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.writing_artifacts", "story_writing_agents.authoring_admission",
                 "story_writing_agents.core_document_readiness",
                 'story_writing_agents.agent_context.group_observation',
+                "story_writing_agents.conversations.artifact_revision_sources",
             },
         }
         for source, expected in conversation_dependencies.items():
@@ -1231,6 +1232,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             "story_writing_agents.lead_preparation.artifact_objective_planning",
             "story_writing_agents.lead_preparation.artifact_review_planning",
             "story_writing_agents.lead_preparation.lead_consultation_planning",
+            "story_writing_agents.lead_preparation.collaboration_response_decoding",
         })
 
         lead_document_nodes = "story_writing_agents.lead_preparation.lead_document_nodes"

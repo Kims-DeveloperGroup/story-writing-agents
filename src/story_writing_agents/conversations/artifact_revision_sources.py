@@ -120,3 +120,8 @@ def artifact_revision_source(
         and state.state is ArtifactProposalState.AWAITING_CONSULTATION_CONFIRMATION
         and state.confirmation_request_id == origin.payload.confirmation_request_id
     )
+
+
+__all__ = (
+    'artifact_revision_source',
+)

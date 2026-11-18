@@ -379,3 +379,12 @@ def decode_continuation_intent(
         authoring_scope=authoring_scope,
         shared_premises=shared_premises,
     )
+
+
+__all__ = (
+    'decode_artifact_synthesis',
+    'decode_specialist_reply',
+    'decode_lead_synthesis',
+    'required_unresolved_input_ids',
+    'decode_continuation_intent',
+)
