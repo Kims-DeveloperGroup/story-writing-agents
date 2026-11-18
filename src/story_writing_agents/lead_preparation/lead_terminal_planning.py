@@ -98,7 +98,7 @@ def structured_fallback_values(
         action="none",
         context_sources=("current_input",),
         recovered_fields=("structured_reply",),
-        origin=ReplyTraceOrigin.RUNTIME_FALLBACK,
+        origin=ReplyTraceOrigin.PROVIDER,
     )
     return message, trace
 
