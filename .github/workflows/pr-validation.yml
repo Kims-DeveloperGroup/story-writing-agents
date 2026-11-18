@@ -1,4 +1,4 @@
-name: PR validation
+name: 'PR validation #1046 변경 전 직렬 영향 정상 표본'
 
 on:
   pull_request:
