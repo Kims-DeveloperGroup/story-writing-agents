@@ -1224,3 +1224,26 @@ ordinary16행/physical17행 증가로 별도 공개한다.
 수정안은 원 concrete Case가 도메인 plain class의 같은 함수 객체를 직접 바인딩한다. 원 MRO·fixture 수명·Case ID와399 weight bytes를 유지하고, 원163 launch순서/mixed19/실제30클래스를 audited-163-v11로 감사한다. 새 도메인 정의 module은 등록 owner의 실제 기존 focused ID로 선택하고, bound 함수의 실제 정의 module도 검증한다. full/shard/hosted/LPT·기본GC·18,000/3,600초·최대4worker는 변경하지 않는다. 실제 collector/모듈선택/동일HEAD CI와 성능 게이트의 통과는 별도 공식 증거가 필요하다.
 
 현행 소스 계상은 raw148,078 + counted support4,677 + 기존미확인1,550 = **154,305행**이다. 기준154,078 대비 총227행(raw224/support3)이며, 실패한 D154,264 이후41행을 포함한다. 필요한 추가 행은 사용자의 모든 이슈 소스 행 포괄 승인을 적용했다. 신규 Case·시나리오·subTest와 시간·worker 예외는 없다. 기존 범용 selector/runner 도구의 변경은 원래 계상 경계 밖의 비용으로 별도 공개하며, 테스트 본문/단언을 도구로 옮겨 누락시키지 않는다. receipt14는 두 실행 ID 재키잉을 취소한 moves0·전후 caps digest동일 상태이며, 앞선13개 단계의 원기록과 검증은 보존한다.
+
+
+## #1048 첫 응답 계약과 기존 의미 정의 분리 소스 배정
+
+사용자의 필요한 행 추가 포괄 승인을 적용한다. 수락 main
+`aac5d831437a5bcb4fdbc35f197eb3d4affb422b`의 raw148,544/support4,680/legacy1,550,
+합계154,774행에서 raw148,675/support4,689/legacy1,550, 합계154,914행으로
+정확히140행(raw131/support9)을 계상한다. 기존 네 Case의119물리행·35assert·cap3을
+정의 모듈로 옮기고 필수 helper3개를 단일 소유로 연결하며, 실제 공개 API·namespace·
+graph·packaging·선택/예산 경계의 기존 검증 비용을 포함한다. 이동 본문은 한 번만 세고
+기존 미확인1,550행과 이미 계상한 지원 코드를 공제하거나 다시 청구하지 않는다.
+
+source-only `154774→154914` 전이는 기존 schema1·Case2,544·각 ID/cap 및 전체 cap8,690의
+동등성, 기존 시간18,000/3,600초와 함께 검증한다. 기존14개 이관 receipt·399 weight·
+163 profile/mixed19·30개 실행 클래스와 최대4worker를 바꾸지 않는다.
+`tests/suite_budget.py`의 새 정확 source 전이 guard17ordinary/17physical행은
+기존 frozen 계상 경계 밖의 물리 비용으로 별도 공개하며, 테스트/단언을 그곳으로 옮겨
+비용을 누락시키지 않는다. 신규 Case·시나리오·subTest·시간/worker 예외는 없다.
+
+이 배정은 #1048의 독립 첫 계약 전달 비용이다. 같은 이슈의 host 후속 단계는 실제
+diff를 별도로 계상하며 이140행을 여유로 전용하지 않는다. Story runtime의 실제
+성능 회귀는 실패로 판단하고, 미세한 정상 측정 변동과 테스트 예산 정책 Case의
+전체 시간 영향에 관한 기존 사용자 기준을 유지한다.

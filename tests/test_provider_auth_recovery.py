@@ -41,7 +41,7 @@ from story_writing_agents.workspace.initialization import compose_session_artifa
 from tests import test_interactive_controller as interactive_controller_tests
 from tests.lead_fixtures import preparation_data, provider_responses, runtime_setup
 from story_writing_agents.conversations import LeadOutcomeKind, CollaborationNextAction
-from tests.test_specialist_orchestration_execution import _assignments
+from tests.lead_fixtures.provider_responses import specialist_assignments as _assignments
 from tests.helpers import initialized_workspace, live_provider_execution_workspace, pristine_initialized_workspace
 from tests.test_interactive_auth import ScriptedAuthService, TerminalHarness, snapshot, status
 from tests.test_provider_auth import ScriptedProcess, ScriptedProcessFactory

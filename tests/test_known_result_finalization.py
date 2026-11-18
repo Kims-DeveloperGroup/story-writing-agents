@@ -37,9 +37,9 @@ from tests.lead_fixtures.preparation_data import (
 )
 from tests.test_specialist_orchestration_execution import (
     ExecutionInputFixture,
-    specialist_raw_outcome,
     stop_after_durable_result_patch,
 )
+from tests.lead_fixtures.provider_responses import specialist_raw_outcome
 
 
 class KnownResultRecoveryTests(ExecutionInputFixture, runtime_setup.LeadOrchestrationTestCase):

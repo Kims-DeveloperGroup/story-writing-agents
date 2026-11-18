@@ -532,7 +532,7 @@ class SuiteBudgetTests(unittest.TestCase):
         ):
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(task_admission_current, subtest_caps=caps), request_policy_current)
         self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, task_admission_current, dict(request_policy_current, subtest_caps={**request_policy_current["subtest_caps"], matrix_id: 2}))
-        artifact_planning_current = suite_budget.load_budget()
+        artifact_planning_current = dict(suite_budget.load_budget(), max_test_source_lines=154774)
         self.assertEqual(artifact_planning_current["max_test_source_lines"], 154774)
         self.assertIsNone(suite_budget.check_monotonic(artifact_planning_current, task_admission_current))
         self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, artifact_planning_current, dict(artifact_planning_current, max_test_source_lines=152814))
@@ -548,6 +548,23 @@ class SuiteBudgetTests(unittest.TestCase):
         ):
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(artifact_planning_current, subtest_caps=caps), task_admission_current)
         self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, artifact_planning_current, dict(task_admission_current, subtest_caps={**task_admission_current["subtest_caps"], matrix_id: 2}))
+
+        response_contract_current = suite_budget.load_budget()
+        self.assertEqual(response_contract_current["max_test_source_lines"], 154914)
+        self.assertIsNone(suite_budget.check_monotonic(response_contract_current, artifact_planning_current))
+        self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, response_contract_current, dict(artifact_planning_current, max_test_source_lines=154305))
+        self._assert_source_limit_neighbors_rejected(response_contract_current, artifact_planning_current)
+        for field, value in (("schema_version", 2), ("max_sequential_wall_seconds", 18001), ("max_shard_wall_seconds", 3601)):
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(response_contract_current, **{field: value}), artifact_planning_current)
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, response_contract_current, dict(artifact_planning_current, **{field: value}))
+        for caps in (
+            {key: value for key, value in response_contract_current["subtest_caps"].items() if key != zero_id},
+            {**response_contract_current["subtest_caps"], "tests.unreviewed.Case.test_extra": 0},
+            {**response_contract_current["subtest_caps"], matrix_id: 2},
+            {**response_contract_current["subtest_caps"], matrix_id: 0},
+        ):
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(response_contract_current, subtest_caps=caps), artifact_planning_current)
+        self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, response_contract_current, dict(artifact_planning_current, subtest_caps={**artifact_planning_current["subtest_caps"], matrix_id: 2}))
 
         ids = runner_profile.HOSTED_METHOD_IDS
         self.assertEqual(runner_evidence.manifest(ids)["digest"],
@@ -662,6 +679,12 @@ class SuiteBudgetTests(unittest.TestCase):
             "tests.lead_preparation.test_artifact_review_recovery": (
                 artifact_class + 'test_missing_synthesis_message_fails_and_reviewed_restart_has_no_authority',
             ),
+            "tests.lead_preparation.test_specialist_response_semantics": (
+                'tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_invalid_specialist_shapes_repair_then_fall_back_without_halting',
+                'tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_specialist_and_synthesis_validation_details_are_private_and_correlated',
+                'tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_synthesis_contract_is_semantic_and_runtime_derives_attribution',
+                'tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_synthesis_derives_non_supporting_inputs_locally',
+            ),
         }
         definition_selections = {}
         for module, expected_ids in definition_groups_1047.items():
@@ -669,6 +692,18 @@ class SuiteBudgetTests(unittest.TestCase):
             self.assertEqual(selected.ids, tuple(value for value in real.ids if value in expected_ids))
             definition_selections[module] = selected
         runner_selection.validate_definition_modules(real, tuple(definition_groups_1047))
+        from tests.lead_preparation.test_specialist_response_semantics import SpecialistResponseSemanticsDefinitions
+        from tests.test_specialist_orchestration_execution import SpecialistExecutionAcceptanceTests, ExecutionInputFixture
+        from tests.lead_fixtures.runtime_setup import LeadOrchestrationTestCase
+        semantic_module = "tests.lead_preparation.test_specialist_response_semantics"
+        semantic = definition_selections[semantic_module]
+        self.assertFalse(issubclass(SpecialistResponseSemanticsDefinitions, unittest.TestCase))
+        self.assertEqual(SpecialistExecutionAcceptanceTests.__bases__, (ExecutionInputFixture, LeadOrchestrationTestCase))
+        for case in semantic.tests:
+            method = case._testMethodName
+            self.assertIs(SpecialistExecutionAcceptanceTests.__dict__[method], SpecialistResponseSemanticsDefinitions.__dict__[method])
+            self.assertIs(getattr(case, method).__func__, SpecialistResponseSemanticsDefinitions.__dict__[method])
+            self.assertEqual(getattr(case, method).__module__, semantic_module)
         revision_module = "tests.lead_preparation.test_artifact_candidate_revisions"
         revision = definition_selections[revision_module]
         missing_revision = runner_contracts.CanonicalCollection(revision.tests[:-1], revision.ids[:-1])

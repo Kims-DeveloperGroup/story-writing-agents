@@ -28,9 +28,12 @@ from story_writing_agents.lead_preparation import (
     artifact_objective_planning,
     lead_consultation_planning,
     lead_terminal_planning,
+    collaboration_response_contracts,
+    collaboration_response_decoding,
 )
 import story_writing_agents
 from story_writing_agents import conversations
+from story_writing_agents.conversations import artifact_revision_sources
 from story_writing_agents.lead_preparation import recommendation_preparation, recommendation_requests
 from story_writing_agents.lead_preparation import recommendation_decisions
 from story_writing_agents.lead_task_transitions import LeadTaskRef
@@ -361,8 +364,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 281)
-        self.assertEqual(len(edges), 1664)
+        self.assertEqual(len(modules), 284)
+        self.assertEqual(len(edges), 1695)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -1548,6 +1551,44 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 self.assertFalse(any(value.kind in (Parameter.VAR_POSITIONAL, Parameter.VAR_KEYWORD)
                                      for value in parameters.values()))
 
+        for owner, expected_targets, expected_sources in (
+            (collaboration_response_contracts, {
+                'story_writing_agents.agent_context.contracts.call_offers',
+                'story_writing_agents.agent_context.invocation.provider',
+                'story_writing_agents.agents',
+                'story_writing_agents.conversations.event_vocabulary',
+                'story_writing_agents.conversations.events',
+                'story_writing_agents.errors',
+                'story_writing_agents.lead_preparation',
+                'story_writing_agents.lead_preparation.reply_contract_values',
+                'story_writing_agents.lead_provider_contracts',
+                'story_writing_agents.specialist_routing',
+            }, {'story_writing_agents.orchestrator'}),
+            (collaboration_response_decoding, {
+                'story_writing_agents.agents',
+                'story_writing_agents.collaboration_execution_results',
+                'story_writing_agents.conversations.event_vocabulary',
+                'story_writing_agents.conversations.events',
+                'story_writing_agents.errors',
+                'story_writing_agents.lead_premise_decisions',
+                'story_writing_agents.lead_preparation',
+                'story_writing_agents.lead_preparation.outcome_decoding',
+                'story_writing_agents.lead_preparation.proposal_basis_values',
+                'story_writing_agents.lead_preparation.reply_contract_values',
+                'story_writing_agents.lead_provider_contracts',
+                'story_writing_agents.specialist_routing',
+                'story_writing_agents.structured_output_validation',
+            }, {'story_writing_agents.orchestrator'}),
+            (artifact_revision_sources, {
+                'story_writing_agents.conversations.event_vocabulary',
+                'story_writing_agents.conversations.events',
+                'story_writing_agents.lead_task_transitions',
+                'story_writing_agents.specialist_routing',
+            }, {'story_writing_agents.conversations.context', 'story_writing_agents.orchestrator'}),
+        ):
+            self.assertEqual({target for source, target in edges if source == owner.__name__}, expected_targets)
+            self.assertEqual({source for source, target in edges if target == owner.__name__}, expected_sources)
+
 
     def test_supported_module_surfaces_do_not_expand_the_root_facade(self) -> None:
 
@@ -1702,6 +1743,37 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 name: type(None) if value is None else value for name, value in function.__annotations__.items()
             })
         self.assertIsInstance(specialist_advisory_values.ADVISORY_USER_IMPACT, str)
+        for owner, exported in (
+            (collaboration_response_decoding, ('decode_artifact_synthesis', 'decode_specialist_reply', 'decode_lead_synthesis', 'required_unresolved_input_ids', 'decode_continuation_intent')),
+            (collaboration_response_contracts, ('specialist_result_contract', 'lead_synthesis_result_contract', 'LEAD_CORRECTABLE_RESPONSE_REJECTION_CODES', 'LEAD_RESPONSE_CORRECTION_INSTRUCTION')),
+            (artifact_revision_sources, ('artifact_revision_source',)),
+        ):
+            self.assertEqual(set(owner.__all__), set(exported))
+            actual = {name for name, value in vars(owner).items()
+                if not name.startswith("_") and callable(value) and getattr(value, "__module__", None) == owner.__name__}
+            self.assertEqual(actual, {name for name in exported if callable(getattr(owner, name))})
+        for owner, function_name, parameter_names, keyword_names, defaults in (
+            (collaboration_response_decoding, 'decode_artifact_synthesis', ('answer', 'proposal', 'attempt_id', 'reply_event_ids', 'replies', 'candidate'), ('proposal', 'attempt_id', 'reply_event_ids', 'replies', 'candidate'), {}),
+            (collaboration_response_decoding, 'decode_specialist_reply', ('answer', 'proposal', 'attempt_id', 'assignment', 'dispatch_event_id', 'premise_dependencies'), ('proposal', 'attempt_id', 'assignment', 'dispatch_event_id', 'premise_dependencies'), {'premise_dependencies': ()}),
+            (collaboration_response_decoding, 'decode_lead_synthesis', ('answer', 'proposal', 'attempt_id', 'reply_event_ids', 'replies', 'review_candidate_ids'), ('proposal', 'attempt_id', 'reply_event_ids', 'replies', 'review_candidate_ids'), {}),
+            (collaboration_response_decoding, 'required_unresolved_input_ids', ('replies',), (), {}),
+            (collaboration_response_decoding, 'decode_continuation_intent', ('value', 'authoring_scope', 'review_candidate_ids', 'shared_premises'), ('authoring_scope', 'review_candidate_ids', 'shared_premises'), {'shared_premises': ()}),
+            (collaboration_response_contracts, 'specialist_result_contract', ('assignment', 'premise_dependencies'), ('premise_dependencies',), {'premise_dependencies': ()}),
+            (collaboration_response_contracts, 'lead_synthesis_result_contract', ('evidence', 'input_ids', 'reply_event_ids', 'allow_next_intent', 'artifact_review', 'authoring_scope', 'constraints'), ('evidence', 'input_ids', 'reply_event_ids', 'allow_next_intent', 'artifact_review', 'authoring_scope', 'constraints'), {'constraints': None}),
+            (artifact_revision_sources, 'artifact_revision_source', ('receipt', 'original', 'history'), (), {}),
+        ):
+            function = getattr(owner, function_name)
+            self.assertEqual(function.__module__, owner.__name__)
+            parameters = signature(function).parameters
+            self.assertEqual(tuple(parameters), parameter_names)
+            self.assertEqual(tuple(name for name, value in parameters.items() if value.kind is Parameter.KEYWORD_ONLY), keyword_names)
+            self.assertEqual({name: value.default for name, value in parameters.items() if value.default is not Parameter.empty}, defaults)
+            self.assertFalse(any(value.kind in (Parameter.VAR_POSITIONAL, Parameter.VAR_KEYWORD) for value in parameters.values()))
+            self.assertEqual(set(function.__annotations__), {*parameter_names, "return"})
+            self.assertFalse(any(isinstance(value, str) for value in function.__annotations__.values()))
+            self.assertEqual(get_type_hints(function), {name: type(None) if value is None else value for name, value in function.__annotations__.items()})
+        self.assertIsInstance(collaboration_response_contracts.LEAD_CORRECTABLE_RESPONSE_REJECTION_CODES, frozenset)
+        self.assertIsInstance(collaboration_response_contracts.LEAD_RESPONSE_CORRECTION_INSTRUCTION, str)
         for module_name in ("group_observation", "group_reporting"):
             spec = importlib.util.find_spec("story_writing_agents.agent_context." + module_name)
             self.assertIsNotNone(spec)
@@ -1735,7 +1807,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                      'prepare_advisory_origin',
                      'prepare_specialist_advisory_intent',
                      'specialist_advisory_assignment',
-                     'specialist_advisory_budget',
+                     'specialist_advisory_budget', 'decode_artifact_synthesis', 'decode_specialist_reply', 'decode_lead_synthesis', 'required_unresolved_input_ids', 'decode_continuation_intent', 'specialist_result_contract', 'lead_synthesis_result_contract', 'artifact_revision_source', 'LEAD_CORRECTABLE_RESPONSE_REJECTION_CODES', 'LEAD_RESPONSE_CORRECTION_INSTRUCTION',
         ):
             self.assertNotIn(name, story_writing_agents.__all__)
             self.assertFalse(hasattr(story_writing_agents, name))
@@ -1987,6 +2059,9 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             "story_writing_agents/lead_preparation/editorial_capture.py",
             "story_writing_agents/lead_preparation/lead_source_qualification.py",
             "story_writing_agents/lead_preparation/review_material_validation.py",
+            "story_writing_agents/lead_preparation/collaboration_response_contracts.py",
+            "story_writing_agents/lead_preparation/collaboration_response_decoding.py",
+            "story_writing_agents/conversations/artifact_revision_sources.py",
             )
             with zipfile.ZipFile(story_wheel) as archive:
                 for package_path in group_package_paths:

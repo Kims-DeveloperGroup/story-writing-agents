@@ -5707,8 +5707,7 @@
         "tests.test_artifact_objectives",
         "tests.test_interactive_auth",
         "tests.test_interactive_controller",
-        "tests.test_provider_auth",
-        "tests.test_specialist_orchestration_execution"
+        "tests.test_provider_auth"
       ]
     },
     {
@@ -6399,6 +6398,7 @@
         "lead-fixtures.preparation-data",
         "lead-fixtures.provider-responses",
         "lead-fixtures.runtime-setup",
+        "tests.lead_preparation.test_specialist_response_semantics",
         "tests.test_specialist_orchestration_accounting"
       ]
     },
@@ -15924,7 +15924,6 @@
         "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_scope_provider_definition_and_policy_dimensions_bootstrap",
         "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_search_and_read_emit_exact_content_free_transient_progress",
         "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_search_batch_read_answer_is_correlated_ordered_and_bounded",
-        "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_all_five_outcomes_have_exact_visible_next_actions",
         "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review",
         "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority",
         "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_canonical_artifact_and_semantic_domain_ownership",
@@ -15937,7 +15936,6 @@
         "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip",
         "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_is_strict_versioned_immutable_and_content_safe",
         "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_selected_document_revision_frames_and_continuation_are_current",
-        "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation",
         "tests.test_agent_context_accounting.AgentContextBoundaryTests.test_accounting_is_a_standard_library_leaf_and_facade_imports_only_it",
         "tests.test_agent_context_accounting.AgentContextBoundaryTests.test_exact_internal_facade_and_public_facades_are_unchanged",
         "tests.test_agent_context_accounting.CanonicalProviderJsonTests.test_ascii_is_compact_and_preserves_insertion_order",
@@ -16257,6 +16255,7 @@
         "tests.test_lead_orchestration.LeadDecisionAuthorityTests.test_mismatch_reject_revise_and_free_text_are_non_authorizing",
         "tests.test_lead_orchestration.LeadDecisionAuthorityTests.test_reference_drift_blocks_confirmation_without_calls",
         "tests.test_lead_orchestration.LeadDecisionAuthorityTests.test_revision_direct_workflow_cannot_erase_selected_story_scope",
+        "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_all_five_outcomes_have_exact_visible_next_actions",
         "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_direct_scope_is_required_and_substantive_outcomes_cannot_bypass_routing",
         "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_direct_search_read_answer_uses_bounded_history_without_proposal",
         "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_front_schema_is_minimal_closed_and_provider_strict",
@@ -16379,6 +16378,7 @@
         "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_empty_target_adequate_brief_produces_draft_without_writes",
         "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_legacy_pending_confirmation_requires_fresh_scoped_proposal_without_rewrite",
         "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_old_drafted_revision_cannot_authorize_revised_candidate",
+        "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation",
         "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_wrong_task_pair_rejects_before_dispatch"
       ],
       "depends_on": [
@@ -16408,7 +16408,6 @@
         "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_scope_provider_definition_and_policy_dimensions_bootstrap",
         "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_search_and_read_emit_exact_content_free_transient_progress",
         "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_search_batch_read_answer_is_correlated_ordered_and_bounded",
-        "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_all_five_outcomes_have_exact_visible_next_actions",
         "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review",
         "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority",
         "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_canonical_artifact_and_semantic_domain_ownership",
@@ -16421,7 +16420,6 @@
         "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip",
         "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_is_strict_versioned_immutable_and_content_safe",
         "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_selected_document_revision_frames_and_continuation_are_current",
-        "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation",
         "tests.test_agent_context_accounting.AgentContextBoundaryTests.test_accounting_is_a_standard_library_leaf_and_facade_imports_only_it",
         "tests.test_agent_context_accounting.AgentContextBoundaryTests.test_exact_internal_facade_and_public_facades_are_unchanged",
         "tests.test_agent_context_accounting.CanonicalProviderJsonTests.test_ascii_is_compact_and_preserves_insertion_order",
@@ -16741,6 +16739,7 @@
         "tests.test_lead_orchestration.LeadDecisionAuthorityTests.test_mismatch_reject_revise_and_free_text_are_non_authorizing",
         "tests.test_lead_orchestration.LeadDecisionAuthorityTests.test_reference_drift_blocks_confirmation_without_calls",
         "tests.test_lead_orchestration.LeadDecisionAuthorityTests.test_revision_direct_workflow_cannot_erase_selected_story_scope",
+        "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_all_five_outcomes_have_exact_visible_next_actions",
         "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_direct_scope_is_required_and_substantive_outcomes_cannot_bypass_routing",
         "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_direct_search_read_answer_uses_bounded_history_without_proposal",
         "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_front_schema_is_minimal_closed_and_provider_strict",
@@ -16863,6 +16862,7 @@
         "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_empty_target_adequate_brief_produces_draft_without_writes",
         "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_legacy_pending_confirmation_requires_fresh_scoped_proposal_without_rewrite",
         "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_old_drafted_revision_cannot_authorize_revised_candidate",
+        "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation",
         "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_wrong_task_pair_rejects_before_dispatch"
       ],
       "depends_on": [
@@ -18218,6 +18218,114 @@
         "lead-fixtures.runtime-setup",
         "lead-fixtures.specialist-routing",
         "tests.test_artifact_objectives"
+      ]
+    },
+    {
+      "name": "lead-preparation.collaboration-response-contracts",
+      "boundary": "existing-cases",
+      "paths": [
+        "src/story_writing_agents/lead_preparation/collaboration_response_contracts.py"
+      ],
+      "focused_ids": [
+        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_synthesis_contract_is_semantic_and_runtime_derives_attribution",
+        "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_original_and_repair_validation_details_persist_across_restart"
+      ],
+      "affected_ids": [
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_missing_synthesis_message_fails_and_reviewed_restart_has_no_authority",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_revised_artifact_intent_replaces_candidate_in_the_same_step",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_stale_confirmation_and_revision_require_fresh_authority",
+        "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_zero_hits_and_scoped_status_evidence_are_derived_locally",
+        "tests.test_lead_orchestration.LeadDecisionAuthorityTests.test_mismatch_reject_revise_and_free_text_are_non_authorizing",
+        "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_front_schema_is_minimal_closed_and_provider_strict",
+        "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_front_schema_rejection_is_repaired_once",
+        "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_minimal_reference_answer_needs_no_provider_correction",
+        "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_original_and_repair_validation_details_persist_across_restart",
+        "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_response_correction_requires_capacity",
+        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_assignment_failure_joins_siblings_and_skips_synthesis",
+        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_invalid_specialist_shapes_repair_then_fall_back_without_halting",
+        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_outer_cancellation_joins_tasks_persists_terminals_and_cleans_marker",
+        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_second_round_uses_reply_events_fresh_authority_and_cannot_chain_again",
+        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_specialist_and_synthesis_validation_details_are_private_and_correlated",
+        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_submitted_uncertainty_enters_unknown_and_never_replays",
+        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_synthesis_contract_is_semantic_and_runtime_derives_attribution",
+        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_synthesis_derives_non_supporting_inputs_locally",
+        "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_empty_inventory_does_not_add_unaffected_owners_and_mixed_scope_does"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "lead-preparation.collaboration-response-decoding",
+      "boundary": "existing-cases",
+      "paths": [
+        "src/story_writing_agents/lead_preparation/collaboration_response_decoding.py"
+      ],
+      "focused_ids": [
+        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_synthesis_contract_is_semantic_and_runtime_derives_attribution",
+        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_synthesis_derives_non_supporting_inputs_locally"
+      ],
+      "affected_ids": [
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_missing_synthesis_message_fails_and_reviewed_restart_has_no_authority",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_revised_artifact_intent_replaces_candidate_in_the_same_step",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_stale_confirmation_and_revision_require_fresh_authority",
+        "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_zero_hits_and_scoped_status_evidence_are_derived_locally",
+        "tests.test_lead_orchestration.LeadDecisionAuthorityTests.test_mismatch_reject_revise_and_free_text_are_non_authorizing",
+        "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_front_schema_is_minimal_closed_and_provider_strict",
+        "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_front_schema_rejection_is_repaired_once",
+        "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_minimal_reference_answer_needs_no_provider_correction",
+        "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_original_and_repair_validation_details_persist_across_restart",
+        "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_response_correction_requires_capacity",
+        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_assignment_failure_joins_siblings_and_skips_synthesis",
+        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_invalid_specialist_shapes_repair_then_fall_back_without_halting",
+        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_outer_cancellation_joins_tasks_persists_terminals_and_cleans_marker",
+        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_second_round_uses_reply_events_fresh_authority_and_cannot_chain_again",
+        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_specialist_and_synthesis_validation_details_are_private_and_correlated",
+        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_submitted_uncertainty_enters_unknown_and_never_replays",
+        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_synthesis_contract_is_semantic_and_runtime_derives_attribution",
+        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_synthesis_derives_non_supporting_inputs_locally",
+        "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_empty_inventory_does_not_add_unaffected_owners_and_mixed_scope_does"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "conversations.artifact-revision-sources",
+      "boundary": "existing-cases",
+      "paths": [
+        "src/story_writing_agents/conversations/artifact_revision_sources.py"
+      ],
+      "focused_ids": [
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_revised_artifact_intent_replaces_candidate_in_the_same_step"
+      ],
+      "affected_ids": [
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_revised_artifact_intent_replaces_candidate_in_the_same_step",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_stale_confirmation_and_revision_require_fresh_authority",
+        "tests.test_lead_orchestration.LeadDecisionAuthorityTests.test_mismatch_reject_revise_and_free_text_are_non_authorizing"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "tests.lead_preparation.test_specialist_response_semantics",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/lead_preparation/test_specialist_response_semantics.py"
+      ],
+      "focused_ids": [
+        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_invalid_specialist_shapes_repair_then_fall_back_without_halting",
+        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_specialist_and_synthesis_validation_details_are_private_and_correlated",
+        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_synthesis_contract_is_semantic_and_runtime_derives_attribution",
+        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_synthesis_derives_non_supporting_inputs_locally"
+      ],
+      "affected_ids": [
+        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_invalid_specialist_shapes_repair_then_fall_back_without_halting",
+        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_specialist_and_synthesis_validation_details_are_private_and_correlated",
+        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_synthesis_contract_is_semantic_and_runtime_derives_attribution",
+        "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_synthesis_derives_non_supporting_inputs_locally"
+      ],
+      "depends_on": [
+        "lead-fixtures.material-values",
+        "lead-fixtures.preparation-data",
+        "lead-fixtures.provider-responses",
+        "lead-fixtures.runtime-setup",
+        "tests.test_specialist_orchestration_accounting"
       ]
     }
   ],
