@@ -18,6 +18,10 @@ from tests.provider_wire_fixture import lead_fixture_bound_scope, selection_plan
 ARTIFACT_FIXTURE_OUTLINE_PATH = "core_documents/global_outline.md"
 ARTIFACT_FIXTURE_RULES_PATH = "core_documents/narrative_rules.md"
 
+ARTIFACT_FIXTURE_INDEX_PATH = "manuscript/part-01/index.md"
+ARTIFACT_FIXTURE_SECOND_PATH = "manuscript/part-01/second.md"
+ARTIFACT_FIXTURE_THIRD_PATH = "manuscript/part-01/third.md"
+
 def _reference_ids(material: dict[str, object]) -> list[str]:
     aliases = material["input_aliases"]
     assert type(aliases) is list

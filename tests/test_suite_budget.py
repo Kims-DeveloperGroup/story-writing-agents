@@ -248,6 +248,7 @@ class SuiteBudgetTests(unittest.TestCase):
 
         migrated = suite_budget.load_budget(Path(__file__).with_name("fixtures") / "test_budget_v1.json")
         task_admission_current = dict(migrated, subtest_caps=dict(migrated["subtest_caps"]))
+        task_admission_current["max_test_source_lines"] = 154305
         for move in load_receipt()[-1]["moves"]:
             migrated["subtest_caps"][move["old_id"]] = migrated["subtest_caps"].pop(move["new_id"])
         migrated["max_test_source_lines"] = 154078
@@ -531,6 +532,22 @@ class SuiteBudgetTests(unittest.TestCase):
         ):
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(task_admission_current, subtest_caps=caps), request_policy_current)
         self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, task_admission_current, dict(request_policy_current, subtest_caps={**request_policy_current["subtest_caps"], matrix_id: 2}))
+        artifact_planning_current = suite_budget.load_budget()
+        self.assertEqual(artifact_planning_current["max_test_source_lines"], 154769)
+        self.assertIsNone(suite_budget.check_monotonic(artifact_planning_current, task_admission_current))
+        self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, artifact_planning_current, dict(artifact_planning_current, max_test_source_lines=152814))
+        self._assert_source_limit_neighbors_rejected(artifact_planning_current, task_admission_current)
+        for field, value in (("schema_version", 2), ("max_sequential_wall_seconds", 18001), ("max_shard_wall_seconds", 3601)):
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(artifact_planning_current, **{field: value}), task_admission_current)
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, artifact_planning_current, dict(task_admission_current, **{field: value}))
+        for caps in (
+            {key: value for key, value in artifact_planning_current["subtest_caps"].items() if key != zero_id},
+            {**artifact_planning_current["subtest_caps"], "tests.unreviewed.Case.test_extra": 0},
+            {**artifact_planning_current["subtest_caps"], matrix_id: 2},
+            {**artifact_planning_current["subtest_caps"], matrix_id: 0},
+        ):
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(artifact_planning_current, subtest_caps=caps), task_admission_current)
+        self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, artifact_planning_current, dict(task_admission_current, subtest_caps={**task_admission_current["subtest_caps"], matrix_id: 2}))
 
         ids = runner_profile.HOSTED_METHOD_IDS
         self.assertEqual(runner_evidence.manifest(ids)["digest"],
@@ -625,6 +642,53 @@ class SuiteBudgetTests(unittest.TestCase):
             marker = owned / "worker.log"; marker.write_text("retained")
             self.assertRaises(FileExistsError, runner_hosted.hosted_artifacts, report_path)
             self.assertEqual(marker.read_text(), "retained")
+
+        from tests.runner import impact as definition_impact
+        artifact_class = "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests."
+        definition_groups_1047 = {
+            "tests.lead_preparation.test_artifact_candidate_creation": (
+                artifact_class + 'test_incomplete_core_workflow_is_reviewed_only_after_confirmation',
+                artifact_class + 'test_search_read_answer_can_add_an_artifact_candidate',
+            ),
+            "tests.lead_preparation.test_artifact_candidate_revisions": (
+                artifact_class + 'test_core_conflict_revision_and_manuscript_atomic_rename_workflows',
+                artifact_class + 'test_revised_artifact_intent_replaces_candidate_in_the_same_step',
+                artifact_class + 'test_stale_confirmation_and_revision_require_fresh_authority',
+            ),
+            "tests.lead_preparation.test_artifact_authority_boundaries": (
+                artifact_class + 'test_ordinary_discussion_captures_current_state_without_specialists',
+                artifact_class + 'test_provider_authority_fields_fall_back_without_candidate',
+            ),
+            "tests.lead_preparation.test_artifact_review_recovery": (
+                artifact_class + 'test_missing_synthesis_message_fails_and_reviewed_restart_has_no_authority',
+            ),
+        }
+        definition_selections = {}
+        for module, expected_ids in definition_groups_1047.items():
+            selected = runner_selection.select(real, modules=(module,))
+            self.assertEqual(selected.ids, tuple(value for value in real.ids if value in expected_ids))
+            definition_selections[module] = selected
+        runner_selection.validate_definition_modules(real, tuple(definition_groups_1047))
+        revision_module = "tests.lead_preparation.test_artifact_candidate_revisions"
+        revision = definition_selections[revision_module]
+        missing_revision = runner_contracts.CanonicalCollection(revision.tests[:-1], revision.ids[:-1])
+        self.assertRaises(runner_contracts.RunnerError, runner_selection.validate_definition_modules,
+                          missing_revision, (revision_module,))
+        original_owners = definition_impact.load_owners(runner_collection.load_inventory())
+        duplicate_owners = {**original_owners, "owners": [dict(row) for row in original_owners["owners"]]}
+        duplicate_row = next(row for row in duplicate_owners["owners"] if row["name"] == revision_module)
+        duplicate_row["focused_ids"] = duplicate_row["affected_ids"] = [revision.ids[0], revision.ids[0]]
+        with patch.object(definition_impact, "load_owners", return_value=duplicate_owners):
+            self.assertRaises(runner_contracts.RunnerError, runner_selection.select, real, modules=(revision_module,))
+        first, second = revision.tests[:2]
+        with patch.object(second, second._testMethodName, getattr(first, first._testMethodName)):
+            self.assertRaises(runner_contracts.RunnerError, runner_selection.validate_definition_modules,
+                              revision, (revision_module,))
+        creation = definition_selections["tests.lead_preparation.test_artifact_candidate_creation"].tests[0]
+        foreign_function = getattr(creation, creation._testMethodName).__func__
+        with patch.object(second, second._testMethodName, foreign_function.__get__(second, type(second))):
+            self.assertRaises(runner_contracts.RunnerError, runner_selection.validate_definition_modules,
+                              revision, (revision_module,))
 
     def test_exact_duration_boundary_passes_and_excess_fails(self) -> None:
         for total, maximum in ((1080, 540), (18000, 3600)):

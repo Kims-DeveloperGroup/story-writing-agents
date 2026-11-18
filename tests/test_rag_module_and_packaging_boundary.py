@@ -24,6 +24,10 @@ from story_writing_agents.lead_preparation import (
     premise_preparation,
     lead_task_control,
     specialist_advisory_values,
+    artifact_review_planning,
+    artifact_objective_planning,
+    lead_consultation_planning,
+    lead_terminal_planning,
 )
 import story_writing_agents
 from story_writing_agents import conversations
@@ -357,8 +361,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 277)
-        self.assertEqual(len(edges), 1608)
+        self.assertEqual(len(modules), 281)
+        self.assertEqual(len(edges), 1664)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -1055,6 +1059,10 @@ class RagModuleBoundaryTests(unittest.TestCase):
             'story_writing_agents.runtime_resources.collaboration_event_journal',
             'story_writing_agents.runtime_resources.provider_call_accounting',
         'story_writing_agents.lead_preparation.lead_task_control',
+            'story_writing_agents.lead_preparation.artifact_review_planning',
+            'story_writing_agents.lead_preparation.artifact_objective_planning',
+            'story_writing_agents.lead_preparation.lead_consultation_planning',
+            'story_writing_agents.lead_preparation.lead_terminal_planning',
                                                                                                                  })
         self.assertIn("story_writing_agents.blocking_work", modules)
         self.assertEqual({target for source, target in edges if source == "story_writing_agents.blocking_work"}, set())
@@ -1414,6 +1422,126 @@ class RagModuleBoundaryTests(unittest.TestCase):
             'story_writing_agents.writing_artifacts',
         })
         self.assertEqual({source for source, target in edges if target == specialist_advisory_values_owner}, {"story_writing_agents.orchestrator"})
+
+        planned_owners = (
+            (
+                artifact_review_planning,
+                {
+                    'validate_artifact_review_origin',
+                    'validate_artifact_review_change_set',
+                    'artifact_review_inputs',
+                    'qualified_review_authoring_values',
+                    'artifact_review_consultation_intent',
+                    'artifact_review_candidate_records',
+                    'artifact_review_publication_tail',
+                },
+                {
+                    'story_writing_agents.artifact_proposals',
+                    'story_writing_agents.authoring_admission',
+                    'story_writing_agents.conversations',
+                    'story_writing_agents.conversations.events',
+                    'story_writing_agents.lead_preparation',
+                    'story_writing_agents.lead_preparation.authoring_authority',
+                    'story_writing_agents.lead_preparation.lead_proposal_inputs',
+                    'story_writing_agents.lead_preparation.proposal_basis_values',
+                    'story_writing_agents.lead_preparation.recommendation_preparation',
+                    'story_writing_agents.lead_preparation.reply_contract_values',
+                    'story_writing_agents.runtime_resources',
+                    'story_writing_agents.runtime_resources.collaboration_event_journal',
+                    'story_writing_agents.specialist_routing',
+                    'story_writing_agents.structured_output_validation',
+                    'story_writing_agents.writing_artifacts',
+                },
+            ),
+            (
+                artifact_objective_planning,
+                {
+                    'objective_goal_exists',
+                    'prepared_document_objective',
+                    'ordinary_objective_outcome',
+                    'objective_facts',
+                    'objective_capture_inputs',
+                    'objective_document_window',
+                    'objective_drafts_for_values',
+                },
+                {
+                    'story_writing_agents.artifact_proposals',
+                    'story_writing_agents.conversations',
+                    'story_writing_agents.document_plan',
+                    'story_writing_agents.lead_preparation',
+                    'story_writing_agents.lead_preparation.authoring_authority',
+                    'story_writing_agents.lead_preparation.proposal_basis_values',
+                    'story_writing_agents.lead_preparation.recommendation_preparation',
+                    'story_writing_agents.lead_preparation.reply_contract_values',
+                    'story_writing_agents.runtime_resources',
+                    'story_writing_agents.runtime_resources.collaboration_event_journal',
+                    'story_writing_agents.specialist_routing',
+                    'story_writing_agents.structured_output_validation',
+                    'story_writing_agents.writing_artifacts',
+                },
+            ),
+            (
+                lead_consultation_planning,
+                {
+                    'consultation_document_selection',
+                    'consultation_document_binding',
+                    'consultation_candidate_inputs',
+                    'inherit_final_review_inputs',
+                    'validate_consultation_plan',
+                    'prepare_consultation_assignments',
+                    'build_consultation_proposal',
+                },
+                {
+                    'story_writing_agents.agents',
+                    'story_writing_agents.conversations',
+                    'story_writing_agents.conversations.events',
+                    'story_writing_agents.document_plan',
+                    'story_writing_agents.errors',
+                    'story_writing_agents.lead_premise_decisions',
+                    'story_writing_agents.lead_preparation',
+                    'story_writing_agents.lead_preparation.authoring_authority',
+                    'story_writing_agents.lead_preparation.document_plan_selection',
+                    'story_writing_agents.lead_preparation.proposal_basis_values',
+                    'story_writing_agents.lead_preparation.recommendation_preparation',
+                    'story_writing_agents.lead_task_transitions',
+                    'story_writing_agents.runtime_resources',
+                    'story_writing_agents.runtime_resources.collaboration_event_journal',
+                    'story_writing_agents.runtime_resources.provider_call_accounting',
+                    'story_writing_agents.specialist_routing',
+                },
+            ),
+            (
+                lead_terminal_planning,
+                {
+                    'lead_failure_drafts',
+                    'discussion_control',
+                    'structured_fallback_values',
+                    'structured_fallback_draft',
+                },
+                {
+                    'story_writing_agents.agents',
+                    'story_writing_agents.conversations',
+                    'story_writing_agents.lead_preparation',
+                    'story_writing_agents.lead_preparation.reply_contract_values',
+                    'story_writing_agents.lead_task_transitions',
+                    'story_writing_agents.reply_trace',
+                    'story_writing_agents.runtime_resources',
+                    'story_writing_agents.runtime_resources.collaboration_event_journal',
+                },
+            ),
+        )
+        for owner, public_names, peer_names in planned_owners:
+            self.assertEqual({target for source, target in edges if source == owner.__name__}, peer_names)
+            self.assertEqual({source for source, target in edges if target == owner.__name__}, {"story_writing_agents.orchestrator"})
+            actual_public = {name for name, value in vars(owner).items()
+                             if not name.startswith("_") and callable(value)
+                             and getattr(value, "__module__", None) == owner.__name__}
+            self.assertEqual(actual_public, public_names)
+            for name in sorted(public_names):
+                parameters = signature(getattr(owner, name)).parameters
+                self.assertNotIn("runtime", parameters)
+                self.assertFalse(any(value.kind in (Parameter.VAR_POSITIONAL, Parameter.VAR_KEYWORD)
+                                     for value in parameters.values()))
 
 
     def test_supported_module_surfaces_do_not_expand_the_root_facade(self) -> None:

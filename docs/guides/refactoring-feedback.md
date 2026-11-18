@@ -367,10 +367,29 @@ PYTHONPATH=src python -m tests.runner run \
 
 이 경로의 Case ID는 기존 tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation이다. 정의 위치 이동만으로 전체 suite의 fixture 그룹을 다시 나누거나 관측 시간에 맞춰 weight를 조정하지 않는다. 실제 canonical ID·MRO·launch 순서·원래 weight bytes와 shard ID집합을 함께 확인한다.
 
-### Artifact·작성 목표·terminal 경계 계획 #1047
+### Artifact·작성 목표·terminal 경계의 선택 검증 #1047
 
-[#1047의 구현 계획](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1047#구현-계획)은 기존5개 정의의 정책을4개 owner로 옮기고, 기존 Artifact8개 메서드의 정의를2/3/2/1개 도메인 파일로 나누는 수락 범위와 검증을 관리한다.
+[#1047의 구현 계획](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1047#구현-계획)은 Artifact 검토·consultation·작성 목표·실패/fallback의 기존 정책과 실제 실행 수명 경계를 관리한다. 값 정책은4개 owner가, 원래 read/capture/lock/append/provider·정리는 기존 실행 경계가 소유한다.
 
-이 문서 연결은 구현 전 Draft PR을 준비하는 계획 기록이다. 새 정의 모듈의 여러 기존 ID 선택은 아직 구현하지 않았다. 실제 Draft를 만든 뒤 코드와 기존 검증을 함께 갱신하고 공식 선택 결과를 기록한다.
+기여자는 바꾼 정책을 실제로 통과하는 기존 Case부터 선택한다. 일반 history projection, incomplete-core-workflow, unread/truncated grounding이 전체5정의 변경의 최초3개 집합이다. fallback 값만 바꾸면 기존 drafting/review-routing witness가 더 작은 첫 선택이며, 실패 draft까지 바뀌면 grounding의 실제 실패 이벤트·복구 경로도 포함한다. 예전 D의151/839초를 현재 source나 다른 실행 문맥의 측정값으로 사용하지 않는다.
 
-기존 canonical ID·구체 클래스·MRO·fixture·hosted/weight 구성을 보존하고, 좁은 정의 `--module` 선택과 보수적인 `--path` 의존 역closure를 구분한다. 최초3개 기존 Case의 의미 있는 피드백, 필요한 범위 확대, 실제 동일 결함 RED/GREEN, 최종 FAST/전체5shard/reconcile을 별도 단계로 확인한다.
+기존 Artifact8개 메서드의 정의는 다음 도메인 파일에 있으며 원래 구체 TestCase와 canonical ID·MRO·fixture·hosted/weight 구성을 유지한다. 각 정의 모듈은 등록된 기존 ID 집합으로 선택되고 실제 bound function의 정의 모듈·receiver를 모든 ID에 대해 확인한다.
+
+| 정의 모듈 | 기존 Case 수 | 책임 |
+| --- | --- | --- |
+| `tests.lead_preparation.test_artifact_candidate_creation` | 2 | Confirm 전후 후보 생성과 검색/읽기 근거 |
+| `tests.lead_preparation.test_artifact_candidate_revisions` | 3 | 충돌·수정·fresh authority·후보 교체 |
+| `tests.lead_preparation.test_artifact_authority_boundaries` | 2 | ordinary discussion과 provider 권한 경계 |
+| `tests.lead_preparation.test_artifact_review_recovery` | 1 | 합성 실패와 재시작의 권한/결과 |
+
+예를 들어 저장소 루트에서 기여자의 canonical runner로 후보 생성의 기존2개 Case를 선택한다.
+
+```bash
+report_dir="$(mktemp -d "${TMPDIR:-/tmp}/story-artifact-feedback.XXXXXXXXXX")"
+chmod 700 "$report_dir"
+PYTHONPATH=src .venv/bin/python -m tests.runner run \
+  --module tests.lead_preparation.test_artifact_candidate_creation \
+  --json "$report_dir/candidate-creation.json"
+```
+
+정의 모듈의 `--module` 선택과 `--path`의 보수적인 depends_on 역closure는 별도다. canonical 파일이 새 정의를 import하는 실제 의존 때문에 경로 기반 선택은 원래 통합 owner까지 확대될 수 있다. 좁은 선택의 성공을 전체 영향 성공으로 표시하지 않고, 필요한 기존15개 직접 Case·별도 witness·실제 역소비자와 최종 FAST/전체5shard/reconcile을 확인한다. 실제 같은 ReplyTrace 오류의 RED/GREEN, 정상 시간과 진단 자료도 서로 구분한다. Case·subTest·시간·worker 상한은 유지하고 Root와 공유 fixture를 바꾼 경우 전체 검증 fallback을 보존한다.

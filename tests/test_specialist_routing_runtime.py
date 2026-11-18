@@ -1030,11 +1030,19 @@ class SpecialistRoutingRuntimeTests(SpecialistRoutingRuntimeCase):
         subprocess.run(['git', 'commit', '-m', 'Seed lead commit test fixtures'], cwd=self.workspace.root, check=True, stdout=subprocess.DEVNULL)
         from tests.test_lead_artifact_application_authority import _application_decision
         from tests.test_lead_story_commit_authority import _commit_decision, StoryCommitDecision
-        from tests.test_artifact_proposal_orchestration import (
-            WorkspaceConversationStorageMutationCoordinator, provision_sqlite_conversation_storage,
-            transfer_conversation_storage, verify_conversation_storage,
-            ConversationStorageBackend, ConversationStorageTransferOutcome,
-            compose_sqlite_conversation_storage, )
+        from story_writing_agents.conversation_storage import (
+            WorkspaceConversationStorageMutationCoordinator,
+            ConversationStorageBackend,
+        )
+        from story_writing_agents.conversation_storage.migration import (
+            transfer_conversation_storage,
+            verify_conversation_storage,
+            ConversationStorageTransferOutcome,
+        )
+        from story_writing_agents.conversation_storage.sqlite import (
+            provision_sqlite_conversation_storage,
+            compose_sqlite_conversation_storage,
+        )
         path = "manuscript/part-01/integrated.md"
         extra = await self._rejected_pair(self.conversation("Review-only extra null"),
             "Concrete supplied candidate, with no authoring requested.",
