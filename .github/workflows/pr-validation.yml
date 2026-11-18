@@ -673,15 +673,11 @@ jobs:
           PY_HARDWARE
       - name: Run fast runtime tests
         run: |
-          selector=(--tier fast)
-          if [[ "$AFFECTED_ONLY" == "true" ]]; then
-            [[ -n "$AFFECTED_IDS" ]] || exit 2
-            selector=()
-            while IFS= read -r test_id; do
-              [[ -n "$test_id" ]] || exit 2
-              selector+=(--id "$test_id")
-            done <<< "$AFFECTED_IDS"
+          if [[ "$AFFECTED_ONLY" != "true" || "$AFFECTED_IDS" != "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation" ]]; then
+            echo "고정 정의 모듈과 원래 Case ID가 맞지 않습니다." >&2
+            exit 2
           fi
+          selector=(--module tests.lead_preparation.test_specialist_advisory_scope)
           printf '%s\n' "${selector[@]}" > "$RUNNER_TEMP/fast-selection-argv.txt"
           test_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))
           if (( test_seconds > 3150 )); then test_seconds=3150; fi
