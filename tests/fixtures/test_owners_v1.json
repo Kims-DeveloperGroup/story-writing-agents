@@ -6713,8 +6713,11 @@
         "tests.test_suite_budget.SuiteBudgetTests.test_subtest_expansion_and_incomplete_shards_fail"
       ],
       "depends_on": [
+        "lead-fixtures.runtime-setup",
         "runner",
-        "test-budget"
+        "test-budget",
+        "tests.lead_preparation.test_specialist_response_semantics",
+        "tests.test_specialist_orchestration_execution"
       ]
     },
     {
