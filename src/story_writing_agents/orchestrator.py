@@ -8395,7 +8395,7 @@ class StoryRuntime:
             action="none",
             context_sources=("current_input",),
             recovered_fields=("structured_reply",),
-            origin=ReplyTraceOrigin.RUNTIME_FALLBACK,
+            origin=ReplyTraceOrigin.PROVIDER,
         )
         if persist_message:
             projection = self.conversation_storage_services.event_store.read_context(
