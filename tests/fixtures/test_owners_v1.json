@@ -1452,8 +1452,10 @@
         "lead-fixtures.preparation-data",
         "lead-fixtures.provider-responses",
         "lead-fixtures.runtime-setup",
-        "lead-fixtures.specialist-routing",
-        "tests.test_artifact_objectives"
+        "tests.lead_preparation.test_artifact_authority_boundaries",
+        "tests.lead_preparation.test_artifact_candidate_creation",
+        "tests.lead_preparation.test_artifact_candidate_revisions",
+        "tests.lead_preparation.test_artifact_review_recovery"
       ]
     },
     {
@@ -5266,7 +5268,6 @@
         "lead-fixtures.artifact-review",
         "lead-fixtures.provider-responses",
         "lead-fixtures.runtime-setup",
-        "tests.test_artifact_proposal_orchestration",
         "tests.test_collaboration_events"
       ]
     },
@@ -6486,7 +6487,6 @@
         "tests.lead_preparation.test_specialist_advisory_scope",
         "tests.test_agent_exchange_viewer",
         "tests.test_artifact_objectives",
-        "tests.test_artifact_proposal_orchestration",
         "tests.test_collaboration_events",
         "tests.test_lead_artifact_application_authority",
         "tests.test_lead_story_commit_authority"
@@ -17998,6 +17998,227 @@
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_provider_free_advisory_confirms_one_specialist_without_synthesis_or_chain"
       ],
       "depends_on": []
+    },
+    {
+      "name": "lead-preparation.artifact-review-planning",
+      "boundary": "existing-cases",
+      "paths": [
+        "src/story_writing_agents/lead_preparation/artifact_review_planning.py"
+      ],
+      "focused_ids": [
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_incomplete_core_workflow_is_reviewed_only_after_confirmation"
+      ],
+      "affected_ids": [
+        "tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_history_rejects_foreign_or_changed_origin_predecessor_sources_and_targets",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_core_conflict_revision_and_manuscript_atomic_rename_workflows",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_incomplete_core_workflow_is_reviewed_only_after_confirmation",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_missing_synthesis_message_fails_and_reviewed_restart_has_no_authority",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_ordinary_discussion_captures_current_state_without_specialists",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_provider_authority_fields_fall_back_without_candidate",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_revised_artifact_intent_replaces_candidate_in_the_same_step",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_search_read_answer_can_add_an_artifact_candidate",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_stale_confirmation_and_revision_require_fresh_authority",
+        "tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_known_result_finalization.KnownResultAssessmentTests.test_all_assessments_are_preserved_and_partial_failure_never_reviews",
+        "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_unread_and_truncated_search_fall_back_while_reads_attach_locally",
+        "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_validation_failure_closes_once_and_restart_uses_fresh_turn",
+        "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_direct_scope_is_required_and_substantive_outcomes_cannot_bypass_routing",
+        "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_front_schema_is_minimal_closed_and_provider_strict",
+        "tests.test_lead_orchestration.LeadReferenceFailurePrecedenceTests.test_reference_failure_with_unwritable_history_stays_recovery_required",
+        "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_draft_task_cannot_skip_current_revision_drafting_via_review_artifact_intent"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "lead-preparation.artifact-objective-planning",
+      "boundary": "existing-cases",
+      "paths": [
+        "src/story_writing_agents/lead_preparation/artifact_objective_planning.py"
+      ],
+      "focused_ids": [
+        "tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests.test_projection_is_deterministic_ordered_typed_and_history_only"
+      ],
+      "affected_ids": [
+        "tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_history_rejects_foreign_or_changed_origin_predecessor_sources_and_targets",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_core_conflict_revision_and_manuscript_atomic_rename_workflows",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_incomplete_core_workflow_is_reviewed_only_after_confirmation",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_missing_synthesis_message_fails_and_reviewed_restart_has_no_authority",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_ordinary_discussion_captures_current_state_without_specialists",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_provider_authority_fields_fall_back_without_candidate",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_revised_artifact_intent_replaces_candidate_in_the_same_step",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_search_read_answer_can_add_an_artifact_candidate",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_stale_confirmation_and_revision_require_fresh_authority",
+        "tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_known_result_finalization.KnownResultAssessmentTests.test_all_assessments_are_preserved_and_partial_failure_never_reviews",
+        "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_unread_and_truncated_search_fall_back_while_reads_attach_locally",
+        "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_validation_failure_closes_once_and_restart_uses_fresh_turn",
+        "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_direct_scope_is_required_and_substantive_outcomes_cannot_bypass_routing",
+        "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_front_schema_is_minimal_closed_and_provider_strict",
+        "tests.test_lead_orchestration.LeadReferenceFailurePrecedenceTests.test_reference_failure_with_unwritable_history_stays_recovery_required",
+        "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_draft_task_cannot_skip_current_revision_drafting_via_review_artifact_intent"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "lead-preparation.lead-consultation-planning",
+      "boundary": "existing-cases",
+      "paths": [
+        "src/story_writing_agents/lead_preparation/lead_consultation_planning.py"
+      ],
+      "focused_ids": [
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_incomplete_core_workflow_is_reviewed_only_after_confirmation"
+      ],
+      "affected_ids": [
+        "tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_history_rejects_foreign_or_changed_origin_predecessor_sources_and_targets",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_core_conflict_revision_and_manuscript_atomic_rename_workflows",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_incomplete_core_workflow_is_reviewed_only_after_confirmation",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_missing_synthesis_message_fails_and_reviewed_restart_has_no_authority",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_ordinary_discussion_captures_current_state_without_specialists",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_provider_authority_fields_fall_back_without_candidate",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_revised_artifact_intent_replaces_candidate_in_the_same_step",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_search_read_answer_can_add_an_artifact_candidate",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_stale_confirmation_and_revision_require_fresh_authority",
+        "tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_known_result_finalization.KnownResultAssessmentTests.test_all_assessments_are_preserved_and_partial_failure_never_reviews",
+        "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_unread_and_truncated_search_fall_back_while_reads_attach_locally",
+        "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_validation_failure_closes_once_and_restart_uses_fresh_turn",
+        "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_direct_scope_is_required_and_substantive_outcomes_cannot_bypass_routing",
+        "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_front_schema_is_minimal_closed_and_provider_strict",
+        "tests.test_lead_orchestration.LeadReferenceFailurePrecedenceTests.test_reference_failure_with_unwritable_history_stays_recovery_required",
+        "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_draft_task_cannot_skip_current_revision_drafting_via_review_artifact_intent"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "lead-preparation.lead-terminal-planning",
+      "boundary": "existing-cases",
+      "paths": [
+        "src/story_writing_agents/lead_preparation/lead_terminal_planning.py"
+      ],
+      "focused_ids": [
+        "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_unread_and_truncated_search_fall_back_while_reads_attach_locally",
+        "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_draft_task_cannot_skip_current_revision_drafting_via_review_artifact_intent"
+      ],
+      "affected_ids": [
+        "tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_history_rejects_foreign_or_changed_origin_predecessor_sources_and_targets",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_core_conflict_revision_and_manuscript_atomic_rename_workflows",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_incomplete_core_workflow_is_reviewed_only_after_confirmation",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_missing_synthesis_message_fails_and_reviewed_restart_has_no_authority",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_ordinary_discussion_captures_current_state_without_specialists",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_provider_authority_fields_fall_back_without_candidate",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_revised_artifact_intent_replaces_candidate_in_the_same_step",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_search_read_answer_can_add_an_artifact_candidate",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_stale_confirmation_and_revision_require_fresh_authority",
+        "tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_known_result_finalization.KnownResultAssessmentTests.test_all_assessments_are_preserved_and_partial_failure_never_reviews",
+        "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_unread_and_truncated_search_fall_back_while_reads_attach_locally",
+        "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_validation_failure_closes_once_and_restart_uses_fresh_turn",
+        "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_direct_scope_is_required_and_substantive_outcomes_cannot_bypass_routing",
+        "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_front_schema_is_minimal_closed_and_provider_strict",
+        "tests.test_lead_orchestration.LeadReferenceFailurePrecedenceTests.test_reference_failure_with_unwritable_history_stays_recovery_required",
+        "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_draft_task_cannot_skip_current_revision_drafting_via_review_artifact_intent"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "tests.lead_preparation.test_artifact_candidate_creation",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/lead_preparation/test_artifact_candidate_creation.py"
+      ],
+      "focused_ids": [
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_incomplete_core_workflow_is_reviewed_only_after_confirmation",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_search_read_answer_can_add_an_artifact_candidate"
+      ],
+      "affected_ids": [
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_incomplete_core_workflow_is_reviewed_only_after_confirmation",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_search_read_answer_can_add_an_artifact_candidate"
+      ],
+      "depends_on": [
+        "context-execution-fixture",
+        "lead-fixtures.artifact-review",
+        "lead-fixtures.material-values",
+        "lead-fixtures.preparation-data",
+        "lead-fixtures.provider-responses",
+        "lead-fixtures.runtime-setup",
+        "lead-fixtures.specialist-routing",
+        "tests.test_artifact_objectives"
+      ]
+    },
+    {
+      "name": "tests.lead_preparation.test_artifact_candidate_revisions",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/lead_preparation/test_artifact_candidate_revisions.py"
+      ],
+      "focused_ids": [
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_core_conflict_revision_and_manuscript_atomic_rename_workflows",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_revised_artifact_intent_replaces_candidate_in_the_same_step",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_stale_confirmation_and_revision_require_fresh_authority"
+      ],
+      "affected_ids": [
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_core_conflict_revision_and_manuscript_atomic_rename_workflows",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_revised_artifact_intent_replaces_candidate_in_the_same_step",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_stale_confirmation_and_revision_require_fresh_authority"
+      ],
+      "depends_on": [
+        "context-execution-fixture",
+        "lead-fixtures.artifact-review",
+        "lead-fixtures.material-values",
+        "lead-fixtures.preparation-data",
+        "lead-fixtures.provider-responses",
+        "lead-fixtures.runtime-setup",
+        "lead-fixtures.specialist-routing",
+        "tests.test_artifact_objectives"
+      ]
+    },
+    {
+      "name": "tests.lead_preparation.test_artifact_authority_boundaries",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/lead_preparation/test_artifact_authority_boundaries.py"
+      ],
+      "focused_ids": [
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_ordinary_discussion_captures_current_state_without_specialists",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_provider_authority_fields_fall_back_without_candidate"
+      ],
+      "affected_ids": [
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_ordinary_discussion_captures_current_state_without_specialists",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_provider_authority_fields_fall_back_without_candidate"
+      ],
+      "depends_on": [
+        "context-execution-fixture",
+        "lead-fixtures.artifact-review",
+        "lead-fixtures.material-values",
+        "lead-fixtures.preparation-data",
+        "lead-fixtures.provider-responses",
+        "lead-fixtures.runtime-setup",
+        "lead-fixtures.specialist-routing",
+        "tests.test_artifact_objectives"
+      ]
+    },
+    {
+      "name": "tests.lead_preparation.test_artifact_review_recovery",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/lead_preparation/test_artifact_review_recovery.py"
+      ],
+      "focused_ids": [
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_missing_synthesis_message_fails_and_reviewed_restart_has_no_authority"
+      ],
+      "affected_ids": [
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_missing_synthesis_message_fails_and_reviewed_restart_has_no_authority"
+      ],
+      "depends_on": [
+        "context-execution-fixture",
+        "lead-fixtures.artifact-review",
+        "lead-fixtures.material-values",
+        "lead-fixtures.preparation-data",
+        "lead-fixtures.provider-responses",
+        "lead-fixtures.runtime-setup",
+        "lead-fixtures.specialist-routing",
+        "tests.test_artifact_objectives"
+      ]
     }
   ],
   "ignored_names": [

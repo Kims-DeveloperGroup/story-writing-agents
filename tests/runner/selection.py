@@ -39,26 +39,32 @@ def definition_module_ids(
 
     owners = load_owners(load_inventory())["owners"]
     known = set(collection.ids)
-    return {
+    definitions = {
         owner["name"]: tuple(owner["focused_ids"])
         for owner in owners
         if owner["name"] in requested and owner.get("boundary") == "existing-cases"
         and owner["paths"] == [owner["name"].replace(".", "/") + ".py"]
-        and len(owner["focused_ids"]) == 1
+        and isinstance(owner["focused_ids"], list) and owner["focused_ids"]
         and owner["focused_ids"] == owner["affected_ids"]
-        and owner["focused_ids"][0] in known
+        and all(type(identifier) is str for identifier in owner["focused_ids"])
+        and len(set(owner["focused_ids"])) == len(owner["focused_ids"])
     }
+    for module, identifiers in definitions.items():
+        if set(identifiers) - known:
+            raise RunnerError(f"test definition module has unavailable registered IDs: {module}")
+    return definitions
 
 
 def validate_definition_modules(collection: CanonicalCollection, modules: Sequence[str]) -> None:
     """Verify each selected definition owner against its actual bound test method."""
     cases = {test.id(): test for test in collection.tests}
     for module, identifiers in definition_module_ids(collection, modules).items():
-        case = cases.get(identifiers[0])
-        method = getattr(case, identifiers[0].rpartition(".")[2], None)
-        if (getattr(method, "__module__", None) != module
-                or getattr(method, "__self__", None) is not case):
-            raise RunnerError(f"test definition module does not own its selected method: {module}")
+        for identifier in identifiers:
+            case = cases.get(identifier)
+            method = getattr(case, identifier.rpartition(".")[2], None)
+            if (getattr(method, "__module__", None) != module
+                    or getattr(method, "__self__", None) is not case):
+                raise RunnerError(f"test definition module does not own its selected method: {module}")
 
 
 def selected_ids(collection: CanonicalInventory | CanonicalCollection, *,

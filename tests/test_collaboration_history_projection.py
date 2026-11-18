@@ -269,7 +269,7 @@ class CollaborationHistoryProjectionTests(unittest.TestCase):
         from story_writing_agents.lead_preparation import document_plan_selection
         from story_writing_agents.lead_preparation.recommendation_preparation import RecommendationCapability
         from story_writing_agents.lead_preparation.proposal_basis_values import build_document_plan
-        from story_writing_agents.lead_preparation import authoring_authority
+        from story_writing_agents.lead_preparation import artifact_objective_planning, authoring_authority
         from story_writing_agents.runtime_resources import collaboration_event_journal as event_journal
         class ObjectiveOwner:
             _new_id = staticmethod(event_journal.new_id)
@@ -277,7 +277,6 @@ class CollaborationHistoryProjectionTests(unittest.TestCase):
             _validate_objective_selection = staticmethod(authoring_authority.validate_objective_selection)
             _resolved_objective_source_ids = staticmethod(authoring_authority.resolved_objective_source_ids)
             _build_document_plan = staticmethod(build_document_plan)
-            _objective_drafts = StoryRuntime._objective_drafts
             read_collaboration_events = StoryRuntime.read_collaboration_events
             def __init__(owner, captured, *, owner_conversation=fixture.CONVERSATION_ID):
                 def read(session, conversation):
@@ -357,8 +356,59 @@ class CollaborationHistoryProjectionTests(unittest.TestCase):
             fixture.SESSION_ID, judgment, scope.target_paths, preparation=capability,
             read_collaboration_events=owner.read_collaboration_events,
         )
-        objective, = owner._objective_drafts(outcome, c.project_collaboration_history(prepared_history), prepared_history,
-                                             judgment, preparation=capability, plan_override=root_plan)
+        _objective_outcome = outcome
+        _objective_projection = c.project_collaboration_history(prepared_history)
+        _objective_events = prepared_history
+        _objective_judgment = judgment
+        _objective_preparation = capability
+        _objective_plan_override = root_plan
+        _objective_session_events = None
+        _objective_candidate_event = None
+        _objective_goal_exists = artifact_objective_planning.objective_goal_exists(
+            _objective_plan_override, _objective_events, session_events=_objective_session_events,
+        )
+        if (_objective_plan_override is not None and _objective_plan_override.goal_objective_id is not None
+                and not _objective_goal_exists):
+            _objective_facts = document_plan_selection.document_goal_facts(
+                _objective_judgment.session_id, _objective_judgment, _objective_outcome.authoring_scope.target_paths,
+                objective_id=_objective_plan_override.goal_objective_id, preparation=_objective_preparation,
+                read_collaboration_events=owner.read_collaboration_events,
+            )
+            _objective_drafts = artifact_objective_planning.prepared_document_objective(
+                _objective_outcome, _objective_judgment, _objective_facts, _objective_plan_override,
+                candidate_event=_objective_candidate_event, preparation=_objective_preparation,
+            )
+        else:
+            _objective_outcome = artifact_objective_planning.ordinary_objective_outcome(
+                _objective_outcome, _objective_projection, preparation=_objective_preparation,
+            )
+            if _objective_outcome is None:
+                _objective_drafts = ()
+            else:
+                _objective_intent = _objective_outcome.objective_intent
+                _objective_candidate = None if _objective_candidate_event is None else _objective_candidate_event.payload.candidate
+                authoring_authority.validate_objective_selection(
+                    _objective_outcome, _objective_projection, _objective_candidate,
+                )
+                _objective_previous = next((item for item in _objective_projection.artifact_objectives
+                    if item.facts.objective_id == _objective_intent.objective_id), None)
+                _objective_facts = artifact_objective_planning.objective_facts(
+                    _objective_intent, _objective_previous, _objective_projection, _objective_events, _objective_judgment,
+                    preparation=_objective_preparation,
+                )
+                _objective_selected, _objective_binding = artifact_objective_planning.objective_capture_inputs(
+                    _objective_outcome, _objective_projection, _objective_events, _objective_previous,
+                    _objective_candidate_event, _objective_candidate, preparation=_objective_preparation,
+                )
+                _objective_plan = _objective_previous.document_plan if _objective_previous is not None else None
+                if (_objective_plan_override is not None
+                        and _objective_plan_override.goal_objective_id == _objective_facts.objective_id):
+                    _objective_plan = _objective_plan_override
+                _objective_drafts = artifact_objective_planning.objective_drafts_for_values(
+                    _objective_outcome, _objective_intent, _objective_previous, _objective_facts,
+                    _objective_selected, _objective_binding, _objective_plan, _objective_judgment,
+                )
+        objective, = _objective_drafts
         self.assertEqual((from_goal.target_paths, objective.payload.facts.target_paths), (scope.target_paths, scope.target_paths))
         self.assertEqual(node_request.target_paths, ())
         self.assertIsNone(objective.payload.document_plan)
@@ -516,9 +566,59 @@ class CollaborationHistoryProjectionTests(unittest.TestCase):
         foreign_judgment = foreign_draft(replace(judgment, payload=replace(judgment.payload, document_node=foreign_binding)))
         foreign_owner = ObjectiveOwner(foreign_prepared, owner_conversation=foreign_id)
         foreign_capability = RecommendationCapability(foreign_prepared[-3], foreign_prepared[-2], foreign_prepared[-1])
-        foreign_objective, = foreign_owner._objective_drafts(replace(outcome, document_node=foreign_binding),
-            c.project_collaboration_history(foreign_prepared), foreign_prepared, foreign_judgment,
-            preparation=foreign_capability, plan_override=qualified_plan, session_events=captured.events())
+        _objective_outcome = replace(outcome, document_node=foreign_binding)
+        _objective_projection = c.project_collaboration_history(foreign_prepared)
+        _objective_events = foreign_prepared
+        _objective_judgment = foreign_judgment
+        _objective_preparation = foreign_capability
+        _objective_plan_override = qualified_plan
+        _objective_session_events = captured.events()
+        _objective_candidate_event = None
+        _objective_goal_exists = artifact_objective_planning.objective_goal_exists(
+            _objective_plan_override, _objective_events, session_events=_objective_session_events,
+        )
+        if (_objective_plan_override is not None and _objective_plan_override.goal_objective_id is not None
+                and not _objective_goal_exists):
+            _objective_facts = document_plan_selection.document_goal_facts(
+                _objective_judgment.session_id, _objective_judgment, _objective_outcome.authoring_scope.target_paths,
+                objective_id=_objective_plan_override.goal_objective_id, preparation=_objective_preparation,
+                read_collaboration_events=foreign_owner.read_collaboration_events,
+            )
+            _objective_drafts = artifact_objective_planning.prepared_document_objective(
+                _objective_outcome, _objective_judgment, _objective_facts, _objective_plan_override,
+                candidate_event=_objective_candidate_event, preparation=_objective_preparation,
+            )
+        else:
+            _objective_outcome = artifact_objective_planning.ordinary_objective_outcome(
+                _objective_outcome, _objective_projection, preparation=_objective_preparation,
+            )
+            if _objective_outcome is None:
+                _objective_drafts = ()
+            else:
+                _objective_intent = _objective_outcome.objective_intent
+                _objective_candidate = None if _objective_candidate_event is None else _objective_candidate_event.payload.candidate
+                authoring_authority.validate_objective_selection(
+                    _objective_outcome, _objective_projection, _objective_candidate,
+                )
+                _objective_previous = next((item for item in _objective_projection.artifact_objectives
+                    if item.facts.objective_id == _objective_intent.objective_id), None)
+                _objective_facts = artifact_objective_planning.objective_facts(
+                    _objective_intent, _objective_previous, _objective_projection, _objective_events, _objective_judgment,
+                    preparation=_objective_preparation,
+                )
+                _objective_selected, _objective_binding = artifact_objective_planning.objective_capture_inputs(
+                    _objective_outcome, _objective_projection, _objective_events, _objective_previous,
+                    _objective_candidate_event, _objective_candidate, preparation=_objective_preparation,
+                )
+                _objective_plan = _objective_previous.document_plan if _objective_previous is not None else None
+                if (_objective_plan_override is not None
+                        and _objective_plan_override.goal_objective_id == _objective_facts.objective_id):
+                    _objective_plan = _objective_plan_override
+                _objective_drafts = artifact_objective_planning.objective_drafts_for_values(
+                    _objective_outcome, _objective_intent, _objective_previous, _objective_facts,
+                    _objective_selected, _objective_binding, _objective_plan, _objective_judgment,
+                )
+        foreign_objective, = _objective_drafts
         foreign_proposal_event = foreign_draft(replace(proposal_event, payload=foreign_proposal))
         foreign_state = foreign_draft(replace(state, payload=fixture.proposal_state(foreign_proposal,
             c.CollaborationStepState.AWAITING_CONFIRMATION, confirmation_request_id="prepared_confirmation")))
