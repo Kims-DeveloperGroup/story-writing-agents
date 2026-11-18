@@ -19,7 +19,7 @@ def prepare_selection(args, *, owner_catalogue=None):
     """Keep fresh census authority separate from manifest-first development runs."""
     from .collection import FRESH_CENSUS_IDS, load_inventory, load_selected
     from .contracts import CanonicalInventory, PolicySelection
-    from .selection import selected_ids, suite_policy_metadata, validated_values
+    from .selection import selected_ids, suite_policy_metadata, validated_values, validate_definition_modules
 
     changed = args.changed_from is not None or bool(args.path)
     if args.shard and changed:
@@ -75,7 +75,11 @@ def prepare_selection(args, *, owner_catalogue=None):
         selected = policy_select(canonical, ids=ordered)
         selected.metadata.update(metadata)
         return canonical, selected
-    selected = load_selected(ordered) if ordered and args.command == "run" else CanonicalInventory(ordered)
+    definition_modules = set(args.module) - set(inventory.modules) if args.module else set()
+    selected = (load_selected(ordered) if ordered and (args.command == "run" or definition_modules)
+                else CanonicalInventory(ordered))
+    if definition_modules:
+        validate_definition_modules(selected, args.module)
     return inventory, PolicySelection(selected, metadata)
 
 

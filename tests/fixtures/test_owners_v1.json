@@ -5344,7 +5344,7 @@
         "tests/test_lead_orchestration.py"
       ],
       "focused_ids": [
-        "tests.lead_preparation.test_ordinary_turn_outcomes.OrdinaryLeadTurnOutcomeTests.test_all_five_outcomes_have_exact_visible_next_actions",
+        "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_all_five_outcomes_have_exact_visible_next_actions",
         "tests.test_known_result_finalization.KnownResultBudgetTests.test_unaffordable_continuation_finalizes_exact_result_without_authority",
         "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_budget_notice_preserves_maximum_utf8_synthesis",
         "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_initial_budget_rejection_remains_failure",
@@ -5398,7 +5398,7 @@
         "tests.test_lead_orchestration.LeadSubmittedFailureRecoveryTests.test_submitted_timed_out_during_correction_never_replays"
       ],
       "affected_ids": [
-        "tests.lead_preparation.test_ordinary_turn_outcomes.OrdinaryLeadTurnOutcomeTests.test_all_five_outcomes_have_exact_visible_next_actions",
+        "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_all_five_outcomes_have_exact_visible_next_actions",
         "tests.test_known_result_finalization.KnownResultBudgetTests.test_unaffordable_continuation_finalizes_exact_result_without_authority",
         "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_budget_notice_preserves_maximum_utf8_synthesis",
         "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_initial_budget_rejection_remains_failure",
@@ -6449,7 +6449,7 @@
         "tests/test_specialist_routing_runtime.py"
       ],
       "focused_ids": [
-        "tests.lead_preparation.test_specialist_advisory_scope.SpecialistAdvisoryScopeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation",
+        "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation",
         "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_archived_task_is_context_without_routable_authority",
         "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_cross_conversation_selection_preserves_scope_and_rejects_workflow_relabel",
         "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_declared_substantive_direct_outcomes_fail_closed",
@@ -6462,7 +6462,7 @@
         "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_wrong_task_pair_rejects_before_dispatch"
       ],
       "affected_ids": [
-        "tests.lead_preparation.test_specialist_advisory_scope.SpecialistAdvisoryScopeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation",
+        "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation",
         "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_archived_task_is_context_without_routable_authority",
         "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_cross_conversation_selection_preserves_scope_and_rejects_workflow_relabel",
         "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_declared_substantive_direct_outcomes_fail_closed",
@@ -14225,7 +14225,7 @@
         "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_compatible_ready_is_delta_and_provider_history_loss_bootstraps",
         "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_lead_search_read_json_answer_uses_exact_dynamic_contract_and_limit",
         "tests.agent_context.invocation.test_request_contracts.ContextExecutionValueTests.test_composite_policy_fingerprint_covers_wire_planning_and_every_limit",
-        "tests.lead_preparation.test_ordinary_turn_outcomes.OrdinaryLeadTurnOutcomeTests.test_all_five_outcomes_have_exact_visible_next_actions",
+        "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_all_five_outcomes_have_exact_visible_next_actions",
         "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review",
         "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority",
         "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_canonical_artifact_and_semantic_domain_ownership",
@@ -14374,7 +14374,7 @@
         "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_compatible_ready_is_delta_and_provider_history_loss_bootstraps",
         "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_lead_search_read_json_answer_uses_exact_dynamic_contract_and_limit",
         "tests.agent_context.invocation.test_request_contracts.ContextExecutionValueTests.test_composite_policy_fingerprint_covers_wire_planning_and_every_limit",
-        "tests.lead_preparation.test_ordinary_turn_outcomes.OrdinaryLeadTurnOutcomeTests.test_all_five_outcomes_have_exact_visible_next_actions",
+        "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_all_five_outcomes_have_exact_visible_next_actions",
         "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review",
         "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority",
         "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_canonical_artifact_and_semantic_domain_ownership",
@@ -14526,7 +14526,7 @@
         "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_compatible_ready_is_delta_and_provider_history_loss_bootstraps",
         "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_lead_search_read_json_answer_uses_exact_dynamic_contract_and_limit",
         "tests.agent_context.invocation.test_request_contracts.ContextExecutionValueTests.test_composite_policy_fingerprint_covers_wire_planning_and_every_limit",
-        "tests.lead_preparation.test_ordinary_turn_outcomes.OrdinaryLeadTurnOutcomeTests.test_all_five_outcomes_have_exact_visible_next_actions",
+        "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_all_five_outcomes_have_exact_visible_next_actions",
         "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review",
         "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority",
         "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_canonical_artifact_and_semantic_domain_ownership",
@@ -14678,7 +14678,7 @@
         "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_compatible_ready_is_delta_and_provider_history_loss_bootstraps",
         "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_lead_search_read_json_answer_uses_exact_dynamic_contract_and_limit",
         "tests.agent_context.invocation.test_request_contracts.ContextExecutionValueTests.test_composite_policy_fingerprint_covers_wire_planning_and_every_limit",
-        "tests.lead_preparation.test_ordinary_turn_outcomes.OrdinaryLeadTurnOutcomeTests.test_all_five_outcomes_have_exact_visible_next_actions",
+        "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_all_five_outcomes_have_exact_visible_next_actions",
         "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review",
         "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority",
         "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_canonical_artifact_and_semantic_domain_ownership",
@@ -14831,7 +14831,7 @@
         "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_compatible_ready_is_delta_and_provider_history_loss_bootstraps",
         "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_lead_search_read_json_answer_uses_exact_dynamic_contract_and_limit",
         "tests.agent_context.invocation.test_request_contracts.ContextExecutionValueTests.test_composite_policy_fingerprint_covers_wire_planning_and_every_limit",
-        "tests.lead_preparation.test_ordinary_turn_outcomes.OrdinaryLeadTurnOutcomeTests.test_all_five_outcomes_have_exact_visible_next_actions",
+        "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_all_five_outcomes_have_exact_visible_next_actions",
         "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review",
         "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority",
         "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_canonical_artifact_and_semantic_domain_ownership",
@@ -15442,7 +15442,7 @@
         "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_scope_provider_definition_and_policy_dimensions_bootstrap",
         "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_search_and_read_emit_exact_content_free_transient_progress",
         "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_search_batch_read_answer_is_correlated_ordered_and_bounded",
-        "tests.lead_preparation.test_ordinary_turn_outcomes.OrdinaryLeadTurnOutcomeTests.test_all_five_outcomes_have_exact_visible_next_actions",
+        "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_all_five_outcomes_have_exact_visible_next_actions",
         "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review",
         "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority",
         "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_canonical_artifact_and_semantic_domain_ownership",
@@ -15455,7 +15455,7 @@
         "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip",
         "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_is_strict_versioned_immutable_and_content_safe",
         "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_selected_document_revision_frames_and_continuation_are_current",
-        "tests.lead_preparation.test_specialist_advisory_scope.SpecialistAdvisoryScopeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation",
+        "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation",
         "tests.test_agent_context_accounting.AgentContextBoundaryTests.test_accounting_is_a_standard_library_leaf_and_facade_imports_only_it",
         "tests.test_agent_context_accounting.AgentContextBoundaryTests.test_exact_internal_facade_and_public_facades_are_unchanged",
         "tests.test_agent_context_accounting.CanonicalProviderJsonTests.test_ascii_is_compact_and_preserves_insertion_order",
@@ -15922,7 +15922,7 @@
         "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_scope_provider_definition_and_policy_dimensions_bootstrap",
         "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_search_and_read_emit_exact_content_free_transient_progress",
         "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_search_batch_read_answer_is_correlated_ordered_and_bounded",
-        "tests.lead_preparation.test_ordinary_turn_outcomes.OrdinaryLeadTurnOutcomeTests.test_all_five_outcomes_have_exact_visible_next_actions",
+        "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_all_five_outcomes_have_exact_visible_next_actions",
         "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review",
         "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority",
         "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_canonical_artifact_and_semantic_domain_ownership",
@@ -15935,7 +15935,7 @@
         "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip",
         "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_is_strict_versioned_immutable_and_content_safe",
         "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_selected_document_revision_frames_and_continuation_are_current",
-        "tests.lead_preparation.test_specialist_advisory_scope.SpecialistAdvisoryScopeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation",
+        "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation",
         "tests.test_agent_context_accounting.AgentContextBoundaryTests.test_accounting_is_a_standard_library_leaf_and_facade_imports_only_it",
         "tests.test_agent_context_accounting.AgentContextBoundaryTests.test_exact_internal_facade_and_public_facades_are_unchanged",
         "tests.test_agent_context_accounting.CanonicalProviderJsonTests.test_ascii_is_compact_and_preserves_insertion_order",
@@ -16406,7 +16406,7 @@
         "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_scope_provider_definition_and_policy_dimensions_bootstrap",
         "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_search_and_read_emit_exact_content_free_transient_progress",
         "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_search_batch_read_answer_is_correlated_ordered_and_bounded",
-        "tests.lead_preparation.test_ordinary_turn_outcomes.OrdinaryLeadTurnOutcomeTests.test_all_five_outcomes_have_exact_visible_next_actions",
+        "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_all_five_outcomes_have_exact_visible_next_actions",
         "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review",
         "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority",
         "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_canonical_artifact_and_semantic_domain_ownership",
@@ -16419,7 +16419,7 @@
         "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip",
         "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_is_strict_versioned_immutable_and_content_safe",
         "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_selected_document_revision_frames_and_continuation_are_current",
-        "tests.lead_preparation.test_specialist_advisory_scope.SpecialistAdvisoryScopeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation",
+        "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation",
         "tests.test_agent_context_accounting.AgentContextBoundaryTests.test_accounting_is_a_standard_library_leaf_and_facade_imports_only_it",
         "tests.test_agent_context_accounting.AgentContextBoundaryTests.test_exact_internal_facade_and_public_facades_are_unchanged",
         "tests.test_agent_context_accounting.CanonicalProviderJsonTests.test_ascii_is_compact_and_preserves_insertion_order",
@@ -16889,7 +16889,7 @@
         "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_scope_provider_definition_and_policy_dimensions_bootstrap",
         "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_search_and_read_emit_exact_content_free_transient_progress",
         "tests.agent_context.invocation.test_execution_lifecycle.ContextExecutionLifecycleTests.test_search_batch_read_answer_is_correlated_ordered_and_bounded",
-        "tests.lead_preparation.test_ordinary_turn_outcomes.OrdinaryLeadTurnOutcomeTests.test_all_five_outcomes_have_exact_visible_next_actions",
+        "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_all_five_outcomes_have_exact_visible_next_actions",
         "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review",
         "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority",
         "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_canonical_artifact_and_semantic_domain_ownership",
@@ -16902,7 +16902,7 @@
         "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip",
         "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_is_strict_versioned_immutable_and_content_safe",
         "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_selected_document_revision_frames_and_continuation_are_current",
-        "tests.lead_preparation.test_specialist_advisory_scope.SpecialistAdvisoryScopeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation",
+        "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation",
         "tests.test_agent_context_accounting.AgentContextBoundaryTests.test_accounting_is_a_standard_library_leaf_and_facade_imports_only_it",
         "tests.test_agent_context_accounting.AgentContextBoundaryTests.test_exact_internal_facade_and_public_facades_are_unchanged",
         "tests.test_agent_context_accounting.CanonicalProviderJsonTests.test_ascii_is_compact_and_preserves_insertion_order",
@@ -17472,7 +17472,7 @@
         "tests.test_lead_review_material_validation.LeadReviewMaterialValidationTests.test_review_rejects_empty_reference_but_accepts_explicit_user_candidate"
       ],
       "affected_ids": [
-        "tests.lead_preparation.test_ordinary_turn_outcomes.OrdinaryLeadTurnOutcomeTests.test_all_five_outcomes_have_exact_visible_next_actions",
+        "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_all_five_outcomes_have_exact_visible_next_actions",
         "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_canonical_artifact_and_semantic_domain_ownership",
         "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_drafted_is_neither_supports_nor_legacy_review_assessment",
         "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_formal_planning_question_selected_gen_is_closed_and_owned",
@@ -17483,7 +17483,7 @@
         "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip",
         "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_is_strict_versioned_immutable_and_content_safe",
         "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_selected_document_revision_frames_and_continuation_are_current",
-        "tests.lead_preparation.test_specialist_advisory_scope.SpecialistAdvisoryScopeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation",
+        "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation",
         "tests.test_collaboration_events.CollaborationPackageBoundaryTests.test_append_receipt_error_and_public_signatures_are_exact",
         "tests.test_collaboration_events.CollaborationPackageBoundaryTests.test_clean_import_orders_have_no_cwd_io_or_dynamic_forwarding",
         "tests.test_collaboration_events.CollaborationPackageBoundaryTests.test_leaf_and_facade_exports_identity_metadata_pickle_and_root_omission",
@@ -17603,7 +17603,7 @@
         "tests.test_current_lead_inputs.CurrentLeadInputsTests.test_reviewed_history_transfers_with_filesystem_sqlite_parity"
       ],
       "affected_ids": [
-        "tests.lead_preparation.test_specialist_advisory_scope.SpecialistAdvisoryScopeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation",
+        "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation",
         "tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_empty_continuation_retains_selection_and_cancel_is_terminal",
         "tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_history_rejects_foreign_or_changed_origin_predecessor_sources_and_targets",
         "tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_intent_variants_and_objective_values_are_closed_and_content_safe",
@@ -17906,10 +17906,10 @@
         "tests/lead_preparation/test_specialist_advisory_scope.py"
       ],
       "focused_ids": [
-        "tests.lead_preparation.test_specialist_advisory_scope.SpecialistAdvisoryScopeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation"
+        "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation"
       ],
       "affected_ids": [
-        "tests.lead_preparation.test_specialist_advisory_scope.SpecialistAdvisoryScopeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation"
+        "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation"
       ],
       "depends_on": [
         "lead-fixtures.preparation-data",
@@ -17923,10 +17923,10 @@
         "tests/lead_preparation/test_ordinary_turn_outcomes.py"
       ],
       "focused_ids": [
-        "tests.lead_preparation.test_ordinary_turn_outcomes.OrdinaryLeadTurnOutcomeTests.test_all_five_outcomes_have_exact_visible_next_actions"
+        "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_all_five_outcomes_have_exact_visible_next_actions"
       ],
       "affected_ids": [
-        "tests.lead_preparation.test_ordinary_turn_outcomes.OrdinaryLeadTurnOutcomeTests.test_all_five_outcomes_have_exact_visible_next_actions"
+        "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_all_five_outcomes_have_exact_visible_next_actions"
       ],
       "depends_on": [
         "context-execution-fixture",
@@ -17963,10 +17963,10 @@
         "src/story_writing_agents/lead_preparation/lead_task_control.py"
       ],
       "focused_ids": [
-        "tests.lead_preparation.test_ordinary_turn_outcomes.OrdinaryLeadTurnOutcomeTests.test_all_five_outcomes_have_exact_visible_next_actions"
+        "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_all_five_outcomes_have_exact_visible_next_actions"
       ],
       "affected_ids": [
-        "tests.lead_preparation.test_ordinary_turn_outcomes.OrdinaryLeadTurnOutcomeTests.test_all_five_outcomes_have_exact_visible_next_actions",
+        "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_all_five_outcomes_have_exact_visible_next_actions",
         "tests.test_lead_orchestration.LeadDecisionAuthorityTests.test_mismatch_reject_revise_and_free_text_are_non_authorizing",
         "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_front_schema_is_minimal_closed_and_provider_strict",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_original_and_repair_validation_details_persist_across_restart",
@@ -17987,11 +17987,11 @@
         "src/story_writing_agents/lead_preparation/specialist_advisory_values.py"
       ],
       "focused_ids": [
-        "tests.lead_preparation.test_specialist_advisory_scope.SpecialistAdvisoryScopeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation",
+        "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_provider_free_advisory_confirms_one_specialist_without_synthesis_or_chain"
       ],
       "affected_ids": [
-        "tests.lead_preparation.test_specialist_advisory_scope.SpecialistAdvisoryScopeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation",
+        "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_restored_results_keep_strict_evidence_and_provider_free_compatibility",
         "tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_provider_free_advisory_confirms_one_specialist_without_synthesis_or_chain"
       ],

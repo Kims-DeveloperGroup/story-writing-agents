@@ -72,6 +72,7 @@ from tests.lead_fixtures.preparation_data import (
 
 
 from tests.lead_fixtures.specialist_routing import SpecialistRoutingRuntimeCase, ADMISSION_BRIEF as _ADMISSION_BRIEF, ROSTER
+from tests.lead_preparation.test_specialist_advisory_scope import SpecialistAdvisoryScopeCases
 
 CHARACTER = "core_documents/character_sheets.md"
 
@@ -91,6 +92,9 @@ _PLOT_NATIVE_INPUTS = { 'source_choices': ('user_input',), 'input_choices': ('us
 
 
 class SpecialistRoutingRuntimeTests(SpecialistRoutingRuntimeCase):
+    test_provider_free_advisory_requires_scope_and_separate_confirmation = (
+        SpecialistAdvisoryScopeCases.test_provider_free_advisory_requires_scope_and_separate_confirmation
+    )
 
     # Fake transport accounting verifies encoded guard sizes, not actual model capacity.
 

@@ -516,7 +516,7 @@ class SuiteBudgetTests(unittest.TestCase):
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(request_policy_current, subtest_caps=caps), document_policy_current)
         self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, request_policy_current, dict(document_policy_current, subtest_caps={**document_policy_current["subtest_caps"], matrix_id: 2}))
 
-        self.assertEqual(task_admission_current["max_test_source_lines"], 154264)
+        self.assertEqual(task_admission_current["max_test_source_lines"], 154305)
         self.assertIsNone(suite_budget.check_monotonic(task_admission_current, request_policy_current))
         self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, task_admission_current, dict(task_admission_current, max_test_source_lines=152814))
         self._assert_source_limit_neighbors_rejected(task_admission_current, request_policy_current)
@@ -534,8 +534,8 @@ class SuiteBudgetTests(unittest.TestCase):
 
         ids = runner_profile.HOSTED_METHOD_IDS
         self.assertEqual(runner_evidence.manifest(ids)["digest"],
-                         'sha256:d8e988e9d0f4753b4ece1aeb6fb31a5e3fc2e77971fd0ae85d0076276628d2c7')
-        self.assertEqual((len(ids), len({value.rsplit(".", 1)[0] for value in ids})), (163, 32))
+                         'sha256:6b7a6aee7e6557ef274a6ff18f3205c75132e0b1e043d3f4de11ff075e104a54')
+        self.assertEqual((len(ids), len({value.rsplit(".", 1)[0] for value in ids})), (163, 30))
         cases = tuple(SimpleNamespace(id=lambda identifier=value: identifier) for value in (*ids, *runner_profile.HOSTED_MIXED_SERIAL_IDS, "unreviewed.test"))
         canonical = runner_contracts.CanonicalCollection(cases, (*ids, *runner_profile.HOSTED_MIXED_SERIAL_IDS, "unreviewed.test"))
         serial, scheduled = runner_hosted.hosted_partition(canonical, canonical)
@@ -544,13 +544,48 @@ class SuiteBudgetTests(unittest.TestCase):
                                              (suite_policy.ISOLATED_TEST_ID,))
         serial, scheduled = runner_hosted.hosted_partition(canonical, isolated)
         self.assertEqual((serial.ids, scheduled), ((), (suite_policy.ISOLATED_TEST_ID,)))
-        launch_digest = 'sha256:0eafc637f70d0e0bed984369e77f7d933201451f715ba978733072f07c2b205a'
+        launch_digest = 'sha256:522c56638a26ec136d74f347449718a87b5e9151329a7eb318f397e379cd9956'
         self.assertEqual(runner_evidence.manifest(runner_profile.hosted_launch_order(ids))["digest"], launch_digest)
         self.assertEqual(runner_profile.hosted_launch_order(ids[::-1]), runner_profile.hosted_launch_order(ids))
         self.assertEqual(runner_profile.hosted_launch_order((ids[-1], ids[0])), (ids[0], ids[-1]))
         drift = runner_contracts.CanonicalCollection(cases, (*ids, *runner_profile.HOSTED_MIXED_SERIAL_IDS, ids[0].rsplit(".", 1)[0] + ".test_unreviewed"))
         self.assertRaises(runner_contracts.RunnerError, runner_hosted.hosted_partition, drift, drift)
         real = runner_execution.source_collection_for(self) or runner_collection.discover_canonical()
+        definitions = (
+            ("tests.lead_preparation.test_specialist_advisory_scope", "SpecialistAdvisoryScopeCases",
+             "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation",
+             "tests.lead_fixtures.specialist_routing.SpecialistRoutingRuntimeCase"),
+            ("tests.lead_preparation.test_ordinary_turn_outcomes", "OrdinaryLeadTurnOutcomeCases",
+             "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_all_five_outcomes_have_exact_visible_next_actions",
+             "tests.lead_fixtures.runtime_setup.LeadOrchestrationTestCase"),
+        )
+        for module, carrier_name, identifier, fixture_name in definitions:
+            selected = runner_selection.select(real, modules=[module])
+            self.assertEqual(selected.ids, (identifier,))
+            case = selected.tests[0]
+            concrete = type(case)
+            carrier = getattr(sys.modules[module], carrier_name)
+            method = identifier.rpartition(".")[2]
+            self.assertFalse(issubclass(carrier, unittest.TestCase))
+            self.assertIs(concrete.__dict__[method], carrier.__dict__[method])
+            self.assertIs(getattr(case, method).__func__, carrier.__dict__[method])
+            self.assertEqual(getattr(case, method).__module__, module)
+            self.assertEqual(concrete.__module__, identifier.rsplit(".", 2)[0])
+            fixture, = concrete.__bases__
+            self.assertEqual(f"{fixture.__module__}.{fixture.__name__}", fixture_name)
+            self.assertEqual(concrete.__mro__, (concrete, *fixture.__mro__))
+            self.assertEqual(runner_selection.selected_ids(real, ids=[identifier]), (identifier,))
+            old_module = concrete.__module__
+            self.assertEqual(runner_selection.selected_ids(real, modules=[old_module]),
+                             tuple(value for value in real.ids if value.rsplit(".", 2)[0] == old_module))
+            owner = {"name": module, "boundary": "existing-cases",
+                     "paths": [module.replace(".", "/") + ".py"],
+                     "focused_ids": [self.id()], "affected_ids": [self.id()]}
+            with patch("tests.runner.impact.load_owners", return_value={"owners": [owner]}):
+                self.assertRaisesRegex(runner_contracts.RunnerError, "definition module",
+                                       runner_selection.select, real, modules=[module])
+        self.assertRaisesRegex(runner_contracts.RunnerError, "unknown test modules",
+                               runner_selection.select, real, modules=["tests.module_graph_fixture"])
         real_serial, real_scheduled = runner_hosted.hosted_partition(real, real)
         self.assertEqual(real_scheduled, ids)
         self.assertEqual(set(real_serial.ids) & set(runner_profile.HOSTED_MIXED_SERIAL_IDS), set(runner_profile.HOSTED_MIXED_SERIAL_IDS))
@@ -559,7 +594,7 @@ class SuiteBudgetTests(unittest.TestCase):
         self.assertEqual(len(runner_profile.HOSTED_MIXED_SERIAL_IDS), 19)
         missing = runner_contracts.CanonicalCollection(cases, (*ids[:-1], *runner_profile.HOSTED_MIXED_SERIAL_IDS))
         self.assertRaises(runner_contracts.RunnerError, runner_hosted.hosted_partition, missing, missing)
-        args = SimpleNamespace(command="run", hosted_methods='audited-163-v10', hosted_deadline_epoch=time.time()+3500,
+        args = SimpleNamespace(command="run", hosted_methods='audited-163-v11', hosted_deadline_epoch=time.time()+3500,
                                shard="1/5", id=[], module=[], tier=[], failfast=False, json="report.json")
         env = dict(GITHUB_ACTIONS="true", TEST_RUN_DEADLINE=str(time.time()+4500),
                    TEST_JOB_DEADLINE=str(time.time()+4500))
@@ -612,7 +647,7 @@ class SuiteBudgetTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             paths = self._reports(directory, (0, 0)); rows = self.report_data
-            metadata = {"version": 1, "mode": "hosted-whole-method", "profile": 'audited-163-v10',
+            metadata = {"version": 1, "mode": "hosted-whole-method", "profile": 'audited-163-v11',
                         "profile_manifest": runner_evidence.manifest(runner_profile.HOSTED_METHOD_IDS),
                         "capacity": 2, "peak_children": 0, "work_deadline_epoch": 10000.0,
                         "cleanup_deadline_epoch": 10030.0, "launch_manifest": runner_evidence.manifest(()),

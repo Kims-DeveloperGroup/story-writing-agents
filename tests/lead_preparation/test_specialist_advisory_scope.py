@@ -16,12 +16,11 @@ from tests.lead_fixtures.preparation_data import (
     fixture_assessment as _fixture_assessment,
 )
 from tests.lead_fixtures.specialist_routing import (
-    SpecialistRoutingRuntimeCase,
     ADMISSION_BRIEF as _ADMISSION_BRIEF,
 )
 
 
-class SpecialistAdvisoryScopeTests(SpecialistRoutingRuntimeCase):
+class SpecialistAdvisoryScopeCases:
     async def test_provider_free_advisory_requires_scope_and_separate_confirmation(self):
         conversation = self.conversation()
         with self.assertRaisesRegex(ValueError, "explicit authoring scope"):

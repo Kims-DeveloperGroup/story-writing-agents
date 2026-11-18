@@ -1316,7 +1316,7 @@
           "destinations": [
             "tests/lead_preparation/test_specialist_advisory_scope.py"
           ],
-          "counting": "Exact whole-method move; no new Case/scenario/subTest. Ordinary local import inverse-normalizes only public ADMISSION_BRIEF transport."
+          "counting": "Whole original function definition remains in the domain file; the original concrete TestCase directly binds that same function object. No wrapper, new Case, scenario, subTest, MRO change, or ID rekey. Only the accepted public ADMISSION_BRIEF import is inverse-normalized."
         },
         {
           "source": "tests/test_lead_orchestration.py",
@@ -1333,7 +1333,7 @@
           "destinations": [
             "tests/lead_preparation/test_ordinary_turn_outcomes.py"
           ],
-          "counting": "Exact whole-method move; no new Case/scenario/subTest. Ordinary local import inverse-normalizes only public ADMISSION_BRIEF transport."
+          "counting": "Whole original function definition remains in the domain file; the original concrete TestCase directly binds that same function object. No wrapper, new Case, scenario, subTest, MRO change, or ID rekey. Only the accepted public ADMISSION_BRIEF import is inverse-normalized."
         },
         {
           "source": "tests/test_rag_module_and_packaging_boundary.py",
@@ -1360,7 +1360,7 @@
           "destinations": [
             "tests/test_rag_module_and_packaging_boundary.py"
           ],
-          "counting": "Existing representative Case API/graph/packaging or closed monotonic source+two-ID checks. No new Case or subTest."
+          "counting": "Existing representative structural/API/packaging and identity-preserving source admission checks; no new Case or subTest. All earlier receipt scenarios remain."
         },
         {
           "source": "tests/test_suite_budget.py",
@@ -1377,16 +1377,16 @@
           "destinations": [
             "tests/test_suite_budget.py"
           ],
-          "counting": "Existing representative Case API/graph/packaging or closed monotonic source+two-ID checks. No new Case or subTest."
+          "counting": "Existing representative structural/API/packaging and identity-preserving source admission checks; no new Case or subTest. All earlier receipt scenarios remain."
         }
       ],
-      "approved_source_delta": 186,
-      "planned_raw_delta": 183,
+      "approved_source_delta": 227,
+      "planned_raw_delta": 224,
       "planned_support_delta": 3,
       "legacy_unresolved_lines": 1550,
-      "expected_caps_sha256": "26cfd192926d49098f8188b568655a3445475ee9447ccb1413d737858a903dfd",
+      "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
       "generic_tooling_physical_delta_excluded": 17,
-      "notes": "Actual source154078 ->154264: raw148037 + support4677 + legacy1550. Whole-method net header40; RAG/API/graph/packaging124; existing BudgetCase19; id_moves support3. Generic suite_budget guard16 ordinary/17 physical outside frozen source scope disclosed separately. Two whole methods only, one public single ADMISSION_BRIEF definition, original alias/default/MRO/resource lifetimes preserved. Caps2544/8690 and execution limits unchanged. Historical quotient/remainder pool unchanged; profile audited-163-v10/classes32/groups401 are metadata rekeys, not measurements."
+      "notes": "Original concrete Case identity and fixture MRO retained through direct function bindings; source definitions remain in two domain files. Stage14 moves=[] with unchanged caps digest. Original399 weight bytes/163 launch IDs/mixed19/physical30 are restored. Source total154305 = raw148078 + counted support4677 + unresolved1550; baseline154078, totaldelta227(raw224/support3), including41 after failed D154264. Maintainer globally approved necessary source rows; Case/scenario/subTest/time/worker limits unchanged. Generic selector and budget runner tools remain outside existing counted-support scope and are disclosed separately."
     }
   ]
 }

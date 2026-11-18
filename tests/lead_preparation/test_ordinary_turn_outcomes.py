@@ -17,11 +17,10 @@ from story_writing_agents.conversations import (
     project_collaboration_history,
 )
 from tests.lead_fixtures.preparation_data import visible_outcome as _visible_outcome
-from tests.lead_fixtures.runtime_setup import LeadOrchestrationTestCase
 from tests.provider_wire_fixture import selection_plan
 
 
-class OrdinaryLeadTurnOutcomeTests(LeadOrchestrationTestCase):
+class OrdinaryLeadTurnOutcomeCases:
     async def test_all_five_outcomes_have_exact_visible_next_actions(self) -> None:
         from tests.lead_fixtures.specialist_routing import ADMISSION_BRIEF as _ADMISSION_BRIEF
         from tests.lead_fixtures.preparation_data import (

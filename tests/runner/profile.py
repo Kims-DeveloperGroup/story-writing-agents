@@ -6,7 +6,7 @@ from .contracts import RunnerError
 from .evidence import manifest, required_dict
 
 
-HOSTED_PROFILE = 'audited-163-v10'
+HOSTED_PROFILE = 'audited-163-v11'
 
 
 HOSTED_CLEANUP_SECONDS = 30.0
@@ -66,7 +66,7 @@ HOSTED_LAUNCH_IDS = (
     'tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_search_read_answer_can_add_an_artifact_candidate',
     'tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_strict_provider_outcomes_reject_unknown_private_mixed_and_duplicate',
     'tests.test_provider_auth_recovery.ContextRecoveryTests.test_later_action_recovery_preserves_prior_evidence_and_per_call_cap',
-    'tests.lead_preparation.test_ordinary_turn_outcomes.OrdinaryLeadTurnOutcomeTests.test_all_five_outcomes_have_exact_visible_next_actions',
+    'tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_all_five_outcomes_have_exact_visible_next_actions',
     'tests.test_known_result_finalization.KnownResultBudgetTests.test_unaffordable_continuation_finalizes_exact_result_without_authority',
     'tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_front_schema_rejection_is_repaired_once',
     'tests.test_interactive_controller.InteractiveLeadAdapterTests.test_literal_lead_turn_and_consultation_decisions_are_exact',
@@ -158,7 +158,7 @@ HOSTED_LAUNCH_IDS = (
     'tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_initial_budget_rejection_remains_failure',
     'tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_capability_is_private_nonserializable_and_single_use',
     'tests.test_provider_auth_recovery.ContextRecoveryTests.test_backend_route_session_thread_and_workspace_drift_veto_replay',
-    'tests.lead_preparation.test_specialist_advisory_scope.SpecialistAdvisoryScopeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation',
+    'tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation',
     'tests.test_provider_auth_recovery.ContextRecoveryTests.test_local_reference_load_does_not_consume_provider_capacity',
     'tests.test_provider_auth_recovery.ContextRecoveryTests.test_replay_requires_explicit_exact_true_validator',
     'tests.test_provider_auth_recovery.ContextRecoveryTests.test_admission_race_abort_keeps_original_accounting_and_exchanges',

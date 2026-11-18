@@ -103,6 +103,7 @@ from tests.lead_fixtures.runtime_setup import (
     capture_execution_inputs as _capture_execution_inputs,
     task_fixture as _task_fixture,
 )
+from tests.lead_preparation.test_ordinary_turn_outcomes import OrdinaryLeadTurnOutcomeCases
 from tests.lead_fixtures.preparation_data import (
     LEAD_FIXTURE_READINESS_DOCUMENTS,
     READINESS_USER as _READINESS_USER,
@@ -244,6 +245,9 @@ def _bound_rejection_envelope(call, value):
 
 
 class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
+    test_all_five_outcomes_have_exact_visible_next_actions = (
+        OrdinaryLeadTurnOutcomeCases.test_all_five_outcomes_have_exact_visible_next_actions
+    )
     async def test_direct_search_read_answer_uses_bounded_history_without_proposal(self) -> None:
         self.backend.context_threads = {}
         conversation_id = self.conversation("Searchable lead history")

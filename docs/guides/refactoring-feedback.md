@@ -328,8 +328,8 @@ setup·선행 조건·cleanup 실패를 정책 오류 검출로 대신하지 않
 | 변경 소유자 | 첫 선택 |
 | --- | --- |
 | `lead_preparation/premise_preparation.py` | `tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_empty_inventory_does_not_add_unaffected_owners_and_mixed_scope_does` |
-| `lead_preparation/lead_task_control.py` | `tests.lead_preparation.test_ordinary_turn_outcomes.OrdinaryLeadTurnOutcomeTests.test_all_five_outcomes_have_exact_visible_next_actions` |
-| `lead_preparation/specialist_advisory_values.py` | `tests.lead_preparation.test_specialist_advisory_scope.SpecialistAdvisoryScopeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation`와 `tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_provider_free_advisory_confirms_one_specialist_without_synthesis_or_chain` |
+| `lead_preparation/lead_task_control.py` | `tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_all_five_outcomes_have_exact_visible_next_actions` |
+| `lead_preparation/specialist_advisory_values.py` | `tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation`와 `tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_provider_free_advisory_confirms_one_specialist_without_synthesis_or_chain` |
 
 예를 들어 task의 다섯 결과를 바꾸는 편집의 첫 확인은 다음과 같다.
 
@@ -337,7 +337,7 @@ setup·선행 조건·cleanup 실패를 정책 오류 검출로 대신하지 않
 report_dir="$(mktemp -d "${TMPDIR:-/tmp}/story-task-feedback.XXXXXXXXXX")"
 chmod 700 "$report_dir"
 PYTHONPATH=src .venv/bin/python -m tests.runner run \
-  --id tests.lead_preparation.test_ordinary_turn_outcomes.OrdinaryLeadTurnOutcomeTests.test_all_five_outcomes_have_exact_visible_next_actions \
+  --id tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_all_five_outcomes_have_exact_visible_next_actions \
   --json "$report_dir/task.json"
 ```
 
@@ -351,3 +351,18 @@ PYTHONPATH=src .venv/bin/python -m tests.runner run \
 보존한다. 첫 선택이라는 이유로 짧은 실행이라고 간주하거나 공개 경로를 순수 함수·spy로
 대체하지 않는다. 오류 검출 자료와 정상 성능 자료도 별개로 보존하며, 서로 다른
 부분 선택·hosted 프로필·shard 모집단의 시간을 합쳐 성능 통과로 판정하지 않는다.
+
+
+### 테스트 정의 파일과 실행 정체성 보존
+
+작은 도메인 파일로 기존 테스트 메서드를 옮길 때는 실제 Case ID·fixture 수명·weight 그룹·shard 배정도 확인한다. 함수 정의를 가진 plain class와 기존 concrete TestCase의 직접 함수 바인딩은 wrapper 없이 기존 실행 정체성을 보존할 수 있다. 함수의 실제 정의 모듈과 concrete 클래스의 모듈은 다르며, 둘을 가짜 __module__ 값으로 숨기지 않는다.
+
+등록된 도메인 정의 모듈은 기존 owner map의 실제 파일과 focused/affected ID가 같은 닫힌 선택으로 해석한다. 원래 ID/module 선택 경로를 보존하고, 실제로 로드한 bound 함수의 정의 모듈까지 검증한다. 빈 모듈이나 다른 모듈의 함수를 선택해 성공을 표시하지 않는다. 예를 들어 아래 도메인 파일 선택은 원래 SpecialistRoutingRuntimeTests의 실제 Case 한 개를 실행한다.
+
+```bash
+PYTHONPATH=src python -m tests.runner run \
+  --module tests.lead_preparation.test_specialist_advisory_scope \
+  --json "$report_dir/advisory-scope.json"
+```
+
+이 경로의 Case ID는 기존 tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation이다. 정의 위치 이동만으로 전체 suite의 fixture 그룹을 다시 나누거나 관측 시간에 맞춰 weight를 조정하지 않는다. 실제 canonical ID·MRO·launch 순서·원래 weight bytes와 shard ID집합을 함께 확인한다.
