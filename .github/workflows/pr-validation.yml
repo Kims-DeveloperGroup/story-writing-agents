@@ -261,8 +261,8 @@ jobs:
                   core.setFailed("영향 테스트 ID는 중복·빈 줄 없이 한 줄에 하나의 정규 ID여야 합니다.");
                   return;
                 }
-                if (process.env.COMPARE_FEEDBACK_BASELINE === "true" && !ids.includes("tests.test_selected_task_material_codec.SelectedTaskMaterialCodecTests.test_two_captures_keep_closed_wire_shape_and_order")) {
-                  core.setFailed("피드백 비교에는 기존 codec 사례의 정확한 ID가 필요합니다."); return;
+                if (process.env.COMPARE_FEEDBACK_BASELINE === "true" && (process.env.PROFILE_SELECTION === "true" || process.env.OBSERVE_GC === "true" || JSON.stringify(ids) !== JSON.stringify(["tests.test_interactive_controller.ControllerContractTests.test_direct_import_is_clean_and_package_graph_is_acyclic", "tests.test_rag_module_and_packaging_boundary.RagModuleBoundaryTests.test_supported_module_surfaces_do_not_expand_the_root_facade", "tests.test_suite_budget.SuiteBudgetTests.test_new_id_increased_subtests_and_relaxed_time_are_rejected"]))) {
+                  core.setFailed("정상 ANNOTATION BOUNDARY3 전후 비교에는 고정된 열 ID와 순서 및 기본 GC·비프로파일 모드가 필요합니다."); return;
                 }
                 affectedIds = ids.join("\n");
               } else if (requestedIds !== "") {
@@ -671,6 +671,28 @@ jobs:
                   stream.write(json.dumps(data, indent=2, allow_nan=False) + '\n')
               print(json.dumps(data, sort_keys=True, allow_nan=False))
           PY_HARDWARE
+      - name: Prepare normal paired CLI wall recorder
+        run: |
+          cat > "$RUNNER_TEMP/annotation-pair-cli-wall-parent.py" <<'PY'
+          """Normal fresh-child CLI wall recorder; stdlib only."""
+          from pathlib import Path
+          import json
+          import subprocess
+          import sys
+          import time
+          record = {"schema_version": 1, "mode": "normal-fresh-child-cli-wall",
+                    "source_role": sys.argv[2], "argv": sys.argv[3:], "returncode": None}
+          started = time.monotonic_ns()
+          try:
+              completed = subprocess.run(sys.argv[3:], check=False)
+              record["returncode"] = completed.returncode
+          finally:
+              finished = time.monotonic_ns()
+              record.update(started_monotonic_ns=started, finished_monotonic_ns=finished,
+                            observed_child_cli_wall_seconds=(finished - started) / 1_000_000_000)
+              Path(sys.argv[1]).write_text(json.dumps(record, allow_nan=False) + "\n")
+          raise SystemExit(completed.returncode)
+          PY
       - name: Run fast runtime tests
         run: |
           selector=(--tier fast)
@@ -695,48 +717,17 @@ jobs:
             runner=(.venv/bin/python -m cProfile -o "$RUNNER_TEMP/case-profile-current.prof" -m tests.runner run "${selector[@]}" --json "$RUNNER_TEMP/case-profile-current.json")
           fi
           set +e
-          timeout --signal=INT --kill-after=30s "${test_seconds}s" env PYTHONPATH=src "${runner[@]}" 2>&1 | tee "$RUNNER_TEMP/fast.log"
+          timeout --signal=INT --kill-after=30s "${test_seconds}s" env PYTHONPATH=src .venv/bin/python "$RUNNER_TEMP/annotation-pair-cli-wall-parent.py" "$RUNNER_TEMP/annotation-pair-current-cli-wall.json" current "${runner[@]}" 2>&1 | tee "$RUNNER_TEMP/fast.log"
           test_statuses=("${PIPESTATUS[@]}")
           test_status=${test_statuses[0]}
           if (( test_status == 0 && test_statuses[1] != 0 )); then test_status=${test_statuses[1]}; fi
           printf '%s\n' "$test_status" > "$RUNNER_TEMP/fast-exit-code.txt"
           exit "$test_status"
-      - name: 기존 생산 경계의 RED와 GREEN 피드백 확인
-        if: needs.classify.outputs.affected_only == 'true' && inputs.observe_gc != true && inputs.profile_selection != true
-        run: |
-          case "$FEEDBACK_WITNESS" in
-            codec)
-              witness_ids=('tests.test_selected_task_material_codec.SelectedTaskMaterialCodecTests.test_two_captures_keep_closed_wire_shape_and_order')
-              ;;
-            source-snapshot)
-              witness_ids=(
-                'tests.test_agent_context_sources.SourceSurfacePolicyAndValueTests.test_descriptor_snapshot_records_are_exact_immutable_and_content_hidden'
-                'tests.agent_context.sources.test_source_contracts.SourceSurfacePolicyAndValueTests.test_descriptor_snapshot_records_are_exact_immutable_and_content_hidden'
-              )
-              ;;
-            provider-call-ordinal)
-              witness_ids=('tests.test_provider_timeout_recovery.ProviderTimeoutRecoveryTests.test_failure_closure_write_error_keeps_history_gated')
-              ;;
-            successor-selection)
-              witness_ids=(
-                'tests.test_specialist_routing.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip'
-                'tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip'
-              )
-              ;;
-            *) exit 2 ;;
-          esac
-          for witness_id in "${witness_ids[@]}"; do
-            if grep -Fxq "$witness_id" <<< "$AFFECTED_IDS"; then
-              PYTHONPATH=src .venv/bin/python -m tests.feedback_probe \
-                --witness "$FEEDBACK_WITNESS" --json "$RUNNER_TEMP/feedback-probe.json"
-              break
-            fi
-          done
       - name: 수정 전 피드백 소스 준비
         if: inputs.compare_feedback_baseline == true && needs.classify.outputs.affected_only == 'true'
         uses: actions/checkout@v4
         with:
-          ref: 45cf084f0d28eb5926863e90509e5f14bbd3497e
+          ref: 751160cb958d39cb1907329942bed11a04ac33ef
           submodules: recursive
           path: .feedback-baseline
       - name: 같은 환경에서 수정 전 RED와 GREEN 측정
@@ -761,16 +752,343 @@ jobs:
             baseline_runner=("$GITHUB_WORKSPACE/.venv/bin/python" -m cProfile -o "$RUNNER_TEMP/case-profile-baseline.prof" -m tests.runner run "${baseline_ids[@]}" --json "$RUNNER_TEMP/case-profile-baseline.json")
           fi
           set +e
-          timeout --signal=INT --kill-after=30s "${baseline_seconds}s" env PYTHONPATH=src "${baseline_runner[@]}" 2>&1 | tee "$RUNNER_TEMP/feedback-probe-baseline-affected.log"
+          timeout --signal=INT --kill-after=30s "${baseline_seconds}s" env PYTHONPATH=src "$GITHUB_WORKSPACE/.venv/bin/python" "$RUNNER_TEMP/annotation-pair-cli-wall-parent.py" "$RUNNER_TEMP/annotation-pair-before-cli-wall.json" before "${baseline_runner[@]}" 2>&1 | tee "$RUNNER_TEMP/feedback-probe-baseline-affected.log"
           baseline_statuses=("${PIPESTATUS[@]}")
           set -e
           baseline_status=${baseline_statuses[0]}
           if (( baseline_status == 0 && baseline_statuses[1] != 0 )); then baseline_status=${baseline_statuses[1]}; fi
           if (( baseline_status != 0 )); then exit "$baseline_status"; fi
-          if [[ "$PROFILE_SELECTION" != "true" ]]; then
-            PYTHONPATH=src "$GITHUB_WORKSPACE/.venv/bin/python" "$GITHUB_WORKSPACE/tests/feedback_probe.py" \
-              --repository-root "$PWD" --witness "$FEEDBACK_WITNESS" --json "$RUNNER_TEMP/feedback-probe-baseline.json"
-          fi
+      - name: Collect public type metadata after both normal source phases
+        run: |
+          snapshot_seconds=$(( TEST_JOB_DEADLINE - $(date +%s) - 450 ))
+          if (( snapshot_seconds <= 0 )); then exit 124; fi
+          actor_tree=$(git rev-parse HEAD^{tree})
+          cat > "$RUNNER_TEMP/annotation-pair-type-metadata-snapshot.py" <<'PY_ANNOTATION_SNAPSHOT'
+          #!/usr/bin/env python3
+          """Official CI only: collect after both normal CLI phases; never a warmup."""
+          import argparse
+          import __future__
+          import dataclasses
+          import enum
+          import hashlib
+          import importlib
+          import inspect
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          import sys
+          import types
+          import typing
+
+          BEFORE = '751160cb958d39cb1907329942bed11a04ac33ef'
+          CURRENT = '2b8028f7930cbeaba5430beb893c98d4492536c1'
+          TARGETS = {
+              'story_writing_agents.lead_preparation.recommendation_requests': {
+                  'functions': ['prepare_recommendation_request_policy', 'recommendation_basis'],
+                  'records': ['RecommendationRequestPolicyResult'],
+              },
+              'story_writing_agents.lead_preparation.recommendation_decisions': {
+                  'functions': ['prepare_recommendation_decision', 'build_recommendation_decision_outcome',
+                                'match_recommendation_failure', 'terminal_recommendation_failure_is_accounted',
+                                'build_recommendation_failure_closure'],
+                  'records': ['PreparedRecommendationDecision', 'PreparedRecommendationRevision',
+                              'RecommendationDecisionClosure', 'RecommendationFailureMatch'],
+              },
+          }
+          # Filled from immutable git blobs by the proposal builder, never from a measured report.
+          SOURCE_PINS = {'before': {'ref': '751160cb958d39cb1907329942bed11a04ac33ef', 'tree': '677081d36d29cddee820d4004533eb6cb6f832f2', 'files': {'src/story_writing_agents/lead_preparation/recommendation_requests.py': '46786761eff27ce943d7d1ba9b725514b37debfd14fe404563d7c3567a6f8b28', 'src/story_writing_agents/lead_preparation/recommendation_decisions.py': '89f55aa29fab9585f3db9524eaeca43b7e68df5af45a344a4bea0a39fc712e4c', 'README.md': 'f98fe5a9e0e4382076e1f89e3ab983135a53c4febc867a8a9b243f47f006fd34', 'pyproject.toml': 'ea190c9f41937c5c1d2a5894b795b37f6342aee1936b21158b4a1aa3f4e2e4b9', 'uv.lock': '4e5bfcdf9815de320c981cae6889cae56746522222dcf1774da1c93404f671b2'}, 'non_workflow_leaf_manifest_sha256': '1c16ca4e4f4c6715cb20a9ef319c460627b5dd0be8c2e06ef6a85719ef55b1e4'}, 'current': {'ref': '2b8028f7930cbeaba5430beb893c98d4492536c1', 'tree': '29f91a5478db60a5471ae93f94c42ee603fcf580', 'files': {'src/story_writing_agents/lead_preparation/recommendation_requests.py': '5423e47bd0f5df0681f63654f74ae4d2eda0c66dd431511a857ca77447c2bbe3', 'src/story_writing_agents/lead_preparation/recommendation_decisions.py': '33b2058d2d8dfed32782529a592bfd7dd8ee7e9d5ec6263bff615342b12ebb5c', 'README.md': 'f98fe5a9e0e4382076e1f89e3ab983135a53c4febc867a8a9b243f47f006fd34', 'pyproject.toml': 'ea190c9f41937c5c1d2a5894b795b37f6342aee1936b21158b4a1aa3f4e2e4b9', 'uv.lock': '4e5bfcdf9815de320c981cae6889cae56746522222dcf1774da1c93404f671b2'}, 'non_workflow_leaf_manifest_sha256': '3dadbf94517e102d8c8e014f0565823ae92d6573ba88c042a59d516b819ac758'}}
+
+
+          def digest(data):
+              return hashlib.sha256(data).hexdigest()
+
+
+          def canonical(value):
+              return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True, allow_nan=False).encode()
+
+
+          def identity(value):
+              module = getattr(value, '__module__', None)
+              name = getattr(value, '__qualname__', None) or getattr(value, '_name', None)
+              if not module or not name:
+                  raise TypeError(f'unsupported type identity: {type(value).__module__}.{type(value).__qualname__}')
+              return {'module': module, 'qualname': name}
+
+
+          def type_descriptor(value):
+              if value is Ellipsis:
+                  return {'kind': 'ellipsis'}
+              if value is None:
+                  return {'kind': 'none'}
+              if isinstance(value, list):
+                  return {'kind': 'callable_arguments', 'items': [type_descriptor(x) for x in value]}
+              if isinstance(value, typing.ForwardRef) or isinstance(value, str):
+                  raise TypeError('unresolved annotation in resolved default-namespace hints')
+              origin = typing.get_origin(value)
+              if origin is not None:
+                  return {'kind': 'generic', 'origin': identity(origin),
+                          'arguments': [type_descriptor(x) for x in typing.get_args(value)]}
+              if isinstance(value, type) or value is typing.Any:
+                  return {'kind': 'type', **identity(value)}
+              raise TypeError(f'unsupported resolved annotation: {type(value).__module__}.{type(value).__qualname__}')
+
+
+          def value_descriptor(value):
+              if value is inspect.Signature.empty:
+                  return {'kind': 'signature_empty'}
+              if value is dataclasses.MISSING:
+                  return {'kind': 'dataclasses_MISSING'}
+              if value is Ellipsis:
+                  return {'kind': 'ellipsis'}
+              if value is None or type(value) in (bool, int, str):
+                  return {'kind': type(value).__name__, 'value': value}
+              if type(value) is float:
+                  return {'kind': 'float', 'hex': value.hex()}
+              if type(value) is complex:
+                  return {'kind': 'complex', 'real': value.real.hex(), 'imag': value.imag.hex()}
+              if type(value) is bytes:
+                  return {'kind': 'bytes', 'hex': value.hex()}
+              if isinstance(value, enum.Enum):
+                  return {'kind': 'enum', 'type': identity(type(value)), 'name': value.name,
+                          'value': value_descriptor(value.value)}
+              if type(value) in (tuple, list):
+                  return {'kind': type(value).__name__, 'items': [value_descriptor(x) for x in value]}
+              if type(value) in (dict, types.MappingProxyType):
+                  return {'kind': type(value).__name__, 'items': [[value_descriptor(k), value_descriptor(v)] for k, v in value.items()]}
+              if type(value) is frozenset:
+                  items = [value_descriptor(x) for x in value]
+                  return {'kind': 'frozenset', 'items': sorted(items, key=canonical)}
+              if isinstance(value, types.CodeType):
+                  return {'kind': 'code', 'normalized': code_descriptor(value)}
+              if isinstance(value, type):
+                  return {'kind': 'class', **identity(value)}
+              if inspect.isfunction(value) or inspect.isbuiltin(value):
+                  result = {'kind': 'callable_default', **identity(value)}
+                  if inspect.isfunction(value):
+                      result['normalized_code'] = code_descriptor(value.__code__)
+                  return result
+              raise TypeError(f'unsupported default/constant: {type(value).__module__}.{type(value).__qualname__}')
+
+
+          def code_descriptor(code):
+              # Only filename, source line numbers, and this one compiler flag are normalized.
+              # Column positions, instruction offsets, constants, exception table, and all other flags remain.
+              return {
+                  'name': code.co_name, 'qualname': code.co_qualname,
+                  'argcount': code.co_argcount, 'posonlyargcount': code.co_posonlyargcount,
+                  'kwonlyargcount': code.co_kwonlyargcount, 'nlocals': code.co_nlocals,
+                  'stacksize': code.co_stacksize,
+                  'flags': code.co_flags & ~__future__.annotations.compiler_flag,
+                  'code': code.co_code.hex(), 'exceptiontable': code.co_exceptiontable.hex(),
+                  'consts': [value_descriptor(x) for x in code.co_consts],
+                  'names': list(code.co_names), 'varnames': list(code.co_varnames),
+                  'freevars': list(code.co_freevars), 'cellvars': list(code.co_cellvars),
+                  'relative_positions': [[None if line is None else line - code.co_firstlineno,
+                                          None if endline is None else endline - code.co_firstlineno, col, endcol]
+                                         for line, endline, col, endcol in code.co_positions()],
+                  'relative_line_ranges': [[start, end, None if line is None else line - code.co_firstlineno]
+                                           for start, end, line in code.co_lines()],
+              }
+
+
+          def raw_annotation(value):
+              if isinstance(value, str):
+                  return {'kind': 'string', 'text': value}
+              return {'kind': 'eager', 'descriptor': type_descriptor(value)}
+
+
+          def function_snapshot(function):
+              # No explicit globalns/localns: exercise the actual public default namespace.
+              hints = typing.get_type_hints(function, include_extras=True)
+              signature = inspect.signature(function)
+              parameters = []
+              for name, parameter in signature.parameters.items():
+                  parameters.append({'name': name, 'kind': parameter.kind.name,
+                                     'default': value_descriptor(parameter.default),
+                                     'annotation': type_descriptor(hints[name]) if name in hints else {'kind': 'absent'}})
+              normalized_code = code_descriptor(function.__code__)
+              closure = [value_descriptor(cell.cell_contents) for cell in (function.__closure__ or ())]
+              raw_signature = str(signature)
+              if ' at 0x' in raw_signature:
+                  raise ValueError('address-bearing raw signature')
+              return {
+                  'semantic': {'identity': identity(function), 'parameters': parameters,
+                               'resolved_hints': {k: type_descriptor(v) for k, v in sorted(hints.items())},
+                               'normalized_code': normalized_code, 'closure': closure},
+                  'raw': {'signature': raw_signature,
+                          'annotations': {k: raw_annotation(v) for k, v in function.__annotations__.items()},
+                          'code_filename': function.__code__.co_filename,
+                          'firstlineno': function.__code__.co_firstlineno,
+                          'flags': function.__code__.co_flags},
+              }
+
+
+          def record_snapshot(cls):
+              assert dataclasses.is_dataclass(cls)
+              hints = typing.get_type_hints(cls, include_extras=True)
+              fields = []
+              for field in dataclasses.fields(cls):
+                  fields.append({'name': field.name, 'resolved_type': type_descriptor(hints[field.name]),
+                                 'default': value_descriptor(field.default),
+                                 'default_factory': value_descriptor(field.default_factory),
+                                 'init': field.init, 'repr': field.repr, 'hash': field.hash,
+                                 'compare': field.compare, 'kw_only': field.kw_only,
+                                 'metadata': value_descriptor(field.metadata),
+                                 'field_type': value_descriptor(field._field_type.name)})
+              constructor = function_snapshot(cls.__init__)
+              params = cls.__dataclass_params__
+              return {
+                  'semantic': {'identity': identity(cls), 'slots': value_descriptor(cls.__slots__),
+                               'mro': [identity(x) for x in cls.__mro__], 'fields': fields,
+                               'resolved_hints': {k: type_descriptor(v) for k, v in sorted(hints.items())},
+                               'dataclass_flags': {k: getattr(params, k) for k in ('init', 'repr', 'eq', 'order', 'unsafe_hash', 'frozen')},
+                               'match_args': value_descriptor(getattr(cls, '__match_args__', ())),
+                               'constructor': constructor['semantic']},
+                  'raw': {'annotations': {k: raw_annotation(v) for k, v in cls.__annotations__.items()},
+                          'field_types': {field.name: raw_annotation(field.type) for field in dataclasses.fields(cls)},
+                          'constructor': constructor['raw']},
+              }
+
+
+          def git(*args):
+              return subprocess.check_output(['git', *args], text=True).strip()
+
+
+          def collect(args):
+              # Read both completed parent sidecars before any target module import.
+              phases = {}
+              for role in ('before', 'current'):
+                  path = Path(args.phase_directory) / f'annotation-pair-{role}-cli-wall.json'
+                  record = json.loads(path.read_text())
+                  assert record['source_role'] == role and record['returncode'] == 0
+                  assert record['mode'] == 'normal-fresh-child-cli-wall'
+                  assert record['finished_monotonic_ns'] > record['started_monotonic_ns']
+                  assert record['observed_child_cli_wall_seconds'] == (record['finished_monotonic_ns'] - record['started_monotonic_ns']) / 1_000_000_000
+                  phases[role] = {'path': str(path), 'sha256': digest(path.read_bytes()), 'record': record}
+              root = Path.cwd().resolve()
+              actual = git('rev-parse', 'HEAD')
+              source = BEFORE if args.role == 'before' else CURRENT
+              assert args.source_ref == source
+              assert args.actor_ref == os.environ['GITHUB_SHA']
+              assert args.actor_tree == git('-C', os.environ['GITHUB_WORKSPACE'], 'rev-parse', 'HEAD^{tree}')
+              if args.role == 'before':
+                  assert actual == BEFORE
+              else:
+                  assert actual == args.actor_ref == os.environ['GITHUB_SHA']
+                  assert [line[7:] for line in git('cat-file', '-p', 'HEAD').split('\n\n', 1)[0].splitlines() if line.startswith('parent ')] == [CURRENT]
+              pins = SOURCE_PINS[args.role]
+              leaves = subprocess.check_output(['git', 'ls-tree', '-r', '-z', 'HEAD'])
+              rows = [row for row in leaves.split(b'\0') if row and row.split(b'\t', 1)[1] != b'.github/workflows/pr-validation.yml']
+              assert digest(b'\0'.join(rows) + b'\0') == pins['non_workflow_leaf_manifest_sha256']
+              for path, expected in pins['files'].items():
+                  assert digest((root / path).read_bytes()) == expected, path
+              functions, records = {}, {}
+              for name, selected in TARGETS.items():
+                  module = importlib.import_module(name)
+                  assert Path(module.__file__).resolve() == root / 'src' / Path(*name.split('.')).with_suffix('.py')
+                  for public_name in selected['functions']:
+                      functions[f'{name}.{public_name}'] = function_snapshot(getattr(module, public_name))
+                  for public_name in selected['records']:
+                      records[f'{name}.{public_name}'] = record_snapshot(getattr(module, public_name))
+              assert len(functions) == 7 and len(records) == 5
+              semantic = {'functions': {k: v['semantic'] for k, v in functions.items()},
+                          'records': {k: v['semantic'] for k, v in records.items()}}
+              result = {'schema_version': 1, 'kind': 'post_normal_public_metadata',
+                        'source_role': args.role, 'source_ref': source, 'source_tree': pins['tree'],
+                        'actual_checkout': actual, 'actual_checkout_tree': git('rev-parse', 'HEAD^{tree}'),
+                        'workflow_actor_ref': args.actor_ref, 'workflow_actor_tree': args.actor_tree,
+                        'workflow_run_id': os.environ['GITHUB_RUN_ID'],
+                        'collector_sha256': digest(Path(__file__).read_bytes()),
+                        'files': pins['files'], 'normal_phases_already_completed': phases,
+                        'python': sys.version, 'semantic': semantic, 'semantic_sha256': digest(canonical(semantic)),
+                        'raw_intentional_API_metadata': {'functions': {k: v['raw'] for k, v in functions.items()},
+                                                         'records': {k: v['raw'] for k, v in records.items()}},
+                        'normalized_only': ['co_filename', 'line numbers', 'FUTURE_ANNOTATIONS flag'],
+                        'normal_time_subtraction': False, 'performance_PASS': None}
+              with Path(args.output).open('x') as stream:
+                  json.dump(result, stream, indent=2, ensure_ascii=True, allow_nan=False)
+                  stream.write('\n')
+
+
+          def compare(args):
+              before, current = [json.loads(Path(p).read_text()) for p in args.files]
+              assert before['source_role'] == 'before' and before['source_ref'] == BEFORE
+              assert current['source_role'] == 'current' and current['source_ref'] == CURRENT
+              assert before['workflow_actor_ref'] == current['workflow_actor_ref']
+              assert before['semantic'] == current['semantic'], 'resolved public metadata / normalized hot code differs'
+              result = {'kind': 'post_normal_metadata_equivalence', 'source_refs': [BEFORE, CURRENT],
+                        'resolved_metadata_and_normalized_hot_code_equal': True,
+                        'raw_annotations_and_signatures_compared_separately': True,
+                        'input_sha256': [digest(Path(p).read_bytes()) for p in args.files],
+                        'performance_PASS': None}
+              with Path(args.output).open('x') as stream:
+                  json.dump(result, stream, indent=2)
+                  stream.write('\n')
+
+
+
+
+
+
+          def seal_before(args):
+              import statistics
+              snapshots = []
+              for name in args.files:
+                  path = Path(name)
+                  snapshot = json.loads(path.read_text())
+                  assert snapshot['source_role'] == 'before' and snapshot['source_ref'] == BEFORE
+                  assert snapshot['source_tree'] == SOURCE_PINS['before']['tree']
+                  before = snapshot['normal_phases_already_completed']['before']['record']
+                  assert before['returncode'] == 0
+                  snapshots.append((snapshot['workflow_run_id'], path, before['observed_child_cli_wall_seconds']))
+              assert len(snapshots) == 3 and len({row[0] for row in snapshots}) == 3
+              raw = [row[2] for row in snapshots]
+              median = statistics.median(raw)
+              mad = statistics.median(abs(x - median) for x in raw)
+              result = {'kind': 'annotation_pair_before_only_cli_fixed_band', 'source_ref': BEFORE,
+                        'raw3_seconds': raw, 'median_seconds': median, 'MAD_seconds': mad,
+                        'band_seconds': max(0.005, 0.01 * median, 3 * mad),
+                        'formula': 'max(0.005s,0.01*before_median,3*before_MAD)',
+                        'inputs': [{'run_id': run, 'path': str(path), 'sha256': digest(path.read_bytes())}
+                                   for run, path, _ in snapshots],
+                        'after_measurements_used': False, 'performance_PASS': None,
+                        'canonical_D34_case_bands_changed': False}
+              with Path(args.output).open('x') as stream:
+                  json.dump(result, stream, indent=2, allow_nan=False)
+                  stream.write('\n')
+
+
+          def main():
+              parser = argparse.ArgumentParser()
+              commands = parser.add_subparsers(dest='command', required=True)
+              capture = commands.add_parser('collect')
+              capture.add_argument('--role', choices=['before', 'current'], required=True)
+              for option in ('source-ref', 'actor-ref', 'actor-tree', 'phase-directory', 'output'):
+                  capture.add_argument('--' + option, required=True)
+              capture.set_defaults(action=collect)
+              comparison = commands.add_parser('compare')
+              comparison.add_argument('files', nargs=2)
+              comparison.add_argument('--output', required=True)
+              comparison.set_defaults(action=compare)
+              seal = commands.add_parser('seal-before')
+              seal.add_argument('files', nargs=3)
+              seal.add_argument('--output', required=True)
+              seal.set_defaults(action=seal_before)
+              args = parser.parse_args()
+              args.action(args)
+
+
+          if __name__ == '__main__':
+              main()
+          PY_ANNOTATION_SNAPSHOT
+          timeout --signal=INT --kill-after=30s "${snapshot_seconds}s" bash -euo pipefail -c '
+            cd "$GITHUB_WORKSPACE/.feedback-baseline"
+            PYTHONPATH=src "$GITHUB_WORKSPACE/.venv/bin/python" "$RUNNER_TEMP/annotation-pair-type-metadata-snapshot.py" collect --role before --source-ref 751160cb958d39cb1907329942bed11a04ac33ef --actor-ref "$GITHUB_SHA" --actor-tree "$1" --phase-directory "$RUNNER_TEMP" --output "$RUNNER_TEMP/annotation-pair-before-public-metadata.json"
+            cd "$GITHUB_WORKSPACE"
+            PYTHONPATH=src .venv/bin/python "$RUNNER_TEMP/annotation-pair-type-metadata-snapshot.py" collect --role current --source-ref 2b8028f7930cbeaba5430beb893c98d4492536c1 --actor-ref "$GITHUB_SHA" --actor-tree "$1" --phase-directory "$RUNNER_TEMP" --output "$RUNNER_TEMP/annotation-pair-current-public-metadata.json"
+            .venv/bin/python "$RUNNER_TEMP/annotation-pair-type-metadata-snapshot.py" compare "$RUNNER_TEMP/annotation-pair-before-public-metadata.json" "$RUNNER_TEMP/annotation-pair-current-public-metadata.json" --output "$RUNNER_TEMP/annotation-pair-public-metadata-comparison.json"
+          ' annotation-snapshot "$actor_tree"
       - uses: actions/upload-artifact@v4
         timeout-minutes: 1
         if: always()
@@ -780,6 +1098,10 @@ jobs:
             ${{ runner.temp }}/fast.json
             ${{ runner.temp }}/fast.log
             ${{ runner.temp }}/fast-control.json
+            ${{ runner.temp }}/annotation-pair-*-cli-wall.json
+            ${{ runner.temp }}/annotation-pair-*-public-metadata.json
+            ${{ runner.temp }}/annotation-pair-public-metadata-comparison.json
+            ${{ runner.temp }}/annotation-pair-type-metadata-snapshot.py
             ${{ runner.temp }}/feedback-probe*
             ${{ runner.temp }}/gc-diagnostic*
             ${{ runner.temp }}/case-profile-*
