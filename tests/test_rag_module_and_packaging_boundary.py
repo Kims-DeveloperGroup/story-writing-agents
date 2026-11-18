@@ -1059,10 +1059,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
             'story_writing_agents.runtime_resources.collaboration_event_journal',
             'story_writing_agents.runtime_resources.provider_call_accounting',
         'story_writing_agents.lead_preparation.lead_task_control',
-            'story_writing_agents.lead_preparation.artifact_review_planning',
             'story_writing_agents.lead_preparation.artifact_objective_planning',
             'story_writing_agents.lead_preparation.lead_consultation_planning',
-            'story_writing_agents.lead_preparation.lead_terminal_planning',
                                                                                                                  })
         self.assertIn("story_writing_agents.blocking_work", modules)
         self.assertEqual({target for source, target in edges if source == "story_writing_agents.blocking_work"}, set())

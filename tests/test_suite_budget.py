@@ -533,7 +533,7 @@ class SuiteBudgetTests(unittest.TestCase):
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(task_admission_current, subtest_caps=caps), request_policy_current)
         self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, task_admission_current, dict(request_policy_current, subtest_caps={**request_policy_current["subtest_caps"], matrix_id: 2}))
         artifact_planning_current = suite_budget.load_budget()
-        self.assertEqual(artifact_planning_current["max_test_source_lines"], 154769)
+        self.assertEqual(artifact_planning_current["max_test_source_lines"], 154767)
         self.assertIsNone(suite_budget.check_monotonic(artifact_planning_current, task_admission_current))
         self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, artifact_planning_current, dict(artifact_planning_current, max_test_source_lines=152814))
         self._assert_source_limit_neighbors_rejected(artifact_planning_current, task_admission_current)

@@ -1452,12 +1452,10 @@
         "lead-fixtures.preparation-data",
         "lead-fixtures.provider-responses",
         "lead-fixtures.runtime-setup",
-        "lead-fixtures.specialist-routing",
         "tests.lead_preparation.test_artifact_authority_boundaries",
         "tests.lead_preparation.test_artifact_candidate_creation",
         "tests.lead_preparation.test_artifact_candidate_revisions",
-        "tests.lead_preparation.test_artifact_review_recovery",
-        "tests.test_artifact_objectives"
+        "tests.lead_preparation.test_artifact_review_recovery"
       ]
     },
     {
@@ -18137,11 +18135,14 @@
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_search_read_answer_can_add_an_artifact_candidate"
       ],
       "depends_on": [
+        "context-execution-fixture",
         "lead-fixtures.artifact-review",
         "lead-fixtures.material-values",
         "lead-fixtures.preparation-data",
         "lead-fixtures.provider-responses",
-        "lead-fixtures.runtime-setup"
+        "lead-fixtures.runtime-setup",
+        "lead-fixtures.specialist-routing",
+        "tests.test_artifact_objectives"
       ]
     },
     {
@@ -18161,9 +18162,14 @@
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_stale_confirmation_and_revision_require_fresh_authority"
       ],
       "depends_on": [
+        "context-execution-fixture",
         "lead-fixtures.artifact-review",
+        "lead-fixtures.material-values",
         "lead-fixtures.preparation-data",
-        "lead-fixtures.runtime-setup"
+        "lead-fixtures.provider-responses",
+        "lead-fixtures.runtime-setup",
+        "lead-fixtures.specialist-routing",
+        "tests.test_artifact_objectives"
       ]
     },
     {
@@ -18181,9 +18187,14 @@
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_provider_authority_fields_fall_back_without_candidate"
       ],
       "depends_on": [
+        "context-execution-fixture",
         "lead-fixtures.artifact-review",
+        "lead-fixtures.material-values",
         "lead-fixtures.preparation-data",
-        "lead-fixtures.runtime-setup"
+        "lead-fixtures.provider-responses",
+        "lead-fixtures.runtime-setup",
+        "lead-fixtures.specialist-routing",
+        "tests.test_artifact_objectives"
       ]
     },
     {
@@ -18199,10 +18210,14 @@
         "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_missing_synthesis_message_fails_and_reviewed_restart_has_no_authority"
       ],
       "depends_on": [
+        "context-execution-fixture",
         "lead-fixtures.artifact-review",
+        "lead-fixtures.material-values",
         "lead-fixtures.preparation-data",
         "lead-fixtures.provider-responses",
-        "lead-fixtures.runtime-setup"
+        "lead-fixtures.runtime-setup",
+        "lead-fixtures.specialist-routing",
+        "tests.test_artifact_objectives"
       ]
     }
   ],
