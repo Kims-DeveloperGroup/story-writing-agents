@@ -508,54 +508,6 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertIsInstance(core_readiness.require_readiness(core_readiness.AuthoringTarget.MANUSCRIPT, superseded),
                               core_readiness.CoreDocumentReadinessNeeded)
 
-    async def test_all_five_outcomes_have_exact_visible_next_actions(self) -> None:
-        from tests.lead_fixtures.specialist_routing import _ADMISSION_BRIEF
-        from tests.lead_fixtures.preparation_data import (
-            fixture_assessment as _fixture_assessment,
-        )
-        assessment = asdict(_fixture_assessment())
-        qualified_request = _ADMISSION_BRIEF + "\nPlease check story direction."
-        from tests.recommendation_fixture import action
-        cases = (('answer', CollaborationNextAction.CONTINUE_WITH_LEAD, 'answer.workflow'), ('question',
-            CollaborationNextAction.REPLY_TO_LEAD, 'question.workflow'), ('critique', CollaborationNextAction.CONTINUE_WITH_LEAD, 'critique.workflow'),
-            ('recommendation', CollaborationNextAction.SUBMIT_RECOMMENDATION_DECISION, 'prepare.consultation.authoring'))
-        for kind, next_action, selection_group in cases:
-            with self.subTest(kind=kind):
-                conversation_id = self.conversation(f"Outcome {kind}")
-                from tests.recommendation_fixture import recommendation
-                self.backend.enqueue(recommendation(recommended_action=action(
-                    kind="prepare_consultation", source_ids=("user_input",),
-                    specialist_ids=( PLOT_ARCHITECT , CHARACTER_CUSTODIAN , EXECUTION_SPECIALIST , ),
-                ), mutate=lambda value: value.update(authoring_assessment=assessment),)
-                    if kind == "recommendation" else _visible_outcome(kind),
-                    control_plan=selection_plan(selection_group))
-                result = await self.runtime.session(self.session_id).lead_turn(conversation_id, (
-                    _ADMISSION_BRIEF + '\n' if kind == 'recommendation' else '') +
-                    f'Return a {kind}. Finished candidate: ' 'a summons causes a choice and its consequence.')
-                self.assertIs(result.kind, LeadOutcomeKind(kind))
-                self.assertIsNone(result.proposal)
-                self.assertIsNone(result.state)
-                self.assertIs(result.next_action, next_action)
-                history = self.history(conversation_id)
-                expected_tail = (
-                    (CollaborationEventKind.LEAD_GROUP_TRACE, CollaborationEventKind.MESSAGE,
-                     CollaborationEventKind.LEAD_RECOMMENDATION_REQUEST)
-                    if kind == 'recommendation'
-                    else (CollaborationEventKind.MESSAGE, CollaborationEventKind.LEAD_GROUP_TRACE)
-                )
-                self.assertEqual(tuple((event.kind for event in history)), (
-                    CollaborationEventKind.MESSAGE,
-                    CollaborationEventKind.PROVIDER_CALL_ACCOUNTING, CollaborationEventKind.PROVIDER_CALL_ACCOUNTING,
-                    CollaborationEventKind.PROVIDER_CALL_ACCOUNTING, CollaborationEventKind.PROVIDER_CALL_ACCOUNTING,
-                    CollaborationEventKind.LEAD_PUBLIC_RESPONSE,
-                ) + expected_tail)
-                self.assertEqual(project_collaboration_history(history).physical_calls_spent, 2,)
-
-        proposal_id = self.conversation("Proposal")
-        proposed = await self.proposal(proposal_id, text=qualified_request, authoring_assessment=assessment,)
-        self.assertIs(proposed.kind, LeadOutcomeKind.PROPOSAL)
-        self.assertIs(proposed.state, CollaborationStepState.AWAITING_CONFIRMATION)
-        self.assertIs(proposed.next_action, CollaborationNextAction.SUBMIT_CONFIRMATION,)
 
     async def test_strict_provider_outcomes_reject_unknown_private_mixed_and_duplicate(self,
     ) -> None:
@@ -641,7 +593,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertNotIn("private", repr(issues))
 
     async def test_front_schema_is_minimal_closed_and_provider_strict(self) -> None:
-        from tests.lead_fixtures.specialist_routing import _ADMISSION_BRIEF
+        from tests.lead_fixtures.specialist_routing import ADMISSION_BRIEF as _ADMISSION_BRIEF
         pending_assessment = {'status': 'needs_information', 'foundations': [], 'direction': None,
             'creative_scope': None, 'allowed_creative_actions': [], 'protected_constraints': [],
             'decisions': [], 'missing_information': ['Choose the substantive direction.'],
@@ -3804,7 +3756,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             failed.factory.for_offer(failed.offers, failed.repair_lineage(), request_basis=minted.request_basis)
         reading = self.conversation("Context during grouped repair")
         from tests.recommendation_fixture import action, recommendation, task_assessment
-        from tests.lead_fixtures.specialist_routing import _ADMISSION_BRIEF
+        from tests.lead_fixtures.specialist_routing import ADMISSION_BRIEF as _ADMISSION_BRIEF
         old_brief, new_brief = 'Draft after choosing the target.', 'Draft the supplied bounded outline at the first target.'
         def scope_question(call, provider, *, paths=(), brief=old_brief):
             return lead_fixture_response(call, {'response_type': 'clarification_question', 'response_text': 'A prior lead response for grouped repair.', 'response_details': {'planning_target': None,
@@ -4260,7 +4212,7 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
 
 
     async def test_mismatch_reject_revise_and_free_text_are_non_authorizing(self) -> None:
-        from tests.lead_fixtures.specialist_routing import _ADMISSION_BRIEF
+        from tests.lead_fixtures.specialist_routing import ADMISSION_BRIEF as _ADMISSION_BRIEF
         from tests.lead_fixtures.preparation_data import (
             fixture_assessment as _fixture_assessment,
         )
@@ -4723,7 +4675,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             proposed.conversation_id)).current_state, CollaborationStepState.CONFIRMED)
 
     async def test_confirmed_restart_preserves_evidence_and_requires_fresh_authority(self) -> None:
-        from tests.lead_fixtures.specialist_routing import _ADMISSION_BRIEF
+        from tests.lead_fixtures.specialist_routing import ADMISSION_BRIEF as _ADMISSION_BRIEF
         from tests.lead_fixtures.preparation_data import (
             fixture_assessment as _fixture_assessment,
         )
@@ -4788,7 +4740,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             self.assertEqual(self._execution_inputs[1], capabilities)
 
     async def test_restored_results_keep_strict_evidence_and_provider_free_compatibility(self) -> None:
-        from tests.lead_fixtures.specialist_routing import _ADMISSION_BRIEF
+        from tests.lead_fixtures.specialist_routing import ADMISSION_BRIEF as _ADMISSION_BRIEF
         from tests.lead_fixtures.preparation_data import (
             fixture_assessment as _fixture_assessment,
         )

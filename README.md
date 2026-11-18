@@ -658,7 +658,7 @@ selected full shard; a diagnostic run never replaces this evidence.
 
 The full suite uses four regular shards and a dedicated shard `5/5` for
 `LeadOutcomeAndProposalTests.test_front_schema_is_minimal_closed_and_provider_strict`.
-The five selections contain 570/540/627/806/1 tests, covering all 2,544 IDs exactly
+The five selections contain 624/698/689/532/1 tests, covering all 2,544 IDs exactly
 once.
 
 To measure whole-front independently, manually dispatch `pr-validation` with
@@ -673,8 +673,8 @@ The dedicated canonical selector is:
 PYTHONPATH=src python -m tests.runner run --shard 5/5 --json whole-front.json
 ```
 
-Hosted full shards use the fixed `audited-163-v9` profile: 163 fixture-audited
-methods across 30 classes run in at most four fresh test processes after the
+Hosted full shards use the fixed `audited-163-v10` profile: 163 fixture-audited
+methods across 32 classes run in at most four fresh test processes after the
 original noneligible serial suite. The checked-in launch order and priority are
 fixed. Runtime history cannot change this order, and final report rows stay canonical.
 Every process shares the shard's original one-hour work cutoff; shutdown has a

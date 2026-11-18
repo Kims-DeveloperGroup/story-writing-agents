@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from tests.lead_fixtures.specialist_routing import SpecialistRoutingRuntimeCase
-from tests.lead_fixtures.specialist_routing import _ADMISSION_BRIEF
+from tests.lead_fixtures.specialist_routing import ADMISSION_BRIEF as _ADMISSION_BRIEF
 from dataclasses import replace
 from story_writing_agents import StoryRuntime, conversations as c, lead_exploration as exploration
 from story_writing_agents.agents import LEAD_ORCHESTRATOR, PLOT_ARCHITECT

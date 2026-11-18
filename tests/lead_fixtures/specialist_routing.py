@@ -23,7 +23,7 @@ from tests.lead_fixtures.runtime_setup import LeadOrchestrationTestCase
 from tests.provider_wire_fixture import finite_fixture_selection, selection_plan
 
 
-_ADMISSION_BRIEF = ( "Nora must recover her brother's letter before a public oath. "
+ADMISSION_BRIEF = ( "Nora must recover her brother's letter before a public oath. "
     "His disappearance motivates her search; this city has no magic. "
     "Draft three outline scenes preserving that motive and rule. "
     "Invent supporting dialogue and minor places; leave the ending unresolved." )
@@ -90,10 +90,10 @@ class SpecialistRoutingRuntimeCase(LeadOrchestrationTestCase):
             return json.dumps(frame, ensure_ascii=False)
         return respond
 
-    async def proposal_for(self, conversation, response=None, text=_ADMISSION_BRIEF, adoption=None, *, selection_group="consultation.authoring.content"):
-        writer = self._native_scoped if text == _ADMISSION_BRIEF else scoped_proposal
+    async def proposal_for(self, conversation, response=None, text=ADMISSION_BRIEF, adoption=None, *, selection_group="consultation.authoring.content"):
+        writer = self._native_scoped if text == ADMISSION_BRIEF else scoped_proposal
         self.backend.enqueue(response or writer(
-            PLOT_ARCHITECT, authoring_assessment=_fixture_assessment() if text == _ADMISSION_BRIEF else None,
+            PLOT_ARCHITECT, authoring_assessment=_fixture_assessment() if text == ADMISSION_BRIEF else None,
             domains=("plot_structure",),), control_plan=selection_plan(selection_group))
         return await self.runtime.lead_turn(self.session_id, conversation, text, adoption=adoption)
 

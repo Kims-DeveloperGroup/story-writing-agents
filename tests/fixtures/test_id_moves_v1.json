@@ -15071,6 +15071,55 @@
           "expected_method_ast_sha256": "8ec08609b226ba8383fc5c6a5aed94fc3b52d439af4de2052f68b440ef31c1b5"
         }
       ]
+    },
+    {
+      "schema_version": 1,
+      "issue": 1046,
+      "origin_commit": "91f82aae158705efbb450482f84e117018f98094",
+      "original_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
+      "expected_caps_sha256": "26cfd192926d49098f8188b568655a3445475ee9447ccb1413d737858a903dfd",
+      "moves": [
+        {
+          "old_id": "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation",
+          "new_id": "tests.lead_preparation.test_specialist_advisory_scope.SpecialistAdvisoryScopeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation",
+          "subtest_cap": 0,
+          "source": "tests/test_specialist_routing_runtime.py",
+          "destination": "tests/lead_preparation/test_specialist_advisory_scope.py",
+          "original_file_sha256": "54235f05f96405e12d00c8534cafa6b0d294fa42577adabee489dd5d012e18c9",
+          "original_method_ast_sha256": "ca8dfb7ebd23c6391cd75e9f693c9040487965dc783f824fd31ae99b6f56f182",
+          "expected_method_ast_sha256": "ca8dfb7ebd23c6391cd75e9f693c9040487965dc783f824fd31ae99b6f56f182"
+        },
+        {
+          "old_id": "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_all_five_outcomes_have_exact_visible_next_actions",
+          "new_id": "tests.lead_preparation.test_ordinary_turn_outcomes.OrdinaryLeadTurnOutcomeTests.test_all_five_outcomes_have_exact_visible_next_actions",
+          "subtest_cap": 4,
+          "source": "tests/test_lead_orchestration.py",
+          "destination": "tests/lead_preparation/test_ordinary_turn_outcomes.py",
+          "original_file_sha256": "43a841660054a549bd1bb5af2bed00f04792233111514d07c3ffee6c0c9ae979",
+          "original_method_ast_sha256": "d020c0f5ec96a7ed967713f9dd11f48986acd9918390f71c8f111d2b2aeb7671",
+          "expected_method_ast_sha256": "4d334fc9cfe0e931df2101aa67f969e1b9eea51dfafb9d061b89db50ddf26981"
+        }
+      ],
+      "class_moves": [
+        {
+          "source": "tests/test_specialist_routing_runtime.py",
+          "class": "SpecialistRoutingRuntimeTests",
+          "destination": "tests/lead_preparation/test_specialist_advisory_scope.py",
+          "destination_class": "SpecialistAdvisoryScopeTests",
+          "methods": [
+            "test_provider_free_advisory_requires_scope_and_separate_confirmation"
+          ]
+        },
+        {
+          "source": "tests/test_lead_orchestration.py",
+          "class": "LeadOutcomeAndProposalTests",
+          "destination": "tests/lead_preparation/test_ordinary_turn_outcomes.py",
+          "destination_class": "OrdinaryLeadTurnOutcomeTests",
+          "methods": [
+            "test_all_five_outcomes_have_exact_visible_next_actions"
+          ]
+        }
+      ]
     }
   ]
 }

@@ -1061,7 +1061,7 @@ class SpecialistRoutingTests(unittest.TestCase):
             result_bound.decode_response(json.dumps(illegal_readonly_artifact))
 
     def test_legacy_proposal_bytes_stay_omitted_and_new_scope_changes_digest(self):
-        from tests.lead_fixtures.specialist_routing import _ADMISSION_BRIEF
+        from tests.lead_fixtures.specialist_routing import ADMISSION_BRIEF as _ADMISSION_BRIEF
         from tests.lead_fixtures.preparation_data import (
             fixture_assessment as _fixture_assessment,
         )

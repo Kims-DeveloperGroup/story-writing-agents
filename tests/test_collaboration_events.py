@@ -1466,7 +1466,7 @@ class CollaborationWireContractTests(unittest.TestCase):
                                    review_basis=ReviewBasis(item.input_ids, "Review selected current inputs.", 1))
                             for item in make_proposal().assignments)
         from tests.collaboration_contract_fixture import qualify_fixture_basis
-        from tests.lead_fixtures.specialist_routing import _ADMISSION_BRIEF
+        from tests.lead_fixtures.specialist_routing import ADMISSION_BRIEF as _ADMISSION_BRIEF
         from tests.lead_fixtures.preparation_data import (
             fixture_assessment as _fixture_assessment,
         )
