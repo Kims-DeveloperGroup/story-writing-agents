@@ -68,6 +68,7 @@ from story_writing_agents.git.session_history_contracts import (
     GitSessionHistoryState,
     GitSessionIdentitySource,
 )
+from story_writing_agents.git.story_commits import StoryCommitRecoverySnapshot
 from story_writing_agents.session_lifecycle import (
     SessionAccessState,
     SessionDurableState,
@@ -90,7 +91,6 @@ from story_writing_agents.session_recovery.transition_assessment import (
     SessionTransitionAssessor,
     SessionTransitionOperation,
 )
-from story_writing_agents.workspace.initialization import StoryCommitRecoverySnapshot
 from tests.collaboration_contract_fixture import (
     LEAD, RUNTIME, USER, make_batch, make_draft, provider_call_drafts, store_batch,
 )
@@ -1164,7 +1164,8 @@ class SessionRecoveryBoundaryTests(unittest.TestCase):
         self.assertEqual(dependencies, {
             "contracts", "conversations", "git", "git.session_contracts", "git.session_resources",
             "git.session_history_contracts", "session_lifecycle",
-            "workspace.initialization", "writing_artifacts",
+            "git.story_commits", "workspace.session_artifact_binding",
+            "workspace.session_resources", "writing_artifacts",
         })
         forbidden = ("provider", "controller", "apply_artifact_changes")
         for value in forbidden:

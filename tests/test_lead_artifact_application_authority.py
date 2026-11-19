@@ -31,9 +31,7 @@ from story_writing_agents.writing_artifacts import (
     ArtifactApplicationState,
 )
 from story_writing_agents.writing_artifacts.repository import WritingArtifactRepository
-from story_writing_agents.workspace.initialization import (
-    provision_session_resources,
-)
+from story_writing_agents.workspace.session_resources import provision_session_resources
 
 from tests.lead_fixtures.artifact_review import (
     ARTIFACT_FIXTURE_INDEX_PATH as _INDEX,

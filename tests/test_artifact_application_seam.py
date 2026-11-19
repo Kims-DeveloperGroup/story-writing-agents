@@ -27,6 +27,7 @@ from story_writing_agents.writing_artifacts import (ArtifactApplicationError,
 )
 from story_writing_agents.writing_artifacts import (_application_store as application_store_module,
 )
+from story_writing_agents.writing_artifacts.application_journal import relationship_digest
 from story_writing_agents.writing_artifacts.relationship_policy import (
     validate_artifact_relationships,
 )
@@ -169,8 +170,7 @@ class ArtifactApplicationSeamTests(_ApplicationStoreTestCase):
             correct.change_set,
             attached_core_paths=(),
         )
-        without_digest = application_store_module._relationship_digest(without_attached
-        )
+        without_digest = relationship_digest(without_attached)
         self.assertNotEqual(without_digest,
             correct.relationship_validation_digest,
         )

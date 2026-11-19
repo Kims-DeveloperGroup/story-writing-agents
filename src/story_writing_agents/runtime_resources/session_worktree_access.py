@@ -5,7 +5,7 @@ from contextlib import AbstractContextManager, contextmanager
 from ..backend import BoundAgent, provider_execution_workspace_manager
 from collections.abc import Iterator
 from ..provider_execution_workspace import ProviderExecutionWorkspace
-from ..workspace.initialization import SessionArtifactBinding
+from ..workspace.session_artifact_binding import SessionArtifactBinding
 from ..writing_artifacts.repository import WritingArtifactRepository
 
 

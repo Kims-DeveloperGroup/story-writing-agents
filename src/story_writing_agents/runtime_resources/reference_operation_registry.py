@@ -11,7 +11,7 @@ from ..writing_artifacts.runtime_references import (
     prepare_registered_guarded_runtime_reference_operation,
     reference_operation_belongs_to_session,
 )
-from ..workspace.initialization import SessionArtifactBinding
+from ..workspace.session_artifact_binding import SessionArtifactBinding
 from ..workspace import Workspace
 from ..writing_artifacts.repository import WritingArtifactRepository
 from functools import partial

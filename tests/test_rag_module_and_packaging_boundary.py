@@ -361,8 +361,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 281)
-        self.assertEqual(len(edges), 1664)
+        self.assertEqual(len(modules), 293)
+        self.assertEqual(len(edges), 1718)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -538,37 +538,34 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.workspace.core",
             },
             "story_writing_agents.workspace.core": {
-                "story_writing_agents.agents",
                 "story_writing_agents.conversations",
                 "story_writing_agents.errors",
                 "story_writing_agents.models",
+                "story_writing_agents.workspace.discovery",
                 "story_writing_agents.workspace.initialization",
+                "story_writing_agents.workspace.root_contracts",
+                "story_writing_agents.workspace.root_filesystem",
                 "story_writing_agents.workspace.schema",
-                "story_writing_agents.workspace.session_record_validation",
+                "story_writing_agents.workspace.session_records",
                 "story_writing_agents.writing_artifacts",
             },
             "story_writing_agents.workspace.initialization": {
                 "story_writing_agents.agent_exchange_paths",
-                "story_writing_agents.config",
                 "story_writing_agents.errors",
                 "story_writing_agents.git",
-                "story_writing_agents.git.repository_lock",
                 "story_writing_agents.git.session_contracts",
-                "story_writing_agents.git.session_checkpoints",
-                "story_writing_agents.git.session_history",
                 "story_writing_agents.git.session_resources",
-                "story_writing_agents.git.story_commits",
-                "story_writing_agents.provider_execution_workspace",
                 "story_writing_agents.runtime_state_paths",
-                "story_writing_agents.workspace._policy_baselines",
-                "story_writing_agents.workspace.session_role_projection",
+                "story_writing_agents.workspace.policy_scaffold",
+                "story_writing_agents.workspace.root_contracts",
+                "story_writing_agents.workspace.root_filesystem",
                 "story_writing_agents.workspace.schema",
-                "story_writing_agents.writing_artifacts.repository",
             },
             "story_writing_agents.workspace.schema": {
                 "story_writing_agents.agents",
                 "story_writing_agents.errors",
                 "story_writing_agents.git.session_contracts",
+                "story_writing_agents.workspace.policy_material",
             },
             "story_writing_agents.conversation_storage.filesystem": {
                 "story_writing_agents.conversations",
@@ -585,12 +582,57 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 )
         self.assertEqual({target for source, target in edges if source == "story_writing_agents.workspace.session_source_workspace"}, {
             "story_writing_agents.workspace.core",
-            "story_writing_agents.workspace.initialization",
+            "story_writing_agents.workspace.session_artifact_binding",
             "story_writing_agents.workspace.session_record_validation",
             "story_writing_agents.agents",
             "story_writing_agents.errors",
             "story_writing_agents.models",
         })
+        extracted_workspace_dependencies = {
+            "workspace.debate_context_codec": {"conversations", "errors", "models"},
+            "workspace.discovery": {
+                "errors", "workspace.initialization", "workspace.root_contracts",
+                "workspace.root_filesystem", "workspace.schema",
+            },
+            "workspace.policy_material": {"agents"},
+            "workspace.policy_scaffold": {
+                "config", "errors", "git", "workspace._policy_baselines_editorial",
+                "workspace._policy_baselines_guidance", "workspace._policy_baselines_legacy",
+                "workspace.root_filesystem", "workspace.schema",
+            },
+            "workspace._policy_baselines_editorial": set(),
+            "workspace._policy_baselines_guidance": set(),
+            "workspace._policy_baselines_legacy": set(),
+            "workspace.root_contracts": {
+                "errors", "git.session_contracts", "workspace.root_filesystem", "workspace.schema",
+            },
+            "workspace.root_filesystem": {"errors"},
+            "workspace.session_artifact_binding": {
+                "errors", "git", "git.repository_lock", "git.session_contracts",
+                "git.session_resources", "git.story_commits", "provider_execution_workspace",
+                "workspace.policy_scaffold", "workspace.root_contracts", "workspace.root_filesystem",
+                "workspace.session_role_projection", "writing_artifacts.repository",
+            },
+            "workspace.session_records": {
+                "agents", "conversations", "errors", "models",
+                "workspace.debate_context_codec", "workspace.session_record_validation",
+            },
+            "workspace.session_resources": {
+                "git.session_checkpoints", "git.session_contracts", "git.session_history",
+                "git.session_resources", "git.story_commits", "workspace.policy_scaffold",
+                "workspace.root_contracts",
+            },
+        }
+        for owner, expected in extracted_workspace_dependencies.items():
+            self.assertEqual(
+                {
+                    target.removeprefix("story_writing_agents.")
+                    for source, target in edges
+                    if source == f"story_writing_agents.{owner}"
+                },
+                expected,
+                owner,
+            )
         git_dependencies = {
             "story_writing_agents.git": {'story_writing_agents.git.adapter', 'story_writing_agents.git.contracts'},
             "story_writing_agents.git.contracts": set(),
@@ -1090,7 +1132,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             "story_writing_agents.runtime_resources.collaboration_event_journal",
             "story_writing_agents.runtime_resources.provider_call_accounting",
             "story_writing_agents.specialist_routing",
-            "story_writing_agents.workspace.initialization",
+            "story_writing_agents.workspace.session_artifact_binding",
         })
         self.assertEqual({source for source, target in edges if target == known_result_owner}, {"story_writing_agents.orchestrator"})
 
@@ -1264,7 +1306,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             "story_writing_agents.runtime_resources",
             "story_writing_agents.runtime_resources.session_worktree_access",
             "story_writing_agents.structured_output_validation",
-            "story_writing_agents.workspace.initialization",
+            "story_writing_agents.workspace.session_artifact_binding",
             "story_writing_agents.workspace.session_source_workspace",
             "story_writing_agents.writing_artifacts",
         })
@@ -1301,7 +1343,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             'story_writing_agents.lead_preparation.reply_contract_values',
             'story_writing_agents.runtime_resources',
             'story_writing_agents.runtime_resources.collaboration_event_journal',
-            'story_writing_agents.workspace.initialization',
+            'story_writing_agents.workspace.session_artifact_binding',
             'story_writing_agents.writing_artifacts',
         })
         self.assertEqual({source for source, target in edges if target == current_lead_inputs_owner}, {"story_writing_agents.orchestrator"})
@@ -1317,7 +1359,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             'story_writing_agents.lead_preparation.authoring_authority',
             'story_writing_agents.lead_preparation.reply_contract_values',
             'story_writing_agents.specialist_routing',
-            'story_writing_agents.workspace.initialization',
+            'story_writing_agents.workspace.session_artifact_binding',
         })
         self.assertEqual({source for source, target in edges if target == current_proposal_authority_owner}, {"story_writing_agents.orchestrator"})
 
@@ -1363,7 +1405,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             'story_writing_agents.runtime_resources.collaboration_event_journal',
             'story_writing_agents.specialist_routing',
             'story_writing_agents.structured_output_validation',
-            'story_writing_agents.workspace.initialization',
+            'story_writing_agents.workspace.session_artifact_binding',
         })
         self.assertEqual({source for source, target in edges if target == review_material_validation_owner}, {"story_writing_agents.orchestrator"})
 

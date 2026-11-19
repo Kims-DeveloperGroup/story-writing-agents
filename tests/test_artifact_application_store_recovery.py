@@ -334,20 +334,20 @@ class ArtifactApplicationGitBoundaryTests(_ApplicationStoreTestCase):
             "staged": git("diff", "--cached", "--binary"),
         }
         self.assertEqual(after, before)
-        tree = ast.parse(
-            Path(application_store_module.__file__).read_text(encoding="utf-8")
-        )
-        imported = {
-            alias.name
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Import)
-            for alias in node.names
-        } | {
-            node.module or ""
-            for node in ast.walk(tree)
-            if isinstance(node, ast.ImportFrom)
-        }
-        self.assertFalse(any(name == "git" or name.endswith(".git") for name in imported))
+        store_path = Path(application_store_module.__file__)
+        for owner_path in (store_path, store_path.with_name("application_journal.py")):
+            tree = ast.parse(owner_path.read_text(encoding="utf-8"))
+            imported = {
+                alias.name
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Import)
+                for alias in node.names
+            } | {
+                node.module or ""
+                for node in ast.walk(tree)
+                if isinstance(node, ast.ImportFrom)
+            }
+            self.assertFalse(any("git" in name.split(".") for name in imported))
 
 
 class ArtifactApplicationBoundaryTests(_ApplicationStoreTestCase):
@@ -365,16 +365,17 @@ class ArtifactApplicationBoundaryTests(_ApplicationStoreTestCase):
         repository_source = repository_path.read_text(encoding="utf-8")
         for private_owner in (
             "_complete_transaction",
-            "_validate_transaction",
+            "validate_transaction",
             "_load_application_records",
             "ARTIFACT_TRANSACTIONS_DIRECTORY",
         ):
             self.assertNotIn(private_owner, repository_source)
 
         modules, edges = module_graph(_SOURCE_ROOT)
-        self.assertEqual(len(modules), 281)
-        self.assertEqual(len(edges), 1664)
+        self.assertEqual(len(modules), 293)
+        self.assertEqual(len(edges), 1718)
         store = "story_writing_agents.writing_artifacts._application_store"
+        journal = "story_writing_agents.writing_artifacts.application_journal"
         repository = "story_writing_agents.writing_artifacts.repository"
         self.assertEqual(
             {target for source, target in edges if source == store},
@@ -383,11 +384,23 @@ class ArtifactApplicationBoundaryTests(_ApplicationStoreTestCase):
                 "story_writing_agents.errors",
                 "story_writing_agents.writing_artifacts._storage",
                 "story_writing_agents.writing_artifacts.application_contracts",
+                journal,
                 "story_writing_agents.writing_artifacts.catalog",
                 "story_writing_agents.writing_artifacts.change_sets",
                 "story_writing_agents.writing_artifacts.relationship_policy",
             },
         )
+        self.assertEqual(
+            {target for source, target in edges if source == journal},
+            {
+                "story_writing_agents.errors",
+                "story_writing_agents.writing_artifacts.application_contracts",
+                "story_writing_agents.writing_artifacts.catalog",
+                "story_writing_agents.writing_artifacts.change_sets",
+                "story_writing_agents.writing_artifacts.relationship_policy",
+            },
+        )
+        self.assertEqual({source for source, target in edges if target == journal}, {store})
         self.assertIn((repository, store), edges)
         self.assertIn(
             (

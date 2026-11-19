@@ -5,29 +5,16 @@ from __future__ import annotations
 import errno
 import json
 import os
-import re
-import stat
 import tempfile
 import unicodedata
-from datetime import UTC, datetime
-from pathlib import Path, PurePosixPath
-from types import TracebackType
-from typing import Any, Callable, Iterator, Mapping
+from pathlib import Path
+from typing import Any, Callable, Mapping
 
-from ..agents import (
-    AGENT_STATE_DIRECTORIES,
-    behavior_policy_files,
-)
-from ..conversations import (
-    ConversationContextWindow,
-    ConversationEvent,
-    ConversationEventKind,
-    validate_conversation_context_window,
-)
+import story_writing_agents.workspace.session_records as session_records
+
+from ..conversations import ConversationContextWindow
 from ..errors import (
-    DebateExistsError,
     ManuscriptExistsError,
-    SessionIdError,
     WorkspaceFormatError,
     WorkspaceSecurityError,
 )
@@ -38,11 +25,12 @@ from ..models import (
     DebateResult,
 )
 from ..writing_artifacts import canonical_artifact_kind
-from .initialization import (
-    WorkspaceRootState,
-    discover_workspace_location,
-    initialize_workspace_root,
-    inspect_workspace_root,
+from .discovery import discover_workspace_location
+from .initialization import initialize_workspace_root, inspect_workspace_root
+from .root_contracts import WorkspaceRootState
+from .root_filesystem import (
+    open_workspace_root_descriptor,
+    verify_workspace_root_descriptor,
 )
 from .schema import (
     WORKSPACE_DIRECTORIES as WORKSPACE_DIRECTORIES,
@@ -53,46 +41,6 @@ from .schema import (
 )
 
 
-from .session_record_validation import (
-    validate_agent_state_entry,
-    validate_debate_state,
-    validate_debate_result,
-    require_debate_ownership,
-)
-_DEBATE_CONTEXT_EVENT_FIELDS = frozenset(
-    {
-        "schema_version",
-        "session_id",
-        "conversation_id",
-        "turn_id",
-        "sequence",
-        "timestamp",
-        "sender",
-        "recipient",
-        "kind",
-        "content",
-    }
-)
-_DEBATE_CONTEXT_FIELDS = frozenset(
-    {
-        "schema_version",
-        "session_id",
-        "debate_id",
-        "conversation_id",
-        "mode",
-        "snapshot",
-    }
-)
-_DEBATE_CONTEXT_SNAPSHOT_FIELDS = frozenset(
-    {
-        "events",
-        "total_complete_turns",
-        "retained_turns",
-        "omitted_turns",
-        "retained_utf8_bytes",
-        "truncated",
-    }
-)
 
 
 class Workspace:
@@ -282,41 +230,17 @@ class Workspace:
         return True
 
     def load_session_overrides(self, session_id: str) -> dict[str, Any]:
-        session = self.validate_identifier(session_id)
-        relative = f"agent_states/orchestrator_state/sessions/{session}.json"
-        target = self.path(relative)
-        if not target.exists():
-            return {"language": None, "agents": {}}
-        value = self.read_json(relative)
-        if not isinstance(value, dict):
-            raise WorkspaceFormatError("session override state must be a JSON object")
-        return value
+        return session_records.load_session_overrides(self, session_id)
 
     def save_session_overrides(
         self, session_id: str, overrides: Mapping[str, Any]
     ) -> Path:
-        session = self.validate_identifier(session_id)
-        return self.write_json(
-            f"agent_states/orchestrator_state/sessions/{session}.json",
-            dict(overrides),
-        )
+        return session_records.save_session_overrides(self, session_id, overrides)
 
     def append_agent_state(self, entry: AgentStateEntry) -> None:
         """Persist one validated outcome beneath its owning agent directory."""
 
-        try:
-            validate_agent_state_entry(entry.to_dict())
-        except TypeError as exc:
-            raise WorkspaceFormatError("invalid agent state entry") from exc
-        relative = self._agent_state_relative(
-            entry.agent_id,
-            entry.session_id,
-            entry.debate_id,
-        )
-        target = self.path(relative)
-        existing = self.read_text(relative) if target.exists() else ""
-        line = json.dumps(entry.to_dict(), ensure_ascii=False, sort_keys=True)
-        self.write_text(relative, existing + line + "\n")
+        session_records.append_agent_state(self, entry)
 
     def read_agent_state(
         self,
@@ -326,8 +250,7 @@ class Workspace:
     ) -> tuple[AgentStateEntry, ...]:
         """Compatibility delegate for owner-scoped session rehydration."""
 
-        self.validate_identifier(debate_id, label="debate ID")
-        return self.read_agent_session_state(agent_id, session_id)
+        return session_records.read_agent_state(self, agent_id, session_id, debate_id)
 
     def read_agent_session_state(
         self,
@@ -336,52 +259,7 @@ class Workspace:
     ) -> tuple[AgentStateEntry, ...]:
         """Rehydrate one owner's complete session history in stable chronology."""
 
-        if agent_id not in AGENT_STATE_DIRECTORIES:
-            raise WorkspaceSecurityError(f"unknown agent state owner: {agent_id}")
-        session = self.validate_identifier(session_id)
-        state_directory = AGENT_STATE_DIRECTORIES[agent_id]
-        relative_directory = f"agent_states/{state_directory}/debates/{session}"
-        directory = self.path(relative_directory)
-        if not directory.exists():
-            return ()
-
-        ordered: list[tuple[str, str, int, int, AgentStateEntry]] = []
-        state_files = sorted(
-            entry for entry in directory.iterdir() if entry.name.endswith(".jsonl")
-        )
-        for file_index, state_file in enumerate(state_files):
-            file_debate_id = state_file.name[: -len(".jsonl")]
-            self.validate_identifier(file_debate_id, label="debate ID")
-            relative = f"{relative_directory}/{file_debate_id}.jsonl"
-            for line_number, line in enumerate(
-                self.read_text(relative).splitlines(), 1
-            ):
-                try:
-                    raw = json.loads(line)
-                    value = validate_agent_state_entry(raw)
-                    if (
-                        value["agent_id"] != agent_id
-                        or value["session_id"] != session
-                        or value["debate_id"] != file_debate_id
-                    ):
-                        raise TypeError("agent state ownership does not match its path")
-                    entry = AgentStateEntry(**value)
-                    ordered.append(
-                        (
-                            entry.timestamp,
-                            file_debate_id,
-                            file_index,
-                            line_number,
-                            entry,
-                        )
-                    )
-                except (json.JSONDecodeError, TypeError) as exc:
-                    raise WorkspaceFormatError(
-                        "invalid agent state entry in "
-                        f"{file_debate_id}.jsonl at line {line_number}"
-                    ) from exc
-        ordered.sort(key=lambda item: item[:4])
-        return tuple(item[4] for item in ordered)
+        return session_records.read_agent_session_state(self, agent_id, session_id)
 
     def append_debate_message(
         self,
@@ -389,11 +267,9 @@ class Workspace:
         debate_id: str,
         message: DebateMessage,
     ) -> None:
-        relative = self._debate_relative(session_id, debate_id, ".jsonl")
-        target = self.path(relative)
-        existing = self.read_text(relative) if target.exists() else ""
-        line = json.dumps(message.to_dict(), ensure_ascii=False, sort_keys=True)
-        self.write_text(relative, existing + line + "\n")
+        session_records.append_debate_message(
+            self, session_id, debate_id, message
+        )
 
     def reserve_debate(
         self,
@@ -410,40 +286,9 @@ class Workspace:
         state; validation, security, collision, or I/O failures propagate.
         """
 
-        session = self.validate_identifier(session_id)
-        debate = self.validate_identifier(debate_id, label="debate ID")
-        if input_kind not in {"prompt", "draft"}:
-            raise WorkspaceFormatError("debate input_kind must be prompt or draft")
-        if not isinstance(owner_token, str) or not owner_token:
-            raise WorkspaceFormatError("debate owner token must be non-empty text")
-
-        for suffix in (".jsonl", ".result.json", ".context.json"):
-            if self.path(self._debate_relative(session, debate, suffix)).exists():
-                raise DebateExistsError(f"debate already exists: {session}/{debate}")
-
-        now = datetime.now(UTC).isoformat()
-        state = {
-            "schema_version": 1,
-            "session_id": session,
-            "debate_id": debate,
-            "input_kind": input_kind,
-            "status": "active",
-            "terminal": False,
-            "owner_token": owner_token,
-            "created_at": now,
-            "updated_at": now,
-            "revision_id": "r0",
-            "rounds_completed": 0,
-            "error": None,
-        }
-        relative = self._debate_relative(session, debate, ".state.json")
-        try:
-            self.write_json(relative, state, overwrite=False)
-        except ManuscriptExistsError as exc:
-            raise DebateExistsError(
-                f"debate already exists: {session}/{debate}"
-            ) from exc
-        return validate_debate_state(state)
+        return session_records.reserve_debate(
+            self, session_id, debate_id, input_kind=input_kind, owner_token=owner_token
+        )
 
     def transition_debate(
         self,
@@ -459,120 +304,27 @@ class Workspace:
     ) -> dict[str, Any]:
         """Update a reservation only for its owning runtime."""
 
-        if status not in {
-            "active",
-            "consensus",
-            "deadlock",
-            "failed",
-            "interrupted",
-        }:
-            raise WorkspaceFormatError(f"invalid debate status: {status}")
-        if not isinstance(terminal, bool):
-            raise WorkspaceFormatError("debate terminal must be boolean")
-        if revision_id is not None and not isinstance(revision_id, str):
-            raise WorkspaceFormatError("debate revision_id must be text or null")
-        if (
-            isinstance(rounds_completed, bool)
-            or not isinstance(rounds_completed, int)
-            or rounds_completed < 0
-        ):
-            raise WorkspaceFormatError(
-                "debate rounds_completed must be a non-negative integer"
-            )
-        if error is not None and not isinstance(error, str):
-            raise WorkspaceFormatError("debate error must be text or null")
-
-        session = self.validate_identifier(session_id)
-        debate = self.validate_identifier(debate_id, label="debate ID")
-        relative = self._debate_relative(session, debate, ".state.json")
-        state = self._read_debate_state(session, debate)
-        if state is None:
-            raise WorkspaceFormatError("debate reservation is missing")
-        if state["owner_token"] != owner_token:
-            raise DebateExistsError(
-                f"debate is owned by another runtime: {session}/{debate}"
-            )
-        if state["terminal"]:
-            return state
-        state.update(
-            {
-                "status": status,
-                "terminal": terminal,
-                "updated_at": datetime.now(UTC).isoformat(),
-                "revision_id": revision_id,
-                "rounds_completed": rounds_completed,
-                "error": error,
-            }
+        return session_records.transition_debate(
+            self,
+            session_id,
+            debate_id,
+            owner_token=owner_token,
+            status=status,
+            terminal=terminal,
+            revision_id=revision_id,
+            rounds_completed=rounds_completed,
+            error=error,
         )
-        validated = validate_debate_state(state)
-        self.write_json(relative, validated)
-        return validated
 
     def read_debate_messages(
         self, session_id: str, debate_id: str
     ) -> tuple[DebateMessage, ...]:
-        relative = self._debate_relative(session_id, debate_id, ".jsonl")
-        target = self.path(relative)
-        if not target.exists():
-            return ()
-        messages: list[DebateMessage] = []
-        for line_number, line in enumerate(self.read_text(relative).splitlines(), 1):
-            try:
-                value = json.loads(line)
-                base_fields = {
-                    "sender",
-                    "phase",
-                    "round",
-                    "revision",
-                    "kind",
-                    "content",
-                    "timestamp",
-                }
-                valid_fields = (
-                    base_fields,
-                    {*base_fields, "trace"},
-                    {*base_fields, "validation_details"},
-                    {*base_fields, "trace", "validation_details"},
-                )
-                if not isinstance(value, dict) or set(value) not in valid_fields:
-                    raise TypeError("debate log entry has an invalid schema")
-                if "trace" in value and type(value["trace"]) is not dict:
-                    raise TypeError("debate log trace must be an object")
-                if "validation_details" in value and type(value["validation_details"]) is not list:
-                    raise TypeError("debate log validation details must be an array")
-                string_fields = base_fields.difference({"round"})
-                if any(not isinstance(value[field], str) for field in string_fields):
-                    raise TypeError("debate log string field has an invalid type")
-                round_number = value["round"]
-                if (
-                    isinstance(round_number, bool)
-                    or not isinstance(round_number, int)
-                    or round_number < 0
-                ):
-                    raise TypeError("debate log round must be a non-negative integer")
-                messages.append(DebateMessage.from_dict(value))
-            except (json.JSONDecodeError, TypeError, ValueError) as exc:
-                raise WorkspaceFormatError(
-                    f"invalid debate log entry at line {line_number}"
-                ) from exc
-        return tuple(messages)
+        return session_records.read_debate_messages(self, session_id, debate_id)
 
     def save_debate_result(
         self, result: DebateResult, *, overwrite: bool = False
     ) -> Path:
-        relative = self._debate_relative(
-            result.session_id, result.debate_id, ".result.json"
-        )
-        try:
-            return self.write_json(
-                relative,
-                result.to_dict(include_messages=False),
-                overwrite=overwrite,
-            )
-        except ManuscriptExistsError as exc:
-            raise DebateExistsError(
-                f"debate result already exists: {result.session_id}/{result.debate_id}"
-            ) from exc
+        return session_records.save_debate_result(self, result, overwrite=overwrite)
 
     def save_debate_context(
         self,
@@ -591,45 +343,14 @@ class Workspace:
         validation errors, while an existing sidecar raises ``DebateExistsError``.
         """
 
-        session = self.validate_identifier(session_id)
-        debate = self.validate_identifier(debate_id, label="debate ID")
-        conversation = self.validate_identifier(
-            conversation_id,
-            label="conversation ID",
+        return session_records.save_debate_context(
+            self,
+            session_id,
+            debate_id,
+            conversation_id=conversation_id,
+            mode=mode,
+            snapshot=snapshot,
         )
-        if not isinstance(mode, DebateContextMode):
-            raise TypeError("debate context mode must be a DebateContextMode")
-        if mode is DebateContextMode.INCLUDED:
-            if snapshot is None:
-                raise ValueError("included debate context requires a snapshot")
-            canonical_snapshot = validate_conversation_context_window(
-                snapshot,
-                session_id=session,
-                conversation_id=conversation,
-            )
-            serialized_snapshot = self._serialize_debate_context_snapshot(
-                canonical_snapshot
-            )
-        else:
-            if snapshot is not None:
-                raise ValueError("fresh debate context snapshot must be null")
-            serialized_snapshot = None
-
-        value = {
-            "schema_version": 1,
-            "session_id": session,
-            "debate_id": debate,
-            "conversation_id": conversation,
-            "mode": mode.value,
-            "snapshot": serialized_snapshot,
-        }
-        relative = self._debate_relative(session, debate, ".context.json")
-        try:
-            return self.write_json(relative, value, overwrite=False)
-        except ManuscriptExistsError as exc:
-            raise DebateExistsError(
-                f"debate context already exists: {session}/{debate}"
-            ) from exc
 
     def inspect_debate_context(
         self,
@@ -644,124 +365,13 @@ class Workspace:
         ``WorkspaceFormatError`` and no file is changed.
         """
 
-        session = self.validate_identifier(session_id)
-        debate = self.validate_identifier(debate_id, label="debate ID")
-        relative = self._debate_relative(session, debate, ".context.json")
-        target = self.path(relative)
-        if not target.exists():
-            return None
-        try:
-            value = json.loads(
-                self.read_text(relative),
-                object_pairs_hook=self._reject_duplicate_json_fields,
-            )
-        except (json.JSONDecodeError, ValueError) as exc:
-            raise WorkspaceFormatError(
-                f"debate context sidecar is not valid JSON: {session}/{debate}"
-            ) from exc
-        return self._validate_debate_context_sidecar(
-            value,
-            session_id=session,
-            debate_id=debate,
-        )
+        return session_records.inspect_debate_context(self, session_id, debate_id)
 
     def inspect_debate(self, session_id: str, debate_id: str) -> dict[str, Any]:
-        session = self.validate_identifier(session_id)
-        debate = self.validate_identifier(debate_id, label="debate ID")
-        relative = self._debate_relative(session, debate, ".result.json")
-        target = self.path(relative)
-        result = (
-            validate_debate_result(self.read_json(relative))
-            if target.exists()
-            else None
-        )
-        state = self._read_debate_state(session, debate)
-        if result is not None:
-            require_debate_ownership(result, session, debate, "result")
-        if state is not None:
-            require_debate_ownership(state, session, debate, "state")
-        messages = self.read_debate_messages(session, debate)
-        if result is not None:
-            status = result["status"]
-            terminal = True
-        elif state is not None:
-            status = state["status"]
-            terminal = state["terminal"]
-        elif messages:
-            status = "interrupted"
-            terminal = True
-        else:
-            status = "not_found"
-            terminal = False
-        public_state = (
-            {key: value for key, value in state.items() if key != "owner_token"}
-            if state is not None
-            else None
-        )
-        return {
-            "session_id": session,
-            "debate_id": debate,
-            "status": status,
-            "terminal": terminal,
-            "state": public_state,
-            "result": result,
-            "messages": [message.to_dict() for message in messages],
-        }
+        return session_records.inspect_debate(self, session_id, debate_id)
 
     def inspect_session(self, session_id: str) -> dict[str, Any]:
-        session = self.validate_identifier(session_id)
-        session_dir = self.path(f"discussion_logs/{session}")
-        debate_ids: set[str] = set()
-        if session_dir.exists():
-            for entry in session_dir.iterdir():
-                if not entry.is_file():
-                    continue
-                for suffix in (".state.json", ".jsonl", ".result.json"):
-                    if entry.name.endswith(suffix):
-                        debate_ids.add(entry.name[: -len(suffix)])
-                        break
-        debates: list[dict[str, Any]] = []
-        for debate_id in sorted(debate_ids):
-            inspected = self.inspect_debate(session, debate_id)
-            result = inspected["result"]
-            if result is not None:
-                summary = dict(result)
-                summary["terminal"] = True
-                debates.append(summary)
-            else:
-                debates.append(
-                    {
-                        "session_id": session,
-                        "debate_id": debate_id,
-                        "input_kind": (
-                            inspected["state"]["input_kind"]
-                            if inspected["state"] is not None
-                            else None
-                        ),
-                        "status": inspected["status"],
-                        "terminal": inspected["terminal"],
-                        "revision_id": (
-                            inspected["state"]["revision_id"]
-                            if inspected["state"] is not None
-                            else None
-                        ),
-                        "rounds_completed": (
-                            inspected["state"]["rounds_completed"]
-                            if inspected["state"] is not None
-                            else 0
-                        ),
-                        "error": (
-                            inspected["state"]["error"]
-                            if inspected["state"] is not None
-                            else "debate log has no terminal result"
-                        ),
-                    }
-                )
-        return {
-            "session_id": session,
-            "overrides": self.load_session_overrides(session),
-            "debates": debates,
-        }
+        return session_records.inspect_session(self, session_id)
 
     def _directory(self, relative: str) -> Path:
         target = self.path(relative)
@@ -770,201 +380,6 @@ class Workspace:
                 f"workspace directory path is not a directory: {relative}"
             )
         return target
-
-    def _debate_relative(self, session_id: str, debate_id: str, suffix: str) -> str:
-        session = self.validate_identifier(session_id)
-        debate = self.validate_identifier(debate_id, label="debate ID")
-        return f"discussion_logs/{session}/{debate}{suffix}"
-
-    def _agent_state_relative(
-        self,
-        agent_id: str,
-        session_id: str,
-        debate_id: str,
-    ) -> str:
-        if agent_id not in AGENT_STATE_DIRECTORIES:
-            raise WorkspaceSecurityError(f"unknown agent state owner: {agent_id}")
-        session = self.validate_identifier(session_id)
-        debate = self.validate_identifier(debate_id, label="debate ID")
-        state_directory = AGENT_STATE_DIRECTORIES[agent_id]
-        return f"agent_states/{state_directory}/debates/{session}/{debate}.jsonl"
-
-    def _read_debate_state(
-        self, session_id: str, debate_id: str
-    ) -> dict[str, Any] | None:
-        relative = self._debate_relative(session_id, debate_id, ".state.json")
-        target = self.path(relative)
-        if not target.exists():
-            return None
-        return validate_debate_state(self.read_json(relative))
-
-    @staticmethod
-    def _serialize_debate_context_snapshot(
-        snapshot: ConversationContextWindow,
-    ) -> dict[str, Any]:
-        """Return one canonical snapshot's exact version-1 JSON fields."""
-
-        return {
-            "events": [event.to_dict() for event in snapshot.events],
-            "total_complete_turns": snapshot.total_complete_turns,
-            "retained_turns": snapshot.retained_turns,
-            "omitted_turns": snapshot.omitted_turns,
-            "retained_utf8_bytes": snapshot.retained_utf8_bytes,
-            "truncated": snapshot.truncated,
-        }
-
-    def _validate_debate_context_sidecar(
-        self,
-        value: Any,
-        *,
-        session_id: str,
-        debate_id: str,
-    ) -> dict[str, Any]:
-        """Return a strict identity-bound sidecar or raise without mutation."""
-
-        if not isinstance(value, dict) or set(value) != _DEBATE_CONTEXT_FIELDS:
-            raise WorkspaceFormatError("debate context sidecar has an invalid schema")
-        if (
-            isinstance(value["schema_version"], bool)
-            or not isinstance(value["schema_version"], int)
-            or value["schema_version"] != 1
-        ):
-            raise WorkspaceFormatError(
-                "unsupported debate context sidecar schema version"
-            )
-        try:
-            stored_session = self.validate_identifier(value["session_id"])
-            stored_debate = self.validate_identifier(
-                value["debate_id"],
-                label="debate ID",
-            )
-            conversation = self.validate_identifier(
-                value["conversation_id"],
-                label="conversation ID",
-            )
-        except (SessionIdError, TypeError, ValueError) as exc:
-            raise WorkspaceFormatError(
-                "debate context sidecar has an invalid identity"
-            ) from exc
-        if stored_session != session_id or stored_debate != debate_id:
-            raise WorkspaceFormatError(
-                "debate context sidecar identity does not match its path"
-            )
-        raw_mode = value["mode"]
-        if not isinstance(raw_mode, str):
-            raise WorkspaceFormatError("debate context sidecar mode is invalid")
-        try:
-            mode = DebateContextMode(raw_mode)
-        except ValueError as exc:
-            raise WorkspaceFormatError(
-                "debate context sidecar mode is invalid"
-            ) from exc
-
-        raw_snapshot = value["snapshot"]
-        if mode is DebateContextMode.FRESH:
-            if raw_snapshot is not None:
-                raise WorkspaceFormatError(
-                    "fresh debate context sidecar snapshot must be null"
-                )
-            serialized_snapshot = None
-        else:
-            canonical_snapshot = self._parse_debate_context_snapshot(
-                raw_snapshot,
-                session_id=session_id,
-                conversation_id=conversation,
-            )
-            serialized_snapshot = self._serialize_debate_context_snapshot(
-                canonical_snapshot
-            )
-        return {
-            "schema_version": 1,
-            "session_id": session_id,
-            "debate_id": debate_id,
-            "conversation_id": conversation,
-            "mode": mode.value,
-            "snapshot": serialized_snapshot,
-        }
-
-    @staticmethod
-    def _parse_debate_context_snapshot(
-        value: Any,
-        *,
-        session_id: str,
-        conversation_id: str,
-    ) -> ConversationContextWindow:
-        """Parse and canonicalize strict snapshot fields without filesystem I/O."""
-
-        if not isinstance(value, dict) or set(value) != _DEBATE_CONTEXT_SNAPSHOT_FIELDS:
-            raise WorkspaceFormatError(
-                "included debate context snapshot has an invalid schema"
-            )
-        raw_events = value["events"]
-        if not isinstance(raw_events, list):
-            raise WorkspaceFormatError(
-                "included debate context snapshot events must be a list"
-            )
-        events: list[ConversationEvent] = []
-        for raw_event in raw_events:
-            if (
-                not isinstance(raw_event, dict)
-                or set(raw_event) != _DEBATE_CONTEXT_EVENT_FIELDS
-            ):
-                raise WorkspaceFormatError(
-                    "included debate context event has an invalid schema"
-                )
-            try:
-                raw_kind = raw_event["kind"]
-                if not isinstance(raw_kind, str):
-                    raise TypeError("event kind must be a string")
-                events.append(
-                    ConversationEvent(
-                        schema_version=raw_event["schema_version"],
-                        session_id=raw_event["session_id"],
-                        conversation_id=raw_event["conversation_id"],
-                        turn_id=raw_event["turn_id"],
-                        sequence=raw_event["sequence"],
-                        timestamp=raw_event["timestamp"],
-                        sender=raw_event["sender"],
-                        recipient=raw_event["recipient"],
-                        kind=ConversationEventKind(raw_kind),
-                        content=raw_event["content"],
-                    )
-                )
-            except (SessionIdError, TypeError, ValueError) as exc:
-                raise WorkspaceFormatError(
-                    "included debate context event has an invalid value"
-                ) from exc
-        try:
-            snapshot = ConversationContextWindow(
-                events=tuple(events),
-                total_complete_turns=value["total_complete_turns"],
-                retained_turns=value["retained_turns"],
-                omitted_turns=value["omitted_turns"],
-                retained_utf8_bytes=value["retained_utf8_bytes"],
-                truncated=value["truncated"],
-            )
-            return validate_conversation_context_window(
-                snapshot,
-                session_id=session_id,
-                conversation_id=conversation_id,
-            )
-        except (SessionIdError, TypeError, ValueError) as exc:
-            raise WorkspaceFormatError(
-                "included debate context snapshot has an invalid value"
-            ) from exc
-
-    @staticmethod
-    def _reject_duplicate_json_fields(
-        pairs: list[tuple[str, Any]],
-    ) -> dict[str, Any]:
-        """Build one JSON object while rejecting every duplicate field name."""
-
-        result: dict[str, Any] = {}
-        for key, field_value in pairs:
-            if key in result:
-                raise ValueError(f"duplicate field: {key}")
-            result[key] = field_value
-        return result
 
     def _assert_contained(self, target: Path) -> None:
         try:
@@ -1060,46 +475,9 @@ def open_workspace_root_directory(workspace: Workspace) -> int:
 
     workspace.require_ready()
     expected = _require_workspace_root_identity(workspace)
-    _require_workspace_root_directory_operations()
-    flags = os.O_RDONLY
-    for name in (
-        "O_CLOEXEC",
-        "O_NOINHERIT",
-        "O_BINARY",
-        "O_DIRECTORY",
-        "O_NOFOLLOW",
-        "O_NONBLOCK",
-    ):
-        flags |= getattr(os, name, 0)
-    named_identity = _meaningful_directory_identity(
-        os.stat(workspace.root, follow_symlinks=False)
+    return open_workspace_root_descriptor(
+        workspace, expected, verify_workspace_root_directory
     )
-    if named_identity != expected:
-        raise WorkspaceSecurityError("workspace root directory identity changed")
-    descriptor = os.open(workspace.root, flags)
-    try:
-        try:
-            os.set_inheritable(descriptor, False)
-        except (AttributeError, OSError):
-            pass
-        verify_workspace_root_directory(workspace, descriptor)
-        return descriptor
-    except BaseException as failure:
-        failure_is_control = not isinstance(failure, Exception)
-        cleanup_control: tuple[BaseException, TracebackType | None] | None = None
-        try:
-            os.close(descriptor)
-        except Exception:
-            pass
-        except BaseException as cleanup_failure:
-            cleanup_control = (
-                cleanup_failure,
-                cleanup_failure.__traceback__,
-            )
-        if not failure_is_control and cleanup_control is not None:
-            cleanup_failure, cleanup_traceback = cleanup_control
-            raise cleanup_failure.with_traceback(cleanup_traceback)
-        raise
 
 
 def verify_workspace_root_directory(
@@ -1110,13 +488,7 @@ def verify_workspace_root_directory(
 
     workspace.require_ready()
     expected = _require_workspace_root_identity(workspace)
-    _require_workspace_root_directory_operations()
-    opened = os.fstat(descriptor)
-    named = os.stat(workspace.root, follow_symlinks=False)
-    opened_identity = _meaningful_directory_identity(opened)
-    named_identity = _meaningful_directory_identity(named)
-    if opened_identity != expected or named_identity != expected:
-        raise WorkspaceSecurityError("workspace root directory identity changed")
+    verify_workspace_root_descriptor(workspace, descriptor, expected)
 
 
 def _require_workspace_root_identity(workspace: Workspace) -> tuple[int, int]:
@@ -1143,42 +515,6 @@ def _require_workspace_root_identity(workspace: Workspace) -> tuple[int, int]:
             getattr(errno, "ENOTSUP", errno.ENOSYS),
             "workspace root identity is unavailable",
         )
-    return device, inode
-
-
-def _require_workspace_root_directory_operations() -> None:
-    """Fail closed without no-follow root-directory primitives."""
-
-    supports_follow_symlinks = getattr(os, "supports_follow_symlinks", ())
-    if (
-        not getattr(os, "O_DIRECTORY", 0)
-        or not getattr(os, "O_NOFOLLOW", 0)
-        or os.stat not in supports_follow_symlinks
-    ):
-        raise OSError(
-            getattr(errno, "ENOTSUP", errno.ENOSYS),
-            "safe workspace root directory access is unsupported",
-        )
-
-
-def _meaningful_directory_identity(
-    value: os.stat_result,
-) -> tuple[int, int] | None:
-    """Return a nonzero directory identity or ``None`` when unavailable."""
-
-    if not stat.S_ISDIR(value.st_mode):
-        return None
-    device = value.st_dev
-    inode = value.st_ino
-    if (
-        isinstance(device, bool)
-        or not isinstance(device, int)
-        or device <= 0
-        or isinstance(inode, bool)
-        or not isinstance(inode, int)
-        or inode <= 0
-    ):
-        return None
     return device, inode
 
 

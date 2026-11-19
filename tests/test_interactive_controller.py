@@ -1457,7 +1457,7 @@ class ControllerContractTests(ControllerTestCase):
                 "provider_auth",
                 "provider_catalog",
                 "session_lifecycle",
-                "workspace", "workspace.initialization",
+                "workspace", "workspace.session_artifact_binding",
             },
             "interactive_controller._session_policy": {
                 "errors",
@@ -1749,8 +1749,8 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 281)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 1551)
+        self.assertEqual(len(modules), 293)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 1605)
         self.assertTrue(
             {
                 "story_writing_agents.artifact_proposals",

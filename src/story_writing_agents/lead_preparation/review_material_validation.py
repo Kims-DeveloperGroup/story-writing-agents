@@ -15,7 +15,7 @@ from ..conversations import CollaborationMessagePayload
 from ..conversations import CollaborationSpecialistAssessment
 from ..lead_exploration import ExplorationAdoptionCapture
 from ..conversations import LeadAssignmentIntent
-from ..workspace.initialization import SessionArtifactAccess
+from ..workspace.session_artifact_binding import SessionArtifactAccess
 from ..specialist_routing import SpecialistAssignmentMode
 from ..lead_preparation import authoring_authority
 from ..runtime_resources import collaboration_event_journal as event_journal

@@ -7,7 +7,7 @@ import os
 import sys
 import unittest
 from tests.helpers import live_provider_execution_workspace, pristine_initialized_workspace
-from story_writing_agents.workspace.initialization import SessionArtifactBindingError
+from story_writing_agents.workspace.session_artifact_binding import SessionArtifactBindingError
 
 from story_writing_agents import provider_process as process_module
 

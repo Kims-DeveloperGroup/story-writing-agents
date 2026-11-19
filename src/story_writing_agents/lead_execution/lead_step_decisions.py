@@ -61,7 +61,10 @@ from ..lead_task_transitions import (
 )
 from ..runtime_resources import collaboration_event_journal as event_journal
 from ..runtime_resources.session_execution_scopes import SessionExecutionScopes
-from ..workspace.initialization import SessionArtifactBinding, SessionArtifactBindingError
+from ..workspace.session_artifact_binding import (
+    SessionArtifactBinding,
+    SessionArtifactBindingError,
+)
 
 __all__ = ["LeadStepDecisions"]
 

@@ -18,12 +18,14 @@ from story_writing_agents.errors import WorkspaceFormatError
 from story_writing_agents.git.session_contracts import GitSessionResourceState
 from story_writing_agents.workspace import initialization as initialization_module
 from story_writing_agents.workspace.core import discover_workspace
-from story_writing_agents.workspace.initialization import (
+from story_writing_agents.workspace.discovery import discover_workspace_location
+from story_writing_agents.workspace.root_contracts import WorkspaceRootRole
+from story_writing_agents.workspace.session_artifact_binding import (
     SessionArtifactBinding,
     SessionArtifactBindingError,
-    WorkspaceRootRole,
     compose_session_artifact_binding,
-    discover_workspace_location,
+)
+from story_writing_agents.workspace.session_resources import (
     inspect_session_resources,
     list_session_resources,
     provision_session_resources,

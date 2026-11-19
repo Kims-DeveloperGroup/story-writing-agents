@@ -34,7 +34,7 @@ class SessionSourceWorkspace(Workspace):
     """Package-internal session-state reader pinned to one physical worktree."""
 
     def __init__(self, binding: object) -> None:
-        from .initialization import SessionArtifactBinding
+        from .session_artifact_binding import SessionArtifactBinding
 
         if type(binding) is not SessionArtifactBinding:
             raise TypeError("binding must be a SessionArtifactBinding")
@@ -76,7 +76,7 @@ class SessionSourceWorkspace(Workspace):
     def from_artifact_binding(cls, binding: object) -> SessionSourceWorkspace:
         """Derive source authority from one reusable guarded artifact binding."""
 
-        from .initialization import SessionArtifactBinding
+        from .session_artifact_binding import SessionArtifactBinding
 
         if type(binding) is not SessionArtifactBinding:
             raise TypeError("binding must be a SessionArtifactBinding")

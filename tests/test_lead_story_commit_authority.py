@@ -45,7 +45,7 @@ from story_writing_agents.git.story_commit_contracts import (
     StoryCommitDecision,
     StoryCommitState,
 )
-from story_writing_agents.workspace.initialization import provision_session_resources
+from story_writing_agents.workspace.session_resources import provision_session_resources
 
 from tests import test_lead_artifact_application_authority as lead_artifact_application_tests
 from tests.known_result_finalization_fixture import seed_reviewed_artifact

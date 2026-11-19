@@ -26,10 +26,8 @@ from story_writing_agents.git.story_commit_contracts import (
     StoryCommitFailureCode,
     StoryCommitPathOperation,
 )
-from story_writing_agents.workspace.initialization import (
-    compose_session_artifact_binding,
-    provision_session_resources,
-)
+from story_writing_agents.workspace.session_artifact_binding import compose_session_artifact_binding
+from story_writing_agents.workspace.session_resources import provision_session_resources
 from story_writing_agents.workspace.schema import canonical_initializer_scaffold
 from story_writing_agents.writing_artifacts import (
     ArtifactCreateOperation,

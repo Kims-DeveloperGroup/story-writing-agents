@@ -22,7 +22,7 @@ from ..lead_exploration import ExplorationAdoptionCapture
 from ..conversations import LeadRecommendationDecisionPayload
 from ..conversations import LeadRecommendationRequestPayload
 from ..writing_artifacts import MAX_REFERENCE_TOTAL_BYTES
-from ..workspace.initialization import SessionArtifactBinding
+from ..workspace.session_artifact_binding import SessionArtifactBinding
 from ..conversations.session_context import SessionHistorySnapshot
 from typing import cast
 from ..runtime_resources import collaboration_event_journal as event_journal

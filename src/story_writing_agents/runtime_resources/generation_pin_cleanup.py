@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ..workspace.initialization import SessionArtifactGenerationPin
+from ..workspace.session_artifact_binding import SessionArtifactGenerationPin
 
 
 def add_generation_pin_cleanup_note(
