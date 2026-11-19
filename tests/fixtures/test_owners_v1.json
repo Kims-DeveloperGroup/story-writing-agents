@@ -19465,6 +19465,30 @@
         "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_windows_guard_branch_initializes_retries_and_unlocks"
       ],
       "depends_on": []
+    },
+    {
+      "name": "provider.session-access-records",
+      "boundary": "existing-cases",
+      "paths": [
+        "src/story_writing_agents/provider_session_access_records.py"
+      ],
+      "focused_ids": [
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_access_liveness_is_conservative_and_dead_local_claim_is_reclaimed",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_access_schema_duplicate_json_and_orphans_fail_closed",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_create_release_and_duplicate_create_use_exact_artifacts",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_unknown_liveness_errors_never_replace_claim"
+      ],
+      "affected_ids": [
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_access_liveness_is_conservative_and_dead_local_claim_is_reclaimed",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_access_schema_duplicate_json_and_orphans_fail_closed",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_concurrent_dead_reclaim_has_exactly_one_owner",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_create_release_and_duplicate_create_use_exact_artifacts",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_release_token_comparison_and_close_preserve_foreign_claims",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_unknown_liveness_errors_never_replace_claim",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_v1_sidecar_and_guard_are_typed_rejections_without_migration",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_write_failures_compensate_only_newly_acquired_access"
+      ],
+      "depends_on": []
     }
   ],
   "ignored_names": [
