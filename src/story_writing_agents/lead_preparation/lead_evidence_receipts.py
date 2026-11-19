@@ -26,6 +26,7 @@ from ..agent_context.manifest import ContextSourceKind
 from ..specialist_routing import artifact_domain
 from ..structured_output_validation import carry_validation, validation_failure
 from . import reply_contract_values
+from . import authoring_authority
 
 
 def evidence_source_kind(
@@ -328,3 +329,16 @@ def _durable_read_receipt(
         action_index=receipt.completing_read_action_index,
         origin_action_index=receipt.originating_search_action_index,
     )
+
+
+def read_reviewer_inputs(
+    receipts: tuple[ContextEvidenceReceipt, ...],
+) -> tuple[tuple[str, str], ...]:
+    read_reviewers = tuple(
+        (reviewer, item.evidence_id) for item in receipts
+        if item.source_kind is ContextSourceKind.WRITING_ARTIFACT
+        for reviewer in (
+            authoring_authority.core_reviewer(f"${{{item.provenance.locator}}}"),
+        ) if reviewer is not None
+    )
+    return read_reviewers

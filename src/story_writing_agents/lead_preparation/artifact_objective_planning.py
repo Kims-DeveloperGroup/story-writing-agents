@@ -27,6 +27,7 @@ from . import proposal_basis_values
 from dataclasses import replace
 from . import reply_contract_values
 from ..structured_output_validation import validation_failure
+from ..document_plan import DocumentNodeSelection
 
 __all__ = (
     'objective_goal_exists',
@@ -36,6 +37,7 @@ __all__ = (
     'objective_capture_inputs',
     'objective_document_window',
     'objective_drafts_for_values',
+    'clarify_unprepared_authoring_proposal',
 )
 
 
@@ -231,3 +233,22 @@ def objective_drafts_for_values(
             draft_sources=selected, candidate_binding=binding, document_plan=plan, document_node=outcome.document_node,
         ),
     ),)
+
+
+def clarify_unprepared_authoring_proposal(outcome: LeadProviderOutcome, *, document_selection: DocumentNodeSelection | None, document_node: DocumentNodeBinding | None) -> LeadProviderOutcome:
+    if (outcome.kind is LeadOutcomeKind.PROPOSAL and outcome.authoring_scope is not None
+            and outcome.authoring_scope.intent is AuthoringIntent.AUTHORING
+            and outcome.authoring_scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}
+            and len(outcome.authoring_scope.target_paths) > 1
+            and document_selection is None and document_node is None):
+        objective_intent = outcome.objective_intent
+        if objective_intent is not None:
+            objective_intent = replace(objective_intent, next_step=ArtifactObjectiveNextStep.CLARIFY,
+                **({"target_paths": outcome.authoring_scope.target_paths} if objective_intent.action is LeadObjectiveAction.START else {}))
+        outcome = replace(outcome, kind=LeadOutcomeKind.QUESTION, proposal=None, artifact_intent=None,
+            objective_intent=objective_intent, message=(
+                "All requested targets are retained in the document goal. Select one exact document node "
+                "from the plan before drafting: prerequisites proceed in order, with separate Global and Part Plot work. "
+                "The selected task, inputs, and inherited budget will be disclosed for a fresh Confirm. "
+                "No specialist work or Apply has been authorized."))
+    return outcome

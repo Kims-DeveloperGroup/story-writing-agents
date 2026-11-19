@@ -393,3 +393,10 @@ PYTHONPATH=src .venv/bin/python -m tests.runner run \
 ```
 
 정의 모듈의 `--module` 선택과 `--path`의 보수적인 depends_on 역closure는 별도다. canonical 파일이 새 정의를 import하는 실제 의존 때문에 경로 기반 선택은 원래 통합 owner까지 확대될 수 있다. 좁은 선택의 성공을 전체 영향 성공으로 표시하지 않고, 필요한 기존15개 직접 Case·별도 witness·실제 역소비자와 최종 FAST/전체5shard/reconcile을 확인한다. 실제 같은 ReplyTrace 오류의 RED/GREEN, 정상 시간과 진단 자료도 서로 구분한다. Case·subTest·시간·worker 상한은 유지하고 Root와 공유 fixture를 바꾼 경우 전체 검증 fallback을 보존한다.
+
+## 전문가·합성 응답과 host 경계 — #1048
+
+[#1048의 수락 계획](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1048#구현-계획)은
+응답 계약·해석과 공통 revision 판정을 먼저 분리하고, 같은 이슈에서 실제 host 정책과
+실행 수명을 순차적으로 정리한다. 첫 계약 전달 뒤에도 전체 완료 조건과 기존 관측을
+유지하며, 후속 경계는 편집 전에 준비를 재검증한다. 구현 전 Draft는 이 계획 링크로 시작한다.

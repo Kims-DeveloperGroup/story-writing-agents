@@ -41,12 +41,30 @@ from ..document_plan import (
 from ..specialist_routing import AuthoringActivity, AuthoringIntent
 from ..writing_artifacts import ArtifactRenameOperation
 from . import authoring_authority
+from ..specialist_routing import AuthoringScope
+from . import reply_contract_values
+from ..errors import BackendProtocolError
+from ..conversations import CollaborationConfirmationDecision
+from ..conversations import CollaborationHistoryProjection
+from ..conversations import CollaborationLeadTaskDecisionPayload
+from ..conversations import CollaborationLeadTaskTransitionPayload
+from ..conversations import ConversationStatus
+from ..document_plan import DocumentPlanningGoalRef
+from ..lead_task_transitions import LeadTaskAction
+from ..lead_task_transitions import LeadTaskTransitionReceipt
+from collections.abc import Mapping
+from ..runtime_resources import collaboration_event_journal as event_journal
 
 __all__ = (
-    "document_plan_views",
-    "validate_document_node",
-    "automatic_document_node",
-    "document_candidate_inputs",
+    'document_plan_views',
+    'validate_document_node',
+    'automatic_document_node',
+    'document_candidate_inputs',
+    'validate_document_target',
+    'document_selection_from_transition',
+    'retained_document_node',
+    'implicit_document_goal',
+    'validate_document_task_origin',
 )
 
 
@@ -273,3 +291,61 @@ def document_candidate_inputs(
             continue
         additions.append(expected)
     return (*inputs, *additions)
+
+
+def validate_document_target(
+    scope: AuthoringScope,
+    target_path: str,
+) -> None:
+    if scope.target_paths != (target_path,):
+        raise reply_contract_values.LeadOutcomeValidationError("document selection requires its exact disclosed target")
+
+
+def document_selection_from_transition(controls: tuple[CollaborationEvent, ...], transition_event_id: str) -> DocumentNodeSelection | None:
+    transition = next((event for event in controls if event.event_id == transition_event_id), None)
+    if transition is not None and type(transition.payload) is CollaborationLeadTaskTransitionPayload:
+        origin = next((event for event in controls if event.event_id == transition.payload.receipt.origin_event_id), None)
+        if origin is not None and type(origin.payload) is CollaborationLeadTaskDecisionPayload:
+            return origin.payload.document_selection
+    return None
+
+def retained_document_node(projection: CollaborationHistoryProjection, retained_scope: AuthoringScope | None, retained_node: DocumentNodeBinding | None) -> DocumentNodeBinding | None:
+    retained = projection
+    if (retained.current_proposal is not None
+            and retained.confirmation_decision is CollaborationConfirmationDecision.CONFIRM
+            and (retained.discussion_context is None or (retained.discussion_context.action in {LeadTaskAction.RESUME, LeadTaskAction.NEW_TASK}
+                and retained.current_proposal.document_node is not None
+                and retained.discussion_context.target_task_id == retained.current_proposal.document_node.task_ref.task_id))):
+        if retained_scope is not None and retained_scope.task_revision == retained_node.task_ref.task_revision:
+            return retained_node
+    return None
+
+def implicit_document_goal(projection: CollaborationHistoryProjection, history: SessionHistorySnapshot, current_goal: DocumentPlanningGoalRef | None, current_budget_task_id: str | None) -> tuple[DocumentPlanningGoalRef | None, str | None]:
+    implicit_plan = projection.document_plans[0].plan
+    implicit_events = history.events()
+    implicit_task_ids = {event.payload.document_node.task_ref.task_id for event in implicit_events
+        if type(event.payload) in {CollaborationProposal, CollaborationLeadJudgmentPayload, LeadRecommendationRequestPayload}
+        and event.payload.document_node is not None
+        and event.payload.document_node.plan_ref.plan_id == implicit_plan.ref.plan_id}
+    active_conversation_ids = {history.metadata.conversation_id for history in history.conversations
+        if history.metadata.status is ConversationStatus.ACTIVE}
+    if not implicit_task_ids or implicit_task_ids.intersection(authoring_authority.authoring_tasks(tuple(
+            event for event in implicit_events if event.conversation_id in active_conversation_ids))):
+        current_goal = implicit_plan.ref
+        if len(projection.available_tasks) == 1:
+            current_budget_task_id = projection.available_tasks[0].ref.task_id
+    return current_goal, current_budget_task_id
+
+def validate_document_task_origin(origin: CollaborationEvent | None, receipt: LeadTaskTransitionReceipt, session_id: str, conversation_id: str, step_id: str, selection: DocumentNodeSelection | None, *, offered_tasks: Mapping[tuple[str, int], AuthoringScope | None], selected_path: str | None) -> None:
+    if (origin is None or type(origin.payload) is not CollaborationLeadTaskDecisionPayload
+            or origin.sender != event_journal.USER_ACTOR
+            or (origin.session_id, origin.conversation_id, origin.step_id)
+            != (session_id, conversation_id, step_id)
+            or origin.payload.document_selection != selection
+            or origin.payload.decision.action is not receipt.action
+            or origin.payload.decision.task_ref != receipt.source_task_ref
+            or receipt.planning_step_id != step_id
+            or (receipt.target_task_id, receipt.target_task_revision)
+            not in offered_tasks
+            or selected_path is None):
+        raise BackendProtocolError("document review requires its exact USER task selection")

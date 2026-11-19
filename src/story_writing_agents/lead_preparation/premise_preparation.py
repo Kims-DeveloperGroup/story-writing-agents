@@ -45,11 +45,19 @@ from ..runtime_resources import collaboration_event_journal as event_journal
 import hashlib
 from ..lead_premise_decisions import premise_digest
 from ..lead_premise_decisions import resolve_premise_choice
+from ..conversations.events import CollaborationLeadSynthesisPayload
+from ..conversations.events import CollaborationProposal
+from ..collaboration_execution_results import LeadSynthesisResult
+from ..lead_premise_decisions import PremiseDecisionReport
+from ..lead_premise_decisions import PremiseDecisionSummary
+from . import collaboration_response_decoding
 
 __all__ = (
-    "capture_shared_premises",
-    "prepare_premise_admission",
-    "validate_premise_control",
+    'capture_shared_premises',
+    'prepare_premise_admission',
+    'validate_premise_control',
+    'premise_synthesis_provenance',
+    'premise_synthesis_result',
 )
 
 def capture_shared_premises(
@@ -233,3 +241,40 @@ def prepare_premise_admission(
         admission,
         draft,
     )
+
+
+def premise_synthesis_provenance(
+    current: tuple[CollaborationEvent, ...],
+    proposal: CollaborationProposal,
+    attempt_id: str,
+    conversation_id: str,
+) -> tuple[PremiseDecisionCost, PremiseFreshWorkAdmission | None, PremiseReportRef | None, PremiseAdmissionRef | None]:
+    calls = tuple(event.payload.call_id for event in current
+        if event.step_id == proposal.step_id and type(event.payload) is CollaborationProviderCallPayload
+        and event.payload.state is CollaborationProviderCallState.SUBMITTED)
+    cost = PremiseDecisionCost(proposal.step_id, calls, 1, proposal.proposal_id,
+        proposal.proposal_revision, proposal.proposal_digest, attempt_id)
+    admission = next((event.payload.admission for event in current
+        if event.step_id == proposal.step_id and type(event.payload) is CollaborationPremiseFreshWorkAdmissionPayload), None)
+    earlier = next((event for event in reversed(current) if type(event.payload) is CollaborationLeadSynthesisPayload
+        and event.payload.premise_report is not None and event.step_id != proposal.step_id), None)
+    earlier_ref = None if earlier is None else PremiseReportRef(conversation_id, earlier.event_id,
+        earlier.payload.premise_report.report_digest, earlier.payload.premise_report.spec.question_id)
+    cost_head = next((event for event in reversed(current) if type(event.payload) is CollaborationPremiseFreshWorkAdmissionPayload), None)
+    parent_ref = (admission.prior_admission_ref if admission is not None else
+        None if cost_head is None else PremiseAdmissionRef(cost_head.event_id, premise_digest(cost_head.payload.admission)))
+    return cost, admission, earlier_ref, parent_ref
+
+def premise_synthesis_result(
+    proposal: CollaborationProposal,
+    attempt_id: str,
+    ids: tuple[str, ...],
+    replies: tuple[CollaborationSpecialistReplyPayload, ...],
+    summary: PremiseDecisionSummary,
+    report: PremiseDecisionReport,
+) -> LeadSynthesisResult:
+    payload = CollaborationLeadSynthesisPayload(proposal.proposal_id,
+        proposal.proposal_revision, proposal.proposal_digest, attempt_id,
+        summary.message, ids, collaboration_response_decoding.required_unresolved_input_ids(replies),
+        proposal.basis.evidence, premise_report=report)
+    return LeadSynthesisResult(payload, None)

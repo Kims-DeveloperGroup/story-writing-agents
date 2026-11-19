@@ -92,13 +92,35 @@ complete workflow shares a 75-minute deadline, including setup and shutdown.
 
 사용자는 전체 테스트 시간에 큰 지장이 없다면 테스트 예산 정책 검증의 개별 증가를 허용하고,
 Story runtime 기능 검증과 구분해 관대한 정책으로 다루도록 지시했다.
-현재 확인된 대상은 `tests.test_suite_budget.SuiteBudgetTests.test_new_id_increased_subtests_and_relaxed_time_are_rejected`이다.
+당시 확인된 최초 대상은 `tests.test_suite_budget.SuiteBudgetTests.test_new_id_increased_subtests_and_relaxed_time_are_rejected`이다.
 이 Case의 개별 method·1:1 시간 증가만으로 Story runtime 회귀나 전달 실패로 판정하지 않는다.
 증가 원인과 원자료는 계속 기록하고, 전체 실행 시간에 유의미한 실제 영향이 없는지 확인한다.
 기존 기능·negative·Case/subTest·시간/worker 상한은 보존하고 기존 전체 시간 비교 기준을 늘리지 않는다.
 Story runtime 기능 Case에는 이 예외를 적용하지 않는다. 전체 시간에 유의미한 실제 회귀가 있으면 실패로 판단한다.
 이 결정에 따라 이 Case만을 위한 후속 digest memo 실험은 철회하고 원래 #1027 source 배정을 유지한다.
 실험의 측정·실패·취소 이력은 [#1027](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1027#구현-계획)에 보존한다.
+
+## 개발 정책 검증의 시간 판정 확대 — 2026-11-19
+
+사용자는 공개 API·패키지 경계 같은 개발 정책 검증에도
+“개발 정책 검증도 전체 영향이 미미하면 허용”하는 기준을 적용하도록 승인했다.
+공개 API의 signature·type hint·export, 모듈 의존 방향·패키지 구조 등
+개발 정책 자체를 검증하는 Case는 필요한 추가 검증의 실제 비용을 기록하고,
+전체 실행 영향이 미미하면 개별 증가만으로 전달 실패로 판단하지 않는다.
+이 기준은 이후 관련 이슈에도 적용하며 같은 범위의 승인을 반복 요청하지 않는다.
+
+Case의 실제 검증 목적을 기준으로 적용하고 파일명·클래스명만으로 자동 면제하지 않는다.
+Story runtime, CLI, I/O, 프로세스·자원 수명의 기능·오류·상태 전이를 검증하는
+Case에는 이 기준을 확대하지 않는다. 그 기능의 실제 성능 회귀는 계속 실패로 판단한다.
+기존 Case·시나리오·negative·subTest·시간·worker 상한을 유지하고,
+원자료·증가 원인·실제 추가 작업·전체 영향과 적용 범위를 공개한다.
+전체 실행에 유의미한 실제 회귀가 있으면 실패이며, 개별 증가를 다른 감소와 상쇄하지 않는다.
+
+첫 확대 적용은 #1048의 기존 공개 API 검증
+`tests.test_rag_module_and_packaging_boundary.RagModuleBoundaryTests.test_supported_module_surfaces_do_not_expand_the_root_facade`이다.
+고정 80개 선택의 전후 정상 3회에서 중앙값은 1.262073→5.851829ms(+4.589756ms)이며,
+추가 reflection 검증의 실제 비용을 인정한다. 전체 영향이 미미한 개발 정책 검증으로
+허용하되, 이 관측을 다른 Story runtime 메서드 문의나 전체 성능 통과에 전용하지 않는다.
 
 ## #1022의 Lead 공통 fixture 분리 소스 배정
 
@@ -1230,6 +1252,63 @@ ordinary16행/physical17행 증가로 별도 공개한다.
 
 현행 소스 계상은 raw148,078 + counted support4,677 + 기존미확인1,550 = **154,305행**이다. 기준154,078 대비 총227행(raw224/support3)이며, 실패한 D154,264 이후41행을 포함한다. 필요한 추가 행은 사용자의 모든 이슈 소스 행 포괄 승인을 적용했다. 신규 Case·시나리오·subTest와 시간·worker 예외는 없다. 기존 범용 selector/runner 도구의 변경은 원래 계상 경계 밖의 비용으로 별도 공개하며, 테스트 본문/단언을 도구로 옮겨 누락시키지 않는다. receipt14는 두 실행 ID 재키잉을 취소한 moves0·전후 caps digest동일 상태이며, 앞선13개 단계의 원기록과 검증은 보존한다.
 
+
+## #1048 응답·요청 자료·Lead 의미 정책 분리 소스 배정
+
+사용자의 필요한 행 추가 포괄 승인을 적용한다. 수락 main
+`aac5d831437a5bcb4fdbc35f197eb3d4affb422b`의 raw148,544/support4,680/legacy1,550,
+합계154,774행에서 raw148,889/support4,689/legacy1,550, 합계155,128행으로
+정확히354행(raw345/support9)을 계상한다. 기존 네 Case의119물리행·35assert·cap3을
+정의 모듈로 옮기고 필수 helper3개를 단일 소유로 연결하며, 실제 공개 API·namespace·
+graph·packaging·선택/예산 경계의 기존 검증 비용을 포함한다. 이동 본문은 한 번만 세고
+기존 미확인1,550행과 이미 계상한 지원 코드를 공제하거나 다시 청구하지 않는다.
+
+source-only `154774→155128` 전이는 기존 schema1·Case2,544·각 ID/cap 및 전체 cap8,690의
+동등성, 기존 시간18,000/3,600초와 함께 검증한다. 기존14개 이관 receipt·399 weight·
+163 profile/mixed19·30개 실행 클래스와 최대4worker를 바꾸지 않는다.
+`tests/suite_budget.py`의 정확 source 전이 guard17ordinary/17physical행은
+기존 frozen 계상 경계 밖의 물리 비용으로 별도 공개하며, stage3·stage4 추가분은0행이다.
+테스트/단언을 그곳으로 옮겨 비용을 누락시키지 않는다. 신규 Case·시나리오·subTest·
+시간/worker 예외는 없다.
+
+이 배정은 #1048의 현재 응답 계약·요청 값·Lead 의미 정책 분리 비용이다. 실제
+Story runtime 성능 회귀는 실패로 판단하고, 미세한 정상 측정 변동과 테스트 예산
+정책 Case의 전체 시간 영향에 관한 기존 사용자 기준을 유지한다. source 배정은
+최종 기능·성능·전체 CI·리뷰 성공이나 이슈 완료를 뜻하지 않는다.
+
+stage1 첫 커밋140행 배정 뒤 기존 incoming 기대집합2행을 보완해142행으로 정정했다.
+stage2의9개 요청·전제·진단·정규화 API와 기존4owner 경계 검증은36raw행이다.
+이36행은 초기35행과 decoder의 실제 supplier 기대집합 보완1행을 포함한다.
+API qualname guard는 이름이 실제 바인딩된 기존 loop로 옮겨 단언과 물리 비용을 유지했다.
+stage1+stage2의 현재 전 단계 배정은178행(raw169/support9)이었다.
+
+stage3은 기존 Lead host 의미25개와 front 요청6개를 공개 owner에 연결한다. 필요한
+기존 RAG API table31행·module import5행·packaging 경로2행·명시 export37행·
+기존 supplier 기대집합9행·신규2owner graph32행, 합계116raw행을 추가 계상한다.
+전체 #1048 현재 배정은354행(raw345/support9)이다. 기존 module의 annotation 방식을
+보존하고 canonical 타입 공급·raw 주석 스타일·get_type_hints 검증을 구분한다.
+기존 assertion·부정 사례를 유지하며 실제 graph와 공개 경계에 검증을 맞춘다.
+
+중간154,914/154,916/154,951/154,952행 관측과 실패는 PR 이력에 보존한다.
+미통합 이슈의 중간값마다 source guard를 누적하지 않고 수락 main154,774에서 현재
+155,128로 가는 단일 정확 aggregate 전이만 갱신한다. 이후 실제 diff 비용과 기반 변경은
+정확히 다시 계상하며 이354행을 다른 작업의 여유나 예산 완화로 전용하지 않는다.
+
+마지막 잔여 단계는 원래 문서·task-offer·revision·front 예산·거절·proposal 판단을
+기존7개 owner의22개 공개 API로 옮긴다. 조건부 lineage 값은 원래 guard/read 뒤 그 안에서
+별도 순수 예산 함수로 전달하며, current_scope 객체·previous_scope 대입·late decision과
+예외·I/O·callback 순서를 유지한다. 실제 기존 API 표22행·import2행·기존 export10행·
+history export10행·planned-public-name1행·실제 supplier 기대집합15행,
+합계60raw행을 추가 계상한다. stage3의155,068행에서155,128행으로 갱신하며
+전체 #1048은 raw345/support9, 합계354행이다. 중간155,068행은 당시 이력으로 보존하고
+source guard는 수락154,774에서 최종155,128로 가는 단일 aggregate pair만 유지한다.
+
+실제 현재 graph는286모듈/1,768간선(+14/-0), DAG이다. 계획상1,764간선 전망과 달리
+원래 task_identity_for_origin·receipt 타입·동일 USER_ACTOR의 필수 canonical 공급4간선을
+실제 구현에서 더 계상했으며 상향 Root 경로·private/globals 위반은 없다. 기존 Case·assertion·
+fixture·MRO·receipt·numeric weight·profile·generic17 guard를 보존한다. source 본문과 경계의
+정적 복원은 기능·성능·전체 CI·리뷰 완료를 대신하지 않으며 최종 동일 source의 공식 검증을 유지한다.
+
 ## #973의 workspace·application journal 분리 소스 배정
 
 `aac5d831` 기준 154,774행에서 기존 테스트의 소유자별 import·patch와 실제 모듈 경계를
@@ -1237,3 +1316,27 @@ ordinary16행/physical17행 증가로 별도 공개한다.
 1,550행으로 **154,860행(+86)**입니다. 필요한 소스 행에 대한 2026-11-15 포괄 승인을
 `154774→154860` 한 번에 적용합니다. 기존 2,544개 ID, cap 합 8,690, 18,000초 및
 3,600초의 시간 상한, 최대 4 worker, shard 분할과 hosted profile을 유지합니다.
+
+## #1048과 #973 main 통합의 소스 편성 — 2026-11-19
+
+이 절은 #1048 C4의 155,128행과 #973 main의 154,860행을 통합한 현재 편성이다.
+앞의 각 분리·소스 전이·측정 기록은 해당 snapshot의 이력으로 보존한다.
+통합 main `3937eaed11e540cfd1a865a9c974e7f14bf1fdf4`와 #1048의 의미 정책 분리를
+함께 유지한 실제 비용은 raw148,980 + support4,689 + legacy1,550 = **155,219행**이다.
+main 154,860→155,219는 +359행(#1048의 기존354행+통합 정책 검증5행),
+#1048 155,128→155,219는 +91행(#973의86행+통합 정책 검증5행)이다.
+사용자의 필요한 소스 행 추가 포괄 승인을 적용하며 별도의 추가 여유는 두지 않는다.
+
+정확한 source-only 전이 `154860→155219`와 `155128→155219`만 추가하고,
+양쪽의 기존 `154774→155128`·`154774→154860` 및 모든 이전 허용·이웃 거부를 보존한다.
+기존 개발 정책 메서드에 통합 전이와 인접 값 거절5행을 더했으며 새 Case·ID·subTest는 없다.
+`tests/suite_budget.py`의 기존 frozen 계상 밖 generic guard는17ordinary/17physical행을
+그대로 유지한다. 통합 guard는 같은 줄을 교체했으므로 이 부분의 추가 비용은0행이다.
+기존 support 원장4,689행과 미확인 legacy1,550행을 누락·공제·중복 청구하지 않는다.
+
+실제 통합 Runtime graph는298모듈/1,822간선, DAG이다. 상대 import graph는1,819간선,
+controller graph는1,688간선이며 module index는299행이다. 단순히 두 그래프를 더한
+전망값으로 처리하지 않고 실제 선언·공급자·109개 graph 기대를 독립 대조한다.
+전체2,544개 ID와 cap-map/cap합8,690·실제 subTest8,340·hosted163개/30클래스·399weight·
+최대4worker 및18,000/3,600초 상한을 유지한다. 실제 실행 결과·현재 source identity·
+전체 CI·리뷰 종료는 별도 완료 조건이며, 통합 전 C4의 시간 판단을 새 head의 성공으로 쓰지 않는다.

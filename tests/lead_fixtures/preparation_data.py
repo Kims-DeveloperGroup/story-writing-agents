@@ -66,6 +66,10 @@ from tests.lead_fixtures.provider_responses import (
 )
 
 
+def events_of_kind(history, kind: conversations.CollaborationEventKind):
+    return tuple(event for event in history if event.kind is kind)
+
+
 STORY_USER_INPUT = ("A courier loses a letter, retraces the route, and returns it. "
     "Preserve the premise; you may invent supporting motivation and decide missing details.")
 

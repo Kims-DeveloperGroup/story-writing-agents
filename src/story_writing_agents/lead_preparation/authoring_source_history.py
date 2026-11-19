@@ -28,8 +28,24 @@ from ..lead_preparation import authoring_authority
 from ..runtime_resources import collaboration_event_journal as event_journal
 import hashlib
 from ..conversations import project_collaboration_history
+from ..conversations import ArtifactReviewCandidatePayload
+from ..conversations import CollaborationConfirmationDecision
+from ..conversations import CollaborationProposal
+from ..conversations import LeadProposalRelation
+from ..conversations import LeadRecommendationDecision
+from ..lead_task_transitions import LeadTaskTransitionReceipt
+from collections.abc import Mapping
+from . import reply_contract_values
+from ..authoring_task_lifecycle import task_identity_for_origin
 
-__all__ = ('ordinary_front_call_cap', 'historical_authoring_users',)
+__all__ = ('ordinary_front_call_cap', 'historical_authoring_users',
+    'current_previous_scope',
+    'authoring_task_offers',
+    'recommendation_task_scope',
+    'recommendation_task_offers',
+    'review_source_revision',
+    'local_binding_scopes',
+)
 
 
 def ordinary_front_call_cap(
@@ -146,3 +162,86 @@ def historical_authoring_users(
         if {source.source_id: source for source, _text in selected} != expected:
             raise ValueError("historical USER admission bytes or identity changed")
     return tuple(selected)
+
+
+def current_previous_scope(previous_scope: AuthoringScope, available_tasks: Mapping[str, AuthoringScope]) -> AuthoringScope:
+    current_scope = available_tasks.get(previous_scope.task_id)
+    if current_scope is None or current_scope.task_revision != previous_scope.task_revision:
+        raise BackendProtocolError("pending authoring task must be regenerated at its current revision")
+    return current_scope
+
+def authoring_task_offers(previous_scope: AuthoringScope | None, available_tasks: Mapping[str, AuthoringScope], events: tuple[CollaborationEvent, ...], conversation_id: str, step_id: str, successor_only: bool) -> dict[tuple[str, int], AuthoringScope | None]:
+    if previous_scope is not None:
+        offered_tasks = {(previous_scope.task_id, previous_scope.task_revision + 1): previous_scope}
+    else:
+        offered_tasks = {} if successor_only else {(item.task_id, item.task_revision): item for item in available_tasks.values()}
+        local_task_events = tuple(event for event in events if event.conversation_id == conversation_id)
+        for item in available_tasks.values():
+            if item.schema_version != 3 or item.activity not in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}:
+                continue
+            try:
+                authoring_authority.completed_authoring_source(item, local_task_events)
+            except (reply_contract_values.LeadOutcomeValidationError, BackendProtocolError):
+                continue
+            offered_tasks[(item.task_id, item.task_revision + 1)] = item
+        if not successor_only:
+            offered_tasks[(task_identity_for_origin(step_id), 1)] = None
+            for active_scope in available_tasks.values():
+                offered_tasks.setdefault((active_scope.task_id, active_scope.task_revision + 1), active_scope)
+    return offered_tasks
+
+def recommendation_task_scope(request: LeadRecommendationRequestPayload, available_tasks: Mapping[str, AuthoringScope]) -> tuple[AuthoringScope, AuthoringScope]:
+    request_scope = request.authoring_scope
+    if request_scope is None:
+        raise BackendProtocolError("legacy recommendation requires fresh scoped planning")
+    current_scope = available_tasks.get(request_scope.task_id)
+    if current_scope is None or current_scope.task_revision != request_scope.task_revision:
+        raise BackendProtocolError("recommendation task revision is no longer current")
+    return request_scope, current_scope
+
+def recommendation_task_offers(request_scope: AuthoringScope, current_scope: AuthoringScope, decision: LeadRecommendationDecision) -> dict[tuple[str, int], AuthoringScope | None]:
+    revision = request_scope.task_revision + int(decision.kind is CollaborationConfirmationDecision.REVISE)
+    offered_tasks = {(request_scope.task_id, revision): current_scope}
+    if decision.kind is CollaborationConfirmationDecision.CONFIRM:
+        offered_tasks[(request_scope.task_id, request_scope.task_revision + 1)] = current_scope
+    return offered_tasks
+
+def review_source_revision(receipt: LeadTaskTransitionReceipt | None, expected_relation: LeadProposalRelation, previous_proposal: CollaborationProposal | None, previous_scope: AuthoringScope | None, events: tuple[CollaborationEvent, ...], task_material_events: tuple[CollaborationEvent, ...]) -> bool:
+    source_review_revision = bool(
+        receipt is not None
+        and receipt.origin_kind == "revise_decision"
+        and expected_relation is LeadProposalRelation.REVISE_PENDING
+        and previous_proposal is not None
+        and previous_scope is not None
+        and previous_proposal.authoring_scope == previous_scope
+        and previous_scope.activity is AuthoringActivity.REVIEW
+        and receipt.source_task_ref is not None
+        and (
+            receipt.source_task_ref.task_id,
+            receipt.source_task_ref.task_revision,
+        ) == (previous_scope.task_id, previous_scope.task_revision)
+        and not task_material_events
+        and not any(
+            type(item.payload) is ArtifactReviewCandidatePayload
+            and (
+                item.payload.consultation_proposal_id,
+                item.payload.consultation_proposal_revision,
+                item.payload.consultation_proposal_digest,
+            ) == (
+                previous_proposal.proposal_id,
+                previous_proposal.proposal_revision,
+                previous_proposal.proposal_digest,
+            )
+            for item in events
+        )
+    )
+    return source_review_revision
+
+def local_binding_scopes(available_tasks: Mapping[str, AuthoringScope], events: tuple[CollaborationEvent, ...], conversation_id: str) -> list[AuthoringScope]:
+    local_ids = {event.payload.authoring_scope.task_id
+        for event in events if event.conversation_id == conversation_id
+        and getattr(event.payload, "authoring_scope", None) is not None
+        and event.payload.authoring_scope.task_id in available_tasks}
+    local_scopes = [available_tasks[identity] for identity in local_ids
+        if available_tasks[identity].activity is not AuthoringActivity.WORKFLOW]
+    return local_scopes
