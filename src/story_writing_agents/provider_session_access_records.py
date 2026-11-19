@@ -25,7 +25,7 @@ def validate_access_claim(value: object, session_id: str) -> dict[str, Any]:
         "claim_token",
         "claimed_at",
     }
-    if not isinstance(value, dict) or set(value) != expected:
+    if not isinstance(value, dict) or set(value) < expected:
         raise WorkspaceFormatError(
             "provider session access claim has an invalid schema"
         )
