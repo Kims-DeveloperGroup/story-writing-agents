@@ -1787,6 +1787,33 @@
     "existing_BudgetCase_strict_source_pair": 4
   },
   "counting": "raw149448\u2192149478, support4689, 1550 legacy. Existing Case/subTest/worker limits retained."
+},
+{
+  "issue": 1064,
+  "origin_commit": "89439136d8b9fc2e014bbf0be1a5d03382d942bf",
+  "origins": [
+    {
+      "source": "tests/test_antigravity_adapter.py",
+      "sha256": "0ca7280e4c5ca0aab7769a0758c2a65b676982c55e30f402d1fdebc9af208576"
+    }
+  ],
+  "approved_source_delta": 68,
+  "planned_raw_delta": 68,
+  "planned_support_delta": 0,
+  "legacy_unresolved_lines": 1550,
+  "exact_source_pair": [
+    155717,
+    155785
+  ],
+  "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
+  "generic_tooling_ordinary_delta_excluded": 0,
+  "generic_tooling_physical_delta_excluded": 0,
+  "cost_components": {
+    "real_case_definition_transport_net": 18,
+    "existing_RAG_API_graph_packaging": 31,
+    "existing_BudgetCase_registration_alias_and_exact_source_pair": 19
+  },
+  "counting": "raw149478\u2192149546, support4689, 1550 legacy. Existing Case/subTest/time/worker unchanged."
 }
 
   ]
