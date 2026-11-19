@@ -32,7 +32,7 @@ from story_writing_agents import (
     ReplyTraceOrigin,
 )
 from story_writing_agents.antigravity_adapter import AntigravityAdapter
-from story_writing_agents.codex_adapter import CodexAdapter
+from story_writing_agents.codex_definition_sources import read_definition_source
 from story_writing_agents.agent_context import (
     ContextComponentKind,
     ProviderCallKind,
@@ -544,7 +544,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         for definition in (specialist, lead):
             self.assertIs(definition.provider_managed_context, True)
             self.assertEqual(definition.context_document_files, ())
-            codex_bytes, codex_components = CodexAdapter._definition_file(definition)
+            codex_bytes, codex_components = read_definition_source(definition)
             agy_bytes, agy_components = AntigravityAdapter._definition_file(definition)
             role = definition.system_prompt_file.content
             prefix = role + b"\n" + definition.persona_file.content + b"\n" + f"Output:{definition.language}.\n".encode()
@@ -561,7 +561,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             if definition is specialist:
                 self.assertIn(b"Do not invoke tools except the bound provider's required structured-result\ndelivery mechanism", role)
             self.assertNotIn(b"Use finish only", codex_bytes[len(prefix):])
-            self.assertEqual(CodexAdapter._definition_file(definition), (codex_bytes, codex_components))
+            self.assertEqual(read_definition_source(definition), (codex_bytes, codex_components))
             self.assertEqual(AntigravityAdapter._definition_file(definition), (agy_bytes, agy_components))
             self.assertEqual(definition.system_prompt_file.content, role)
         self.assertEqual(lead.fingerprint, "0" * 64)

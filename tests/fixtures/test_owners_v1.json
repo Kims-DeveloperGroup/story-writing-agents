@@ -19319,6 +19319,27 @@
         "context-execution-fixture",
         "lead-fixtures.material-values"
       ]
+    },
+    {
+      "name": "codex.definition-sources",
+      "boundary": "existing-cases",
+      "paths": [
+        "src/story_writing_agents/codex_definition_sources.py"
+      ],
+      "focused_ids": [
+        "tests.test_agent_policy_composition.AgentPolicyCompositionTests.test_provider_bindings_use_captured_composed_bytes_after_source_mutation",
+        "tests.test_codex_backend.CodexBackendTestCase.test_binding_stages_immutable_bytes_after_all_source_paths_become_unsafe",
+        "tests.test_codex_backend.CodexBackendTestCase.test_post_staging_validation_failure_discards_provisional_bytes"
+      ],
+      "affected_ids": [
+        "tests.test_agent_policy_composition.AgentPolicyCompositionTests.test_provider_bindings_use_captured_composed_bytes_after_source_mutation",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_contextual_binding_shared_semantics_and_vendor_constraints_are_exact",
+        "tests.test_codex_backend.CodexBackendTestCase.test_binding_stages_immutable_bytes_after_all_source_paths_become_unsafe",
+        "tests.test_codex_backend.CodexBackendTestCase.test_binding_stages_isolated_agents_and_turn_omits_static_prompt",
+        "tests.test_codex_backend.CodexBackendTestCase.test_post_staging_validation_failure_discards_provisional_bytes",
+        "tests.test_codex_backend.CodexBackendTestCase.test_reference_read_invoke_isolated_for_all_roles_and_rounds"
+      ],
+      "depends_on": []
     }
   ],
   "ignored_names": [
