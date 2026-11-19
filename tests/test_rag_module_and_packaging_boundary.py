@@ -2408,7 +2408,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
         self.assertFalse(hasattr(story_writing_agents, "read_definition_source"))
         self.assertIs(backend_module.provider_thread_records, provider_thread_records)
         self.assertIs(backend_module.provider_session_timestamps, provider_session_timestamps)
-        self.assertIs(provider_thread_records.provider_session_timestamps, provider_session_timestamps)
+        self.assertIs(provider_thread_records.parse_record_timestamp, provider_session_timestamps.parse_record_timestamp)
         self.assertEqual(get_type_hints(provider_thread_records.validate_thread_record),
                          {"value": Any, "return": dict[str, Any]})
         self.assertEqual(get_type_hints(provider_session_timestamps.record_timestamp), {"return": str})
