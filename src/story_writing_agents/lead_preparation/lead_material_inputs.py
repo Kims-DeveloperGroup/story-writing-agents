@@ -60,6 +60,10 @@ from ..artifact_proposals import serialize_artifact_review_candidate
 from ..conversations.events import shared_premises_to_dict
 from ..specialist_routing import specialists_for_domains
 from ..specialist_routing import stage_plan_to_dict
+from ..document_plan import DocumentNodeSelection
+from ..document_plan import DocumentPlanView
+from ..lead_task_transitions import LeadMaterialCapture
+from ..document_plan import document_plan_to_dict
 
 
 def selected_task_material(
@@ -477,3 +481,40 @@ def premise_synthesis_values(
             for event_id, reply, assignment in zip(ids, replies, proposal.assignments, strict=True)],
     }
     return ids, facts, value
+
+
+def selected_task_input(event: CollaborationEvent, ordinal: int, capture: LeadMaterialCapture) -> CollaborationInputRevision:
+    return CollaborationInputRevision(
+        input_id=f"selected_material_{ordinal}", kind=CollaborationInputKind.CONVERSATION_EVENT,
+        locator=f"conversation/{event.event_id}",
+        revision_digest="sha256:" + capture.material_digest,
+        state=CollaborationInputState.PRESENT,
+
+    )
+
+def document_candidate_input_material(inputs: tuple[CollaborationInputRevision, ...]) -> list[dict[str, object]]:
+    return [
+        {
+            "input_id": item.input_id,
+            "kind": item.kind.value,
+            "locator": item.locator,
+            "revision_digest": item.revision_digest,
+            **({"start_line": item.start_line, "end_line": item.end_line}
+               if item.start_line is not None else {}),
+        }
+        for item in inputs
+    ]
+
+def document_work_plan_material(view: DocumentPlanView, selection: DocumentNodeSelection | None) -> dict[str, object]:
+    return {
+        "plan": document_plan_to_dict(view.plan), "original_goal": view.goal_text,
+        "current_confirmed_node_id": view.current_node_id,
+        "completed_target_paths": list(view.completed_target_paths),
+        "unfinished_inactive_targets": [path for path in view.plan.remaining_target_paths
+            if path not in view.completed_target_paths],
+        "physical_calls_spent": view.physical_calls_spent,
+        "cumulative_plan_physical_calls": view.cumulative_plan_physical_calls,
+        "authority": "Plan/input guidance only; each exact executed node requires its own disclosed Confirm, final review, Apply and Commit.",
+        **({"replacement_window_guidance": "Propose the exact selected document node directly for its own Confirm, or ask for missing inputs. A preparation-only recommendation cannot carry a replacement window."}
+           if selection is not None and selection.target_path is not None else {}),
+    }

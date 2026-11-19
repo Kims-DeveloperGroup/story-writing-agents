@@ -53,6 +53,8 @@ from ..errors import BackendProtocolError
 from ..reply_trace import ReplyTrace, ReplyTraceOrigin
 from ..specialist_routing import AuthoringIntent, ReviewBasis
 from ..runtime_resources import collaboration_event_journal as event_journal
+from ..conversations import CollaborationLeadOutcomeFailureCode
+from ..conversations import LeadProviderOutcome
 
 BUDGET_POLICY_FINGERPRINT = (
     "sha256:"
@@ -573,3 +575,22 @@ def proposal_basis_digest(proposal: CollaborationProposal) -> str:
             "route": proposal.basis.route_fingerprint,
         }
     )
+
+
+def lead_rejection_failure_code(source_owner_rejection: bool, prepare_selected: bool, declared_artifact_intent: bool, decoded: LeadProviderOutcome | None) -> CollaborationLeadOutcomeFailureCode:
+    if source_owner_rejection:
+        artifact_failure = prepare_selected or declared_artifact_intent or (
+            decoded is not None and decoded.artifact_intent is not None
+        )
+        correction_failure_code = (
+            CollaborationLeadOutcomeFailureCode.ARTIFACT_INTENT_REJECTED
+            if artifact_failure
+            else (
+                CollaborationLeadOutcomeFailureCode.EVIDENCE_VALIDATION_REJECTED
+            )
+        )
+    else:
+        correction_failure_code = (
+            CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED
+        )
+    return correction_failure_code

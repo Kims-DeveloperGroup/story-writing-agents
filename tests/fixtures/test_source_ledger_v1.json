@@ -1453,13 +1453,13 @@
           "counting": "Existing single definitions move to already counted support. No body duplication or old support recharge; existing consumers import public owners with original local aliases."
         }
       ],
-      "approved_source_delta": 294,
-      "planned_raw_delta": 285,
+      "approved_source_delta": 354,
+      "planned_raw_delta": 345,
       "planned_support_delta": 9,
       "legacy_unresolved_lines": 1550,
       "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
       "generic_tooling_physical_delta_excluded": 17,
-      "notes": "Issue1048 cumulative first contracts/decoders/canonical revision leaf, stage2 nine policies, and stage3 thirty-one Lead value APIs. Source-only aggregate154774 to155068 (+294=raw285/support9); current raw148829/support4689/legacy1550. Stage3 adds116 raw: API31+supplier imports5+packaging2+closed public exports37+old supplier entries9+new owner graph rows32. Existing Cases/Story scenarios/subTests, ID receipts, weights, profiles, launch/order, workers and time budgets unchanged. Generic strict guard remains17 ordinary/physical lines outside frozen scope with stage3 additional0. Existing eager/postponed annotation styles and original concrete guards are preserved. Actual official Actions, not static proofs, establish runtime/timing qualification; remaining Issue1048 host scope is not replaced by this slice.",
+      "notes": "Issue1048 cumulative first contracts/decoders/canonical revision leaf, stage2 nine value policies, stage3 thirty-one Lead policies and stage4 twenty-two remaining policies in seven existing owners. Single source-only aggregate154774 to155128 (+354=raw345/support9); actual raw148889/support4689/legacy1550. Stage4 adds60 raw: independent API rows22+actual module imports2+existing closed export rows10+history export row10+planned public name1+actual supplier expected rows15. Existing Cases/Story scenarios/assertions/subTests, fixture/MRO/cold-import lifetimes, ID receipts, weights, profile, launch/order, workers and time caps unchanged. Generic strict guard remains17 ordinary/physical lines outside frozen scope with stage4 additional0. Retained resource/cleanup host logic and full C1-C4 closure are adjudicated by Root from authoritative runtime/official CI evidence, not this source ledger alone.",
       "stage2": {
         "new_API_count": 9,
         "existing_owners": [
@@ -1497,6 +1497,31 @@
           "front_constraints required keyword-only selected_path"
         ],
         "annotation_styles": "new two eager; existing suppliers preserve eager/postponed raw contracts; canonical get_type_hints"
+      },
+      "stage4": {
+        "API_count": 22,
+        "existing_owner_files": 7,
+        "new_owner_modules": 0,
+        "source_delta_from031989": 60,
+        "raw_delta_from031989": 60,
+        "support_delta_from031989": 0,
+        "cost_components": {
+          "API_table": 22,
+          "module_imports": 2,
+          "existing_explicit_export_rows": 10,
+          "history_export_rows": 10,
+          "planned_public_name": 1,
+          "supplier_expected_rows": 15
+        },
+        "new_Cases_assertions_scenarios_IDmoves_receipts": 0,
+        "generic_additional_delta": 0,
+        "required_supply_supplements": [
+          "validate_document_task_origin required offered_tasks/selected_path keyword-only",
+          "review_source_revision required sixth task_material_events",
+          "document_lineage_front_cap only under old document guard",
+          "front_budget_limits ordinary cap and task receipt",
+          "clarify_unprepared_authoring_proposal required document_selection/document_node keyword-only"
+        ]
       }
     }
   ]

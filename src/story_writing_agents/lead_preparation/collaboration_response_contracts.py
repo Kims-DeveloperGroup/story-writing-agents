@@ -30,6 +30,8 @@ from ..conversations.event_vocabulary import LeadProposalRelation
 from ..lead_task_transitions import LeadTaskTransitionReceipt
 from typing import Mapping
 from . import response_rules
+from ..conversations import CollaborationEvent
+from ..lead_task_transitions import LeadTaskAction
 
 
 LEAD_CORRECTABLE_RESPONSE_REJECTION_CODES = frozenset(
@@ -240,4 +242,24 @@ __all__ = (
     'LEAD_CORRECTABLE_RESPONSE_REJECTION_CODES',
     'LEAD_RESPONSE_CORRECTION_INSTRUCTION',
     'prepare_lead_rule_seed',
+    'task_discussion_constraints',
 )
+
+
+def task_discussion_constraints(transition: CollaborationEvent, receipt: LeadTaskTransitionReceipt, discussion_only: bool) -> LeadDiscussionConstraints | None:
+    ref = receipt.source_task_ref
+    discussion_constraints = LeadDiscussionConstraints(
+        transition.event_id, None if ref is None else ref.task_id,
+        None if ref is None else ref.task_revision,
+    ) if (
+    discussion_only
+    or (
+        receipt.target_task_id is not None
+        and receipt.target_task_revision is not None
+        and (
+            receipt.action in {LeadTaskAction.RESUME, LeadTaskAction.NEW_TASK}
+            or receipt.origin_kind == "revise_decision"
+        )
+    )
+    ) else None
+    return discussion_constraints

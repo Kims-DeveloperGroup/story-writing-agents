@@ -18,6 +18,22 @@ from ..document_plan import document_node_selection_to_dict
 from . import lead_material_inputs
 from ..agent_task_projection import project_agent_task_metadata
 from . import reply_contract_values
+from ..conversations import COLLABORATION_PHYSICAL_CALL_LIMIT
+from ..conversations import COLLABORATION_ROUND_LIMIT
+from ..conversations import CollaborationInputKind
+from ..conversations import CollaborationInputState
+from ..conversations import CollaborationInvocationKind
+from ..conversations import CollaborationProposal
+from ..conversations import CollaborationProviderCallPayload
+from ..conversations import CollaborationProviderCallState
+from ..document_plan import DocumentCandidateUseIntent
+from ..document_plan import DocumentPlanningGoalRef
+from ..lead_exploration import ExplorationAdoptionCapture
+from ..conversations import LeadProposalRelation
+from ..lead_task_transitions import LeadTaskTransitionReceipt
+from ..lead_premise_decisions import PremiseSelectionCapture
+from .recommendation_preparation import RecommendationCapability
+from ..agents import SPECIALIST_IDS
 
 
 def lead_front_material_prefix(
@@ -109,4 +125,64 @@ __all__ = (
     'lead_front_material_prefix',
     'lead_front_material_suffix',
     'recommendation_preparation_material',
+    'document_lineage_front_cap',
+    'front_budget_limits',
+    'adopted_idea_input',
+    'selected_premise_input',
+    'document_candidate_material_inputs',
+    'front_submitted_call_count',
 )
+
+
+def document_lineage_front_cap(ordinary_front_cap: int | None, inherited_calls: int, inherited_rounds: int) -> int:
+    ordinary_front_cap = min(reply_contract_values.CONTEXT_INVOCATION_CALL_LIMIT if ordinary_front_cap is None else ordinary_front_cap,
+        max(0, COLLABORATION_PHYSICAL_CALL_LIMIT - inherited_calls))
+    if inherited_rounds >= COLLABORATION_ROUND_LIMIT:
+        ordinary_front_cap = 0
+    return ordinary_front_cap
+
+def front_budget_limits(ordinary_front_cap: int | None, task_receipt: LeadTaskTransitionReceipt | None, document_goal: DocumentPlanningGoalRef | None, projection: CollaborationHistoryProjection | None, document_node: DocumentNodeBinding | None, preparation: RecommendationCapability | None, previous_proposal: CollaborationProposal | None, expected_relation: LeadProposalRelation) -> tuple[int | None, bool]:
+    if (document_node is None and document_goal is not None and task_receipt is None
+            and projection is not None):
+        current_view = next((view for view in projection.document_plans if view.plan.ref.plan_id == document_goal.plan_id), None)
+        if current_view is not None:
+            ordinary_front_cap = min(reply_contract_values.CONTEXT_INVOCATION_CALL_LIMIT if ordinary_front_cap is None else ordinary_front_cap,
+                                     current_view.remaining_physical_calls)
+    successor_only = (document_node is None and document_goal is None and
+        ordinary_front_cap is not None and ordinary_front_cap < 1
+        and preparation is None and previous_proposal is None
+        and expected_relation is LeadProposalRelation.NEW_STEP
+    )
+    if successor_only:
+        # A fresh revision owns new finite accounting, never the exhausted source's calls.
+        # Reserve full three-role draft/synthesis plus two preparation and four final calls.
+        ordinary_front_cap = min(reply_contract_values.CONTEXT_INVOCATION_CALL_LIMIT,
+                                 COLLABORATION_PHYSICAL_CALL_LIMIT - (2 * len(SPECIALIST_IDS) + 4))
+    return ordinary_front_cap, successor_only
+
+def adopted_idea_input(capture: ExplorationAdoptionCapture, event_id: str) -> CollaborationInputRevision:
+    return CollaborationInputRevision(
+        input_id="adopted_idea", kind=CollaborationInputKind.CONVERSATION_EVENT,
+        state=CollaborationInputState.PRESENT,
+        locator=f"conversation/{event_id}",
+        revision_digest=f"sha256:{capture.selected_material_digest}",
+    )
+
+def selected_premise_input(capture: PremiseSelectionCapture, event_id: str) -> CollaborationInputRevision:
+    return CollaborationInputRevision(
+        input_id="selected_premise", kind=CollaborationInputKind.CONVERSATION_EVENT,
+        state=CollaborationInputState.PRESENT, locator=f"conversation/{event_id}",
+        revision_digest="sha256:" + capture.material_digest,
+    )
+
+def document_candidate_material_inputs(intents: tuple[DocumentCandidateUseIntent, ...], inputs: tuple[CollaborationInputRevision, ...]) -> tuple[CollaborationInputRevision, ...]:
+    candidate_aliases = {f"plan_candidate_{index}" for index, _ in enumerate(intents, 1)}
+    candidate_inputs = tuple(item for item in inputs if item.input_id in candidate_aliases)
+    return candidate_inputs
+
+def front_submitted_call_count(events: tuple[CollaborationEvent, ...], step_id: str) -> int:
+    return sum(type(event.payload) is CollaborationProviderCallPayload
+                and event.step_id == step_id
+                and event.payload.invocation_kind is not CollaborationInvocationKind.LEAD_DISCUSSION
+                and event.payload.state is CollaborationProviderCallState.SUBMITTED
+                for event in events)

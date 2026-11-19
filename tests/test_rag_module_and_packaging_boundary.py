@@ -37,6 +37,8 @@ from story_writing_agents.lead_preparation import (
     lead_document_nodes,
     lead_evidence_receipts,
     lead_front_values,
+    authoring_source_history,
+    reply_contract_values,
 )
 import story_writing_agents
 from story_writing_agents import conversations
@@ -372,7 +374,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
         self.assertEqual(len(modules), 286)
-        self.assertEqual(len(edges), 1754)
+        self.assertEqual(len(edges), 1768)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -1228,6 +1230,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             "story_writing_agents.orchestrator",
             "story_writing_agents.lead_preparation.artifact_objective_planning",
             "story_writing_agents.lead_preparation.artifact_review_planning",
+            'story_writing_agents.lead_preparation.lead_front_values',
             "story_writing_agents.lead_preparation.lead_consultation_planning",
         })
         proposal_values_owner = "story_writing_agents.lead_preparation.proposal_basis_values"
@@ -1269,6 +1272,11 @@ class RagModuleBoundaryTests(unittest.TestCase):
             'story_writing_agents.lead_preparation.authoring_authority',
             'story_writing_agents.specialist_routing',
             'story_writing_agents.lead_preparation.reply_contract_values',
+            'story_writing_agents.conversations',
+            'story_writing_agents.errors',
+            'story_writing_agents.lead_task_transitions',
+            'story_writing_agents.runtime_resources',
+            'story_writing_agents.runtime_resources.collaboration_event_journal',
             'story_writing_agents.writing_artifacts',
         })
         self.assertEqual({source for source, target in edges if target == lead_document_nodes}, {"story_writing_agents.orchestrator"})
@@ -1311,6 +1319,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
             'story_writing_agents.lead_task_transitions',
             'story_writing_agents.runtime_resources',
             'story_writing_agents.runtime_resources.collaboration_event_journal',
+            'story_writing_agents.authoring_task_lifecycle',
+            'story_writing_agents.lead_preparation.reply_contract_values',
             'story_writing_agents.specialist_routing',
         })
         self.assertEqual({source for source, target in edges if target == authoring_source_history_owner}, {
@@ -1499,6 +1509,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                     'objective_facts',
                     'objective_capture_inputs',
                     'objective_document_window',
+                    'clarify_unprepared_authoring_proposal',
                     'objective_drafts_for_values',
                 },
                 {
@@ -1594,6 +1605,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 'story_writing_agents.lead_exploration',
                 'story_writing_agents.lead_preparation.response_rules',
                 'story_writing_agents.lead_task_transitions',
+                'story_writing_agents.conversations',
                 'story_writing_agents.specialist_routing',
             }, {'story_writing_agents.orchestrator'}),
             (collaboration_response_decoding, {
@@ -1648,6 +1660,12 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 'story_writing_agents.lead_preparation.lead_material_inputs',
                 'story_writing_agents.lead_preparation.reply_contract_values',
                 'story_writing_agents.lead_provider_contracts',
+                'story_writing_agents.agents',
+                'story_writing_agents.conversations',
+                'story_writing_agents.lead_exploration',
+                'story_writing_agents.lead_premise_decisions',
+                'story_writing_agents.lead_preparation.recommendation_preparation',
+                'story_writing_agents.lead_task_transitions',
                 'story_writing_agents.specialist_routing',
             }, {'story_writing_agents.orchestrator'}),
         ):
@@ -1812,8 +1830,18 @@ class RagModuleBoundaryTests(unittest.TestCase):
         self.assertIsInstance(specialist_advisory_values.ADVISORY_USER_IMPACT, str)
         for owner, exported in (
             (collaboration_response_decoding, ('decode_artifact_synthesis', 'decode_specialist_reply', 'decode_lead_synthesis', 'required_unresolved_input_ids', 'decode_continuation_intent', 'normalize_locked_collaboration_answer')),
-            (collaboration_response_contracts, ('specialist_result_contract', 'lead_synthesis_result_contract', 'LEAD_CORRECTABLE_RESPONSE_REJECTION_CODES', 'LEAD_RESPONSE_CORRECTION_INSTRUCTION', 'prepare_lead_rule_seed')),
+            (collaboration_response_contracts, ('specialist_result_contract', 'lead_synthesis_result_contract', 'LEAD_CORRECTABLE_RESPONSE_REJECTION_CODES', 'LEAD_RESPONSE_CORRECTION_INSTRUCTION', 'prepare_lead_rule_seed', 'task_discussion_constraints')),
             (artifact_revision_sources, ('artifact_revision_source',)),
+            (authoring_source_history, (
+                'ordinary_front_call_cap',
+                'historical_authoring_users',
+                'current_previous_scope',
+                'authoring_task_offers',
+                'recommendation_task_scope',
+                'recommendation_task_offers',
+                'review_source_revision',
+                'local_binding_scopes',
+            )),
             (lead_answer_authority, (
                 'discussion_report',
                 'exploration_answer_content',
@@ -1843,6 +1871,12 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 'lead_front_material_prefix',
                 'lead_front_material_suffix',
                 'recommendation_preparation_material',
+                'document_lineage_front_cap',
+                'front_budget_limits',
+                'adopted_idea_input',
+                'selected_premise_input',
+                'document_candidate_material_inputs',
+                'front_submitted_call_count',
             )),
             (lead_document_nodes, (
                 'document_plan_views',
@@ -1850,6 +1884,10 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 'automatic_document_node',
                 'document_candidate_inputs',
                 'validate_document_target',
+                'document_selection_from_transition',
+                'retained_document_node',
+                'implicit_document_goal',
+                'validate_document_task_origin',
             )),
         ):
             self.assertEqual(set(owner.__all__), set(exported))
@@ -1905,6 +1943,28 @@ class RagModuleBoundaryTests(unittest.TestCase):
             (lead_front_values, 'lead_front_material_prefix', ('document_selection', 'document_node', 'candidate_material', 'conversation_id', 'constraints', 'historical_user_sources', 'objective_projection'), (), {}, False),
             (lead_front_values, 'lead_front_material_suffix', ('objective_projection', 'objective_events', 'binding_prior', 'ordinary_front_cap', 'successor_only', 'inputs'), (), {}, False),
             (lead_front_values, 'recommendation_preparation_material', ('request_event', 'decision_event', 'start_event', 'inputs', 'candidate_material_by_input', 'objective_events'), (), {}, False),
+            (lead_document_nodes, 'document_selection_from_transition', ('controls', 'transition_event_id'), (), {}, True),
+            (lead_document_nodes, 'retained_document_node', ('projection', 'retained_scope', 'retained_node'), (), {}, True),
+            (collaboration_response_contracts, 'task_discussion_constraints', ('transition', 'receipt', 'discussion_only'), (), {}, False),
+            (lead_document_nodes, 'implicit_document_goal', ('projection', 'history', 'current_goal', 'current_budget_task_id'), (), {}, True),
+            (lead_front_values, 'document_lineage_front_cap', ('ordinary_front_cap', 'inherited_calls', 'inherited_rounds'), (), {}, False),
+            (lead_front_values, 'front_budget_limits', ('ordinary_front_cap', 'task_receipt', 'document_goal', 'projection', 'document_node', 'preparation', 'previous_proposal', 'expected_relation'), (), {}, False),
+            (lead_material_inputs, 'selected_task_input', ('event', 'ordinal', 'capture'), (), {}, True),
+            (authoring_source_history, 'current_previous_scope', ('previous_scope', 'available_tasks'), (), {}, True),
+            (authoring_source_history, 'authoring_task_offers', ('previous_scope', 'available_tasks', 'events', 'conversation_id', 'step_id', 'successor_only'), (), {}, True),
+            (authoring_source_history, 'recommendation_task_scope', ('request', 'available_tasks'), (), {}, True),
+            (authoring_source_history, 'recommendation_task_offers', ('request_scope', 'current_scope', 'decision'), (), {}, True),
+            (lead_front_values, 'adopted_idea_input', ('capture', 'event_id'), (), {}, False),
+            (lead_front_values, 'selected_premise_input', ('capture', 'event_id'), (), {}, False),
+            (lead_document_nodes, 'validate_document_task_origin', ('origin', 'receipt', 'session_id', 'conversation_id', 'step_id', 'selection', 'offered_tasks', 'selected_path'), ('offered_tasks', 'selected_path'), {}, True),
+            (lead_material_inputs, 'document_candidate_input_material', ('inputs',), (), {}, True),
+            (authoring_source_history, 'review_source_revision', ('receipt', 'expected_relation', 'previous_proposal', 'previous_scope', 'events', 'task_material_events'), (), {}, True),
+            (authoring_source_history, 'local_binding_scopes', ('available_tasks', 'events', 'conversation_id'), (), {}, True),
+            (lead_front_values, 'document_candidate_material_inputs', ('intents', 'inputs'), (), {}, False),
+            (lead_material_inputs, 'document_work_plan_material', ('view', 'selection'), (), {}, True),
+            (lead_front_values, 'front_submitted_call_count', ('events', 'step_id'), (), {}, False),
+            (reply_contract_values, 'lead_rejection_failure_code', ('source_owner_rejection', 'prepare_selected', 'declared_artifact_intent', 'decoded'), (), {}, True),
+            (artifact_objective_planning, 'clarify_unprepared_authoring_proposal', ('outcome', 'document_selection', 'document_node'), ('document_selection', 'document_node'), {}, False),
         ):
             function = getattr(owner, function_name)
             self.assertEqual(function.__qualname__, function_name)

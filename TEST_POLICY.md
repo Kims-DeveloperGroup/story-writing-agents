@@ -1230,17 +1230,17 @@ ordinary16행/physical17행 증가로 별도 공개한다.
 
 사용자의 필요한 행 추가 포괄 승인을 적용한다. 수락 main
 `aac5d831437a5bcb4fdbc35f197eb3d4affb422b`의 raw148,544/support4,680/legacy1,550,
-합계154,774행에서 raw148,829/support4,689/legacy1,550, 합계155,068행으로
-정확히294행(raw285/support9)을 계상한다. 기존 네 Case의119물리행·35assert·cap3을
+합계154,774행에서 raw148,889/support4,689/legacy1,550, 합계155,128행으로
+정확히354행(raw345/support9)을 계상한다. 기존 네 Case의119물리행·35assert·cap3을
 정의 모듈로 옮기고 필수 helper3개를 단일 소유로 연결하며, 실제 공개 API·namespace·
 graph·packaging·선택/예산 경계의 기존 검증 비용을 포함한다. 이동 본문은 한 번만 세고
 기존 미확인1,550행과 이미 계상한 지원 코드를 공제하거나 다시 청구하지 않는다.
 
-source-only `154774→155068` 전이는 기존 schema1·Case2,544·각 ID/cap 및 전체 cap8,690의
+source-only `154774→155128` 전이는 기존 schema1·Case2,544·각 ID/cap 및 전체 cap8,690의
 동등성, 기존 시간18,000/3,600초와 함께 검증한다. 기존14개 이관 receipt·399 weight·
 163 profile/mixed19·30개 실행 클래스와 최대4worker를 바꾸지 않는다.
 `tests/suite_budget.py`의 정확 source 전이 guard17ordinary/17physical행은
-기존 frozen 계상 경계 밖의 물리 비용으로 별도 공개하며, stage3 추가분은0행이다.
+기존 frozen 계상 경계 밖의 물리 비용으로 별도 공개하며, stage3·stage4 추가분은0행이다.
 테스트/단언을 그곳으로 옮겨 비용을 누락시키지 않는다. 신규 Case·시나리오·subTest·
 시간/worker 예외는 없다.
 
@@ -1258,11 +1258,26 @@ stage1+stage2의 현재 전 단계 배정은178행(raw169/support9)이었다.
 stage3은 기존 Lead host 의미25개와 front 요청6개를 공개 owner에 연결한다. 필요한
 기존 RAG API table31행·module import5행·packaging 경로2행·명시 export37행·
 기존 supplier 기대집합9행·신규2owner graph32행, 합계116raw행을 추가 계상한다.
-전체 #1048 현재 배정은294행(raw285/support9)이다. 기존 module의 annotation 방식을
+전체 #1048 현재 배정은354행(raw345/support9)이다. 기존 module의 annotation 방식을
 보존하고 canonical 타입 공급·raw 주석 스타일·get_type_hints 검증을 구분한다.
 기존 assertion·부정 사례를 유지하며 실제 graph와 공개 경계에 검증을 맞춘다.
 
 중간154,914/154,916/154,951/154,952행 관측과 실패는 PR 이력에 보존한다.
 미통합 이슈의 중간값마다 source guard를 누적하지 않고 수락 main154,774에서 현재
-155,068로 가는 단일 정확 aggregate 전이만 갱신한다. 이후 실제 diff 비용과 기반 변경은
-정확히 다시 계상하며 이294행을 다른 작업의 여유나 예산 완화로 전용하지 않는다.
+155,128로 가는 단일 정확 aggregate 전이만 갱신한다. 이후 실제 diff 비용과 기반 변경은
+정확히 다시 계상하며 이354행을 다른 작업의 여유나 예산 완화로 전용하지 않는다.
+
+마지막 잔여 단계는 원래 문서·task-offer·revision·front 예산·거절·proposal 판단을
+기존7개 owner의22개 공개 API로 옮긴다. 조건부 lineage 값은 원래 guard/read 뒤 그 안에서
+별도 순수 예산 함수로 전달하며, current_scope 객체·previous_scope 대입·late decision과
+예외·I/O·callback 순서를 유지한다. 실제 기존 API 표22행·import2행·기존 export10행·
+history export10행·planned-public-name1행·실제 supplier 기대집합15행,
+합계60raw행을 추가 계상한다. stage3의155,068행에서155,128행으로 갱신하며
+전체 #1048은 raw345/support9, 합계354행이다. 중간155,068행은 당시 이력으로 보존하고
+source guard는 수락154,774에서 최종155,128로 가는 단일 aggregate pair만 유지한다.
+
+실제 현재 graph는286모듈/1,768간선(+14/-0), DAG이다. 계획상1,764간선 전망과 달리
+원래 task_identity_for_origin·receipt 타입·동일 USER_ACTOR의 필수 canonical 공급4간선을
+실제 구현에서 더 계상했으며 상향 Root 경로·private/globals 위반은 없다. 기존 Case·assertion·
+fixture·MRO·receipt·numeric weight·profile·generic17 guard를 보존한다. source 본문과 경계의
+정적 복원은 기능·성능·전체 CI·리뷰 완료를 대신하지 않으며 최종 동일 source의 공식 검증을 유지한다.
