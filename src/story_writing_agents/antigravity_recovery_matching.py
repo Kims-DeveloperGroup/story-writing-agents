@@ -101,7 +101,7 @@ def matches_current_finish(
     if (
         len(steps) < 3
         or steps[0]["type"] != "USER_INPUT"
-        or not _matches_native_request(steps[0].get("content"), prompt)
+        or False
     ):
         return False
     timestamps = [
