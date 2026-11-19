@@ -19391,6 +19391,58 @@
         "tests.test_antigravity_adapter.AntigravityRecoveryEvidenceTests.test_unsafe_native_paths_and_bounded_trace_reject"
       ],
       "depends_on": []
+    },
+    {
+      "name": "provider.thread-records",
+      "boundary": "existing-cases",
+      "paths": [
+        "src/story_writing_agents/provider_thread_records.py"
+      ],
+      "focused_ids": [
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_backend_routes_and_persists_antigravity_conversation_id",
+        "tests.test_codex_backend.CodexBackendTestCase.test_unsafe_persisted_thread_id_is_never_used_as_an_option",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_manifest_schema_is_strict_and_v1_is_rejected_unchanged"
+      ],
+      "affected_ids": [
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_backend_routes_and_persists_antigravity_conversation_id",
+        "tests.test_antigravity_parity.AntigravityParityTests.test_contextual_thread_bootstrap_delta_restart_and_scope_isolation_match_codex",
+        "tests.test_antigravity_parity.AntigravityParityTests.test_mixed_provider_dispatch_and_thread_locks_are_independent",
+        "tests.test_codex_backend.CodexBackendTestCase.test_contextual_submitted_failure_taints_only_exact_context_thread",
+        "tests.test_codex_backend.CodexBackendTestCase.test_structured_decode_failures_taint_existing_thread_once",
+        "tests.test_codex_backend.CodexBackendTestCase.test_unsafe_persisted_thread_id_is_never_used_as_an_option",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_absence_listing_order_and_configuration_validation_are_read_only",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_access_schema_duplicate_json_and_orphans_fail_closed",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_create_release_and_duplicate_create_use_exact_artifacts",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_manifest_schema_is_strict_and_v1_is_rejected_unchanged",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_reopen_and_pause_transitions_preserve_provider_state_and_noops"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "provider.session-timestamps",
+      "boundary": "existing-cases",
+      "paths": [
+        "src/story_writing_agents/provider_session_timestamps.py"
+      ],
+      "focused_ids": [
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_absence_listing_order_and_configuration_validation_are_read_only",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_access_schema_duplicate_json_and_orphans_fail_closed",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_reopen_and_pause_transitions_preserve_provider_state_and_noops"
+      ],
+      "affected_ids": [
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_backend_routes_and_persists_antigravity_conversation_id",
+        "tests.test_antigravity_parity.AntigravityParityTests.test_contextual_thread_bootstrap_delta_restart_and_scope_isolation_match_codex",
+        "tests.test_antigravity_parity.AntigravityParityTests.test_mixed_provider_dispatch_and_thread_locks_are_independent",
+        "tests.test_codex_backend.CodexBackendTestCase.test_contextual_submitted_failure_taints_only_exact_context_thread",
+        "tests.test_codex_backend.CodexBackendTestCase.test_structured_decode_failures_taint_existing_thread_once",
+        "tests.test_codex_backend.CodexBackendTestCase.test_unsafe_persisted_thread_id_is_never_used_as_an_option",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_absence_listing_order_and_configuration_validation_are_read_only",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_access_schema_duplicate_json_and_orphans_fail_closed",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_create_release_and_duplicate_create_use_exact_artifacts",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_manifest_schema_is_strict_and_v1_is_rejected_unchanged",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_reopen_and_pause_transitions_preserve_provider_state_and_noops"
+      ],
+      "depends_on": []
     }
   ],
   "ignored_names": [

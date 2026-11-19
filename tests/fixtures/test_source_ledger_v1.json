@@ -1814,6 +1814,42 @@
     "existing_BudgetCase_registration_alias_and_exact_source_pair": 19
   },
   "counting": "raw149478\u2192149546, support4689, 1550 legacy. Existing Case/subTest/time/worker unchanged."
+},
+
+{
+  "issue": 1067,
+  "origin_commit": "a57b837271bfc06725a00034cf3af0e986bb5d51",
+  "origins": [
+    {
+      "source": "tests/test_codex_backend.py",
+      "sha256": "71be91942432af37e3340bd58665fef07c33c5dfbd31cc79f2d22ebcd4707ba0"
+    },
+    {
+      "source": "tests/test_rag_module_and_packaging_boundary.py",
+      "sha256": "ada654a156be2d81d424df6ecdf6dcc479556610ef9ef03254e7243ec9210503"
+    },
+    {
+      "source": "tests/test_suite_budget.py",
+      "sha256": "6e53767b72cc285976f49306c13ee8773935cf9306df454a4eb0da8139f04808"
+    }
+  ],
+  "approved_source_delta": 57,
+  "planned_raw_delta": 57,
+  "planned_support_delta": 0,
+  "legacy_unresolved_lines": 1550,
+  "exact_source_pair": [
+    155785,
+    155842
+  ],
+  "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
+  "generic_tooling_ordinary_delta_excluded": 0,
+  "generic_tooling_physical_delta_excluded": 0,
+  "cost_components": {
+    "existing_RAG_API_graph_packaging": 53,
+    "same_case_direct_public_API": 0,
+    "existing_BudgetCase_strict_source_pair": 4
+  },
+  "counting": "raw149546\u2192149603, support4689, 1550 legacy. Existing Case/subTest/time/worker limits retained."
 }
 
   ]
