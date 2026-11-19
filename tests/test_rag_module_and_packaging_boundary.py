@@ -17,6 +17,7 @@ import textwrap
 import tomllib
 import unittest
 import zipfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any, get_type_hints
 from inspect import Parameter, signature
@@ -50,7 +51,8 @@ from story_writing_agents.consensus import (
 )
 from story_writing_agents import authoring_admission
 from story_writing_agents import backend as backend_module, backend_reply_decoding, conversation_retrieval, models
-from story_writing_agents.errors import BackendProtocolError
+from story_writing_agents import provider_session_timestamps, provider_thread_records
+from story_writing_agents.errors import BackendProtocolError, WorkspaceFormatError
 from story_writing_agents import antigravity_adapter, antigravity_recovery_matching, antigravity_response_decoding, antigravity_rules
 from story_writing_agents import codex_adapter, codex_definition_sources
 from story_writing_agents.agent_context import ContextComponentBytes
@@ -384,8 +386,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 321)
-        self.assertEqual(len(edges), 1952)
+        self.assertEqual(len(modules), 323)
+        self.assertEqual(len(edges), 1961)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -1936,6 +1938,27 @@ class RagModuleBoundaryTests(unittest.TestCase):
             {source for source, target in edges if target == antigravity_matching_owner},
             {"story_writing_agents.antigravity_adapter"},
         )
+        records_owner = provider_thread_records.__name__
+        stamps_owner = provider_session_timestamps.__name__
+        self.assertEqual(
+            {target for source, target in edges if source == records_owner},
+            {
+                "story_writing_agents.agent_context.contracts.errors",
+                "story_writing_agents.agent_context.manifest",
+                "story_writing_agents.errors",
+                "story_writing_agents.models",
+                stamps_owner,
+                "story_writing_agents.runtime_state_paths",
+                "story_writing_agents.session_lifecycle",
+            },
+        )
+        self.assertEqual({source for source, target in edges if target == records_owner},
+                         {"story_writing_agents.backend"})
+        self.assertEqual({target for source, target in edges if source == stamps_owner},
+                         {"story_writing_agents.errors"})
+        self.assertEqual({source for source, target in edges if target == stamps_owner},
+                         {"story_writing_agents.backend", records_owner})
+        self.assertNotIn(("story_writing_agents.backend", "story_writing_agents.runtime_state_paths"), edges)
 
 
     def test_supported_module_surfaces_do_not_expand_the_root_facade(self) -> None:
@@ -2161,6 +2184,13 @@ class RagModuleBoundaryTests(unittest.TestCase):
             (antigravity_recovery_matching, ("MALFORMED_FUNCTION_CALL", "NativeEvidenceUnavailable",
                                             "matches_current_finish", "native_steps")),
             (codex_definition_sources, ("read_definition_source",)),
+            (provider_thread_records, (
+                "PROVIDER_FINGERPRINT_PATTERN", "PROVIDER_SESSION_SCHEMA_VERSION", "PROVIDER_THREAD_ID_PATTERN",
+                "context_thread_id", "context_thread_key_payload", "context_thread_record", "context_thread_relative",
+                "select_thread_record", "store_thread_record", "taint_thread_record", "tainted_context_thread_record",
+                "thread_key", "validate_context_thread_key", "validate_session_manifest", "validate_thread_record",
+            )),
+            (provider_session_timestamps, ("advance_record_timestamp", "parse_record_timestamp", "record_timestamp")),
             (backend_reply_decoding, ("decode_conversation_retrieval_action", "decode_conversation_reply", "decode_reply", "PhaseReplyConstraintError")),
         ):
             self.assertEqual(set(owner.__all__), set(exported))
@@ -2261,6 +2291,11 @@ class RagModuleBoundaryTests(unittest.TestCase):
             (antigravity_recovery_matching, "matches_current_finish",
              ("steps", "prompt", "structured_output", "native_error"), (), {}, True),
             (codex_definition_sources, "read_definition_source", ("definition",), (), {}, True),
+            (provider_thread_records, "validate_thread_record", ("value",), (), {}, True),
+            (provider_session_timestamps, "record_timestamp", (), (), {}, True),
+            (provider_session_timestamps, "parse_record_timestamp", ("value", "label"), ("label",), {}, True),
+            (provider_session_timestamps, "advance_record_timestamp", ("previous", "candidate"),
+             ("candidate",), {"candidate": None}, True),
             (backend_reply_decoding, "decode_conversation_retrieval_action", ("text", "request", "action_index", "provider_name", "allowed_actions"), ("request", "action_index", "provider_name", "allowed_actions"), {"provider_name": "Codex", "allowed_actions": None}, True),
             (backend_reply_decoding, "decode_conversation_reply", ("request", "text", "provider_name"), ("provider_name",), {"provider_name": "Codex"}, True),
             (backend_reply_decoding, "decode_reply", ("phase", "text", "revision_id", "provider_name"), ("revision_id", "provider_name"), {"provider_name": "Codex"}, True),
@@ -2371,6 +2406,22 @@ class RagModuleBoundaryTests(unittest.TestCase):
         self.assertFalse(hasattr(codex_adapter.CodexAdapter, "_definition_file"))
         self.assertNotIn("read_definition_source", story_writing_agents.__all__)
         self.assertFalse(hasattr(story_writing_agents, "read_definition_source"))
+        self.assertIs(backend_module.provider_thread_records, provider_thread_records)
+        self.assertIs(backend_module.provider_session_timestamps, provider_session_timestamps)
+        self.assertIs(provider_thread_records.provider_session_timestamps, provider_session_timestamps)
+        self.assertEqual(get_type_hints(provider_thread_records.validate_thread_record),
+                         {"value": Any, "return": dict[str, Any]})
+        self.assertEqual(get_type_hints(provider_session_timestamps.record_timestamp), {"return": str})
+        self.assertEqual(get_type_hints(provider_session_timestamps.parse_record_timestamp),
+                         {"value": Any, "label": str, "return": datetime})
+        self.assertEqual(get_type_hints(provider_session_timestamps.advance_record_timestamp),
+                         {"previous": str, "candidate": str | None, "return": str})
+        self.assertIs(provider_thread_records.WorkspaceFormatError, WorkspaceFormatError)
+        self.assertIs(provider_session_timestamps.WorkspaceFormatError, WorkspaceFormatError)
+        self.assertFalse(hasattr(backend_module.AgentBackend, "_validate_thread"))
+        for name in (*provider_thread_records.__all__, *provider_session_timestamps.__all__):
+            self.assertNotIn(name, story_writing_agents.__all__)
+            self.assertFalse(hasattr(story_writing_agents, name))
         self.assertIs(get_type_hints(backend_reply_decoding.decode_reply)["phase"], models.Phase)
         self.assertIs(get_type_hints(backend_reply_decoding.decode_reply)["return"], models.AgentReply)
         self.assertIs(get_type_hints(backend_reply_decoding.decode_conversation_reply)["request"], models.ConversationRequest)
@@ -2653,6 +2704,8 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             "story_writing_agents/antigravity_rules.py",
             "story_writing_agents/backend_reply_decoding.py",
             "story_writing_agents/codex_definition_sources.py",
+            "story_writing_agents/provider_session_timestamps.py",
+            "story_writing_agents/provider_thread_records.py",
             )
             with zipfile.ZipFile(story_wheel) as archive:
                 for package_path in group_package_paths:

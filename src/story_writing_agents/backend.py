@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 import story_writing_agents.backend_reply_decoding as backend_reply_decoding
+import story_writing_agents.provider_session_timestamps as provider_session_timestamps
+import story_writing_agents.provider_thread_records as provider_thread_records
 from .agents import LEAD_ORCHESTRATOR
 from .provider_schema_projection import require_schema_projection
 from .provider_message_catalog import WIRE_VERSION, RETRIEVAL_ACTIONS, WireShapeError
@@ -39,7 +41,6 @@ from .structured_output_validation import (
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import ExitStack, asynccontextmanager, contextmanager
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping, TypeVar
@@ -213,7 +214,6 @@ from .writing_artifacts.read_actions import (
     ReferenceReadResult,
 )
 from .workspace import Workspace
-from .runtime_state_paths import CONTEXTUAL_PROVIDER_DIRECTORY
 from .workspace.root_contracts import main_workspace_root as _main_workspace_root
 from .workspace.session_artifact_binding import (
     SessionArtifactBinding,
@@ -225,19 +225,13 @@ from .workspace.session_resources import (
 )
 
 
-_SESSION_SCHEMA_VERSION = 2
 _ACCESS_CLAIM_SCHEMA_VERSION = 2
 _SESSION_DIRECTORY = "agent_states/orchestrator_state/provider_sessions"
-_CONTEXT_THREAD_SCHEMA_VERSION = 1
-_CONTEXT_THREAD_DIRECTORY = CONTEXTUAL_PROVIDER_DIRECTORY
 _CONTEXT_REFERENCE_TERMINATED_ATTRIBUTE = "_context_reference_terminated"
 _ACCESS_CLAIM_GUARD = f"{_SESSION_DIRECTORY}/.access-claims.lock"
 _UNSUPPORTED_V1_ACCESS_CLAIM_GUARD = f"{_SESSION_DIRECTORY}/.lease-claims.lock"
 _WINDOWS_LOCK_RETRY_SECONDS = 0.05
 _ACCESS_DIAGNOSTIC_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
-_SAFE_THREAD_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
-_SAFE_FINGERPRINT = re.compile(r"[0-9a-f]{64}")
-_SAFE_CONTEXT_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 
 
 async def _timed_provider_invoke(
@@ -1631,7 +1625,7 @@ class BoundAgent:
             or not definition.backend
             or self.vendor != definition.backend
             or not isinstance(definition.fingerprint, str)
-            or _SAFE_FINGERPRINT.fullmatch(definition.fingerprint) is None
+            or provider_thread_records.PROVIDER_FINGERPRINT_PATTERN.fullmatch(definition.fingerprint) is None
         ):
             AgentBackend._terminate_reference_read_without_replacing(
                 reference_read,
@@ -1717,7 +1711,7 @@ class BoundAgent:
             or not definition.backend
             or self.vendor != definition.backend
             or not isinstance(definition.fingerprint, str)
-            or _SAFE_FINGERPRINT.fullmatch(definition.fingerprint) is None
+            or provider_thread_records.PROVIDER_FINGERPRINT_PATTERN.fullmatch(definition.fingerprint) is None
         ):
             raise BackendProtocolError(
                 "bound agent definition is invalid for conversation routing"
@@ -1763,7 +1757,7 @@ class BoundAgent:
             or not definition.backend
             or self.vendor != definition.backend
             or not isinstance(definition.fingerprint, str)
-            or _SAFE_FINGERPRINT.fullmatch(definition.fingerprint) is None
+            or provider_thread_records.PROVIDER_FINGERPRINT_PATTERN.fullmatch(definition.fingerprint) is None
         ):
             raise BackendProtocolError(
                 "bound agent definition is invalid for conversation retrieval"
@@ -2840,7 +2834,7 @@ class AgentBackend:
                     )
                 states.sort(key=lambda state: state.session_id)
                 states.sort(
-                    key=lambda state: _parse_timestamp(
+                    key=lambda state: provider_session_timestamps.parse_record_timestamp(
                         state.updated_at,
                         label="provider session updated_at",
                     ),
@@ -3025,10 +3019,10 @@ class AgentBackend:
 
             token = uuid.uuid4().hex
             claim = self._new_access_claim(session, token)
-            now = _now()
-            _parse_timestamp(now, label="provider session timestamp")
+            now = provider_session_timestamps.record_timestamp()
+            provider_session_timestamps.parse_record_timestamp(now, label="provider session timestamp")
             manifest: dict[str, Any] = {
-                "schema_version": _SESSION_SCHEMA_VERSION,
+                "schema_version": provider_thread_records.PROVIDER_SESSION_SCHEMA_VERSION,
                 "session_id": session,
                 "durable_state": SessionDurableState.READY.value,
                 "created_at": now,
@@ -3103,7 +3097,7 @@ class AgentBackend:
                 assert manifest is not None
                 if manifest["durable_state"] != SessionDurableState.READY.value:
                     manifest["durable_state"] = SessionDurableState.READY.value
-                    manifest["updated_at"] = _advanced_timestamp(manifest["updated_at"])
+                    manifest["updated_at"] = provider_session_timestamps.advance_record_timestamp(manifest["updated_at"])
                     self._write_manifest(session, manifest)
                 state = self._session_lifecycle(manifest)
             except BaseException:
@@ -3152,7 +3146,7 @@ class AgentBackend:
                 assert manifest is not None
                 if manifest["durable_state"] != SessionDurableState.PAUSED.value:
                     manifest["durable_state"] = SessionDurableState.PAUSED.value
-                    manifest["updated_at"] = _advanced_timestamp(manifest["updated_at"])
+                    manifest["updated_at"] = provider_session_timestamps.advance_record_timestamp(manifest["updated_at"])
                     self._write_manifest(session, manifest)
             except BaseException:
                 if not already_owned:
@@ -5622,7 +5616,7 @@ class AgentBackend:
             raise failure
         if (
             type(result.thread_id) is not str
-            or _SAFE_THREAD_ID.fullmatch(result.thread_id) is None
+            or provider_thread_records.PROVIDER_THREAD_ID_PATTERN.fullmatch(result.thread_id) is None
         ):
             failure = ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
             record_context_provider_failure(
@@ -6817,7 +6811,7 @@ class AgentBackend:
                 raise WorkspaceFormatError(
                     "provider session access claim has an invalid string field"
                 )
-        _parse_timestamp(
+        provider_session_timestamps.parse_record_timestamp(
             value["claimed_at"],
             label="provider session access claimed_at",
         )
@@ -6841,7 +6835,7 @@ class AgentBackend:
             "owner_hostname": socket.gethostname(),
             "owner_pid": os.getpid(),
             "claim_token": token,
-            "claimed_at": _now(),
+            "claimed_at": provider_session_timestamps.record_timestamp(),
         }
 
     def _read_lifecycle_json(self, relative: str) -> Any:
@@ -6927,116 +6921,6 @@ class AgentBackend:
                 f"failed creation access cleanup: {type(cleanup_error).__name__}"
             )
 
-    @staticmethod
-    def _context_thread_key_payload(
-        scope: ContextScope,
-        provider_id: str,
-        definition_fingerprint: str,
-        policy_fingerprint: str,
-    ) -> dict[str, object]:
-        """Return the exact content-free identity for a contextual thread."""
-
-        return {
-            "definition_fingerprint": definition_fingerprint,
-            "policy_fingerprint": policy_fingerprint,
-            "provider_id": provider_id,
-            "scope": {
-                "agent_id": scope.agent_id,
-                "session_id": scope.session_id,
-                "subject_id": scope.subject_id,
-                "subject_kind": scope.subject_kind.value,
-                "workspace_id": scope.workspace_id,
-            },
-        }
-
-    @classmethod
-    def _context_thread_relative(
-        cls,
-        scope: ContextScope,
-        provider_id: str,
-        definition_fingerprint: str,
-        policy_fingerprint: str,
-    ) -> str:
-        payload = cls._context_thread_key_payload(
-            scope,
-            provider_id,
-            definition_fingerprint,
-            policy_fingerprint,
-        )
-        encoded = json.dumps(
-            ["provider-context-thread-v1", payload],
-            ensure_ascii=False,
-            allow_nan=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        ).encode("utf-8", errors="strict")
-        digest = hashlib.sha256(encoded).hexdigest()
-        return f"{_CONTEXT_THREAD_DIRECTORY}/{scope.session_id}/{digest}.json"
-
-    @classmethod
-    def _validated_context_thread_record(
-        cls,
-        value: object,
-        *,
-        scope: ContextScope,
-        provider_id: str,
-        definition_fingerprint: str,
-        policy_fingerprint: str,
-    ) -> dict[str, object] | None:
-        """Validate an exact record; corruption or key mismatch means unusable."""
-
-        expected_fields = {
-            "definition_fingerprint",
-            "key",
-            "policy_fingerprint",
-            "provider_id",
-            "schema_version",
-            "tainted",
-            "thread_id",
-            "updated_at",
-        }
-        if type(value) is not dict or set(value) != expected_fields:
-            return None
-        expected_key = cls._context_thread_key_payload(
-            scope,
-            provider_id,
-            definition_fingerprint,
-            policy_fingerprint,
-        )
-        if (
-            value["schema_version"] != _CONTEXT_THREAD_SCHEMA_VERSION
-            or value["key"] != expected_key
-            or value["provider_id"] != provider_id
-            or value["definition_fingerprint"] != definition_fingerprint
-            or value["policy_fingerprint"] != policy_fingerprint
-            or type(value["tainted"]) is not bool
-            or type(value["thread_id"]) is not str
-            or _SAFE_THREAD_ID.fullmatch(value["thread_id"]) is None
-            or type(value["updated_at"]) is not str
-        ):
-            return None
-        try:
-            _parse_timestamp(value["updated_at"], label="context thread updated_at")
-        except (TypeError, ValueError, WorkspaceFormatError):
-            return None
-        return dict(value)
-
-    @staticmethod
-    def _validate_context_thread_key(
-        scope: ContextScope,
-        provider_id: str,
-        definition_fingerprint: str,
-        policy_fingerprint: str,
-    ) -> None:
-        if (
-            type(scope) is not ContextScope
-            or type(provider_id) is not str
-            or not provider_id
-            or _SAFE_CONTEXT_DIGEST.fullmatch(definition_fingerprint) is None
-            or _SAFE_CONTEXT_DIGEST.fullmatch(policy_fingerprint) is None
-        ):
-            raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
-
     def _load_context_thread(
         self,
         scope: ContextScope,
@@ -7046,14 +6930,14 @@ class AgentBackend:
     ) -> str | None:
         """Load only one usable exact scoped continuation; otherwise bootstrap."""
 
-        self._validate_context_thread_key(
+        provider_thread_records.validate_context_thread_key(
             scope,
             provider_id,
             definition_fingerprint,
             policy_fingerprint,
         )
         self._assert_provider_work_ready(scope.session_id)
-        relative = self._context_thread_relative(
+        relative = provider_thread_records.context_thread_relative(
             scope,
             provider_id,
             definition_fingerprint,
@@ -7066,18 +6950,13 @@ class AgentBackend:
             value = self.workspace.read_json(relative)
         except WorkspaceFormatError:
             return None
-        record = self._validated_context_thread_record(
+        return provider_thread_records.context_thread_id(
             value,
             scope=scope,
             provider_id=provider_id,
             definition_fingerprint=definition_fingerprint,
             policy_fingerprint=policy_fingerprint,
         )
-        if record is None or record["tainted"]:
-            return None
-        thread_id = record["thread_id"]
-        assert isinstance(thread_id, str)
-        return thread_id
 
     def _store_context_thread(
         self,
@@ -7091,7 +6970,7 @@ class AgentBackend:
     ) -> None:
         """Persist a native continuation in the distinct contextual store."""
 
-        self._validate_context_thread_key(
+        provider_thread_records.validate_context_thread_key(
             scope,
             provider_id,
             definition_fingerprint,
@@ -7099,34 +6978,32 @@ class AgentBackend:
         )
         if (
             type(thread_id) is not str
-            or _SAFE_THREAD_ID.fullmatch(thread_id) is None
+            or provider_thread_records.PROVIDER_THREAD_ID_PATTERN.fullmatch(thread_id) is None
             or type(tainted) is not bool
         ):
             raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
         self._assert_owned_access(scope.session_id)
-        key = self._context_thread_key_payload(
+        key = provider_thread_records.context_thread_key_payload(
             scope,
             provider_id,
             definition_fingerprint,
             policy_fingerprint,
         )
         self.workspace.write_json(
-            self._context_thread_relative(
+            provider_thread_records.context_thread_relative(
                 scope,
                 provider_id,
                 definition_fingerprint,
                 policy_fingerprint,
             ),
-            {
-                "definition_fingerprint": definition_fingerprint,
-                "key": key,
-                "policy_fingerprint": policy_fingerprint,
-                "provider_id": provider_id,
-                "schema_version": _CONTEXT_THREAD_SCHEMA_VERSION,
-                "tainted": tainted,
-                "thread_id": thread_id,
-                "updated_at": _now(),
-            },
+            provider_thread_records.context_thread_record(
+                key=key,
+                definition_fingerprint=definition_fingerprint,
+                policy_fingerprint=policy_fingerprint,
+                provider_id=provider_id,
+                tainted=tainted,
+                thread_id=thread_id,
+            ),
         )
 
     def _taint_context_thread(
@@ -7138,14 +7015,14 @@ class AgentBackend:
     ) -> None:
         """Mark one matching contextual continuation permanently unusable."""
 
-        self._validate_context_thread_key(
+        provider_thread_records.validate_context_thread_key(
             scope,
             provider_id,
             definition_fingerprint,
             policy_fingerprint,
         )
         self._assert_owned_access(scope.session_id)
-        relative = self._context_thread_relative(
+        relative = provider_thread_records.context_thread_relative(
             scope,
             provider_id,
             definition_fingerprint,
@@ -7158,17 +7035,15 @@ class AgentBackend:
             value = self.workspace.read_json(relative)
         except WorkspaceFormatError:
             return
-        record = self._validated_context_thread_record(
+        record = provider_thread_records.tainted_context_thread_record(
             value,
             scope=scope,
             provider_id=provider_id,
             definition_fingerprint=definition_fingerprint,
             policy_fingerprint=policy_fingerprint,
         )
-        if record is None or record["tainted"]:
+        if record is None:
             return
-        record["tainted"] = True
-        record["updated_at"] = _now()
         self.workspace.write_json(relative, record)
 
     def _load_thread(
@@ -7181,22 +7056,15 @@ class AgentBackend:
         effective_fingerprint = (
             definition.fingerprint if fingerprint is None else fingerprint
         )
-        key = self._thread_key(
+        key = provider_thread_records.thread_key(
             definition,
             fingerprint=effective_fingerprint,
         )
         manifest = self._read_manifest(session_id, missing_ok=False)
         assert manifest is not None
-        raw = manifest["provider_threads"].get(key)
-        if raw is None:
-            return None
-        validated = self._validate_thread(raw)
-        if (
-            validated["fingerprint"] != effective_fingerprint
-            or validated["tainted"]
-        ):
-            return None
-        return validated
+        return provider_thread_records.select_thread_record(
+            manifest, key, effective_fingerprint,
+        )
 
     def _store_thread(
         self,
@@ -7209,7 +7077,7 @@ class AgentBackend:
     ) -> None:
         if (
             not isinstance(thread_id, str)
-            or _SAFE_THREAD_ID.fullmatch(thread_id) is None
+            or provider_thread_records.PROVIDER_THREAD_ID_PATTERN.fullmatch(thread_id) is None
         ):
             provider_name = "Codex" if definition.backend == "codex" else "Antigravity"
             raise BackendProtocolError(f"{provider_name} thread ID is invalid")
@@ -7217,23 +7085,17 @@ class AgentBackend:
         effective_fingerprint = (
             definition.fingerprint if fingerprint is None else fingerprint
         )
-        if _SAFE_FINGERPRINT.fullmatch(effective_fingerprint) is None:
+        if provider_thread_records.PROVIDER_FINGERPRINT_PATTERN.fullmatch(effective_fingerprint) is None:
             raise BackendProtocolError("provider thread fingerprint is invalid")
         manifest = self._read_manifest(session_id, missing_ok=False)
         assert manifest is not None
-        key = self._thread_key(
+        provider_thread_records.store_thread_record(
+            manifest,
             definition,
-            fingerprint=effective_fingerprint,
+            thread_id,
+            tainted=tainted,
+            effective_fingerprint=effective_fingerprint,
         )
-        manifest["provider_threads"][key] = {
-            "backend": definition.backend,
-            "agent_id": definition.agent_id,
-            "fingerprint": effective_fingerprint,
-            "thread_id": thread_id,
-            "tainted": tainted,
-            "updated_at": _now(),
-        }
-        manifest["updated_at"] = _advanced_timestamp(manifest["updated_at"])
         self._write_manifest(session_id, manifest)
 
     def _taint_thread(
@@ -7245,23 +7107,10 @@ class AgentBackend:
     ) -> None:
         manifest = self._read_manifest(session_id, missing_ok=False)
         assert manifest is not None
-        expected_fingerprint = (
-            definition.fingerprint if fingerprint is None else fingerprint
-        )
-        key = self._thread_key(
-            definition,
-            fingerprint=expected_fingerprint,
-        )
-        raw = manifest["provider_threads"].get(key)
-        if raw is None:
+        if not provider_thread_records.taint_thread_record(
+            manifest, definition, fingerprint=fingerprint,
+        ):
             return
-        thread = self._validate_thread(raw)
-        if thread["fingerprint"] != expected_fingerprint:
-            return
-        thread["tainted"] = True
-        thread["updated_at"] = _now()
-        manifest["provider_threads"][key] = thread
-        manifest["updated_at"] = _advanced_timestamp(manifest["updated_at"])
         self._write_manifest(session_id, manifest)
 
     def _assert_owned_access(self, session_id: str) -> None:
@@ -7326,127 +7175,12 @@ class AgentBackend:
                 f"run 'story session create {session_id}'"
             )
         value = self._read_lifecycle_json(relative)
-        if isinstance(value, dict):
-            schema_version = value.get("schema_version")
-            if (
-                isinstance(schema_version, int)
-                and not isinstance(schema_version, bool)
-                and schema_version != _SESSION_SCHEMA_VERSION
-            ):
-                raise WorkspaceVersionUnsupportedError(
-                    "unsupported provider session manifest schema version"
-                )
-        expected = {
-            "schema_version",
-            "session_id",
-            "durable_state",
-            "created_at",
-            "updated_at",
-            "provider_threads",
-        }
-        if not isinstance(value, dict) or set(value) != expected:
-            raise WorkspaceFormatError(
-                "provider session manifest has an invalid schema"
-            )
-        schema_version = value["schema_version"]
-        if isinstance(schema_version, bool) or not isinstance(schema_version, int):
-            raise WorkspaceFormatError(
-                "provider session manifest has an invalid schema version"
-            )
-        if schema_version != _SESSION_SCHEMA_VERSION:
-            raise WorkspaceVersionUnsupportedError(
-                "unsupported provider session manifest schema version"
-            )
-        if value["session_id"] != session_id:
-            raise WorkspaceFormatError("provider session manifest path mismatch")
-        if value["durable_state"] not in {
-            SessionDurableState.READY.value,
-            SessionDurableState.PAUSED.value,
-        }:
-            raise WorkspaceFormatError("provider session durable state is invalid")
-        if any(
-            not isinstance(value[field], str) or not value[field]
-            for field in ("session_id", "created_at", "updated_at")
-        ):
-            raise WorkspaceFormatError(
-                "provider session manifest has an invalid string field"
-            )
-        created_at = _parse_timestamp(
-            value["created_at"],
-            label="provider session created_at",
-        )
-        updated_at = _parse_timestamp(
-            value["updated_at"],
-            label="provider session updated_at",
-        )
-        if updated_at < created_at:
-            raise WorkspaceFormatError(
-                "provider session updated_at precedes created_at"
-            )
-        if not isinstance(value["provider_threads"], dict):
-            raise WorkspaceFormatError(
-                "provider session provider_threads must contain an object"
-            )
-        for key, thread in value["provider_threads"].items():
-            if not isinstance(key, str) or not key:
-                raise WorkspaceFormatError("provider thread key is invalid")
-            validated = self._validate_thread(thread)
-            base_key = f"{validated['backend']}:{validated['agent_id']}"
-            qualified_key = f"{base_key}:{validated['fingerprint']}"
-            if key != base_key and (
-                _SAFE_FINGERPRINT.fullmatch(validated["fingerprint"]) is None
-                or key != qualified_key
-            ):
-                raise WorkspaceFormatError(
-                    "provider thread key does not match its backend and agent"
-                )
-        result = dict(value)
-        result["provider_threads"] = dict(value["provider_threads"])
-        return result
+        return provider_thread_records.validate_session_manifest(value, session_id)
 
     def _manifest_exists(self, session_id: str) -> bool:
         """Report whether the canonical manifest path exists without reading it."""
 
         return self.workspace.path(self._manifest_relative(session_id)).exists()
-
-    @staticmethod
-    def _validate_thread(value: Any) -> dict[str, Any]:
-        """Return a copied thread record after exact schema validation.
-
-        Required strings, boolean taint, safe thread identity, and timestamp
-        are checked without mutation; invalid data raises ``WorkspaceFormatError``.
-        """
-
-        expected = {
-            "backend",
-            "agent_id",
-            "fingerprint",
-            "thread_id",
-            "tainted",
-            "updated_at",
-        }
-        if not isinstance(value, dict) or set(value) != expected:
-            raise WorkspaceFormatError("provider thread has an invalid schema")
-        for field in (
-            "backend",
-            "agent_id",
-            "fingerprint",
-            "thread_id",
-            "updated_at",
-        ):
-            if not isinstance(value[field], str) or not value[field]:
-                raise WorkspaceFormatError(
-                    "provider thread has an invalid string field"
-                )
-        if not isinstance(value["tainted"], bool):
-            raise WorkspaceFormatError("provider thread tainted state is invalid")
-        if _SAFE_THREAD_ID.fullmatch(value["thread_id"]) is None:
-            raise WorkspaceFormatError("provider thread ID is invalid")
-        _parse_timestamp(
-            value["updated_at"],
-            label="provider thread updated_at",
-        )
-        return dict(value)
 
     def _write_manifest(
         self,
@@ -7462,22 +7196,6 @@ class AgentBackend:
             dict(value),
             overwrite=overwrite,
         )
-
-    @staticmethod
-    def _thread_key(
-        definition: AgentDefinition,
-        *,
-        fingerprint: str | None = None,
-    ) -> str:
-        effective_fingerprint = (
-            definition.fingerprint if fingerprint is None else fingerprint
-        )
-        if _SAFE_FINGERPRINT.fullmatch(effective_fingerprint) is None:
-            raise BackendProtocolError("provider thread fingerprint is invalid")
-        base_key = f"{definition.backend}:{definition.agent_id}"
-        if effective_fingerprint == definition.fingerprint:
-            return base_key
-        return f"{base_key}:{effective_fingerprint}"
 
     @staticmethod
     def _manifest_relative(session_id: str) -> str:
@@ -7563,50 +7281,3 @@ def backend_configuration_snapshot(
     if not isinstance(backend, AgentBackend):
         raise TypeError("backend must be an AgentBackend")
     return backend._configuration_snapshot
-
-
-def _parse_timestamp(value: Any, *, label: str) -> datetime:
-    """Return an offset-aware timestamp or raise ``WorkspaceFormatError``.
-
-    Parsing performs no normalization or mutation; the supplied diagnostic
-    label identifies empty, malformed, or offset-free values.
-    """
-
-    if not isinstance(value, str) or not value:
-        raise WorkspaceFormatError(f"{label} must be a timestamp string")
-    try:
-        parsed = datetime.fromisoformat(value)
-        offset = parsed.utcoffset()
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise WorkspaceFormatError(f"{label} is invalid") from exc
-    if parsed.tzinfo is None or offset is None:
-        raise WorkspaceFormatError(f"{label} must include a UTC offset")
-    return parsed
-
-
-def _advanced_timestamp(previous: str, *, candidate: str | None = None) -> str:
-    """Return a timestamp strictly later than the validated previous value.
-
-    The candidate, or current UTC time when absent, is preserved if later;
-    otherwise the prior instant advances by one microsecond in UTC. Invalid or
-    unadvanceable timestamps raise ``WorkspaceFormatError``.
-    """
-
-    prior = _parse_timestamp(previous, label="provider session updated_at")
-    proposed_text = _now() if candidate is None else candidate
-    proposed = _parse_timestamp(
-        proposed_text,
-        label="provider session timestamp",
-    )
-    if proposed > prior:
-        return proposed_text
-    try:
-        return (prior.astimezone(UTC) + timedelta(microseconds=1)).isoformat()
-    except OverflowError as exc:
-        raise WorkspaceFormatError(
-            "provider session updated_at cannot be advanced"
-        ) from exc
-
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
