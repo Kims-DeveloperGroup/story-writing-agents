@@ -37,6 +37,33 @@ from ..conversations.session_context import SessionHistorySnapshot
 import hashlib
 import json
 from . import recommendation_preparation, reply_contract_values
+from ..conversations.event_vocabulary import ArtifactObjectiveState
+from ..conversations.events import ArtifactReviewCandidatePayload
+from ..errors import BackendProtocolError
+from ..conversations.events import CollaborationAssignment
+from ..conversations.events import CollaborationEvent
+from ..conversations.context import CollaborationHistoryProjection
+from ..conversations.events import CollaborationPremiseSelectionPayload
+from ..conversations.events import CollaborationProposal
+from ..lead_provider_contracts import LeadProviderConstraints
+from ..lead_provider_contracts import PremiseDecisionConstraints
+from ..specialist_routing import SpecialistAssignmentMode
+from ..conversations.context import artifact_objective_context
+from . import authoring_authority
+from ..conversations.events import authoring_scope_to_dict
+from ..document_plan import document_node_binding_to_dict
+from ..runtime_resources import collaboration_event_journal as event_journal
+from ..lead_premise_decisions import premise_value_to_dict
+from ..conversations.context import project_collaboration_history
+from ..conversations.events import review_basis_to_dict
+from ..artifact_proposals import serialize_artifact_review_candidate
+from ..conversations.events import shared_premises_to_dict
+from ..specialist_routing import specialists_for_domains
+from ..specialist_routing import stage_plan_to_dict
+from ..document_plan import DocumentNodeSelection
+from ..document_plan import DocumentPlanView
+from ..lead_task_transitions import LeadMaterialCapture
+from ..document_plan import document_plan_to_dict
 
 
 def selected_task_material(
@@ -288,3 +315,206 @@ def context_material(
         ),
         body,
     )
+
+
+def specialist_assignment_material(
+    proposal: CollaborationProposal,
+    assignment: CollaborationAssignment,
+    input_events: tuple[CollaborationEvent, ...],
+    events: tuple[CollaborationEvent, ...],
+) -> tuple[tuple[CollaborationInputRevision, ...], dict[str, object], tuple[tuple[str, str], ...]]:
+    inputs_by_id = {item.input_id: item for item in proposal.basis.inputs}
+    try:
+        selected = tuple(
+            inputs_by_id[input_id] for input_id in assignment.input_ids
+        )
+    except KeyError as exc:
+        raise BackendProtocolError(
+            "assignment contains an unknown input alias"
+        ) from exc
+    value = {
+        "assignment": {
+            "mode": assignment.mode.value,
+            "assignment_id": assignment.assignment_id,
+            "instruction": assignment.instruction,
+            "input_ids": list(assignment.input_ids),
+            "round": assignment.round,
+            **({"review_basis": review_basis_to_dict(assignment.review_basis)}
+               if assignment.review_basis is not None else {}),
+        },
+        "inputs": [
+            reply_contract_values.collaboration_input_value(item, input_events, evidence=proposal.basis.evidence) for item in selected
+        ],
+        "authoring_scope": authoring_scope_to_dict(proposal.authoring_scope),
+        **({"stage_plan": stage_plan_to_dict(proposal.stage_plan)} if proposal.stage_plan is not None else {}),
+        **({"document_node": document_node_binding_to_dict(proposal.document_node)} if proposal.document_node is not None else {}),
+        **({"shared_premises": shared_premises_to_dict(tuple(
+            premise for premise in proposal.basis.shared_premises
+            if proposal.authoring_scope.activity is AuthoringActivity.REVIEW or any(
+                slot.slot_id == premise.slot_id and assignment.specialist_id in specialists_for_domains(slot.dependent_domains)
+                for slot in proposal.authoring_scope.dependency_slots
+            )
+        ))} if proposal.authoring_scope.schema_version == 3 else {}),
+        "workflow": proposal.step_kind.value,
+    }
+    chosen = tuple(event.payload.capture for event in events
+        if type(event.payload) is CollaborationPremiseSelectionPayload
+        and event.payload.capture.authoring_task_id == proposal.authoring_scope.task_id
+        and event.payload.capture.authoring_task_revision <= proposal.authoring_scope.task_revision)
+    dependencies = ()
+    if chosen:
+        capture = chosen[-1]
+        value["premise_selection"] = premise_value_to_dict(capture)
+        if assignment.mode is SpecialistAssignmentMode.DRAFT and assignment.specialist_id in specialists_for_domains(capture.dependent_domains):
+            dependencies = ((capture.slot_id, capture.capture_digest),)
+    return selected, value, dependencies
+
+def synthesis_constraints(
+    proposal: CollaborationProposal,
+    replies: tuple[CollaborationSpecialistReplyPayload, ...],
+    reply_event_ids: tuple[str, ...],
+    current_projection: CollaborationHistoryProjection,
+    conversation_id: str,
+) -> LeadProviderConstraints:
+    constraints = LeadProviderConstraints(
+        input_ids=(*(item.input_id for item in proposal.basis.inputs), *reply_event_ids),
+        review_candidate_ids=tuple(dict.fromkeys((
+            *(item.input_id for item in proposal.basis.inputs),
+            *(reply_event_id for reply_event_id, reply in
+              zip(reply_event_ids, replies, strict=True)
+              if reply.assessment is CollaborationSpecialistAssessment.DRAFTED),
+        ))),
+        reviewer_inputs=tuple((reviewer, item.input_id) for item in proposal.basis.inputs
+            if item.kind in {CollaborationInputKind.CORE_DOCUMENT, CollaborationInputKind.MANUSCRIPT,
+                             CollaborationInputKind.WRITING_ARTIFACT}
+            for reviewer in (authoring_authority.core_reviewer(item.locator),) if reviewer is not None),
+        source_ids=tuple(dict.fromkeys(("current_response",
+            *(item.event_id for item in current_projection.offered_draft_sources),
+            *(item.input_id for item in proposal.basis.inputs), *reply_event_ids))),
+        objective_ids=tuple(item.facts.objective_id for item in current_projection.artifact_objectives
+            if item.state is ArtifactObjectiveState.OPEN
+            and item.facts.origin_conversation_id == conversation_id),
+        scope=proposal.authoring_scope, continuation=True,
+    )
+    return constraints
+
+def synthesis_material(
+    proposal: CollaborationProposal,
+    replies: tuple[CollaborationSpecialistReplyPayload, ...],
+    events: tuple[CollaborationEvent, ...],
+    input_events: tuple[CollaborationEvent, ...],
+    conversation_id: str,
+    reply_event_ids: tuple[str, ...],
+    constraints: LeadProviderConstraints,
+    artifact_candidate: ArtifactReviewCandidatePayload | None,
+) -> dict[str, object]:
+    value = {
+        "provider_constraints": constraints.prompt_facts(),
+        "authoring_scope": authoring_scope_to_dict(proposal.authoring_scope),
+        **({"stage_plan": stage_plan_to_dict(proposal.stage_plan)} if proposal.stage_plan is not None else {}),
+        **({"document_node": document_node_binding_to_dict(proposal.document_node)} if proposal.document_node is not None else {}),
+        **({"shared_premises": shared_premises_to_dict(proposal.basis.shared_premises)}
+           if proposal.authoring_scope.schema_version == 3 else {}),
+        "conversation_id": conversation_id,
+        "artifact_objectives": artifact_objective_context(project_collaboration_history(events)),
+        "inputs": [
+            reply_contract_values.collaboration_input_value(item, input_events, evidence=proposal.basis.evidence)
+            for item in proposal.basis.inputs
+        ],
+        "replies": [
+            {
+                "mode": reply.mode.value,
+                "assessment": reply.assessment.value,
+                "assignment_id": reply.assignment_id,
+                "input_ids": list(reply.input_ids),
+                "message": reply.message,
+                "reply_event_id": reply_event_id,
+            }
+            for reply, reply_event_id in zip(replies, reply_event_ids, strict=True)
+        ],
+        "workflow": "lead_synthesis",
+    }
+    if artifact_candidate is not None:
+        value["artifact_candidate"] = json.loads(
+            serialize_artifact_review_candidate(artifact_candidate.candidate)
+        )
+    return value
+
+def premise_assignment_material(
+    proposal: CollaborationProposal,
+    assignment: CollaborationAssignment,
+    events: tuple[CollaborationEvent, ...],
+) -> tuple[tuple[CollaborationInputRevision, ...], dict[str, object]]:
+    selected = tuple(item for item in proposal.basis.inputs if item.input_id in assignment.input_ids)
+    value = {
+        "workflow": "premise_analysis", "provisional": True,
+        "premise_decision": premise_value_to_dict(proposal.premise_decision),
+        "assignment": {"assignment_id": assignment.assignment_id,
+            "mode": assignment.mode.value, "instruction": assignment.instruction,
+            "input_ids": list(assignment.input_ids), "round": assignment.round},
+        "inputs": [reply_contract_values.collaboration_input_value(item, events,
+            evidence=proposal.basis.evidence) for item in selected],
+    }
+    return selected, value
+
+def premise_synthesis_values(
+    proposal: CollaborationProposal,
+    attempt_id: str,
+    replies: tuple[CollaborationSpecialistReplyPayload, ...],
+    events: tuple[CollaborationEvent, ...],
+) -> tuple[tuple[str, ...], PremiseDecisionConstraints, dict[str, object]]:
+    ids = tuple(event_journal.deterministic_id("e", attempt_id, reply.assignment_id, "reply") for reply in replies)
+    facts = PremiseDecisionConstraints(proposal.premise_decision.question_id,
+        tuple(item.input_id for item in proposal.basis.inputs),
+        tuple((event_id, tuple(item.alternative_key for item in reply.premise_analysis.alternatives))
+            for event_id, reply in zip(ids, replies, strict=True)),
+        tuple(event_id for event_id, reply in zip(ids, replies, strict=True)
+            if reply.assessment is CollaborationSpecialistAssessment.INSUFFICIENT_EVIDENCE
+            or not reply.premise_analysis.alternatives))
+    value = {
+        "workflow": "premise_decision_summary", "provisional": True,
+        "premise_decision": premise_value_to_dict(proposal.premise_decision),
+        "inputs": [reply_contract_values.collaboration_input_value(item, events,
+            evidence=proposal.basis.evidence) for item in proposal.basis.inputs],
+        "replies": [{"reply_event_id": event_id, "agent_id": assignment.specialist_id,
+            "premise_analysis": premise_value_to_dict(reply.premise_analysis)}
+            for event_id, reply, assignment in zip(ids, replies, proposal.assignments, strict=True)],
+    }
+    return ids, facts, value
+
+
+def selected_task_input(event: CollaborationEvent, ordinal: int, capture: LeadMaterialCapture) -> CollaborationInputRevision:
+    return CollaborationInputRevision(
+        input_id=f"selected_material_{ordinal}", kind=CollaborationInputKind.CONVERSATION_EVENT,
+        locator=f"conversation/{event.event_id}",
+        revision_digest="sha256:" + capture.material_digest,
+        state=CollaborationInputState.PRESENT,
+
+    )
+
+def document_candidate_input_material(inputs: tuple[CollaborationInputRevision, ...]) -> list[dict[str, object]]:
+    return [
+        {
+            "input_id": item.input_id,
+            "kind": item.kind.value,
+            "locator": item.locator,
+            "revision_digest": item.revision_digest,
+            **({"start_line": item.start_line, "end_line": item.end_line}
+               if item.start_line is not None else {}),
+        }
+        for item in inputs
+    ]
+
+def document_work_plan_material(view: DocumentPlanView, selection: DocumentNodeSelection | None) -> dict[str, object]:
+    return {
+        "plan": document_plan_to_dict(view.plan), "original_goal": view.goal_text,
+        "current_confirmed_node_id": view.current_node_id,
+        "completed_target_paths": list(view.completed_target_paths),
+        "unfinished_inactive_targets": [path for path in view.plan.remaining_target_paths
+            if path not in view.completed_target_paths],
+        "physical_calls_spent": view.physical_calls_spent,
+        "cumulative_plan_physical_calls": view.cumulative_plan_physical_calls,
+        "authority": "Plan/input guidance only; each exact executed node requires its own disclosed Confirm, final review, Apply and Commit.",
+        **({"replacement_window_guidance": "Propose the exact selected document node directly for its own Confirm, or ask for missing inputs. A preparation-only recommendation cannot carry a replacement window."}
+           if selection is not None and selection.target_path is not None else {}),
+    }

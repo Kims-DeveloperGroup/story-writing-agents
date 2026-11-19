@@ -44,6 +44,17 @@ from collections.abc import Mapping
 from tests.lead_fixtures.material_values import expanded_context_payload
 
 
+def specialist_assignments(*agent_ids: str) -> list[dict[str, object]]:
+    return [{'agent_id': agent_id, 'instruction': f'Return the bounded {agent_id} assessment.',
+        'input_ids': ['user_input']} for agent_id in agent_ids]
+
+def specialist_raw_outcome(value: object):
+    def respond(_call, _provider):
+        return json.dumps({'action': {'kind': 'answer', 'result': value}}, separators=(',', ':'))
+
+    return respond
+
+
 Response = str | BaseException | Callable[[ctx_provider.ContextProviderCallRequest, 'LeadContextProvider'],
     str | BaseException | Awaitable[str | BaseException]]
 

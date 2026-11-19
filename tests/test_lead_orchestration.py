@@ -139,6 +139,7 @@ from tests.lead_fixtures.provider_responses import (
     SubmittedFailure as _SubmittedFailure,
     workflow_material as _workflow_material,
 )
+from story_writing_agents.lead_preparation import collaboration_response_contracts
 
 _REVIEW_USER_INPUT = "Review complete supplied candidate: " + _STORY_USER_INPUT
 
@@ -1704,11 +1705,11 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         catalog_ordinary_described = describe_schema(catalog_ordinary)
         self.assertEqual(catalog_ordinary_described['properties']['queries']['items']['properties'][ 'source_types']['items'], catalog_items)
         self.assertEqual(call.payload["response_contract"]["result_contract_id"], "lead-response-v8")
-        draft_contract = orchestrator_module._specialist_result_contract(type("Assignment", (), {"mode": orchestrator_module.SpecialistAssignmentMode.DRAFT})())
+        draft_contract = collaboration_response_contracts.specialist_result_contract(type("Assignment", (), {"mode": orchestrator_module.SpecialistAssignmentMode.DRAFT})())
         description = draft_contract.schema["description"]
         self.assertIn("draft_completed", description); self.assertIn("do not write documents", description)
         self.assertEqual(diagnose_json_text(json.dumps({"response_type": "specialist_assignment_result", "assignment_status": "draft_completed", "response_text": "Synthetic draft."}), draft_contract.schema), ())
-        constraint_contract = orchestrator_module._specialist_result_contract(type("Assignment", (), {"mode": orchestrator_module.SpecialistAssignmentMode.CONSTRAINT_ASSESSMENT})())
+        constraint_contract = collaboration_response_contracts.specialist_result_contract(type("Assignment", (), {"mode": orchestrator_module.SpecialistAssignmentMode.CONSTRAINT_ASSESSMENT})())
         self.assertEqual(constraint_contract.contract_id, "specialist-assignment-response-v4")
         self.assertEqual(constraint_contract.schema["properties"]["assignment_status"]["enum"], ["constraints_assessed", "concerns_found", "conflicts_found", "insufficient_evidence"])
         self.assertFalse(diagnose_json_text(json.dumps({"response_type":"specialist_assignment_result", "response_text":"The declared limit is grounded.", "assignment_status":"constraints_assessed"}), constraint_contract.schema))
@@ -1877,7 +1878,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         from story_writing_agents.conversations import ( CollaborationLeadEvidence, LeadEvidenceStatus, LeadOutcomeScope, authoring_scope_from_dict,)
         from story_writing_agents.lead_provider_contracts import ( LeadDiscussionConstraints, LeadExplorationConstraints, PremiseDecisionConstraints,)
         from story_writing_agents.lead_preparation.reply_contract_values import lead_discussion_result_contract, lead_result_rule_seed
-        from story_writing_agents.orchestrator import _lead_synthesis_result_contract
+        from story_writing_agents.lead_preparation.collaboration_response_contracts import lead_synthesis_result_contract
         from tests.provider_wire_fixture import lead_fixture_result, lead_fixture_assessment, finite_fixture_selection
         factory = call.contract.factory
         host_task = _live_task(call, 0)
@@ -2985,7 +2986,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         scope_value = authoring_scope_from_dict(scope_record)
         synthesis_constraints = replace( declared, scope=scope_value, continuation=True, review_candidate_ids=('user_input',))
         evidence = CollaborationLeadEvidence(LeadOutcomeScope.STORY_SPECIFIC, LeadEvidenceStatus.EMPTY, ())
-        synthesis_seed = _lead_synthesis_result_contract(evidence=evidence, input_ids=('user_input',
+        synthesis_seed = lead_synthesis_result_contract(evidence=evidence, input_ids=('user_input',
             ), reply_event_ids=(), allow_next_intent=True, artifact_review=False,
             authoring_scope=scope_value, constraints=synthesis_constraints)
         with self.assertRaisesRegex(ValueError, 'physical continuation requires frozen review'):
@@ -3024,7 +3025,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                  'instruction': 'Retain the exact remaining concern.',
                  'source_ids': ['user_input'], 'specialist_ids': [EXECUTION_SPECIALIST]}},
             branch='consultation-summary-v4:family:2', constraints=synthesis_constraints)
-        review_seed = _lead_synthesis_result_contract(evidence=evidence, input_ids=('user_input',),
+        review_seed = lead_synthesis_result_contract(evidence=evidence, input_ids=('user_input',),
             reply_event_ids=(), allow_next_intent=False, artifact_review=True,
             authoring_scope=scope_value, constraints=synthesis_constraints)
         for native_decision, expected_decision in (

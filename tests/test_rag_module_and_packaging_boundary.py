@@ -28,9 +28,21 @@ from story_writing_agents.lead_preparation import (
     artifact_objective_planning,
     lead_consultation_planning,
     lead_terminal_planning,
+    collaboration_response_contracts,
+    collaboration_response_decoding,
+    lead_material_inputs,
+    outcome_decoding,
+    call_rule_factory,
+    lead_answer_authority,
+    lead_document_nodes,
+    lead_evidence_receipts,
+    lead_front_values,
+    authoring_source_history,
+    reply_contract_values,
 )
 import story_writing_agents
 from story_writing_agents import conversations
+from story_writing_agents.conversations import artifact_revision_sources
 from story_writing_agents.lead_preparation import recommendation_preparation, recommendation_requests
 from story_writing_agents.lead_preparation import recommendation_decisions
 from story_writing_agents.lead_task_transitions import LeadTaskRef
@@ -361,8 +373,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 309)
-        self.assertEqual(len(edges), 1810)
+        self.assertEqual(len(modules), 314)
+        self.assertEqual(len(edges), 1914)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -509,6 +521,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.writing_artifacts", "story_writing_agents.authoring_admission",
                 "story_writing_agents.core_document_readiness",
                 'story_writing_agents.agent_context.group_observation',
+                "story_writing_agents.conversations.artifact_revision_sources",
             },
         }
         for source, expected in conversation_dependencies.items():
@@ -1213,6 +1226,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             "story_writing_agents.conversations.events", "story_writing_agents.interactive_terminal._collaboration_view",
             "story_writing_agents.artifact_transactions.artifact_application_authority", "story_writing_agents.lead_preparation.outcome_decoding",
             "story_writing_agents.lead_execution.known_result_finalization",
+            'story_writing_agents.lead_preparation.lead_answer_authority',
             "story_writing_agents.lead_preparation.call_rule_factory", "story_writing_agents.lead_provider_contracts", "story_writing_agents.orchestrator"})
         self.assertIn("story_writing_agents.document_plan", modules)
         self.assertEqual({target for source, target in edges if source == "story_writing_agents.document_plan"}, {
@@ -1235,6 +1249,9 @@ class RagModuleBoundaryTests(unittest.TestCase):
         'story_writing_agents.lead_preparation.lead_task_control',
             'story_writing_agents.lead_preparation.artifact_objective_planning',
             'story_writing_agents.lead_preparation.lead_consultation_planning',
+            'story_writing_agents.lead_preparation.call_rule_factory',
+            'story_writing_agents.lead_preparation.lead_front_values',
+            'story_writing_agents.lead_preparation.lead_material_inputs',
                                                                                                                  })
         self.assertIn("story_writing_agents.blocking_work", modules)
         self.assertEqual({target for source, target in edges if source == "story_writing_agents.blocking_work"}, set())
@@ -1284,12 +1301,24 @@ class RagModuleBoundaryTests(unittest.TestCase):
             "story_writing_agents.specialist_routing",
             "story_writing_agents.writing_artifacts",
             "story_writing_agents.writing_artifacts.runtime_references",
+            'story_writing_agents.artifact_proposals',
+            'story_writing_agents.conversations.context',
+            'story_writing_agents.conversations.event_vocabulary',
+            'story_writing_agents.conversations.events',
+            'story_writing_agents.document_plan',
+            'story_writing_agents.errors',
+            'story_writing_agents.lead_premise_decisions',
+            'story_writing_agents.lead_preparation.authoring_authority',
+            'story_writing_agents.lead_provider_contracts',
+            'story_writing_agents.runtime_resources',
+            'story_writing_agents.runtime_resources.collaboration_event_journal',
         })
         self.assertEqual({source for source, target in edges if target == lead_material_inputs}, {
             'story_writing_agents.lead_preparation.current_lead_evidence',
             'story_writing_agents.lead_preparation.current_lead_inputs',
             'story_writing_agents.lead_preparation.lead_source_qualification',
             'story_writing_agents.lead_preparation.review_material_validation',
+            'story_writing_agents.lead_preparation.lead_front_values',
             'story_writing_agents.orchestrator',
         })
         lead_evidence_receipts = "story_writing_agents.lead_preparation.lead_evidence_receipts"
@@ -1300,6 +1329,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             "story_writing_agents.lead_preparation",
             "story_writing_agents.lead_preparation.reply_contract_values",
             "story_writing_agents.specialist_routing",
+            'story_writing_agents.lead_preparation.authoring_authority',
             "story_writing_agents.structured_output_validation",
         })
         self.assertEqual({source for source, target in edges if target == lead_evidence_receipts}, {
@@ -1374,6 +1404,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             "story_writing_agents.orchestrator",
             "story_writing_agents.lead_preparation.artifact_objective_planning",
             "story_writing_agents.lead_preparation.artifact_review_planning",
+            'story_writing_agents.lead_preparation.lead_front_values',
             "story_writing_agents.lead_preparation.lead_consultation_planning",
         })
         proposal_values_owner = "story_writing_agents.lead_preparation.proposal_basis_values"
@@ -1402,6 +1433,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             "story_writing_agents.lead_preparation.artifact_objective_planning",
             "story_writing_agents.lead_preparation.artifact_review_planning",
             "story_writing_agents.lead_preparation.lead_consultation_planning",
+            "story_writing_agents.lead_preparation.collaboration_response_decoding",
         })
 
         lead_document_nodes = "story_writing_agents.lead_preparation.lead_document_nodes"
@@ -1413,6 +1445,12 @@ class RagModuleBoundaryTests(unittest.TestCase):
             'story_writing_agents.lead_preparation',
             'story_writing_agents.lead_preparation.authoring_authority',
             'story_writing_agents.specialist_routing',
+            'story_writing_agents.lead_preparation.reply_contract_values',
+            'story_writing_agents.conversations',
+            'story_writing_agents.errors',
+            'story_writing_agents.lead_task_transitions',
+            'story_writing_agents.runtime_resources',
+            'story_writing_agents.runtime_resources.collaboration_event_journal',
             'story_writing_agents.writing_artifacts',
         })
         self.assertEqual({source for source, target in edges if target == lead_document_nodes}, {"story_writing_agents.orchestrator"})
@@ -1455,6 +1493,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
             'story_writing_agents.lead_task_transitions',
             'story_writing_agents.runtime_resources',
             'story_writing_agents.runtime_resources.collaboration_event_journal',
+            'story_writing_agents.authoring_task_lifecycle',
+            'story_writing_agents.lead_preparation.reply_contract_values',
             'story_writing_agents.specialist_routing',
         })
         self.assertEqual({source for source, target in edges if target == authoring_source_history_owner}, {
@@ -1576,6 +1616,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
             'story_writing_agents.runtime_resources',
             'story_writing_agents.runtime_resources.collaboration_event_journal',
             'story_writing_agents.specialist_routing',
+            'story_writing_agents.collaboration_execution_results',
+            'story_writing_agents.lead_preparation.collaboration_response_decoding',
         })
         self.assertEqual({source for source, target in edges if target == premise_preparation_owner}, {"story_writing_agents.orchestrator"})
         lead_task_control_owner = 'story_writing_agents.lead_preparation.lead_task_control'
@@ -1641,6 +1683,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                     'objective_facts',
                     'objective_capture_inputs',
                     'objective_document_window',
+                    'clarify_unprepared_authoring_proposal',
                     'objective_drafts_for_values',
                 },
                 {
@@ -1721,6 +1764,87 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 self.assertNotIn("runtime", parameters)
                 self.assertFalse(any(value.kind in (Parameter.VAR_POSITIONAL, Parameter.VAR_KEYWORD)
                                      for value in parameters.values()))
+
+        for owner, expected_targets, expected_sources in (
+            (collaboration_response_contracts, {
+                'story_writing_agents.agent_context.contracts.call_offers',
+                'story_writing_agents.agent_context.invocation.provider',
+                'story_writing_agents.agents',
+                'story_writing_agents.conversations.event_vocabulary',
+                'story_writing_agents.conversations.events',
+                'story_writing_agents.errors',
+                'story_writing_agents.lead_preparation',
+                'story_writing_agents.lead_preparation.reply_contract_values',
+                'story_writing_agents.lead_provider_contracts',
+                'story_writing_agents.lead_exploration',
+                'story_writing_agents.lead_preparation.response_rules',
+                'story_writing_agents.lead_task_transitions',
+                'story_writing_agents.conversations',
+                'story_writing_agents.specialist_routing',
+            }, {'story_writing_agents.orchestrator'}),
+            (collaboration_response_decoding, {
+                'story_writing_agents.authoring_task_lifecycle',
+                'story_writing_agents.agents',
+                'story_writing_agents.collaboration_execution_results',
+                'story_writing_agents.conversations.event_vocabulary',
+                'story_writing_agents.conversations.events',
+                'story_writing_agents.errors',
+                'story_writing_agents.lead_premise_decisions',
+                'story_writing_agents.lead_preparation',
+                'story_writing_agents.lead_preparation.outcome_decoding',
+                'story_writing_agents.lead_preparation.proposal_basis_values',
+                'story_writing_agents.lead_preparation.reply_contract_values',
+                'story_writing_agents.lead_provider_contracts',
+                'story_writing_agents.specialist_routing',
+                'story_writing_agents.structured_output_validation',
+            }, {'story_writing_agents.orchestrator', 'story_writing_agents.lead_preparation.premise_preparation'}),
+            (artifact_revision_sources, {
+                'story_writing_agents.conversations.event_vocabulary',
+                'story_writing_agents.conversations.events',
+                'story_writing_agents.lead_task_transitions',
+                'story_writing_agents.specialist_routing',
+            }, {'story_writing_agents.conversations.context', 'story_writing_agents.orchestrator'}),
+            (lead_answer_authority, {
+                'story_writing_agents.agent_context.actions',
+                'story_writing_agents.agent_context.manifest',
+                'story_writing_agents.artifact_proposals',
+                'story_writing_agents.authoring_admission',
+                'story_writing_agents.conversations.context',
+                'story_writing_agents.conversations.event_vocabulary',
+                'story_writing_agents.conversations.events',
+                'story_writing_agents.lead_exploration',
+                'story_writing_agents.lead_premise_decisions',
+                'story_writing_agents.lead_preparation',
+                'story_writing_agents.lead_preparation.authoring_authority',
+                'story_writing_agents.lead_preparation.reply_contract_values',
+                'story_writing_agents.lead_provider_contracts',
+                'story_writing_agents.lead_task_transitions',
+                'story_writing_agents.review_contracts',
+                'story_writing_agents.specialist_routing',
+                'story_writing_agents.structured_output_validation',
+            }, {'story_writing_agents.orchestrator'}),
+            (lead_front_values, {
+                'story_writing_agents.agent_task_projection',
+                'story_writing_agents.authoring_admission',
+                'story_writing_agents.conversations.context',
+                'story_writing_agents.conversations.event_vocabulary',
+                'story_writing_agents.conversations.events',
+                'story_writing_agents.document_plan',
+                'story_writing_agents.lead_preparation',
+                'story_writing_agents.lead_preparation.lead_material_inputs',
+                'story_writing_agents.lead_preparation.reply_contract_values',
+                'story_writing_agents.lead_provider_contracts',
+                'story_writing_agents.agents',
+                'story_writing_agents.conversations',
+                'story_writing_agents.lead_exploration',
+                'story_writing_agents.lead_premise_decisions',
+                'story_writing_agents.lead_preparation.recommendation_preparation',
+                'story_writing_agents.lead_task_transitions',
+                'story_writing_agents.specialist_routing',
+            }, {'story_writing_agents.orchestrator'}),
+        ):
+            self.assertEqual({target for source, target in edges if source == owner.__name__}, expected_targets)
+            self.assertEqual({source for source, target in edges if target == owner.__name__}, expected_sources)
 
 
     def test_supported_module_surfaces_do_not_expand_the_root_facade(self) -> None:
@@ -1816,6 +1940,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
             'capture_shared_premises',
             'prepare_premise_admission',
             'validate_premise_control',
+            'premise_synthesis_provenance',
+            'premise_synthesis_result',
         ))
         self.assertEqual(tuple(lead_task_control.__all__), (
             'prepare_exploration_adoption',
@@ -1876,6 +2002,164 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 name: type(None) if value is None else value for name, value in function.__annotations__.items()
             })
         self.assertIsInstance(specialist_advisory_values.ADVISORY_USER_IMPACT, str)
+        for owner, exported in (
+            (collaboration_response_decoding, ('decode_artifact_synthesis', 'decode_specialist_reply', 'decode_lead_synthesis', 'required_unresolved_input_ids', 'decode_continuation_intent', 'normalize_locked_collaboration_answer')),
+            (collaboration_response_contracts, ('specialist_result_contract', 'lead_synthesis_result_contract', 'LEAD_CORRECTABLE_RESPONSE_REJECTION_CODES', 'LEAD_RESPONSE_CORRECTION_INSTRUCTION', 'prepare_lead_rule_seed', 'task_discussion_constraints')),
+            (artifact_revision_sources, ('artifact_revision_source',)),
+            (authoring_source_history, (
+                'ordinary_front_call_cap',
+                'historical_authoring_users',
+                'current_previous_scope',
+                'authoring_task_offers',
+                'recommendation_task_scope',
+                'recommendation_task_offers',
+                'review_source_revision',
+                'local_binding_scopes',
+            )),
+            (lead_answer_authority, (
+                'discussion_report',
+                'exploration_answer_content',
+                'authority_free_response',
+                'validate_premise_reviewers',
+                'superseding_recommendation',
+                'validate_selected_preparation',
+                'offered_authoring_scope',
+                'transition_source_request',
+                'retained_transition_source',
+                'validate_current_scope',
+                'scope_interpretation',
+                'objective_scope',
+                'validate_preliminary_targets',
+                'validate_nonworkflow_answer',
+                'resolved_proposal_intent',
+                'validate_user_task_selection',
+                'validate_adoption_answer',
+                'adoption_review_assignments',
+                'validate_premise_answer',
+                'validate_authoring_admission_inputs',
+                'validate_proposal_relation',
+                'validate_artifact_request',
+                'validate_premise_question',
+            )),
+            (lead_front_values, (
+                'lead_front_material_prefix',
+                'lead_front_material_suffix',
+                'recommendation_preparation_material',
+                'document_lineage_front_cap',
+                'front_budget_limits',
+                'adopted_idea_input',
+                'selected_premise_input',
+                'document_candidate_material_inputs',
+                'front_submitted_call_count',
+            )),
+            (lead_document_nodes, (
+                'document_plan_views',
+                'validate_document_node',
+                'automatic_document_node',
+                'document_candidate_inputs',
+                'validate_document_target',
+                'document_selection_from_transition',
+                'retained_document_node',
+                'implicit_document_goal',
+                'validate_document_task_origin',
+            )),
+        ):
+            self.assertEqual(set(owner.__all__), set(exported))
+            actual = {name for name, value in vars(owner).items()
+                if not name.startswith("_") and callable(value) and getattr(value, "__module__", None) == owner.__name__}
+            self.assertEqual(actual, {name for name in exported if callable(getattr(owner, name))})
+        for owner, function_name, parameter_names, keyword_names, defaults, postponed in (
+            (collaboration_response_decoding, 'decode_artifact_synthesis', ('answer', 'proposal', 'attempt_id', 'reply_event_ids', 'replies', 'candidate'), ('proposal', 'attempt_id', 'reply_event_ids', 'replies', 'candidate'), {}, False),
+            (collaboration_response_decoding, 'decode_specialist_reply', ('answer', 'proposal', 'attempt_id', 'assignment', 'dispatch_event_id', 'premise_dependencies'), ('proposal', 'attempt_id', 'assignment', 'dispatch_event_id', 'premise_dependencies'), {'premise_dependencies': ()}, False),
+            (collaboration_response_decoding, 'decode_lead_synthesis', ('answer', 'proposal', 'attempt_id', 'reply_event_ids', 'replies', 'review_candidate_ids'), ('proposal', 'attempt_id', 'reply_event_ids', 'replies', 'review_candidate_ids'), {}, False),
+            (collaboration_response_decoding, 'required_unresolved_input_ids', ('replies',), (), {}, False),
+            (collaboration_response_decoding, 'decode_continuation_intent', ('value', 'authoring_scope', 'review_candidate_ids', 'shared_premises'), ('authoring_scope', 'review_candidate_ids', 'shared_premises'), {'shared_premises': ()}, False),
+            (collaboration_response_contracts, 'specialist_result_contract', ('assignment', 'premise_dependencies'), ('premise_dependencies',), {'premise_dependencies': ()}, False),
+            (collaboration_response_contracts, 'lead_synthesis_result_contract', ('evidence', 'input_ids', 'reply_event_ids', 'allow_next_intent', 'artifact_review', 'authoring_scope', 'constraints'), ('evidence', 'input_ids', 'reply_event_ids', 'allow_next_intent', 'artifact_review', 'authoring_scope', 'constraints'), {'constraints': None}, False),
+            (artifact_revision_sources, 'artifact_revision_source', ('receipt', 'original', 'history'), (), {}, False),
+            (lead_material_inputs, 'specialist_assignment_material', ('proposal', 'assignment', 'input_events', 'events'), (), {}, True),
+            (lead_material_inputs, 'synthesis_constraints', ('proposal', 'replies', 'reply_event_ids', 'current_projection', 'conversation_id'), (), {}, True),
+            (lead_material_inputs, 'synthesis_material', ('proposal', 'replies', 'events', 'input_events', 'conversation_id', 'reply_event_ids', 'constraints', 'artifact_candidate'), (), {}, True),
+            (lead_material_inputs, 'premise_assignment_material', ('proposal', 'assignment', 'events'), (), {}, True),
+            (lead_material_inputs, 'premise_synthesis_values', ('proposal', 'attempt_id', 'replies', 'events'), (), {}, True),
+            (premise_preparation, 'premise_synthesis_provenance', ('current', 'proposal', 'attempt_id', 'conversation_id'), (), {}, False),
+            (premise_preparation, 'premise_synthesis_result', ('proposal', 'attempt_id', 'ids', 'replies', 'summary', 'report'), (), {}, False),
+            (outcome_decoding, 'diagnose_collaboration_fallback', ('answer',), (), {}, True),
+            (collaboration_response_decoding, 'normalize_locked_collaboration_answer', ('answer', 'constraints'), (), {}, False),
+            (lead_answer_authority, 'discussion_report', ('value', 'authorization', 'task_transition', 'task_receipt'), (), {}, False),
+            (lead_answer_authority, 'exploration_answer_content', ('value', 'request_event_id', 'artifact_reads'), (), {}, False),
+            (lead_answer_authority, 'authority_free_response', ('value', 'spec', 'binding_pinned'), (), {}, False),
+            (lead_answer_authority, 'validate_premise_reviewers', ('intent', 'materialized'), (), {}, False),
+            (lead_answer_authority, 'superseding_recommendation', ('decoded', 'request', 'interpretation', 'inputs'), (), {}, False),
+            (lead_answer_authority, 'validate_selected_preparation', ('decoded', 'prepare_selected'), (), {}, False),
+            (lead_answer_authority, 'offered_authoring_scope', ('decoded', 'admission', 'offered_tasks'), (), {}, False),
+            (lead_answer_authority, 'transition_source_request', ('receipt', 'selected_prior', 'scope', 'session_id', 'step_id', 'conversation_id'), (), {}, False),
+            (lead_answer_authority, 'retained_transition_source', ('projection', 'failure', 'receipt', 'selected_prior'), (), {}, False),
+            (lead_answer_authority, 'validate_current_scope', ('selected_prior', 'selected_current', 'retained_transition_source'), (), {}, False),
+            (lead_answer_authority, 'scope_interpretation', ('scope', 'target_prior', 'provisional_brief_refinement'), (), {}, False),
+            (lead_answer_authority, 'objective_scope', ('decoded', 'scope', 'projection'), (), {}, False),
+            (lead_answer_authority, 'validate_preliminary_targets', ('review', 'scope', 'targets'), (), {}, False),
+            (lead_answer_authority, 'validate_nonworkflow_answer', ('decoded', 'scope', 'evidence'), (), {}, False),
+            (lead_answer_authority, 'resolved_proposal_intent', ('intent', 'declared_scope', 'resolved_scope'), (), {}, False),
+            (lead_document_nodes, 'validate_document_target', ('scope', 'target_path'), (), {}, True),
+            (lead_answer_authority, 'validate_user_task_selection', ('decoded', 'receipt', 'source_review_revision', 'source_artifact_revision', 'selected_document_review_path', 'task_material_events'), (), {}, False),
+            (lead_answer_authority, 'validate_adoption_answer', ('decoded', 'scope', 'capture'), (), {}, False),
+            (lead_answer_authority, 'adoption_review_assignments', ('intent', 'inputs'), (), {}, False),
+            (lead_answer_authority, 'validate_premise_answer', ('decoded', 'scope', 'capture'), (), {}, False),
+            (lead_answer_authority, 'validate_authoring_admission_inputs', ('decoded', 'historical_user_sources', 'source_scope'), (), {}, False),
+            (lead_answer_authority, 'validate_proposal_relation', ('intent', 'expected_relation'), (), {}, False),
+            (lead_answer_authority, 'validate_artifact_request', ('decoded', 'scope', 'expected_relation'), (), {}, False),
+            (lead_evidence_receipts, 'read_reviewer_inputs', ('receipts',), (), {}, True),
+            (lead_answer_authority, 'validate_premise_question', ('intent', 'premise_question_id'), (), {}, False),
+            (collaboration_response_contracts, 'prepare_lead_rule_seed', ('discussion_only', 'discussion_constraints', 'expected_relation', 'inputs', 'offered_tasks', 'constraints', 'successor_only', 'task_receipt', 'revision_source_scope', 'source_artifact_revision', 'selected_document_review_path', 'interaction_mode'), ('discussion_only', 'discussion_constraints', 'expected_relation', 'inputs', 'offered_tasks', 'constraints', 'successor_only', 'task_receipt', 'revision_source_scope', 'source_artifact_revision', 'selected_document_review_path', 'interaction_mode'), {}, False),
+            (outcome_decoding, 'diagnose_lead_answer', ('answer', 'discussion_constraints', 'discussion_only', 'constraints', 'read_ids', 'read_reviewers', 'interaction_mode'), ('discussion_constraints', 'discussion_only', 'constraints', 'read_ids', 'read_reviewers', 'interaction_mode'), {}, True),
+            (call_rule_factory, 'front_constraints', ('inputs', 'task_material_events', 'historical_user_sources', 'readiness_pin', 'offered_tasks', 'successor_only', 'objective_projection', 'conversation_id', 'preparation_request', 'is_revision', 'preparation_present', 'premise_question_id', 'adoption_capture', 'document_selection', 'document_node', 'selected_path'), ('inputs', 'task_material_events', 'historical_user_sources', 'readiness_pin', 'offered_tasks', 'successor_only', 'objective_projection', 'conversation_id', 'preparation_request', 'is_revision', 'preparation_present', 'premise_question_id', 'adoption_capture', 'document_selection', 'document_node', 'selected_path'), {}, True),
+            (lead_front_values, 'lead_front_material_prefix', ('document_selection', 'document_node', 'candidate_material', 'conversation_id', 'constraints', 'historical_user_sources', 'objective_projection'), (), {}, False),
+            (lead_front_values, 'lead_front_material_suffix', ('objective_projection', 'objective_events', 'binding_prior', 'ordinary_front_cap', 'successor_only', 'inputs'), (), {}, False),
+            (lead_front_values, 'recommendation_preparation_material', ('request_event', 'decision_event', 'start_event', 'inputs', 'candidate_material_by_input', 'objective_events'), (), {}, False),
+            (lead_document_nodes, 'document_selection_from_transition', ('controls', 'transition_event_id'), (), {}, True),
+            (lead_document_nodes, 'retained_document_node', ('projection', 'retained_scope', 'retained_node'), (), {}, True),
+            (collaboration_response_contracts, 'task_discussion_constraints', ('transition', 'receipt', 'discussion_only'), (), {}, False),
+            (lead_document_nodes, 'implicit_document_goal', ('projection', 'history', 'current_goal', 'current_budget_task_id'), (), {}, True),
+            (lead_front_values, 'document_lineage_front_cap', ('ordinary_front_cap', 'inherited_calls', 'inherited_rounds'), (), {}, False),
+            (lead_front_values, 'front_budget_limits', ('ordinary_front_cap', 'task_receipt', 'document_goal', 'projection', 'document_node', 'preparation', 'previous_proposal', 'expected_relation'), (), {}, False),
+            (lead_material_inputs, 'selected_task_input', ('event', 'ordinal', 'capture'), (), {}, True),
+            (authoring_source_history, 'current_previous_scope', ('previous_scope', 'available_tasks'), (), {}, True),
+            (authoring_source_history, 'authoring_task_offers', ('previous_scope', 'available_tasks', 'events', 'conversation_id', 'step_id', 'successor_only'), (), {}, True),
+            (authoring_source_history, 'recommendation_task_scope', ('request', 'available_tasks'), (), {}, True),
+            (authoring_source_history, 'recommendation_task_offers', ('request_scope', 'current_scope', 'decision'), (), {}, True),
+            (lead_front_values, 'adopted_idea_input', ('capture', 'event_id'), (), {}, False),
+            (lead_front_values, 'selected_premise_input', ('capture', 'event_id'), (), {}, False),
+            (lead_document_nodes, 'validate_document_task_origin', ('origin', 'receipt', 'session_id', 'conversation_id', 'step_id', 'selection', 'offered_tasks', 'selected_path'), ('offered_tasks', 'selected_path'), {}, True),
+            (lead_material_inputs, 'document_candidate_input_material', ('inputs',), (), {}, True),
+            (authoring_source_history, 'review_source_revision', ('receipt', 'expected_relation', 'previous_proposal', 'previous_scope', 'events', 'task_material_events'), (), {}, True),
+            (authoring_source_history, 'local_binding_scopes', ('available_tasks', 'events', 'conversation_id'), (), {}, True),
+            (lead_front_values, 'document_candidate_material_inputs', ('intents', 'inputs'), (), {}, False),
+            (lead_material_inputs, 'document_work_plan_material', ('view', 'selection'), (), {}, True),
+            (lead_front_values, 'front_submitted_call_count', ('events', 'step_id'), (), {}, False),
+            (reply_contract_values, 'lead_rejection_failure_code', ('source_owner_rejection', 'prepare_selected', 'declared_artifact_intent', 'decoded'), (), {}, True),
+            (artifact_objective_planning, 'clarify_unprepared_authoring_proposal', ('outcome', 'document_selection', 'document_node'), ('document_selection', 'document_node'), {}, False),
+        ):
+            function = getattr(owner, function_name)
+            self.assertEqual(function.__qualname__, function_name)
+            self.assertEqual(function.__module__, owner.__name__)
+            parameters = signature(function).parameters
+            self.assertEqual(tuple(parameters), parameter_names)
+            self.assertEqual(tuple(name for name, value in parameters.items() if value.kind is Parameter.KEYWORD_ONLY), keyword_names)
+            self.assertEqual({name: value.default for name, value in parameters.items() if value.default is not Parameter.empty}, defaults)
+            self.assertFalse(any(value.kind in (Parameter.VAR_POSITIONAL, Parameter.VAR_KEYWORD) for value in parameters.values()))
+            self.assertEqual(set(function.__annotations__), {*parameter_names, "return"})
+            if postponed:
+                self.assertTrue(all(isinstance(value, str) for value in function.__annotations__.values()))
+            else:
+                self.assertFalse(any(isinstance(value, str) for value in function.__annotations__.values()))
+            resolved = get_type_hints(function)
+            self.assertEqual(set(resolved), {*parameter_names, "return"})
+            self.assertFalse(any(isinstance(value, str) for value in resolved.values()))
+            if not postponed:
+                self.assertEqual(get_type_hints(function), {name: type(None) if value is None else value for name, value in function.__annotations__.items()})
+        self.assertIsInstance(collaboration_response_contracts.LEAD_CORRECTABLE_RESPONSE_REJECTION_CODES, frozenset)
+        self.assertIsInstance(collaboration_response_contracts.LEAD_RESPONSE_CORRECTION_INSTRUCTION, str)
         for module_name in ("group_observation", "group_reporting"):
             spec = importlib.util.find_spec("story_writing_agents.agent_context." + module_name)
             self.assertIsNotNone(spec)
@@ -1909,7 +2193,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                      'prepare_advisory_origin',
                      'prepare_specialist_advisory_intent',
                      'specialist_advisory_assignment',
-                     'specialist_advisory_budget',
+                     'specialist_advisory_budget', 'decode_artifact_synthesis', 'decode_specialist_reply', 'decode_lead_synthesis', 'required_unresolved_input_ids', 'decode_continuation_intent', 'specialist_result_contract', 'lead_synthesis_result_contract', 'artifact_revision_source', 'LEAD_CORRECTABLE_RESPONSE_REJECTION_CODES', 'LEAD_RESPONSE_CORRECTION_INSTRUCTION',
         ):
             self.assertNotIn(name, story_writing_agents.__all__)
             self.assertFalse(hasattr(story_writing_agents, name))
@@ -2161,6 +2445,11 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             "story_writing_agents/lead_preparation/editorial_capture.py",
             "story_writing_agents/lead_preparation/lead_source_qualification.py",
             "story_writing_agents/lead_preparation/review_material_validation.py",
+            "story_writing_agents/lead_preparation/collaboration_response_contracts.py",
+            "story_writing_agents/lead_preparation/collaboration_response_decoding.py",
+            "story_writing_agents/lead_preparation/lead_answer_authority.py",
+            "story_writing_agents/lead_preparation/lead_front_values.py",
+            "story_writing_agents/conversations/artifact_revision_sources.py",
             )
             with zipfile.ZipFile(story_wheel) as archive:
                 for package_path in group_package_paths:
