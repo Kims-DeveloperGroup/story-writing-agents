@@ -7,7 +7,7 @@ import os
 from dataclasses import replace
 from unittest import mock
 
-from story_writing_agents.errors import ProviderInvocationError
+from story_writing_agents.provider_adapter import ProviderInvocationError
 
 
 class AntigravityRecoveryEvidenceDefinitions:
