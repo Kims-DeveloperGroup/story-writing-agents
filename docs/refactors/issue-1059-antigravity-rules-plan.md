@@ -1,5 +1,7 @@
 # Antigravity rules 분리 검증 계획 (#1059)
 
+이 문서는 실제 Draft 생성 전의 문서 전용 체크포인트를 보존한다. 아래 실행 상태는 그 시점의 기록이며 최신 결과는 owning 이슈의 Evidence에서 확인한다.
+
 - 상세 구현 계획: https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1059
 - 기준 main: `ef92fa9738178c1708a5597e20e3838afd913444`.
 - 이 체크포인트는 문서만 추가하며 런타임·테스트 코드를 변경하지 않는다.
@@ -17,3 +19,6 @@
 - 필요한 소스 행 추가는 포괄 승인을 적용하고 실제 계수와 정확한 source-only 예산 쌍을 고정한다.
 - 기준 source와 같은 tree의 기존 전체 CI는 44503897774이며 후보 after 검증으로 해석하지 않는다.
 - 실제 실행은 공식 Actions에서 하고 로컬에서는 프로젝트 import/collection/테스트를 실행하지 않는다.
+
+공식 검증의 첫 후보는 annotation 설정과 테스트 의존성 선언 누락으로 실패했다. 원래 future annotations를 복원하고 실제 provider 두 개를 선언한 수정본을 별도 검증한다.
+실제 테스트 소스는 155,510→155,583행(+73)이며, 기존 Case/단언과 시간·worker 상한은 유지한다. 실패 실행은 정상 시간 표본에 합치지 않는다.
