@@ -616,7 +616,7 @@ class SuiteBudgetTests(unittest.TestCase):
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, combined_current, dict(prior, subtest_caps={**prior["subtest_caps"], matrix_id: 2}))
 
 
-        rules_current = suite_budget.load_budget()
+        rules_current = dict(suite_budget.load_budget(), max_test_source_lines=155583)
         self.assertEqual(rules_current["max_test_source_lines"], 155583)
         self.assertIsNone(suite_budget.check_monotonic(rules_current, combined_current))
         self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, rules_current, dict(rules_current, max_test_source_lines=152814))
@@ -639,6 +639,37 @@ class SuiteBudgetTests(unittest.TestCase):
         self.assertIs(AntigravityAdapterTests.test_binding_is_stable_isolated_and_uses_private_custom_agent, AntigravityRulesDefinitions.test_binding_is_stable_isolated_and_uses_private_custom_agent)
         self.assertIs(AntigravityAdapterTests.test_command_stdin_paths_and_fresh_resume_results_are_exact, AntigravityRulesDefinitions.test_command_stdin_paths_and_fresh_resume_results_are_exact)
         self.assertIs(AntigravityAdapterTests.test_mode_failures_are_best_effort_but_controls_propagate, AntigravityRulesDefinitions.test_mode_failures_are_best_effort_but_controls_propagate)
+        decoder_current = suite_budget.load_budget()
+        self.assertEqual(decoder_current["max_test_source_lines"], 155687)
+        self.assertIsNone(suite_budget.check_monotonic(decoder_current, rules_current))
+        self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, decoder_current, dict(decoder_current, max_test_source_lines=152814))
+        self._assert_source_limit_neighbors_rejected(decoder_current, rules_current)
+        for field, value in (("schema_version", 2), ("max_sequential_wall_seconds", 18001), ("max_shard_wall_seconds", 3601)):
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(decoder_current, **{field: value}), rules_current)
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, decoder_current, dict(rules_current, **{field: value}))
+        for caps in (
+            {key: value for key, value in decoder_current["subtest_caps"].items() if key != zero_id},
+            {**decoder_current["subtest_caps"], "tests.unreviewed.Case.test_extra": 0},
+            {**decoder_current["subtest_caps"], matrix_id: 2},
+            {**decoder_current["subtest_caps"], matrix_id: 0},
+        ):
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(decoder_current, subtest_caps=caps), rules_current)
+        self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, decoder_current, dict(rules_current, subtest_caps={**rules_current["subtest_caps"], matrix_id: 2}))
+
+
+        from tests import test_codex_backend as canonical_decoder_tests
+        from tests import test_backend_reply_decoding as decoder_definitions
+        self.assertIs(canonical_decoder_tests.CodexBackendTestCase.test_strict_phase_reply_mapping, decoder_definitions.BackendReplyDecodingDefinitions.test_strict_phase_reply_mapping)
+        self.assertIs(canonical_decoder_tests.CodexBackendTestCase.test_retrieval_decoder_rejects_malformed_duplicate_and_schema_errors, decoder_definitions.BackendReplyDecodingDefinitions.test_retrieval_decoder_rejects_malformed_duplicate_and_schema_errors)
+        self.assertIs(canonical_decoder_tests.CodexBackendTestCase.test_retrieval_read_explicit_null_is_not_an_omitted_end_sequence, decoder_definitions.BackendReplyDecodingDefinitions.test_retrieval_read_explicit_null_is_not_an_omitted_end_sequence)
+        for private, public in (
+            ('_readable_context', 'readable_context'),
+            ('_retrieval_request', 'retrieval_request'),
+            ('_retrieval_action_json', 'retrieval_action_json'),
+            ('_needle_search', 'needle_search'),
+            ('_read_first_search_hit', 'read_first_search_hit'),
+        ):
+            self.assertIs(getattr(canonical_decoder_tests, private), getattr(decoder_definitions, public))
         ids = runner_profile.HOSTED_METHOD_IDS
         self.assertEqual(runner_evidence.manifest(ids)["digest"],
                          'sha256:6b7a6aee7e6557ef274a6ff18f3205c75132e0b1e043d3f4de11ff075e104a54')
@@ -762,6 +793,11 @@ class SuiteBudgetTests(unittest.TestCase):
                 'tests.test_antigravity_adapter.AntigravityAdapterTests.test_binding_is_stable_isolated_and_uses_private_custom_agent',
                 'tests.test_antigravity_adapter.AntigravityAdapterTests.test_command_stdin_paths_and_fresh_resume_results_are_exact',
                 'tests.test_antigravity_adapter.AntigravityAdapterTests.test_mode_failures_are_best_effort_but_controls_propagate',
+            ),
+            "tests.test_backend_reply_decoding": (
+                'tests.test_codex_backend.CodexBackendTestCase.test_strict_phase_reply_mapping',
+                'tests.test_codex_backend.CodexBackendTestCase.test_retrieval_decoder_rejects_malformed_duplicate_and_schema_errors',
+                'tests.test_codex_backend.CodexBackendTestCase.test_retrieval_read_explicit_null_is_not_an_omitted_end_sequence',
             ),
         }
         definition_selections = {}

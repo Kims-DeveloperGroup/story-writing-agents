@@ -1419,3 +1419,21 @@ compound negative 보존 하에 허용한다. helper의 FD/inode/read/write/temp
 
 공식 첫 후보 검증에서 발견한 future annotations 누락과 예산 Case의 실제 provider 의존성
 두 개를 수정했다. 기존 Case/단언/fixture는 유지하며, 실패 후보의 시간은 정상 표본에서 제외한다.
+
+## #1060 — Backend 응답 복원과 실제 테스트 정의 소유권
+
+기준 main `a78d2ec85a`의 155,583행에서 실제 **155,687행 = raw149,448 + support4,689 + legacy1,550**으로
+charged raw가 104행 증가한다. 기존 본문과 공용 producer 다섯 개의 단일 이동은 순증 0이다.
+직접 테스트 정의·producer 연결 24행, 기존 공개 API·graph·packaging 검증 46행,
+기존 예산·실제 정의 선택 검증 34행을 포함한다. 범용 `tests/suite_budget.py` guard 17행은
+기존 frozen charge 범위 밖 비용으로 별도 공개한다. 사용자가 포괄 승인한 필요한 행만 추가한다.
+
+`BackendReplyDecodingDefinitions`의 실제 함수 세 개를 기존 Case가 직접 바인딩한다. 원래 41개 단언,
+cap 5/13/0과 fixture·MRO를 보존한다. 기존 producer 다섯 개는 새 실제 공개 소유자에 한 번 두고,
+원래 소비자는 직접 import한다. 이 모듈의 직접 선택 세 개와 conversation 공개 소비자를 포함한
+소스 영향 선택 세 개를 구분한다. 기존 전체 Case/ID·cap·profile·weights·시간·worker 상한은 유지한다.
+
+정확한 source-only **155,583→155,687**만 추가한다. 기존 schema·인접 한도·ID/subTest·시간의
+거부 조건과 정확한 이전 전이 쌍을 유지한다. 동일 newline 오류에 대한 기존 단언, 정상 전후 세 번,
+영향 범위와 현재 소스 전체 CI를 각각 검증한다. 개발 정책 검증 시간은 실제 비용을 기록하고 전체
+영향을 확인한다. Story runtime 기능 사례의 실제 추가 작업이나 회귀는 별도로 조사한다.

@@ -49,6 +49,8 @@ from story_writing_agents.consensus import (
     authoring_qualification,
 )
 from story_writing_agents import authoring_admission
+from story_writing_agents import backend as backend_module, backend_reply_decoding, conversation_retrieval, models
+from story_writing_agents.errors import BackendProtocolError
 from story_writing_agents import antigravity_adapter, antigravity_rules
 from story_writing_agents.lead_preparation import recommendation_preparation, recommendation_requests
 from story_writing_agents.lead_preparation import recommendation_decisions
@@ -380,8 +382,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 318)
-        self.assertEqual(len(edges), 1939)
+        self.assertEqual(len(modules), 319)
+        self.assertEqual(len(edges), 1947)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -406,6 +408,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                     'story_writing_agents.prompts',
                     'story_writing_agents.provider_request_mapping',
                     'story_writing_agents.provider_schema_projection',
+                    "story_writing_agents.backend_reply_decoding",
                 },
             ),
             'story_writing_agents.provider_message_catalog': (
@@ -422,6 +425,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                     'story_writing_agents.provider_request_mapping',
                     'story_writing_agents.provider_response_mapping',
                     'story_writing_agents.provider_schema_projection',
+                    "story_writing_agents.backend_reply_decoding",
                 },
             ),
             'story_writing_agents.provider_request_mapping': (
@@ -449,6 +453,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                     'story_writing_agents.lead_provider_contracts',
                     'story_writing_agents.orchestrator',
                     'story_writing_agents.runtime_resources.provider_call_accounting',
+                    "story_writing_agents.backend_reply_decoding",
                 },
             ),
             'story_writing_agents.provider_schema_projection': (
@@ -1893,6 +1898,20 @@ class RagModuleBoundaryTests(unittest.TestCase):
         antigravity_rules_owner = "story_writing_agents.antigravity_rules"
         self.assertEqual({target for source, target in edges if source == antigravity_rules_owner}, set())
         self.assertEqual({source for source, target in edges if target == antigravity_rules_owner}, {"story_writing_agents.antigravity_adapter"})
+        backend_reply_owner = "story_writing_agents.backend_reply_decoding"
+        self.assertEqual(
+            {target for source, target in edges if source == backend_reply_owner},
+            {
+                "story_writing_agents.conversation_retrieval",
+                "story_writing_agents.errors",
+                "story_writing_agents.models",
+                "story_writing_agents.provider_contract_guidance",
+                "story_writing_agents.provider_message_catalog",
+                "story_writing_agents.provider_response_mapping",
+                "story_writing_agents.structured_output_validation",
+            },
+        )
+        self.assertEqual({source for source, target in edges if target == backend_reply_owner}, {"story_writing_agents.backend"})
 
 
     def test_supported_module_surfaces_do_not_expand_the_root_facade(self) -> None:
@@ -2115,6 +2134,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             (provider_request_policy, ('require_running_consensus_request', 'consensus_provider_phase', 'review_only_audit_event', 'consensus_continuation_context', 'consensus_expected_reviewed_proposal', 'consensus_agent_request', 'consensus_authored_material_required', 'consensus_report_material_required')),
             (authoring_qualification, ('consensus_lineage_changed', 'record_consensus_lineage_hop', 'consensus_admission_inputs', 'manuscript_admission_source', 'consensus_admission_source_fact', 'qualify_consensus_authoring_sources')),
             (antigravity_rules, ("read_rules_source", "install_rules")),
+            (backend_reply_decoding, ("decode_conversation_retrieval_action", "decode_conversation_reply", "decode_reply", "PhaseReplyConstraintError")),
         ):
             self.assertEqual(set(owner.__all__), set(exported))
             actual = {name for name, value in vars(owner).items()
@@ -2210,6 +2230,9 @@ class RagModuleBoundaryTests(unittest.TestCase):
             (authoring_qualification, 'qualify_consensus_authoring_sources', ('identity', 'workflow_id', 'material', 'assessment', 'input_kind', 'direction_material', 'ruling_material', 'source_revision_id', 'authoring_target', 'facts'), ('input_kind', 'direction_material', 'ruling_material', 'source_revision_id', 'authoring_target', 'facts'), {}, False),
             (antigravity_rules, "read_rules_source", ("source",), (), {}, True),
             (antigravity_rules, "install_rules", ("target", "content"), (), {}, True),
+            (backend_reply_decoding, "decode_conversation_retrieval_action", ("text", "request", "action_index", "provider_name", "allowed_actions"), ("request", "action_index", "provider_name", "allowed_actions"), {"provider_name": "Codex", "allowed_actions": None}, True),
+            (backend_reply_decoding, "decode_conversation_reply", ("request", "text", "provider_name"), ("provider_name",), {"provider_name": "Codex"}, True),
+            (backend_reply_decoding, "decode_reply", ("phase", "text", "revision_id", "provider_name"), ("revision_id", "provider_name"), {"provider_name": "Codex"}, True),
         ):
             function = getattr(owner, function_name)
             self.assertEqual(function.__qualname__, function_name)
@@ -2293,6 +2316,28 @@ class RagModuleBoundaryTests(unittest.TestCase):
         self.assertFalse(hasattr(antigravity_adapter.AntigravityAdapter, "_install_rules"))
         self.assertNotIn("read_rules_source", story_writing_agents.__all__)
         self.assertNotIn("install_rules", story_writing_agents.__all__)
+        self.assertIs(get_type_hints(backend_reply_decoding.decode_reply)["phase"], models.Phase)
+        self.assertIs(get_type_hints(backend_reply_decoding.decode_reply)["return"], models.AgentReply)
+        self.assertIs(get_type_hints(backend_reply_decoding.decode_conversation_reply)["request"], models.ConversationRequest)
+        self.assertIs(get_type_hints(backend_reply_decoding.decode_conversation_reply)["return"], models.ConversationReply)
+        self.assertIs(get_type_hints(backend_reply_decoding.decode_conversation_retrieval_action)["request"], conversation_retrieval.ConversationRetrievalRequest)
+        self.assertEqual(get_type_hints(backend_reply_decoding.decode_conversation_retrieval_action)["return"], conversation_retrieval.ConversationRetrievalAction)
+        self.assertIs(get_type_hints(backend_reply_decoding.decode_conversation_retrieval_action)["action_index"], int)
+        self.assertIs(backend_reply_decoding.BackendProtocolError, BackendProtocolError)
+        self.assertIs(backend_module.backend_reply_decoding, backend_reply_decoding)
+        phase_error = backend_reply_decoding.PhaseReplyConstraintError
+        self.assertEqual((phase_error.__module__, phase_error.__qualname__), (backend_reply_decoding.__name__, "PhaseReplyConstraintError"))
+        self.assertEqual(phase_error.__bases__, (BackendProtocolError,))
+        self.assertEqual(tuple(signature(phase_error).parameters), ("rule",))
+        self.assertIs(signature(phase_error).parameters["rule"].default, Parameter.empty)
+        self.assertIs(signature(phase_error).parameters["rule"].kind, Parameter.POSITIONAL_OR_KEYWORD)
+        self.assertEqual(get_type_hints(phase_error.__init__), {"rule": str, "return": type(None)})
+        self.assertFalse(hasattr(backend_module, "_PhaseReplyConstraintError"))
+        for name in ("_decode_reply", "_decode_conversation_reply", "_decode_conversation_retrieval_action"):
+            self.assertFalse(hasattr(backend_module.AgentBackend, name))
+        for name in ("decode_reply", "decode_conversation_reply", "decode_conversation_retrieval_action", "PhaseReplyConstraintError"):
+            self.assertNotIn(name, story_writing_agents.__all__)
+            self.assertFalse(hasattr(story_writing_agents, name))
 
 
 class RagPackagingBoundaryTests(unittest.TestCase):
@@ -2550,6 +2595,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             "story_writing_agents/consensus/provider_request_policy.py",
             "story_writing_agents/consensus/authoring_qualification.py",
             "story_writing_agents/antigravity_rules.py",
+            "story_writing_agents/backend_reply_decoding.py",
             )
             with zipfile.ZipFile(story_wheel) as archive:
                 for package_path in group_package_paths:
