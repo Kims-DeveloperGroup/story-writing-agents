@@ -3657,51 +3657,9 @@ class StoryRuntime:
             proposal.basis.inputs,
             input_events,
         )
-        inputs_by_id = {item.input_id: item for item in proposal.basis.inputs}
-        try:
-            selected = tuple(
-                inputs_by_id[input_id] for input_id in assignment.input_ids
-            )
-        except KeyError as exc:
-            raise BackendProtocolError(
-                "assignment contains an unknown input alias"
-            ) from exc
-        value = {
-            "assignment": {
-                "mode": assignment.mode.value,
-                "assignment_id": assignment.assignment_id,
-                "instruction": assignment.instruction,
-                "input_ids": list(assignment.input_ids),
-                "round": assignment.round,
-                **({"review_basis": review_basis_to_dict(assignment.review_basis)}
-                   if assignment.review_basis is not None else {}),
-            },
-            "inputs": [
-                reply_contract_values.collaboration_input_value(item, input_events, evidence=proposal.basis.evidence) for item in selected
-            ],
-            "authoring_scope": authoring_scope_to_dict(proposal.authoring_scope),
-            **({"stage_plan": stage_plan_to_dict(proposal.stage_plan)} if proposal.stage_plan is not None else {}),
-            **({"document_node": document_node_binding_to_dict(proposal.document_node)} if proposal.document_node is not None else {}),
-            **({"shared_premises": shared_premises_to_dict(tuple(
-                premise for premise in proposal.basis.shared_premises
-                if proposal.authoring_scope.activity is AuthoringActivity.REVIEW or any(
-                    slot.slot_id == premise.slot_id and assignment.specialist_id in specialists_for_domains(slot.dependent_domains)
-                    for slot in proposal.authoring_scope.dependency_slots
-                )
-            ))} if proposal.authoring_scope.schema_version == 3 else {}),
-            "workflow": proposal.step_kind.value,
-        }
-        chosen = tuple(event.payload.capture for event in events
-            if type(event.payload) is CollaborationPremiseSelectionPayload
-            and event.payload.capture.authoring_task_id == proposal.authoring_scope.task_id
-            and event.payload.capture.authoring_task_revision <= proposal.authoring_scope.task_revision)
-        dependencies = ()
-        if chosen:
-            capture = chosen[-1]
-            value["premise_selection"] = premise_value_to_dict(capture)
-            if assignment.mode is SpecialistAssignmentMode.DRAFT and assignment.specialist_id in specialists_for_domains(capture.dependent_domains):
-                dependencies = ((capture.slot_id, capture.capture_digest),)
-
+        selected, value, dependencies = lead_material_inputs.specialist_assignment_material(
+            proposal, assignment, input_events, events,
+        )
         def decode(
             answer: str,
             _artifact_binding: SessionArtifactBinding,
@@ -3781,57 +3739,14 @@ class StoryRuntime:
             for reply in replies
         )
         current_projection = self.conversation_storage_services.event_store.read_context(session_id, conversation_id)
-        constraints = LeadProviderConstraints(
-            input_ids=(*(item.input_id for item in proposal.basis.inputs), *reply_event_ids),
-            review_candidate_ids=tuple(dict.fromkeys((
-                *(item.input_id for item in proposal.basis.inputs),
-                *(reply_event_id for reply_event_id, reply in
-                  zip(reply_event_ids, replies, strict=True)
-                  if reply.assessment is CollaborationSpecialistAssessment.DRAFTED),
-            ))),
-            reviewer_inputs=tuple((reviewer, item.input_id) for item in proposal.basis.inputs
-                if item.kind in {CollaborationInputKind.CORE_DOCUMENT, CollaborationInputKind.MANUSCRIPT,
-                                 CollaborationInputKind.WRITING_ARTIFACT}
-                for reviewer in (authoring_authority.core_reviewer(item.locator),) if reviewer is not None),
-            source_ids=tuple(dict.fromkeys(("current_response",
-                *(item.event_id for item in current_projection.offered_draft_sources),
-                *(item.input_id for item in proposal.basis.inputs), *reply_event_ids))),
-            objective_ids=tuple(item.facts.objective_id for item in current_projection.artifact_objectives
-                if item.state is ArtifactObjectiveState.OPEN
-                and item.facts.origin_conversation_id == conversation_id),
-            scope=proposal.authoring_scope, continuation=True,
+        constraints = lead_material_inputs.synthesis_constraints(
+            proposal, replies, reply_event_ids, current_projection, conversation_id,
         )
         input_events = self.read_session_authoring_events(session_id) if proposal.document_node is not None else events
-        value = {
-            "provider_constraints": constraints.prompt_facts(),
-            "authoring_scope": authoring_scope_to_dict(proposal.authoring_scope),
-            **({"stage_plan": stage_plan_to_dict(proposal.stage_plan)} if proposal.stage_plan is not None else {}),
-            **({"document_node": document_node_binding_to_dict(proposal.document_node)} if proposal.document_node is not None else {}),
-            **({"shared_premises": shared_premises_to_dict(proposal.basis.shared_premises)}
-               if proposal.authoring_scope.schema_version == 3 else {}),
-            "conversation_id": conversation_id,
-            "artifact_objectives": artifact_objective_context(project_collaboration_history(events)),
-            "inputs": [
-                reply_contract_values.collaboration_input_value(item, input_events, evidence=proposal.basis.evidence)
-                for item in proposal.basis.inputs
-            ],
-            "replies": [
-                {
-                    "mode": reply.mode.value,
-                    "assessment": reply.assessment.value,
-                    "assignment_id": reply.assignment_id,
-                    "input_ids": list(reply.input_ids),
-                    "message": reply.message,
-                    "reply_event_id": reply_event_id,
-                }
-                for reply, reply_event_id in zip(replies, reply_event_ids, strict=True)
-            ],
-            "workflow": "lead_synthesis",
-        }
-        if artifact_candidate is not None:
-            value["artifact_candidate"] = json.loads(
-                serialize_artifact_review_candidate(artifact_candidate.candidate)
-            )
+        value = lead_material_inputs.synthesis_material(
+            proposal, replies, events, input_events, conversation_id,
+            reply_event_ids, constraints, artifact_candidate,
+        )
 
         def decode(
             answer: str,
@@ -3934,16 +3849,9 @@ class StoryRuntime:
         self, *, session_id, conversation_id, turn_id, proposal, attempt_id,
         assignment, dispatch_event_id, events, action_progress_sink,
     ):
-        selected = tuple(item for item in proposal.basis.inputs if item.input_id in assignment.input_ids)
-        value = {
-            "workflow": "premise_analysis", "provisional": True,
-            "premise_decision": premise_value_to_dict(proposal.premise_decision),
-            "assignment": {"assignment_id": assignment.assignment_id,
-                "mode": assignment.mode.value, "instruction": assignment.instruction,
-                "input_ids": list(assignment.input_ids), "round": assignment.round},
-            "inputs": [reply_contract_values.collaboration_input_value(item, events,
-                evidence=proposal.basis.evidence) for item in selected],
-        }
+        selected, value = lead_material_inputs.premise_assignment_material(
+            proposal, assignment, events,
+        )
         return await self._run_collaboration_invocation(
             session_id=session_id, conversation_id=conversation_id, turn_id=turn_id,
             step_id=proposal.step_id, agent_id=assignment.specialist_id,
@@ -3967,42 +3875,17 @@ class StoryRuntime:
         self, *, session_id, conversation_id, turn_id, proposal, attempt_id,
         replies, events, action_progress_sink,
     ):
-        ids = tuple(event_journal.deterministic_id("e", attempt_id, reply.assignment_id, "reply") for reply in replies)
-        facts = PremiseDecisionConstraints(proposal.premise_decision.question_id,
-            tuple(item.input_id for item in proposal.basis.inputs),
-            tuple((event_id, tuple(item.alternative_key for item in reply.premise_analysis.alternatives))
-                for event_id, reply in zip(ids, replies, strict=True)),
-            tuple(event_id for event_id, reply in zip(ids, replies, strict=True)
-                if reply.assessment is CollaborationSpecialistAssessment.INSUFFICIENT_EVIDENCE
-                or not reply.premise_analysis.alternatives))
-        value = {
-            "workflow": "premise_decision_summary", "provisional": True,
-            "premise_decision": premise_value_to_dict(proposal.premise_decision),
-            "inputs": [reply_contract_values.collaboration_input_value(item, events,
-                evidence=proposal.basis.evidence) for item in proposal.basis.inputs],
-            "replies": [{"reply_event_id": event_id, "agent_id": assignment.specialist_id,
-                "premise_analysis": premise_value_to_dict(reply.premise_analysis)}
-                for event_id, reply, assignment in zip(ids, replies, proposal.assignments, strict=True)],
-        }
+        ids, facts, value = lead_material_inputs.premise_synthesis_values(
+            proposal, attempt_id, replies, events,
+        )
 
         def decode(answer, binding):
             summary = facts.validate_summary(outcome_decoding.strict_json_object(answer,
                 {"status", "message", "options", "recommended_option_key"}))
             current = self.conversation_storage_services.event_store.read(session_id, conversation_id)
-            calls = tuple(event.payload.call_id for event in current
-                if event.step_id == proposal.step_id and type(event.payload) is CollaborationProviderCallPayload
-                and event.payload.state is CollaborationProviderCallState.SUBMITTED)
-            cost = PremiseDecisionCost(proposal.step_id, calls, 1, proposal.proposal_id,
-                proposal.proposal_revision, proposal.proposal_digest, attempt_id)
-            admission = next((event.payload.admission for event in current
-                if event.step_id == proposal.step_id and type(event.payload) is CollaborationPremiseFreshWorkAdmissionPayload), None)
-            earlier = next((event for event in reversed(current) if type(event.payload) is CollaborationLeadSynthesisPayload
-                and event.payload.premise_report is not None and event.step_id != proposal.step_id), None)
-            earlier_ref = None if earlier is None else PremiseReportRef(conversation_id, earlier.event_id,
-                earlier.payload.premise_report.report_digest, earlier.payload.premise_report.spec.question_id)
-            cost_head = next((event for event in reversed(current) if type(event.payload) is CollaborationPremiseFreshWorkAdmissionPayload), None)
-            parent_ref = (admission.prior_admission_ref if admission is not None else
-                None if cost_head is None else PremiseAdmissionRef(cost_head.event_id, premise_digest(cost_head.payload.admission)))
+            cost, admission, earlier_ref, parent_ref = premise_preparation.premise_synthesis_provenance(
+                current, proposal, attempt_id, conversation_id,
+            )
             report = PremiseDecisionReport(
                 proposal.premise_decision, conversation_id, proposal.proposal_id,
                 proposal.proposal_revision, proposal.proposal_digest, proposal.step_id, attempt_id,
@@ -4015,11 +3898,9 @@ class StoryRuntime:
                 parent_ref,
                 prior_analysis_report_ref=earlier_ref,
             )
-            payload = CollaborationLeadSynthesisPayload(proposal.proposal_id,
-                proposal.proposal_revision, proposal.proposal_digest, attempt_id,
-                summary.message, ids, collaboration_response_decoding.required_unresolved_input_ids(replies),
-                proposal.basis.evidence, premise_report=report)
-            return LeadSynthesisResult(payload, None)
+            return premise_preparation.premise_synthesis_result(
+                proposal, attempt_id, ids, replies, summary, report,
+            )
 
         return await self._run_collaboration_invocation(
             session_id=session_id, conversation_id=conversation_id, turn_id=turn_id,
@@ -4340,27 +4221,13 @@ class StoryRuntime:
             def diagnose(answer: str) -> tuple[DomainValidationRule, ...]:
                 if constraints is not None:
                     return constraints.diagnose(answer) or (DomainValidationRule.LEAD_OUTCOME_REJECTED,)
-                try:
-                    value = json.loads(answer)
-                except (TypeError, ValueError):
-                    return (DomainValidationRule.LEAD_OUTCOME_REJECTED,)
-                if type(value) is dict and not visible_text(value.get("message")):
-                    return (DomainValidationRule.MESSAGE_REQUIRED,)
-                return (DomainValidationRule.LEAD_OUTCOME_REJECTED,)
+                return outcome_decoding.diagnose_collaboration_fallback(answer)
 
             def validate(answer: str, _authorization: object) -> None:
                 nonlocal decoded
-                if constraints is not None:
-                    rules = constraints.diagnose(answer)
-                    if rules:
-                        raise LeadContractError(rules)
-                if constraints is not None and constraints.scope is not None:
-                    value = json.loads(answer)
-                    if type(value.get("authoring_scope")) is dict:
-                        scope = constraints.scope
-                        value = bind_task_outcome(value, TaskBindingPlan(scope.task_id,
-                            scope.task_revision, "locked"))
-                        answer = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+                answer = collaboration_response_decoding.normalize_locked_collaboration_answer(
+                    answer, constraints,
+                )
                 decoded = decoder(answer, artifact_binding)
 
             def record_validated_answer(call_id: str) -> None:

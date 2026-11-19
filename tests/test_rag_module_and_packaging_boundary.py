@@ -30,6 +30,8 @@ from story_writing_agents.lead_preparation import (
     lead_terminal_planning,
     collaboration_response_contracts,
     collaboration_response_decoding,
+    lead_material_inputs,
+    outcome_decoding,
 )
 import story_writing_agents
 from story_writing_agents import conversations
@@ -365,7 +367,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
         self.assertEqual(len(modules), 284)
-        self.assertEqual(len(edges), 1695)
+        self.assertEqual(len(edges), 1709)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -1065,6 +1067,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
         'story_writing_agents.lead_preparation.lead_task_control',
             'story_writing_agents.lead_preparation.artifact_objective_planning',
             'story_writing_agents.lead_preparation.lead_consultation_planning',
+            'story_writing_agents.lead_preparation.lead_material_inputs',
                                                                                                                  })
         self.assertIn("story_writing_agents.blocking_work", modules)
         self.assertEqual({target for source, target in edges if source == "story_writing_agents.blocking_work"}, set())
@@ -1114,6 +1117,17 @@ class RagModuleBoundaryTests(unittest.TestCase):
             "story_writing_agents.specialist_routing",
             "story_writing_agents.writing_artifacts",
             "story_writing_agents.writing_artifacts.runtime_references",
+            'story_writing_agents.artifact_proposals',
+            'story_writing_agents.conversations.context',
+            'story_writing_agents.conversations.event_vocabulary',
+            'story_writing_agents.conversations.events',
+            'story_writing_agents.document_plan',
+            'story_writing_agents.errors',
+            'story_writing_agents.lead_premise_decisions',
+            'story_writing_agents.lead_preparation.authoring_authority',
+            'story_writing_agents.lead_provider_contracts',
+            'story_writing_agents.runtime_resources',
+            'story_writing_agents.runtime_resources.collaboration_event_journal',
         })
         self.assertEqual({source for source, target in edges if target == lead_material_inputs}, {
             'story_writing_agents.lead_preparation.current_lead_evidence',
@@ -1407,6 +1421,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
             'story_writing_agents.runtime_resources',
             'story_writing_agents.runtime_resources.collaboration_event_journal',
             'story_writing_agents.specialist_routing',
+            'story_writing_agents.collaboration_execution_results',
+            'story_writing_agents.lead_preparation.collaboration_response_decoding',
         })
         self.assertEqual({source for source, target in edges if target == premise_preparation_owner}, {"story_writing_agents.orchestrator"})
         lead_task_control_owner = 'story_writing_agents.lead_preparation.lead_task_control'
@@ -1685,6 +1701,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
             'capture_shared_premises',
             'prepare_premise_admission',
             'validate_premise_control',
+            'premise_synthesis_provenance',
+            'premise_synthesis_result',
         ))
         self.assertEqual(tuple(lead_task_control.__all__), (
             'prepare_exploration_adoption',
@@ -1734,6 +1752,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
         )
         for owner, function, parameter_names, keyword_only in policy_contracts:
             self.assertEqual(function.__module__, owner.__name__)
+            self.assertEqual(function.__qualname__, function_name)
             parameters = signature(function).parameters
             self.assertEqual(tuple(parameters), parameter_names)
             self.assertEqual(tuple(name for name, value in parameters.items() if value.kind is Parameter.KEYWORD_ONLY), keyword_only)
@@ -1746,7 +1765,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             })
         self.assertIsInstance(specialist_advisory_values.ADVISORY_USER_IMPACT, str)
         for owner, exported in (
-            (collaboration_response_decoding, ('decode_artifact_synthesis', 'decode_specialist_reply', 'decode_lead_synthesis', 'required_unresolved_input_ids', 'decode_continuation_intent')),
+            (collaboration_response_decoding, ('decode_artifact_synthesis', 'decode_specialist_reply', 'decode_lead_synthesis', 'required_unresolved_input_ids', 'decode_continuation_intent', 'normalize_locked_collaboration_answer')),
             (collaboration_response_contracts, ('specialist_result_contract', 'lead_synthesis_result_contract', 'LEAD_CORRECTABLE_RESPONSE_REJECTION_CODES', 'LEAD_RESPONSE_CORRECTION_INSTRUCTION')),
             (artifact_revision_sources, ('artifact_revision_source',)),
         ):
@@ -1754,15 +1773,24 @@ class RagModuleBoundaryTests(unittest.TestCase):
             actual = {name for name, value in vars(owner).items()
                 if not name.startswith("_") and callable(value) and getattr(value, "__module__", None) == owner.__name__}
             self.assertEqual(actual, {name for name in exported if callable(getattr(owner, name))})
-        for owner, function_name, parameter_names, keyword_names, defaults in (
-            (collaboration_response_decoding, 'decode_artifact_synthesis', ('answer', 'proposal', 'attempt_id', 'reply_event_ids', 'replies', 'candidate'), ('proposal', 'attempt_id', 'reply_event_ids', 'replies', 'candidate'), {}),
-            (collaboration_response_decoding, 'decode_specialist_reply', ('answer', 'proposal', 'attempt_id', 'assignment', 'dispatch_event_id', 'premise_dependencies'), ('proposal', 'attempt_id', 'assignment', 'dispatch_event_id', 'premise_dependencies'), {'premise_dependencies': ()}),
-            (collaboration_response_decoding, 'decode_lead_synthesis', ('answer', 'proposal', 'attempt_id', 'reply_event_ids', 'replies', 'review_candidate_ids'), ('proposal', 'attempt_id', 'reply_event_ids', 'replies', 'review_candidate_ids'), {}),
-            (collaboration_response_decoding, 'required_unresolved_input_ids', ('replies',), (), {}),
-            (collaboration_response_decoding, 'decode_continuation_intent', ('value', 'authoring_scope', 'review_candidate_ids', 'shared_premises'), ('authoring_scope', 'review_candidate_ids', 'shared_premises'), {'shared_premises': ()}),
-            (collaboration_response_contracts, 'specialist_result_contract', ('assignment', 'premise_dependencies'), ('premise_dependencies',), {'premise_dependencies': ()}),
-            (collaboration_response_contracts, 'lead_synthesis_result_contract', ('evidence', 'input_ids', 'reply_event_ids', 'allow_next_intent', 'artifact_review', 'authoring_scope', 'constraints'), ('evidence', 'input_ids', 'reply_event_ids', 'allow_next_intent', 'artifact_review', 'authoring_scope', 'constraints'), {'constraints': None}),
-            (artifact_revision_sources, 'artifact_revision_source', ('receipt', 'original', 'history'), (), {}),
+        for owner, function_name, parameter_names, keyword_names, defaults, postponed in (
+            (collaboration_response_decoding, 'decode_artifact_synthesis', ('answer', 'proposal', 'attempt_id', 'reply_event_ids', 'replies', 'candidate'), ('proposal', 'attempt_id', 'reply_event_ids', 'replies', 'candidate'), {}, False),
+            (collaboration_response_decoding, 'decode_specialist_reply', ('answer', 'proposal', 'attempt_id', 'assignment', 'dispatch_event_id', 'premise_dependencies'), ('proposal', 'attempt_id', 'assignment', 'dispatch_event_id', 'premise_dependencies'), {'premise_dependencies': ()}, False),
+            (collaboration_response_decoding, 'decode_lead_synthesis', ('answer', 'proposal', 'attempt_id', 'reply_event_ids', 'replies', 'review_candidate_ids'), ('proposal', 'attempt_id', 'reply_event_ids', 'replies', 'review_candidate_ids'), {}, False),
+            (collaboration_response_decoding, 'required_unresolved_input_ids', ('replies',), (), {}, False),
+            (collaboration_response_decoding, 'decode_continuation_intent', ('value', 'authoring_scope', 'review_candidate_ids', 'shared_premises'), ('authoring_scope', 'review_candidate_ids', 'shared_premises'), {'shared_premises': ()}, False),
+            (collaboration_response_contracts, 'specialist_result_contract', ('assignment', 'premise_dependencies'), ('premise_dependencies',), {'premise_dependencies': ()}, False),
+            (collaboration_response_contracts, 'lead_synthesis_result_contract', ('evidence', 'input_ids', 'reply_event_ids', 'allow_next_intent', 'artifact_review', 'authoring_scope', 'constraints'), ('evidence', 'input_ids', 'reply_event_ids', 'allow_next_intent', 'artifact_review', 'authoring_scope', 'constraints'), {'constraints': None}, False),
+            (artifact_revision_sources, 'artifact_revision_source', ('receipt', 'original', 'history'), (), {}, False),
+            (lead_material_inputs, 'specialist_assignment_material', ('proposal', 'assignment', 'input_events', 'events'), (), {}, True),
+            (lead_material_inputs, 'synthesis_constraints', ('proposal', 'replies', 'reply_event_ids', 'current_projection', 'conversation_id'), (), {}, True),
+            (lead_material_inputs, 'synthesis_material', ('proposal', 'replies', 'events', 'input_events', 'conversation_id', 'reply_event_ids', 'constraints', 'artifact_candidate'), (), {}, True),
+            (lead_material_inputs, 'premise_assignment_material', ('proposal', 'assignment', 'events'), (), {}, True),
+            (lead_material_inputs, 'premise_synthesis_values', ('proposal', 'attempt_id', 'replies', 'events'), (), {}, True),
+            (premise_preparation, 'premise_synthesis_provenance', ('current', 'proposal', 'attempt_id', 'conversation_id'), (), {}, False),
+            (premise_preparation, 'premise_synthesis_result', ('proposal', 'attempt_id', 'ids', 'replies', 'summary', 'report'), (), {}, False),
+            (outcome_decoding, 'diagnose_collaboration_fallback', ('answer',), (), {}, True),
+            (collaboration_response_decoding, 'normalize_locked_collaboration_answer', ('answer', 'constraints'), (), {}, False),
         ):
             function = getattr(owner, function_name)
             self.assertEqual(function.__module__, owner.__name__)
@@ -1772,8 +1800,15 @@ class RagModuleBoundaryTests(unittest.TestCase):
             self.assertEqual({name: value.default for name, value in parameters.items() if value.default is not Parameter.empty}, defaults)
             self.assertFalse(any(value.kind in (Parameter.VAR_POSITIONAL, Parameter.VAR_KEYWORD) for value in parameters.values()))
             self.assertEqual(set(function.__annotations__), {*parameter_names, "return"})
-            self.assertFalse(any(isinstance(value, str) for value in function.__annotations__.values()))
-            self.assertEqual(get_type_hints(function), {name: type(None) if value is None else value for name, value in function.__annotations__.items()})
+            if postponed:
+                self.assertTrue(all(isinstance(value, str) for value in function.__annotations__.values()))
+            else:
+                self.assertFalse(any(isinstance(value, str) for value in function.__annotations__.values()))
+            resolved = get_type_hints(function)
+            self.assertEqual(set(resolved), {*parameter_names, "return"})
+            self.assertFalse(any(isinstance(value, str) for value in resolved.values()))
+            if not postponed:
+                self.assertEqual(get_type_hints(function), {name: type(None) if value is None else value for name, value in function.__annotations__.items()})
         self.assertIsInstance(collaboration_response_contracts.LEAD_CORRECTABLE_RESPONSE_REJECTION_CODES, frozenset)
         self.assertIsInstance(collaboration_response_contracts.LEAD_RESPONSE_CORRECTION_INSTRUCTION, str)
         for module_name in ("group_observation", "group_reporting"):

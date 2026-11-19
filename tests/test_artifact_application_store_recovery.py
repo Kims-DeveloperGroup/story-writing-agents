@@ -373,7 +373,7 @@ class ArtifactApplicationBoundaryTests(_ApplicationStoreTestCase):
 
         modules, edges = module_graph(_SOURCE_ROOT)
         self.assertEqual(len(modules), 284)
-        self.assertEqual(len(edges), 1695)
+        self.assertEqual(len(edges), 1709)
         store = "story_writing_agents.writing_artifacts._application_store"
         repository = "story_writing_agents.writing_artifacts.repository"
         self.assertEqual(

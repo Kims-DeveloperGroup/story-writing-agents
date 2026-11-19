@@ -690,3 +690,15 @@ def _decode_shared_premise_intents(value: object) -> tuple[LeadSharedPremiseInte
         result.append(LeadSharedPremiseIntent(item["slot_id"], item["selected_premise"],
                                               tuple(item["basis_input_ids"])))
     return tuple(result)
+
+
+def diagnose_collaboration_fallback(
+    answer: str,
+) -> tuple[DomainValidationRule, ...]:
+    try:
+        value = json.loads(answer)
+    except (TypeError, ValueError):
+        return (DomainValidationRule.LEAD_OUTCOME_REJECTED,)
+    if type(value) is dict and not visible_text(value.get("message")):
+        return (DomainValidationRule.MESSAGE_REQUIRED,)
+    return (DomainValidationRule.LEAD_OUTCOME_REJECTED,)

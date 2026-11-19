@@ -34,6 +34,11 @@ from ..structured_output_validation import (
     validation_failure,
 )
 from . import outcome_decoding, proposal_basis_values, reply_contract_values
+from ..lead_provider_contracts import LeadContractError
+from ..lead_provider_contracts import LeadProviderConstraints
+from ..authoring_task_lifecycle import TaskBindingPlan
+from ..authoring_task_lifecycle import bind_task_outcome
+import json
 
 
 def decode_artifact_synthesis(
@@ -381,10 +386,31 @@ def decode_continuation_intent(
     )
 
 
+
+
+def normalize_locked_collaboration_answer(
+    answer: str,
+    constraints: LeadProviderConstraints | None,
+) -> str:
+    if constraints is not None:
+        rules = constraints.diagnose(answer)
+        if rules:
+            raise LeadContractError(rules)
+    if constraints is not None and constraints.scope is not None:
+        value = json.loads(answer)
+        if type(value.get("authoring_scope")) is dict:
+            scope = constraints.scope
+            value = bind_task_outcome(value, TaskBindingPlan(scope.task_id,
+                scope.task_revision, "locked"))
+            answer = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    return answer
+
+
 __all__ = (
     'decode_artifact_synthesis',
     'decode_specialist_reply',
     'decode_lead_synthesis',
     'required_unresolved_input_ids',
     'decode_continuation_intent',
+    'normalize_locked_collaboration_answer',
 )

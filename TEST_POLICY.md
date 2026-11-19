@@ -1230,25 +1230,34 @@ ordinary16행/physical17행 증가로 별도 공개한다.
 
 사용자의 필요한 행 추가 포괄 승인을 적용한다. 수락 main
 `aac5d831437a5bcb4fdbc35f197eb3d4affb422b`의 raw148,544/support4,680/legacy1,550,
-합계154,774행에서 raw148,677/support4,689/legacy1,550, 합계154,916행으로
-정확히142행(raw133/support9)을 계상한다. 기존 네 Case의119물리행·35assert·cap3을
+합계154,774행에서 raw148,712/support4,689/legacy1,550, 합계154,951행으로
+정확히177행(raw168/support9)을 계상한다. 기존 네 Case의119물리행·35assert·cap3을
 정의 모듈로 옮기고 필수 helper3개를 단일 소유로 연결하며, 실제 공개 API·namespace·
 graph·packaging·선택/예산 경계의 기존 검증 비용을 포함한다. 이동 본문은 한 번만 세고
 기존 미확인1,550행과 이미 계상한 지원 코드를 공제하거나 다시 청구하지 않는다.
 
-source-only `154774→154916` 전이는 기존 schema1·Case2,544·각 ID/cap 및 전체 cap8,690의
+source-only `154774→154951` 전이는 기존 schema1·Case2,544·각 ID/cap 및 전체 cap8,690의
 동등성, 기존 시간18,000/3,600초와 함께 검증한다. 기존14개 이관 receipt·399 weight·
 163 profile/mixed19·30개 실행 클래스와 최대4worker를 바꾸지 않는다.
 `tests/suite_budget.py`의 새 정확 source 전이 guard17ordinary/17physical행은
 기존 frozen 계상 경계 밖의 물리 비용으로 별도 공개하며, 테스트/단언을 그곳으로 옮겨
 비용을 누락시키지 않는다. 신규 Case·시나리오·subTest·시간/worker 예외는 없다.
 
-이 배정은 #1048의 독립 첫 계약 전달 비용이다. 같은 이슈의 host 후속 단계는 실제
-diff를 별도로 계상하며 이142행을 여유로 전용하지 않는다. Story runtime의 실제
+이 배정은 #1048의 현재 계약·요청 값 분리 비용이다. 같은 이슈의 host 후속 단계는 실제
+diff를 별도로 계상하며 이177행을 여유로 전용하지 않는다. Story runtime의 실제
 성능 회귀는 실패로 판단하고, 미세한 정상 측정 변동과 테스트 예산 정책 Case의
 전체 시간 영향에 관한 기존 사용자 기준을 유지한다.
 
-첫 커밋의140행 배정 뒤 기존 incoming 기대집합 누락2행을 보완해 현재142행으로
+첫 커밋의140행 배정 뒤 기존 incoming 기대집합 누락2행을 보완해 stage1의142행으로
 정정했다. 중간154,914행의 관측과 실패는 PR 이력에 보존하며 현재 정확 전이만
 최신 계상으로 사용한다. 신규 세 모듈의 명시적 `__all__`22물리행은 production
 공개 경계 선언이며 테스트 소스 상한의 비용과 구분한다.
+
+stage2의 요청 값·전제 provenance/result·진단·scope 정규화9API를 기존4owner로
+옮기고 실제signature/주석스타일·graph14edge/incoming·owner 검증을 동기화해
+추가35raw행을 계상했다. 전체 #1048 현재 배정은177행이며 중간154,914/154,916은
+미통합 이슈의 관측 이력으로 보존한다. 새 aggregate guard를 중간값마다 누적하지
+않고 accepted main154,774에서 현재154,951로 가는 단일 정확 전이만 갱신한다.
+기존 material/outcome의 future annotation과 기존API 계약은 유지하며, 새6API의
+실제 canonical 타입 공급·get_type_hints와 나머지 eager API 검증을 구분한다.
+이 source 배정은 최종 기능·성능·전체 CI·리뷰의 성공을 뜻하지 않는다.
