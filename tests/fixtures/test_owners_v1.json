@@ -980,7 +980,8 @@
         "tests.test_antigravity_adapter.AntigravitySchemaRenderingTests.test_safe_integer_edges_and_original_constraint_equivalence"
       ],
       "depends_on": [
-        "tests.test_agent_context_accounting"
+        "tests.test_agent_context_accounting",
+        "tests.test_antigravity_rules"
       ]
     },
     {
@@ -6717,6 +6718,8 @@
         "runner",
         "test-budget",
         "tests.lead_preparation.test_specialist_response_semantics",
+        "tests.test_antigravity_adapter",
+        "tests.test_antigravity_rules",
         "tests.test_specialist_orchestration_execution"
       ]
     },
@@ -19226,6 +19229,47 @@
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_phase_mapping_is_exact_and_finalization_is_read_only",
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_prompt_and_supplied_draft_are_execution_authored_before_audit",
         "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_reject_revise_restart_and_session_ownership_fail_before_provider"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "antigravity.rules",
+      "boundary": "existing-cases",
+      "paths": [
+        "src/story_writing_agents/antigravity_rules.py"
+      ],
+      "focused_ids": [
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_binding_is_stable_isolated_and_uses_private_custom_agent",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_command_stdin_paths_and_fresh_resume_results_are_exact",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_mode_failures_are_best_effort_but_controls_propagate"
+      ],
+      "affected_ids": [
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_agent_cleanup_exception_precedence_is_exact",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_agent_writes_are_complete_bounded_and_failure_safe",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_binding_is_stable_isolated_and_uses_private_custom_agent",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_command_stdin_paths_and_fresh_resume_results_are_exact",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_contextual_binding_shared_semantics_and_vendor_constraints_are_exact",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_definition_chain_rejects_links_and_non_directories",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_mode_failures_are_best_effort_but_controls_propagate",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_nonzero_timeout_and_cancellation_use_bounded_cleanup"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "tests.test_antigravity_rules",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/test_antigravity_rules.py"
+      ],
+      "focused_ids": [
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_binding_is_stable_isolated_and_uses_private_custom_agent",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_command_stdin_paths_and_fresh_resume_results_are_exact",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_mode_failures_are_best_effort_but_controls_propagate"
+      ],
+      "affected_ids": [
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_binding_is_stable_isolated_and_uses_private_custom_agent",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_command_stdin_paths_and_fresh_resume_results_are_exact",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_mode_failures_are_best_effort_but_controls_propagate"
       ],
       "depends_on": []
     }
