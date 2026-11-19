@@ -213,18 +213,16 @@ session resources, record session history/checkpoints, and prepare/execute local
 commits. `git` re-exports the general adapter/contracts; workflow-specific modules expose
 only their intentional contract paths.
 
-- `git`, `git.contracts`, `git.adapter`, `git.process`, `git.repository_lock`
-- `git.session_contracts`, `git.session_resources`, `git.session_history_contracts`, `git.session_history`
-- `git.session_checkpoint_contracts`, `git.session_checkpoints`, `git.story_commit_contracts`, `git.story_commit_candidates`, `git.story_commits`
-
-`git.process` owns fixed-profile children, bounded nonblocking read-only pipes and call-local selectors; `repository_lock` owns cross-process serialization.
-Resource/history/checkpoint/commit services depend inward on those owners; general contracts do not import workflow services. `session_resources` delegates bounded fresh loose-object frames and shared format policy to package-internal `inspection_objects`; it owns Git fallback and unchanged raw-tree/root verification. Loose-ref/object proofs retain named descriptors and inspection-local state.
-Generation capture and pinning remain opaque internal contracts. Bound history and story-commit services validate
-exact generation without exporting descriptors or general mutation authority.
-`git.session_resources` proves the literal top-level `.agents` namespace and every case variant
-absent from the exact linked-worktree index under a retained lease and generation. Its optional
-effective-ignore proof uses fixed `git check-ignore --quiet --no-index -- .agents/`; index and
-generation facts bracket both checks. This owner never mutates Git for role projection.
+`git.adapter` composes the public repository operations. `adapter_execution` runs typed command queries through `git.process`, which owns fixed child profiles and bounded pipes.
+`repository_topology`, `external_operation_inspection`, `repository_baseline`, and `repository_metadata` own topology, descriptor-based markers, baseline commits, and guarded status/diff/log respectively.
+`session_resources` composes inspection and provisioning. `session_resource_repository` owns lease-scoped storage, journal I/O, and fixed process calls.
+`session_resource_inspection` classifies inventory and recovery from bounded ref/tree proofs in `session_inspection_data`. Loose frames use `inspection_objects`.
+`session_provisioning` owns restart-safe ref and worktree mutation. `session_generation` owns creator-bound descriptors and pins. `repository_lock` serializes repository operations.
+Locked generation admission verifies the literal top-level `.agents` namespace and every case variant, plus the exact linked-worktree effective-ignore proof.
+`session_history` and `session_checkpoints` own durable history and checkpoint operations under their typed contracts.
+`story_commit_candidates` owns planning and revalidation. `story_commits` owns single-use confirmation and durable execution transitions.
+`story_commit_git` owns fixed Git reads, isolated staging and branch CAS. `story_commit_recovery` inspects and completes exact durable operations using lower command and session contracts.
+Resource, history, checkpoint, and commit owners depend inward. General Git contracts have no workflow dependencies.
 
 ### Workspace, runtime state, and session lifecycle
 

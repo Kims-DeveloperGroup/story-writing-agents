@@ -20,7 +20,8 @@ from story_writing_agents.git import (
     GitRepositoryState,
     GitTopologyKind,
 )
-from story_writing_agents.git import adapter as adapter_module
+from story_writing_agents.git import repository_baseline
+from story_writing_agents.git.adapter_execution import GitAdapterExecution
 from story_writing_agents.git import process as process_module
 
 from tests.git_contract_fixture import (
@@ -287,7 +288,7 @@ class GitAdapterIntegrationTests(DisposableGitTestCase):
         )
 
         with (
-            mock.patch.object(adapter_module.os, "open", wraps=os.open) as open_file,
+            mock.patch.object(repository_baseline.os, "open", wraps=os.open) as open_file,
             mock.patch.object(process_module.subprocess, "Popen") as popen,
         ):
             for operation in ("inspect_baseline", "create_baseline"):
@@ -700,7 +701,7 @@ class GitAdapterIntegrationTests(DisposableGitTestCase):
                 GitRepositoryState.BASELINE_COMMITTED,
             ),
         )
-        original = GitRepositoryAdapter._required_git  # noqa: SLF001
+        original = GitAdapterExecution.required_git
         for name, command, after, signal, expected in scenarios:
             with self.subTest(stage=name):
                 root = self.repository(name)
@@ -709,7 +710,7 @@ class GitAdapterIntegrationTests(DisposableGitTestCase):
                 interrupted = False
 
                 def interrupt_stage(
-                    instance: GitRepositoryAdapter,
+                    instance: GitAdapterExecution,
                     arguments: tuple[str, ...],
                     **kwargs: object,
                 ) -> object:
@@ -729,7 +730,7 @@ class GitAdapterIntegrationTests(DisposableGitTestCase):
                         os.environ, self._adapter_environment(), clear=True
                     ),
                     mock.patch.object(
-                        GitRepositoryAdapter, "_required_git", interrupt_stage
+                        GitAdapterExecution, "required_git", interrupt_stage
                     ),
                 ):
                     with self.assertRaises(GitOperationError) as caught:

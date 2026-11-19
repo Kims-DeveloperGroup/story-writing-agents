@@ -68,7 +68,7 @@ from story_writing_agents.git.session_history_contracts import (
     GitSessionHistoryState,
     GitSessionIdentitySource,
 )
-from story_writing_agents.git.story_commits import StoryCommitRecoverySnapshot
+from story_writing_agents.git.story_commit_recovery import StoryCommitRecoverySnapshot
 from story_writing_agents.session_lifecycle import (
     SessionAccessState,
     SessionDurableState,
@@ -1162,9 +1162,9 @@ class SessionRecoveryBoundaryTests(unittest.TestCase):
             if isinstance(node, ast.ImportFrom) and node.level in {1, 2}
         }
         self.assertEqual(dependencies, {
-            "contracts", "conversations", "git", "git.session_contracts", "git.session_resources",
+            "contracts", "conversations", "git", "git.session_contracts", "git.session_generation",
             "git.session_history_contracts", "session_lifecycle",
-            "git.story_commits", "workspace.session_artifact_binding",
+            "git.story_commit_recovery", "workspace.session_artifact_binding",
             "workspace.session_resources", "writing_artifacts",
         })
         forbidden = ("provider", "controller", "apply_artifact_changes")

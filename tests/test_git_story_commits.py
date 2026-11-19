@@ -16,7 +16,6 @@ from unittest import mock
 
 import story_writing_agents
 import story_writing_agents.git as git_facade
-from story_writing_agents.git import story_commits as commits_module
 from story_writing_agents.git import repository_lock as lock_module
 from story_writing_agents.git.session_history import (
     GitSessionHistory,
@@ -43,6 +42,7 @@ from story_writing_agents.git.story_commit_contracts import (
     StoryCommitState,
 )
 from story_writing_agents.git.story_commits import StoryCommitService
+from story_writing_agents.git.story_commit_session import candidate_operation_id
 from story_writing_agents.workspace.session_artifact_binding import (
     SessionArtifactBindingError,
     compose_session_artifact_binding,
@@ -111,7 +111,7 @@ class StoryCommitServiceTests(StoryCommitGitTestCase):
         authority = service.authorize(candidate, confirmation)
         self.assertEqual(
             authority._operation_id,
-            commits_module._candidate_operation_id("commit", candidate.candidate_id),
+            candidate_operation_id("commit", candidate.candidate_id),
         )
         with self.assertRaises(StoryCommitError) as caught:
             service.authorize(candidate, confirmation)

@@ -1616,7 +1616,33 @@
           "counting": "Existing Case definitions and canonical IDs remain in place; public mapper transport or source-only boundary validation, no Case/fixture/receipt move."
         }
       ],
-      "counting": "Source-only 149079+4689+1550=155318; accepted base155219 delta99. Mapper public-owner import1; existing RAG API/export/namespace/graph/packaging82; existing BudgetCase16. Canonical IDs/caps/receipts/weights/profile/launch and historical strict transitions unchanged. Exact generic suite_budget branch17 physical/ordinary rows is separately disclosed outside frozen source charge. Original collection-phase Root import remains necessary for the existing handoff consumer."
+      "counting": "Source-only 149079+4689+1550=155318; accepted base155219 delta99. Mapper public-owner import1; existing RAG API/export/namespace/graph/packaging82; existing BudgetCase16. Canonical IDs/caps/receipts/weights/profile/launch and historical strict transitions unchanged. Exact generic suite_budget branch17 physical/ordinary rows is separately disclosed outside frozen source charge. Original collection-phase Root import remains necessary for the existing handoff consumer.",
+      "main974_integration": {
+        "main_commit": "a5824011928ba2a94ef3e454bd102f819e80d022",
+        "Main_source": 155394,
+        "ours_source": 155318,
+        "combined_source": 155510,
+        "combined_raw": 149271,
+        "combined_support": 4689,
+        "combined_legacy": 1550,
+        "delta_from_Main": 116,
+        "delta_from_ours": 192,
+        "combined_verification_raw_delta": 17,
+        "exact_source_pairs": [
+          [
+            155318,
+            155510
+          ],
+          [
+            155394,
+            155510
+          ]
+        ],
+        "generic_additional_ordinary_excluded": 17,
+        "generic_additional_physical_excluded": 17,
+        "new_Cases_scenarios_subTests_IDmoves_receipts_weights_profiles": 0,
+        "counting": "Preserve original Issue1049 155219 to155318 (+99) and merged Main974 155219 to155394 (+175) histories. Combined source155510 adds17 counted ordinary rows to the existing BudgetCase for both exact parent floors and adjacent/schema/time/caps negatives. Both parent cases, caps, fixture lifetimes and registry remain; shared graph expectations use the actual combined scanner scopes."
+      }
     }
   ]
 }
