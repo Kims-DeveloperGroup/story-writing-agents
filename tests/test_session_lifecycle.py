@@ -36,7 +36,7 @@ from story_writing_agents import (
     WorkspaceVersionUnsupportedError,
     provider_work_is_ready,
 )
-from story_writing_agents import backend as backend_module
+from story_writing_agents import backend as backend_module, provider_session_claim_guard
 from story_writing_agents import errors as errors_module
 from story_writing_agents import models as models_module
 from story_writing_agents import session_lifecycle as lifecycle_module
@@ -507,7 +507,7 @@ class SessionLifecycleContractTests(unittest.TestCase):
             ]
         )
         source_files = tuple(source_root.rglob("*.py"))
-        self.assertEqual(len(source_files), 323)
+        self.assertEqual(len(source_files), 324)
         self.assertTrue(
             {
                 source_root / "artifact_proposals.py",
@@ -1453,15 +1453,17 @@ class AgentBackendLifecycleTests(unittest.TestCase):
 
         fake_msvcrt.locking.side_effect = locking
         with (
-            mock.patch.object(backend_module, "_fcntl", None),
-            mock.patch.object(backend_module, "_msvcrt", fake_msvcrt),
-            mock.patch.object(backend_module.time, "sleep") as sleep,
-            backend._access_claim_guard(),
+            mock.patch.object(provider_session_claim_guard, "_fcntl", None),
+            mock.patch.object(provider_session_claim_guard, "_msvcrt", fake_msvcrt),
+            mock.patch.object(provider_session_claim_guard.time, "sleep") as sleep,
+            provider_session_claim_guard.access_claim_guard(
+                backend.workspace, backend_module._SESSION_DIRECTORY, backend_module._ACCESS_CLAIM_GUARD
+            ),
         ):
             pass
         self.assertEqual(self.workspace.path(_ACCESS_GUARD).read_bytes(), b"\0")
         self.assertEqual(fake_msvcrt.locking.call_count, 3)
-        sleep.assert_called_once_with(backend_module._WINDOWS_LOCK_RETRY_SECONDS)
+        sleep.assert_called_once_with(provider_session_claim_guard._WINDOWS_LOCK_RETRY_SECONDS)
 
     @unittest.skipUnless(os.name == "posix", "requires POSIX process semantics")
     def test_concurrent_dead_reclaim_has_exactly_one_owner(self) -> None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 from tests.module_graph_fixture import module_inventory, internal_edges
 import ast
 import configparser
+from collections.abc import Iterator
 from contextlib import nullcontext
 import email.parser
 import importlib.util
@@ -51,8 +52,9 @@ from story_writing_agents.consensus import (
 )
 from story_writing_agents import authoring_admission
 from story_writing_agents import backend as backend_module, backend_reply_decoding, conversation_retrieval, models
-from story_writing_agents import provider_session_timestamps, provider_thread_records
-from story_writing_agents.errors import BackendProtocolError, WorkspaceFormatError
+from story_writing_agents import provider_session_claim_guard, provider_session_timestamps, provider_thread_records
+from story_writing_agents.errors import BackendProtocolError, WorkspaceFormatError, WorkspaceSecurityError
+from story_writing_agents.workspace import Workspace
 from story_writing_agents import antigravity_adapter, antigravity_recovery_matching, antigravity_response_decoding, antigravity_rules
 from story_writing_agents import codex_adapter, codex_definition_sources
 from story_writing_agents.agent_context import ContextComponentBytes
@@ -386,8 +388,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 323)
-        self.assertEqual(len(edges), 1961)
+        self.assertEqual(len(modules), 324)
+        self.assertEqual(len(edges), 1964)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -1959,6 +1961,11 @@ class RagModuleBoundaryTests(unittest.TestCase):
         self.assertEqual({source for source, target in edges if target == stamps_owner},
                          {"story_writing_agents.backend", records_owner})
         self.assertNotIn(("story_writing_agents.backend", "story_writing_agents.runtime_state_paths"), edges)
+        guard_owner = provider_session_claim_guard.__name__
+        self.assertEqual({target for source, target in edges if source == guard_owner},
+                         {"story_writing_agents.errors", "story_writing_agents.workspace"})
+        self.assertEqual({source for source, target in edges if target == guard_owner},
+                         {"story_writing_agents.backend"})
 
 
     def test_supported_module_surfaces_do_not_expand_the_root_facade(self) -> None:
@@ -2191,6 +2198,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "thread_key", "validate_context_thread_key", "validate_session_manifest", "validate_thread_record",
             )),
             (provider_session_timestamps, ("advance_record_timestamp", "parse_record_timestamp", "record_timestamp")),
+            (provider_session_claim_guard, ("access_claim_guard",)),
             (backend_reply_decoding, ("decode_conversation_retrieval_action", "decode_conversation_reply", "decode_reply", "PhaseReplyConstraintError")),
         ):
             self.assertEqual(set(owner.__all__), set(exported))
@@ -2293,6 +2301,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
             (codex_definition_sources, "read_definition_source", ("definition",), (), {}, True),
             (provider_thread_records, "validate_thread_record", ("value",), (), {}, True),
             (provider_session_timestamps, "record_timestamp", (), (), {}, True),
+            (provider_session_claim_guard, "access_claim_guard",
+             ("workspace", "session_directory", "guard_relative"), (), {}, True),
             (provider_session_timestamps, "parse_record_timestamp", ("value", "label"), ("label",), {}, True),
             (provider_session_timestamps, "advance_record_timestamp", ("previous", "candidate"),
              ("candidate",), {"candidate": None}, True),
@@ -2408,6 +2418,16 @@ class RagModuleBoundaryTests(unittest.TestCase):
         self.assertFalse(hasattr(story_writing_agents, "read_definition_source"))
         self.assertIs(backend_module.provider_thread_records, provider_thread_records)
         self.assertIs(backend_module.provider_session_timestamps, provider_session_timestamps)
+        self.assertIs(backend_module.provider_session_claim_guard, provider_session_claim_guard)
+        self.assertEqual(get_type_hints(provider_session_claim_guard.access_claim_guard.__wrapped__),
+                         {"workspace": Workspace, "session_directory": str, "guard_relative": str,
+                          "return": Iterator[None]})
+        self.assertIs(provider_session_claim_guard.BackendProtocolError, BackendProtocolError)
+        self.assertIs(provider_session_claim_guard.WorkspaceFormatError, WorkspaceFormatError)
+        self.assertIs(provider_session_claim_guard.WorkspaceSecurityError, WorkspaceSecurityError)
+        self.assertFalse(hasattr(backend_module.AgentBackend, "_access_claim_guard"))
+        self.assertNotIn("access_claim_guard", story_writing_agents.__all__)
+        self.assertFalse(hasattr(story_writing_agents, "access_claim_guard"))
         self.assertIs(provider_thread_records.parse_record_timestamp, provider_session_timestamps.parse_record_timestamp)
         self.assertEqual(get_type_hints(provider_thread_records.validate_thread_record),
                          {"value": Any, "return": dict[str, Any]})
@@ -2704,6 +2724,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             "story_writing_agents/antigravity_rules.py",
             "story_writing_agents/backend_reply_decoding.py",
             "story_writing_agents/codex_definition_sources.py",
+            "story_writing_agents/provider_session_claim_guard.py",
             "story_writing_agents/provider_session_timestamps.py",
             "story_writing_agents/provider_thread_records.py",
             )
