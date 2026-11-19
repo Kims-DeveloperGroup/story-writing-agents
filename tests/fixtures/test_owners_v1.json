@@ -981,6 +981,7 @@
       ],
       "depends_on": [
         "tests.test_agent_context_accounting",
+        "tests.test_antigravity_recovery_evidence",
         "tests.test_antigravity_rules"
       ]
     },
@@ -6720,6 +6721,7 @@
         "test-budget",
         "tests.lead_preparation.test_specialist_response_semantics",
         "tests.test_antigravity_adapter",
+        "tests.test_antigravity_recovery_evidence",
         "tests.test_antigravity_rules",
         "tests.test_backend_reply_decoding",
         "tests.test_codex_backend",
@@ -19338,6 +19340,55 @@
         "tests.test_codex_backend.CodexBackendTestCase.test_binding_stages_isolated_agents_and_turn_omits_static_prompt",
         "tests.test_codex_backend.CodexBackendTestCase.test_post_staging_validation_failure_discards_provisional_bytes",
         "tests.test_codex_backend.CodexBackendTestCase.test_reference_read_invoke_isolated_for_all_roles_and_rounds"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "antigravity.recovery-matching",
+      "boundary": "existing-cases",
+      "paths": [
+        "src/story_writing_agents/antigravity_recovery_matching.py"
+      ],
+      "focused_ids": [
+        "tests.test_antigravity_adapter.AntigravityRecoveryEvidenceTests.test_captured_shape_and_clean_current_finish_recover",
+        "tests.test_antigravity_adapter.AntigravityRecoveryEvidenceTests.test_missing_preexisting_wrong_request_or_replaced_directory_reject",
+        "tests.test_antigravity_adapter.AntigravityRecoveryEvidenceTests.test_reordered_finish_arguments_match_but_scalar_types_do_not"
+      ],
+      "affected_ids": [
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_partial_exit_zero_requires_independent_current_finish_for_fresh_and_resumed_calls",
+        "tests.test_antigravity_adapter.AntigravityRecoveryEvidenceTests.test_captured_shape_and_clean_current_finish_recover",
+        "tests.test_antigravity_adapter.AntigravityRecoveryEvidenceTests.test_incomplete_ambiguous_nonmonotonic_and_forged_native_steps_reject",
+        "tests.test_antigravity_adapter.AntigravityRecoveryEvidenceTests.test_missing_preexisting_wrong_request_or_replaced_directory_reject",
+        "tests.test_antigravity_adapter.AntigravityRecoveryEvidenceTests.test_reordered_finish_arguments_match_but_scalar_types_do_not",
+        "tests.test_antigravity_adapter.AntigravityRecoveryEvidenceTests.test_resume_requires_unchanged_prefix_and_new_matching_request",
+        "tests.test_antigravity_adapter.AntigravityRecoveryEvidenceTests.test_status_identity_schema_and_diagnostic_requirements_remain_strict",
+        "tests.test_antigravity_adapter.AntigravityRecoveryEvidenceTests.test_unsafe_native_paths_and_bounded_trace_reject"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "tests.test_antigravity_recovery_evidence",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/test_antigravity_recovery_evidence.py"
+      ],
+      "focused_ids": [
+        "tests.test_antigravity_adapter.AntigravityRecoveryEvidenceTests.test_captured_shape_and_clean_current_finish_recover",
+        "tests.test_antigravity_adapter.AntigravityRecoveryEvidenceTests.test_incomplete_ambiguous_nonmonotonic_and_forged_native_steps_reject",
+        "tests.test_antigravity_adapter.AntigravityRecoveryEvidenceTests.test_missing_preexisting_wrong_request_or_replaced_directory_reject",
+        "tests.test_antigravity_adapter.AntigravityRecoveryEvidenceTests.test_reordered_finish_arguments_match_but_scalar_types_do_not",
+        "tests.test_antigravity_adapter.AntigravityRecoveryEvidenceTests.test_resume_requires_unchanged_prefix_and_new_matching_request",
+        "tests.test_antigravity_adapter.AntigravityRecoveryEvidenceTests.test_status_identity_schema_and_diagnostic_requirements_remain_strict",
+        "tests.test_antigravity_adapter.AntigravityRecoveryEvidenceTests.test_unsafe_native_paths_and_bounded_trace_reject"
+      ],
+      "affected_ids": [
+        "tests.test_antigravity_adapter.AntigravityRecoveryEvidenceTests.test_captured_shape_and_clean_current_finish_recover",
+        "tests.test_antigravity_adapter.AntigravityRecoveryEvidenceTests.test_incomplete_ambiguous_nonmonotonic_and_forged_native_steps_reject",
+        "tests.test_antigravity_adapter.AntigravityRecoveryEvidenceTests.test_missing_preexisting_wrong_request_or_replaced_directory_reject",
+        "tests.test_antigravity_adapter.AntigravityRecoveryEvidenceTests.test_reordered_finish_arguments_match_but_scalar_types_do_not",
+        "tests.test_antigravity_adapter.AntigravityRecoveryEvidenceTests.test_resume_requires_unchanged_prefix_and_new_matching_request",
+        "tests.test_antigravity_adapter.AntigravityRecoveryEvidenceTests.test_status_identity_schema_and_diagnostic_requirements_remain_strict",
+        "tests.test_antigravity_adapter.AntigravityRecoveryEvidenceTests.test_unsafe_native_paths_and_bounded_trace_reject"
       ],
       "depends_on": []
     }

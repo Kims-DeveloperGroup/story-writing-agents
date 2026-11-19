@@ -644,10 +644,14 @@ class SuiteBudgetTests(unittest.TestCase):
         self.assertIsNone(suite_budget.check_monotonic(decoder_current, rules_current))
         self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, decoder_current, dict(decoder_current, max_test_source_lines=152814))
         self._assert_source_limit_neighbors_rejected(decoder_current, rules_current)
-        codex_source_current = suite_budget.load_budget()
+        codex_source_current = dict(suite_budget.load_budget(), max_test_source_lines=155717)
         self.assertEqual(codex_source_current["max_test_source_lines"], 155717)
         self.assertIsNone(suite_budget.check_monotonic(codex_source_current, decoder_current))
         self._assert_source_limit_neighbors_rejected(codex_source_current, decoder_current)
+        recovery_current = suite_budget.load_budget()
+        self.assertEqual(recovery_current["max_test_source_lines"], 155785)
+        self.assertIsNone(suite_budget.check_monotonic(recovery_current, codex_source_current))
+        self._assert_source_limit_neighbors_rejected(recovery_current, codex_source_current)
         for field, value in (("schema_version", 2), ("max_sequential_wall_seconds", 18001), ("max_shard_wall_seconds", 3601)):
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(decoder_current, **{field: value}), rules_current)
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, decoder_current, dict(rules_current, **{field: value}))
@@ -770,6 +774,16 @@ class SuiteBudgetTests(unittest.TestCase):
 
         from tests.runner import impact as definition_impact
         artifact_class = "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests."
+        recovery_case = "tests.test_antigravity_adapter.AntigravityRecoveryEvidenceTests."
+        recovery_method_names = (
+            "test_captured_shape_and_clean_current_finish_recover",
+            "test_incomplete_ambiguous_nonmonotonic_and_forged_native_steps_reject",
+            "test_missing_preexisting_wrong_request_or_replaced_directory_reject",
+            "test_reordered_finish_arguments_match_but_scalar_types_do_not",
+            "test_resume_requires_unchanged_prefix_and_new_matching_request",
+            "test_status_identity_schema_and_diagnostic_requirements_remain_strict",
+            "test_unsafe_native_paths_and_bounded_trace_reject",
+        )
         definition_groups_1047 = {
             "tests.lead_preparation.test_artifact_candidate_creation": (
                 artifact_class + 'test_incomplete_core_workflow_is_reviewed_only_after_confirmation',
@@ -798,6 +812,7 @@ class SuiteBudgetTests(unittest.TestCase):
                 'tests.test_antigravity_adapter.AntigravityAdapterTests.test_command_stdin_paths_and_fresh_resume_results_are_exact',
                 'tests.test_antigravity_adapter.AntigravityAdapterTests.test_mode_failures_are_best_effort_but_controls_propagate',
             ),
+            "tests.test_antigravity_recovery_evidence": tuple(recovery_case + name for name in recovery_method_names),
             "tests.test_backend_reply_decoding": (
                 'tests.test_codex_backend.CodexBackendTestCase.test_strict_phase_reply_mapping',
                 'tests.test_codex_backend.CodexBackendTestCase.test_retrieval_decoder_rejects_malformed_duplicate_and_schema_errors',
@@ -810,6 +825,10 @@ class SuiteBudgetTests(unittest.TestCase):
             self.assertEqual(selected.ids, tuple(value for value in real.ids if value in expected_ids))
             definition_selections[module] = selected
         runner_selection.validate_definition_modules(real, tuple(definition_groups_1047))
+        from tests.test_antigravity_adapter import AntigravityRecoveryEvidenceTests
+        from tests.test_antigravity_recovery_evidence import AntigravityRecoveryEvidenceDefinitions
+        for method in recovery_method_names:
+            self.assertIs(AntigravityRecoveryEvidenceTests.__dict__[method], AntigravityRecoveryEvidenceDefinitions.__dict__[method])
         from tests.lead_preparation.test_specialist_response_semantics import SpecialistResponseSemanticsDefinitions
         from tests.test_specialist_orchestration_execution import SpecialistExecutionAcceptanceTests, ExecutionInputFixture
         from tests.lead_fixtures.runtime_setup import LeadOrchestrationTestCase

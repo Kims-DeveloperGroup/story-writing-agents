@@ -20,7 +20,6 @@ import unicodedata
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -63,6 +62,7 @@ from .workspace.session_role_projection import (
     prepare_session_role_projection,
     require_session_role_projection,
 )
+import story_writing_agents.antigravity_recovery_matching as antigravity_recovery_matching
 import story_writing_agents.antigravity_rules as antigravity_rules
 from .antigravity_response_decoding import (
     reject_duplicate_fields as _reject_duplicate_fields,
@@ -75,14 +75,6 @@ from .antigravity_response_decoding import (
 
 _SAFE_CONVERSATION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 _SAFE_FINGERPRINT = re.compile(r"[0-9a-f]{64}")
-_MALFORMED_FUNCTION_CALL = re.compile(
-    r"Your previous response contained an improperly formatted function call\. "
-    r"Please retry with a properly formatted function call\. Retries remaining: ([0-3])"
-)
-_NATIVE_COMPLETED = re.compile(
-    r"Created At: ([^\n]+)\nCompleted At: ([^\n]+)\n"
-    r"Task is complete\. Summarize what you did and do not call any more tools\."
-)
 _NATIVE_PARTIAL_TIMEOUT = re.compile(
     rb"^\[agy\] print timeout after [^\r\n]+ with turn in progress; "
     rb"returning partial output\r?$", re.MULTILINE,
@@ -91,8 +83,6 @@ _NATIVE_TRUNCATED = re.compile(
     rb"^error: [^\r\n]+ \(response may be truncated\)\r?$", re.MULTILINE,
 )
 _NATIVE_TRACE_MAX_BYTES = 4 * 1024 * 1024
-_NATIVE_TRACE_MAX_LINE_BYTES = 512 * 1024
-_NATIVE_TRACE_MAX_STEPS = 4096
 _NATIVE_SNAPSHOT_MAX_ENTRIES = 1024
 _HELP_LONG_OPTION = re.compile(
     r"(?<![A-Za-z0-9_-])--[A-Za-z0-9][A-Za-z0-9_-]*(?![A-Za-z0-9_-])"
@@ -115,10 +105,6 @@ _REQUIRED_HEADLESS_FLAGS = (
 )
 
 CapabilityRun = Callable[..., subprocess.CompletedProcess[bytes]]
-
-
-class _NativeEvidenceUnavailable(ValueError):
-    """Reject unsafe or incomplete recovery evidence without native content."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -1582,7 +1568,9 @@ class AntigravityAdapter:
         recoverable_error = (
             terminal.get("status") == "ERROR"
             and type(native_error) is str
-            and _MALFORMED_FUNCTION_CALL.fullmatch(native_error) is not None
+            and antigravity_recovery_matching.MALFORMED_FUNCTION_CALL.fullmatch(
+                native_error
+            ) is not None
         )
         if terminal.get("status") != "SUCCESS" and not recoverable_error:
             raise ProviderInvocationError(
@@ -1663,7 +1651,7 @@ class AntigravityAdapter:
             or value.st_dev <= 0
             or value.st_ino <= 0
         ):
-            raise _NativeEvidenceUnavailable
+            raise antigravity_recovery_matching.NativeEvidenceUnavailable
         return value.st_dev, value.st_ino
 
     @staticmethod
@@ -1693,7 +1681,7 @@ class AntigravityAdapter:
             os.stat(name, dir_fd=parent, follow_symlinks=False),
             directory=directory,
         ):
-            raise _NativeEvidenceUnavailable
+            raise antigravity_recovery_matching.NativeEvidenceUnavailable
         return descriptor
 
     @contextmanager
@@ -1711,10 +1699,10 @@ class AntigravityAdapter:
             or os.stat not in os.supports_follow_symlinks
             or os.scandir not in os.supports_fd
         ):
-            raise _NativeEvidenceUnavailable
+            raise antigravity_recovery_matching.NativeEvidenceUnavailable
         parts = provider_directory.relative_to(self.state_root).parts
         if not parts or any(part in {".", ".."} for part in parts):
-            raise _NativeEvidenceUnavailable
+            raise antigravity_recovery_matching.NativeEvidenceUnavailable
         with ExitStack() as stack:
             descriptor = os.open(
                 self.state_root,
@@ -1745,7 +1733,7 @@ class AntigravityAdapter:
         """Read one bounded, stable regular trace without following native links."""
 
         if _SAFE_CONVERSATION_ID.fullmatch(thread_id) is None:
-            raise _NativeEvidenceUnavailable
+            raise antigravity_recovery_matching.NativeEvidenceUnavailable
         with ExitStack() as stack:
             directory = brain
             for part in (thread_id, ".system_generated", "logs"):
@@ -1757,7 +1745,7 @@ class AntigravityAdapter:
             )
             before = os.fstat(descriptor)
             if not 0 < before.st_size <= _NATIVE_TRACE_MAX_BYTES:
-                raise _NativeEvidenceUnavailable
+                raise antigravity_recovery_matching.NativeEvidenceUnavailable
             remaining = _NATIVE_TRACE_MAX_BYTES + 1
             chunks: list[bytes] = []
             while remaining:
@@ -1781,43 +1769,8 @@ class AntigravityAdapter:
                 or cls._native_identity(after, directory=False)
                 != cls._native_identity(pathname, directory=False)
             ):
-                raise _NativeEvidenceUnavailable
+                raise antigravity_recovery_matching.NativeEvidenceUnavailable
             return content
-
-    @classmethod
-    def _native_steps(cls, content: bytes) -> list[dict[str, Any]]:
-        """Validate finite JSONL structure; private thinking is never evidence."""
-
-        if not content.endswith(b"\n"):
-            raise _NativeEvidenceUnavailable
-        lines = content.split(b"\n")[:-1]
-        if not 0 < len(lines) <= _NATIVE_TRACE_MAX_STEPS:
-            raise _NativeEvidenceUnavailable
-        sources = {
-            "USER_INPUT": "USER_EXPLICIT",
-            "PLANNER_RESPONSE": "MODEL",
-            "ERROR_MESSAGE": "SYSTEM",
-            "GENERIC": "MODEL",
-        }
-        steps: list[dict[str, Any]] = []
-        for index, line in enumerate(lines):
-            if not 0 < len(line) <= _NATIVE_TRACE_MAX_LINE_BYTES:
-                raise _NativeEvidenceUnavailable
-            step = cls._parse_result(line)
-            step.pop("thinking", None)
-            kind = step.get("type")
-            if (
-                type(step.get("step_index")) is not int
-                or step["step_index"] != index
-                or type(kind) is not str
-                or kind not in sources
-                or step.get("source") != sources[kind]
-                or step.get("status") != "DONE"
-                or (kind != "PLANNER_RESPONSE" and "tool_calls" in step)
-            ):
-                raise _NativeEvidenceUnavailable
-            steps.append(step)
-        return steps
 
     def _native_recovery_baseline(
         self,
@@ -1834,13 +1787,13 @@ class AntigravityAdapter:
                         with os.scandir(brain) as entries:
                             for entry in entries:
                                 if len(names) >= _NATIVE_SNAPSHOT_MAX_ENTRIES:
-                                    raise _NativeEvidenceUnavailable
+                                    raise antigravity_recovery_matching.NativeEvidenceUnavailable
                                 names.add(entry.name)
                     return _NativeRecoveryBaseline(identities, None, frozenset(names))
                 if brain is None:
                     return None
                 content = self._read_native_trace(brain, thread_id)
-                steps = self._native_steps(content)
+                steps = antigravity_recovery_matching.native_steps(content)
                 return _NativeRecoveryBaseline(
                     identities,
                     thread_id,
@@ -1891,8 +1844,10 @@ class AntigravityAdapter:
                 != baseline.prefix_sha256
             ):
                 return False
-            steps = self._native_steps(content)[baseline.prior_steps:]
-            return self._matches_current_finish(
+            steps = antigravity_recovery_matching.native_steps(content)[
+                baseline.prior_steps:
+            ]
+            return antigravity_recovery_matching.matches_current_finish(
                 steps, prompt, structured_output, native_error
             )
         except (
@@ -1904,122 +1859,6 @@ class AntigravityAdapter:
             RecursionError,
         ):
             return False
-
-    @staticmethod
-    def _native_timestamp(value: object) -> datetime:
-        if type(value) is not str:
-            raise _NativeEvidenceUnavailable
-        timestamp = datetime.fromisoformat(value)
-        if timestamp.tzinfo is None or timestamp.utcoffset() is None:
-            raise _NativeEvidenceUnavailable
-        return timestamp
-
-    @staticmethod
-    def _matches_native_request(content: object, prompt: str) -> bool:
-        if type(content) is not str:
-            return False
-        framed = f"<USER_REQUEST>\n{prompt}\n</USER_REQUEST>"
-        if not content.startswith(framed):
-            return False
-        suffix = content[len(framed):]
-        for tag in ("ADDITIONAL_METADATA", "USER_SETTINGS_CHANGE"):
-            opening = f"\n<{tag}>\n"
-            if suffix.startswith(opening):
-                metadata, ending, suffix = suffix[len(opening):].partition(
-                    f"\n</{tag}>"
-                )
-                if (
-                    not ending
-                    or "<USER_REQUEST>" in metadata
-                    or "</USER_REQUEST>" in metadata
-                ):
-                    return False
-        return suffix == ""
-
-    @classmethod
-    def _matches_current_finish(
-        cls,
-        steps: list[dict[str, Any]],
-        prompt: str,
-        structured_output: dict[str, Any],
-        native_error: str,
-    ) -> bool:
-        if (
-            len(steps) < 3
-            or steps[0]["type"] != "USER_INPUT"
-            or not cls._matches_native_request(steps[0].get("content"), prompt)
-        ):
-            return False
-        timestamps = [
-            cls._native_timestamp(step.get("created_at")) for step in steps
-        ]
-        if any(
-            later < earlier
-            for earlier, later in zip(timestamps, timestamps[1:])
-        ):
-            return False
-        last_error: str | None = None
-        retries: int | None = None
-        for step in steps[1:-2]:
-            if step["type"] == "PLANNER_RESPONSE" and not step.get("tool_calls"):
-                continue
-            if (
-                step["type"] != "ERROR_MESSAGE"
-                or type(step.get("content")) is not str
-            ):
-                return False
-            content = step["content"]
-            if not content.startswith("Error: "):
-                return False
-            match = _MALFORMED_FUNCTION_CALL.fullmatch(content[len("Error: "):])
-            if match is None or (
-                retries is not None and int(match[1]) != retries - 1
-            ):
-                return False
-            retries = int(match[1])
-            last_error = content[len("Error: "):]
-        if last_error is not None and last_error != native_error:
-            return False
-        finish, completed = steps[-2:]
-        calls = finish.get("tool_calls")
-        if (
-            finish["type"] != "PLANNER_RESPONSE"
-            or type(calls) is not list
-            or len(calls) != 1
-            or type(calls[0]) is not dict
-            or set(calls[0]) != {"name", "args"}
-            or calls[0]["name"] != "finish"
-            or type(calls[0]["args"]) is not dict
-        ):
-            return False
-        arguments = dict(calls[0]["args"])
-        for metadata in ("toolAction", "toolSummary"):
-            if metadata in arguments and metadata not in structured_output:
-                if type(arguments.pop(metadata)) is not str:
-                    return False
-
-        def structural_json(value: dict[str, Any]) -> str:
-            return json.dumps(
-                value,
-                allow_nan=False,
-                ensure_ascii=False,
-                separators=(",", ":"),
-                sort_keys=True,
-            )
-
-        if structural_json(arguments) != structural_json(structured_output):
-            return False
-        if (
-            completed["type"] != "GENERIC"
-            or type(completed.get("content")) is not str
-        ):
-            return False
-        match = _NATIVE_COMPLETED.fullmatch(completed["content"])
-        if match is None:
-            return False
-        created = cls._native_timestamp(match[1])
-        ended = cls._native_timestamp(match[2])
-        return timestamps[-2] <= created <= timestamps[-1] <= ended
 
     @staticmethod
     def provider_usage(value: object) -> ProviderUsage | None:
