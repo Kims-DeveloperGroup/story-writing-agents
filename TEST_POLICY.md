@@ -92,13 +92,35 @@ complete workflow shares a 75-minute deadline, including setup and shutdown.
 
 사용자는 전체 테스트 시간에 큰 지장이 없다면 테스트 예산 정책 검증의 개별 증가를 허용하고,
 Story runtime 기능 검증과 구분해 관대한 정책으로 다루도록 지시했다.
-현재 확인된 대상은 `tests.test_suite_budget.SuiteBudgetTests.test_new_id_increased_subtests_and_relaxed_time_are_rejected`이다.
+당시 확인된 최초 대상은 `tests.test_suite_budget.SuiteBudgetTests.test_new_id_increased_subtests_and_relaxed_time_are_rejected`이다.
 이 Case의 개별 method·1:1 시간 증가만으로 Story runtime 회귀나 전달 실패로 판정하지 않는다.
 증가 원인과 원자료는 계속 기록하고, 전체 실행 시간에 유의미한 실제 영향이 없는지 확인한다.
 기존 기능·negative·Case/subTest·시간/worker 상한은 보존하고 기존 전체 시간 비교 기준을 늘리지 않는다.
 Story runtime 기능 Case에는 이 예외를 적용하지 않는다. 전체 시간에 유의미한 실제 회귀가 있으면 실패로 판단한다.
 이 결정에 따라 이 Case만을 위한 후속 digest memo 실험은 철회하고 원래 #1027 source 배정을 유지한다.
 실험의 측정·실패·취소 이력은 [#1027](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1027#구현-계획)에 보존한다.
+
+## 개발 정책 검증의 시간 판정 확대 — 2026-11-19
+
+사용자는 공개 API·패키지 경계 같은 개발 정책 검증에도
+“개발 정책 검증도 전체 영향이 미미하면 허용”하는 기준을 적용하도록 승인했다.
+공개 API의 signature·type hint·export, 모듈 의존 방향·패키지 구조 등
+개발 정책 자체를 검증하는 Case는 필요한 추가 검증의 실제 비용을 기록하고,
+전체 실행 영향이 미미하면 개별 증가만으로 전달 실패로 판단하지 않는다.
+이 기준은 이후 관련 이슈에도 적용하며 같은 범위의 승인을 반복 요청하지 않는다.
+
+Case의 실제 검증 목적을 기준으로 적용하고 파일명·클래스명만으로 자동 면제하지 않는다.
+Story runtime, CLI, I/O, 프로세스·자원 수명의 기능·오류·상태 전이를 검증하는
+Case에는 이 기준을 확대하지 않는다. 그 기능의 실제 성능 회귀는 계속 실패로 판단한다.
+기존 Case·시나리오·negative·subTest·시간·worker 상한을 유지하고,
+원자료·증가 원인·실제 추가 작업·전체 영향과 적용 범위를 공개한다.
+전체 실행에 유의미한 실제 회귀가 있으면 실패이며, 개별 증가를 다른 감소와 상쇄하지 않는다.
+
+첫 확대 적용은 #1048의 기존 공개 API 검증
+`tests.test_rag_module_and_packaging_boundary.RagModuleBoundaryTests.test_supported_module_surfaces_do_not_expand_the_root_facade`이다.
+고정 80개 선택의 전후 정상 3회에서 중앙값은 1.262073→5.851829ms(+4.589756ms)이며,
+추가 reflection 검증의 실제 비용을 인정한다. 전체 영향이 미미한 개발 정책 검증으로
+허용하되, 이 관측을 다른 Story runtime 메서드 문의나 전체 성능 통과에 전용하지 않는다.
 
 ## #1022의 Lead 공통 fixture 분리 소스 배정
 
