@@ -1453,13 +1453,13 @@
           "counting": "Existing single definitions move to already counted support. No body duplication or old support recharge; existing consumers import public owners with original local aliases."
         }
       ],
-      "approved_source_delta": 177,
-      "planned_raw_delta": 168,
+      "approved_source_delta": 178,
+      "planned_raw_delta": 169,
       "planned_support_delta": 9,
       "legacy_unresolved_lines": 1550,
       "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
       "generic_tooling_physical_delta_excluded": 17,
-      "notes": "Issue1048 cumulative first contracts/decoders/canonical revision leaf plus stage2 nine value policies in four existing owners; remaining lead/host scope is unfinished. Source-only allocation154774→154951 (raw148712/support4689/legacy1550); aggregate+177=raw168+support9, including stage2+35 raw. Existing canonical Cases/scenarios/subTests, ID receipts, weights, profiles, launch/order, workers and time budgets unchanged. Generic strict guard remains17 ordinary/physical lines outside frozen counter. Existing postponed annotations in material/outcome are preserved; new APIs resolve canonical eagerly imported suppliers with get_type_hints. All necessary source rows globally preapproved; official Actions alone establish runtime/timing results.",
+      "notes": "Issue1048 cumulative first contracts/decoders/canonical revision leaf plus stage2 nine value policies in four existing owners; remaining lead/host scope is unfinished. Source-only allocation154774→154952 (raw148713/support4689/legacy1550); aggregate+178=raw169+support9, including stage2+36 raw. Existing canonical Cases/scenarios/subTests, ID receipts, weights, profiles, launch/order, workers and time budgets unchanged. Generic strict guard remains17 ordinary/physical lines outside frozen counter. Existing postponed annotations in material/outcome are preserved; new APIs resolve canonical eagerly imported suppliers with get_type_hints. All necessary source rows globally preapproved; official Actions alone establish runtime/timing results.",
       "stage2": {
         "new_API_count": 9,
         "existing_owners": [
@@ -1468,8 +1468,8 @@
           "outcome_decoding",
           "collaboration_response_decoding"
         ],
-        "source_delta_from_C3": 35,
-        "raw_delta_from_C3": 35,
+        "source_delta_from_C3": 36,
+        "raw_delta_from_C3": 36,
         "support_delta_from_C3": 0,
         "new_Cases": 0,
         "ID_moves": 0,

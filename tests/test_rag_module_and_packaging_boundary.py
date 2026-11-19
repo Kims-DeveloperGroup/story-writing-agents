@@ -1583,6 +1583,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 'story_writing_agents.specialist_routing',
             }, {'story_writing_agents.orchestrator'}),
             (collaboration_response_decoding, {
+                'story_writing_agents.authoring_task_lifecycle',
                 'story_writing_agents.agents',
                 'story_writing_agents.collaboration_execution_results',
                 'story_writing_agents.conversations.event_vocabulary',
@@ -1596,7 +1597,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 'story_writing_agents.lead_provider_contracts',
                 'story_writing_agents.specialist_routing',
                 'story_writing_agents.structured_output_validation',
-            }, {'story_writing_agents.orchestrator'}),
+            }, {'story_writing_agents.orchestrator', 'story_writing_agents.lead_preparation.premise_preparation'}),
             (artifact_revision_sources, {
                 'story_writing_agents.conversations.event_vocabulary',
                 'story_writing_agents.conversations.events',
@@ -1752,7 +1753,6 @@ class RagModuleBoundaryTests(unittest.TestCase):
         )
         for owner, function, parameter_names, keyword_only in policy_contracts:
             self.assertEqual(function.__module__, owner.__name__)
-            self.assertEqual(function.__qualname__, function_name)
             parameters = signature(function).parameters
             self.assertEqual(tuple(parameters), parameter_names)
             self.assertEqual(tuple(name for name, value in parameters.items() if value.kind is Parameter.KEYWORD_ONLY), keyword_only)
@@ -1793,6 +1793,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             (collaboration_response_decoding, 'normalize_locked_collaboration_answer', ('answer', 'constraints'), (), {}, False),
         ):
             function = getattr(owner, function_name)
+            self.assertEqual(function.__qualname__, function_name)
             self.assertEqual(function.__module__, owner.__name__)
             parameters = signature(function).parameters
             self.assertEqual(tuple(parameters), parameter_names)
