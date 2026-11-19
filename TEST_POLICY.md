@@ -1391,3 +1391,28 @@ Story runtime·CLI·I/O·process·자원 수명 기능의 실제 회귀 기준�
 
 기존 소스의 공식 결과와 새 main 통합 결과를 구분한다. 실제 결합 source의
 공개 API·graph·source 예산·선택 검증과 필수 전체 CI를 다시 확인한다.
+
+## #1059 — Antigravity rules의 실제 소유와 기존 사례 정의 분리
+
+이번 변경의 실제 소스 계수는 **155,582행 = raw149,343 + support4,689 + legacy1,550**이다.
+기준 main `ef92fa9738`의 155,510행 대비 **charged raw +72행**, support/legacy 증감은 0이다.
+기존 본문/helper의 단일 이동은 순증 0이며 정의 파일의 import21행과 doc/class/alias3개/
+원래 class의 definition import/같은 fake의 두 번째 namespace 연결이 28행, 기존 공개 API·graph·
+packaging 정책 Case가 18행, 기존 예산 Case의 정의/정확 전이 검증이 26행이다.
+범용 `tests/suite_budget.py`의 신규 정확 guard **17 ordinary/17 physical행**은 기존 도구 계상
+범위 밖의 실제 비용으로 별도 공개한다. 테스트/단언을 그 도구로 옮겨 비용을 숨기지 않는다.
+필요 행 추가에는 사용자의 포괄 승인을 적용하며 별도 승인 요청을 반복하지 않는다.
+
+first3의 전체 본문·guard와 단일 소비 helper2행을 plain `AntigravityRulesDefinitions`로 한 번
+이동하고 원래 TestCase가 동일 함수를 직접 바인딩한다. 기존 Case/MRO/fixture/입력·77개
+assertion·원래 first3 cap3/0/10을 보존한다. wrapper·Case/module/id 위장·새 Case·시나리오는 없다.
+기존 모듈 import가 남으므로 small-file-only collection 또는 cold import 비용 0을 주장하지 않는다.
+실제 definition owner와 bound 함수의 원산지 검증을 등록하고 현재 전체 2,544 ID·cap합8,690,
+audited-163-v11·30 profile 클래스·399 weights·원163 launch·기본 GC/clock·시간/worker를 유지한다.
+
+정확한 source-only **155,510→155,582**만 기존 positive/neighbor/schema·ID/cap·시간/worker·
+compound negative 보존 하에 허용한다. helper의 FD/inode/read/write/temp/replace/cleanup 순서와
+기존 실제 부정 사례를 유지하며 모든 FD 오류 분기에 전용 oracle이 있다는 근거를 만들지 않는다.
+동일 newline 오류의 기존 assertion RED, 고정 정상 전후3회, 실제 definition/선택/영향과
+최종 현재 소스의 전체 CI·유한 시간 평가·리뷰·통합은 각각 공식 실행 근거가 필요하다.
+이 소스 계상과 정적 역AST는 런타임·성능 PASS가 아니며 기능 Case의 회귀를 면제하지 않는다.

@@ -1,5 +1,7 @@
 # Antigravity rules 분리 검증 계획 (#1059)
 
+이 문서는 실제 Draft 생성 전의 문서 전용 체크포인트를 보존한다. 아래 실행 상태는 그 시점의 기록이며 최신 결과는 owning 이슈의 Evidence에서 확인한다.
+
 - 상세 구현 계획: https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/1059
 - 기준 main: `ef92fa9738178c1708a5597e20e3838afd913444`.
 - 이 체크포인트는 문서만 추가하며 런타임·테스트 코드를 변경하지 않는다.
