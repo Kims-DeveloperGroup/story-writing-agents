@@ -25,9 +25,18 @@ from story_writing_agents.git.session_contracts import (
     GitSessionResourceError,
     GitSessionResourceState,
 )
-from story_writing_agents.git import session_resources as resources_module
+from story_writing_agents.git import session_inspection_data as inspection_data
+from story_writing_agents.git.contracts import GIT_BASELINE_COMMIT_MESSAGE, GitFailureCode
+from story_writing_agents.git.process import GitProcessFailure
+from story_writing_agents.git.session_contracts import GitSessionResourceInventory
 from story_writing_agents.git import inspection_objects as objects_module
-from story_writing_agents.git.session_resources import _Repository
+from story_writing_agents.git.session_inspection_data import RefSnapshot, SessionInspectionData
+from story_writing_agents.git.session_provisioning import SessionResourceProvisioner
+from story_writing_agents.git.session_resource_inspection import ResourceFacts, SessionResourceInspector
+from story_writing_agents.git.session_resource_repository import (
+    InspectionBatchOverflow, InspectionPrefetchUnsuitable, SessionResourceRepository,
+)
+from story_writing_agents.git.session_resource_values import MAX_SESSION_ADMIN_FILE_BYTES
 from story_writing_agents.workspace.session_artifact_binding import (
     SessionArtifactBindingError,
     compose_session_artifact_binding,
@@ -128,10 +137,10 @@ class GitSessionResourceLifecycleTests(GitSessionResourceGitTestCase):
         root = self.initialize_workspace("Story Space 한글")
         baseline = self.run_git(root, "rev-parse", "HEAD").stdout.decode().strip()
         row = b"refs/heads/main\0" + baseline.encode() + b"\0*\n"
-        repository = object.__new__(_Repository)
+        repository = object.__new__(SessionResourceRepository)
         query = ("for-each-ref", "--format=%(refname)%00%(objectname)%00%(HEAD)")
-        with mock.patch.object(_Repository, "_required", return_value=GitProcessResult(row, 0)) as required:
-            self.assertEqual(repository._read_refs().rows, (("refs/heads/main", baseline, True),))
+        with mock.patch.object(SessionResourceRepository, "required", return_value=GitProcessResult(row, 0)) as required:
+            self.assertEqual(SessionInspectionData(repository).read_refs().rows, (("refs/heads/main", baseline, True),))
         required.assert_called_once_with(query, read_only=True)
         invalid = (
             row[:-1], row + row, row + row.replace(b"main", b"other"),
@@ -139,10 +148,10 @@ class GitSessionResourceLifecycleTests(GitSessionResourceGitTestCase):
         )
         for output in invalid:
             with mock.patch.object(
-                _Repository, "_required", return_value=GitProcessResult(output, 0)
+                SessionResourceRepository, "required", return_value=GitProcessResult(output, 0)
             ):
                 with self.assertRaises(GitSessionResourceError) as caught:
-                    repository._read_refs()
+                    SessionInspectionData(repository).read_refs()
             self.assertIs(caught.exception.code, GitSessionFailureCode.RECOVERY_REQUIRED)
         root_before = self.repository_snapshot(root)
 
@@ -191,8 +200,8 @@ class GitSessionResourceLifecycleTests(GitSessionResourceGitTestCase):
         self.assertEqual(inventory.baseline_commit_id, baseline)
         self.assertEqual(inventory.sessions, (created,))
         self.assertEqual(self.repository_snapshot(root), after_create)
-        with mock.patch.object(_Repository, "_root_anchor", side_effect=AssertionError("redundant baseline traversal")), mock.patch.object(
-            _Repository, "_root_commit", side_effect=AssertionError("redundant seed traversal")
+        with mock.patch.object(SessionResourceInspector, "root_anchor", side_effect=AssertionError("redundant baseline traversal")), mock.patch.object(
+            SessionResourceInspector, "_root_commit", side_effect=AssertionError("redundant seed traversal")
         ):
             self.assertEqual(inspect_session_resources(root, "Novel_01"), created)
         blobs = (b"", b"binary\n\x00\xff")
@@ -209,11 +218,11 @@ class GitSessionResourceLifecycleTests(GitSessionResourceGitTestCase):
         commit_input = b"".join(oid.encode() + b"\n" for oid in commits)
         blob_input = b"".join(oid + b"\n" for oid in ids)
         objects = {}
-        repository = object.__new__(_Repository)
-        with mock.patch.object(_Repository, "_required", side_effect=(
+        repository = object.__new__(SessionResourceRepository)
+        with mock.patch.object(SessionResourceRepository, "required", side_effect=(
             GitProcessResult(tree, 0), GitProcessResult(combined, 0),
         )) as required:
-            self.assertEqual(repository._tree_digests("0" * 40, commit_ids=tuple(commits) + ("0" * 40,), commit_objects=objects), {
+            self.assertEqual(SessionInspectionData(repository)._tree_digests("0" * 40, commit_ids=tuple(commits) + ("0" * 40,), commit_objects=objects), {
                 f"fixture/{index}": hashlib.sha256(blob).hexdigest()
                 for index, blob in enumerate(blobs)
             })
@@ -235,66 +244,66 @@ class GitSessionResourceLifecycleTests(GitSessionResourceGitTestCase):
             (metadata, combined[:-1]),
             (metadata, combined + b"unexpected residue"),
         ):
-            with mock.patch.object(_Repository, "_required", side_effect=(
+            with mock.patch.object(SessionResourceRepository, "required", side_effect=(
                 GitProcessResult(tree, 0), GitProcessResult(bad_frames if bad_metadata == metadata else bad_metadata, 0),
             )), self.assertRaises(GitSessionResourceError) as caught:
-                repository._tree_digests("0" * 40, commit_ids=tuple(commits), commit_objects={})
+                SessionInspectionData(repository)._tree_digests("0" * 40, commit_ids=tuple(commits), commit_objects={})
             self.assertIs(caught.exception.code, GitSessionFailureCode.RECOVERY_REQUIRED)
-        oversized_tip = b"x" * (resources_module._MAX_ADMIN_FILE_BYTES + 1)
+        oversized_tip = b"x" * (MAX_SESSION_ADMIN_FILE_BYTES + 1)
         for missing_frames in (
             commit_frames[0] + b"c" * 40 + b" missing\n" + frames,
             commit_frames[0] + commit_frames[1].replace(b" commit ", b" blob ") + frames,
             commit_frames[0] + b"c" * 40 + b" commit " + str(len(oversized_tip)).encode() + b"\n" + oversized_tip + b"\n" + frames,
         ):
             objects = {}
-            with mock.patch.object(_Repository, "_required", side_effect=(
+            with mock.patch.object(SessionResourceRepository, "required", side_effect=(
                 GitProcessResult(tree, 0), GitProcessResult(missing_frames, 0),
             )):
-                self.assertEqual(repository._tree_digests("0" * 40, commit_ids=tuple(commits), commit_objects=objects), {
+                self.assertEqual(SessionInspectionData(repository)._tree_digests("0" * 40, commit_ids=tuple(commits), commit_objects=objects), {
                     f"fixture/{index}": hashlib.sha256(blob).hexdigest() for index, blob in enumerate(blobs)
                 })
             self.assertEqual(objects, {"0" * 40: commits["0" * 40]})
-        facts = resources_module._Facts(
+        facts = ResourceFacts(
             {identity.branch: baseline}, {identity.internal_ref: created.seed_commit_id},
             {identity.worktree_root: (baseline, f"refs/heads/{identity.branch}")}, {},
         )
-        advanced = resources_module._Facts(
+        advanced = ResourceFacts(
             {identity.branch: "d" * 40}, {identity.internal_ref: "e" * 40},
             {identity.worktree_root: ("d" * 40, f"refs/heads/{identity.branch}")}, {},
         )
-        with mock.patch.object(_Repository, "_root_anchor", return_value=True) as anchor, mock.patch.object(
-            _Repository, "_root_commit", return_value=created.seed_commit_id
-        ) as traverse, mock.patch.object(_Repository, "_required", return_value=GitProcessResult(payload, 0)), mock.patch.object(
-            _Repository, "_verify_worktree_indirection", return_value=True
-        ), mock.patch.object(_Repository, "_session_index_is_clean", return_value=True):
-            inspected = repository._classify(identity, baseline, advanced, inspected_baseline=baseline, inspected_tip=("e" * 40, b"parent historical tip"))
+        with mock.patch.object(SessionResourceInspector, "root_anchor", return_value=True) as anchor, mock.patch.object(
+            SessionResourceInspector, "_root_commit", return_value=created.seed_commit_id
+        ) as traverse, mock.patch.object(SessionResourceRepository, "required", return_value=GitProcessResult(payload, 0)), mock.patch.object(
+            SessionResourceInspector, "_verify_worktree_indirection", return_value=True
+        ), mock.patch.object(SessionResourceInspector, "_session_index_is_clean", return_value=True):
+            inspected = SessionResourceInspector(repository).classify(identity, baseline, advanced, inspected_baseline=baseline, inspected_tip=("e" * 40, b"parent historical tip"))
             self.assertIs(inspected.state, GitSessionResourceState.READY)
             anchor.assert_called_once_with("d" * 40, baseline)
             traverse.assert_called_once_with("e" * 40)
         for unsuitable in (None, b"malformed optional TIP"):
-            with mock.patch.object(_Repository, "_root_commit", return_value=None) as traverse:
-                inspected = repository._classify(identity, baseline, facts, inspected_baseline=baseline, inspected_tip=(created.seed_commit_id, unsuitable))
+            with mock.patch.object(SessionResourceInspector, "_root_commit", return_value=None) as traverse:
+                inspected = SessionResourceInspector(repository).classify(identity, baseline, facts, inspected_baseline=baseline, inspected_tip=(created.seed_commit_id, unsuitable))
             self.assertIs(inspected.state, GitSessionResourceState.RECOVERY_REQUIRED)
             traverse.assert_called_once_with(created.seed_commit_id)
-        with mock.patch.object(_Repository, "_root_anchor", return_value=True), mock.patch.object(
-            _Repository, "_required", return_value=GitProcessResult(b"", 0)
+        with mock.patch.object(SessionResourceInspector, "root_anchor", return_value=True), mock.patch.object(
+            SessionResourceRepository, "required", return_value=GitProcessResult(b"", 0)
         ) as required:
-            missing = repository._classify(identity, baseline, facts, inspected_seed=(created.seed_commit_id, None))
+            missing = SessionResourceInspector(repository).classify(identity, baseline, facts, inspected_seed=(created.seed_commit_id, None))
             self.assertIs(missing.state, GitSessionResourceState.RECOVERY_REQUIRED)
             required.assert_called_once_with(("cat-file", "commit", created.seed_commit_id), read_only=True)
         expected = {f"fixture/{index}": hashlib.sha256(blob).hexdigest() for index, blob in enumerate(blobs)}
         manifest = GitBaselineManifest(tuple(GitManifestEntry(path, value) for path, value in expected.items()))
-        refs = resources_module._RefSnapshot((("refs/heads/main", baseline, True),))
+        refs = RefSnapshot((("refs/heads/main", baseline, True),))
         prefetched = {baseline: b"discard prior optimistic bytes", created.seed_commit_id: b"discard seed"}
-        formatted = b"\0" + resources_module.GIT_BASELINE_COMMIT_MESSAGE.encode() + b"\n"
-        for fallback in (resources_module._InspectionBatchOverflow(), resources_module._InspectionPrefetchUnsuitable()):
+        formatted = b"\0" + GIT_BASELINE_COMMIT_MESSAGE.encode() + b"\n"
+        for fallback in (InspectionBatchOverflow(), InspectionPrefetchUnsuitable()):
             prefetched.update({baseline: b"discard prior optimistic bytes", created.seed_commit_id: b"discard seed"})
-            with mock.patch.object(_Repository, "_inspection_tree_digests", side_effect=fallback) as optimistic, mock.patch.object(
-                _Repository, "_tree_digests", return_value=expected
+            with mock.patch.object(SessionInspectionData, "_inspection_tree_digests", side_effect=fallback) as optimistic, mock.patch.object(
+                SessionInspectionData, "_tree_digests", return_value=expected
             ) as trees, mock.patch.object(
-                _Repository, "_required", side_effect=(GitProcessResult(formatted, 0), GitProcessResult(b"", 0))
+                SessionResourceRepository, "required", side_effect=(GitProcessResult(formatted, 0), GitProcessResult(b"", 0))
             ) as required:
-                self.assertEqual(repository._verify_main(manifest, refs, commit_objects=prefetched, internal_tip=created.seed_commit_id), baseline)
+                self.assertEqual(SessionInspectionData(repository).verify_main(manifest, refs, commit_objects=prefetched, internal_tip=created.seed_commit_id), baseline)
                 self.assertEqual(prefetched, {})
                 self.assertEqual(optimistic.call_count + trees.call_count, 2)
                 self.assertEqual(optimistic.call_args.args[1:3], (baseline, created.seed_commit_id))
@@ -306,34 +315,34 @@ class GitSessionResourceLifecycleTests(GitSessionResourceGitTestCase):
                 ])
         malformed = GitSessionResourceError(GitSessionFailureCode.RECOVERY_REQUIRED, operation=GitSessionOperationKind.INSPECT,
             state=GitSessionResourceState.RECOVERY_REQUIRED, recovery_action=GitSessionRecoveryAction.OPERATOR_RECOVERY)
-        with mock.patch.object(_Repository, "_inspection_tree_digests", side_effect=malformed) as trees, mock.patch.object(
-            _Repository, "_tree_digests"
+        with mock.patch.object(SessionInspectionData, "_inspection_tree_digests", side_effect=malformed) as trees, mock.patch.object(
+            SessionInspectionData, "_tree_digests"
         ) as legacy, self.assertRaises(GitSessionResourceError):
-            repository._verify_main(manifest, refs, commit_objects={})
+            SessionInspectionData(repository).verify_main(manifest, refs, commit_objects={})
         self.assertEqual(trees.call_count, 1)
         legacy.assert_not_called()
         repository.runner = mock.Mock()
         repository.identity = (1, 2)
-        for code in (resources_module.GitFailureCode.PROCESS_OUTPUT_EXCEEDED, resources_module.GitFailureCode.PROCESS_START_FAILED, resources_module.GitFailureCode.PROCESS_TIMED_OUT):
-            repository.runner.run.side_effect = resources_module.GitProcessFailure(code)
-            exception = resources_module._InspectionBatchOverflow if code is resources_module.GitFailureCode.PROCESS_OUTPUT_EXCEEDED else GitSessionResourceError
+        for code in (GitFailureCode.PROCESS_OUTPUT_EXCEEDED, GitFailureCode.PROCESS_START_FAILED, GitFailureCode.PROCESS_TIMED_OUT):
+            repository.runner.run.side_effect = GitProcessFailure(code)
+            exception = InspectionBatchOverflow if code is GitFailureCode.PROCESS_OUTPUT_EXCEEDED else GitSessionResourceError
             with self.assertRaises(exception) as caught:
-                repository._required(("cat-file", "--batch"), read_only=True, allow_output_overflow=True, allow_unsuitable_result=True)
-            if code is resources_module.GitFailureCode.PROCESS_START_FAILED:
-                with mock.patch.object(_Repository, "_inspection_tree_digests", side_effect=caught.exception) as trees, mock.patch.object(
-                    _Repository, "_tree_digests"
+                repository.required(("cat-file", "--batch"), read_only=True, allow_output_overflow=True, allow_unsuitable_result=True)
+            if code is GitFailureCode.PROCESS_START_FAILED:
+                with mock.patch.object(SessionInspectionData, "_inspection_tree_digests", side_effect=caught.exception) as trees, mock.patch.object(
+                    SessionInspectionData, "_tree_digests"
                 ) as legacy, self.assertRaises(GitSessionResourceError):
-                    repository._verify_main(manifest, refs, commit_objects={})
+                    SessionInspectionData(repository).verify_main(manifest, refs, commit_objects={})
                 self.assertEqual(trees.call_count, 1)
                 legacy.assert_not_called()
         repository.runner.run.side_effect = None
         repository.runner.run.return_value = GitProcessResult(b"unsupported batch expression", 1)
-        with self.assertRaises(resources_module._InspectionPrefetchUnsuitable):
-            repository._required(("cat-file", "--batch"), read_only=True, allow_unsuitable_result=True)
+        with self.assertRaises(InspectionPrefetchUnsuitable):
+            repository.required(("cat-file", "--batch"), read_only=True, allow_unsuitable_result=True)
         with self.assertRaises(GitSessionResourceError):
-            repository._required(("cat-file", "--batch"), read_only=True)
-        with mock.patch.object(_Repository, "_required", return_value=GitProcessResult(b"", 0)) as required:
-            self.assertEqual(repository._tree_digests("0" * 40), {})
+            repository.required(("cat-file", "--batch"), read_only=True)
+        with mock.patch.object(SessionResourceRepository, "required", return_value=GitProcessResult(b"", 0)) as required:
+            self.assertEqual(SessionInspectionData(repository)._tree_digests("0" * 40), {})
             required.assert_called_once_with(("ls-tree", "-r", "-l", "-z", "0" * 40), read_only=True)
 
         def raw_object_id(kind, body, algorithm):
@@ -350,7 +359,7 @@ class GitSessionResourceLifecycleTests(GitSessionResourceGitTestCase):
             raw_root = b"40000 fixture\0" + bytes.fromhex(child_id)
             root_id = raw_object_id(b"tree", raw_root, algorithm)
             author_headers = b"author Fixture <fixture@example.invalid> 0 +0000\ncommitter Fixture <fixture@example.invalid> 0 +0000\n\n"
-            root_commit = b"tree " + root_id.encode() + b"\n" + author_headers + resources_module.GIT_BASELINE_COMMIT_MESSAGE.encode() + b"\n"
+            root_commit = b"tree " + root_id.encode() + b"\n" + author_headers + GIT_BASELINE_COMMIT_MESSAGE.encode() + b"\n"
             raw_baseline = raw_object_id(b"commit", root_commit, algorithm)
             empty_tree_id = raw_object_id(b"tree", b"", algorithm)
             tip_commit = b"tree " + empty_tree_id.encode() + b"\n" + author_headers + b"seed fixture\n"
@@ -363,23 +372,23 @@ class GitSessionResourceLifecycleTests(GitSessionResourceGitTestCase):
                        *[raw_baseline.encode() + b":" + path.encode() for path in ("fixture", "fixture/0", "fixture/1")]]
             raw_stdin = b"".join(query + b"\n" for query in queries)
             objects = {}
-            with mock.patch.object(_Repository, "_required", return_value=GitProcessResult(b"".join(raw_frames), 0)) as required:
-                self.assertEqual(repository._inspection_tree_digests(manifest, raw_baseline, raw_tip, objects), expected)
+            with mock.patch.object(SessionResourceRepository, "required", return_value=GitProcessResult(b"".join(raw_frames), 0)) as required:
+                self.assertEqual(SessionInspectionData(repository)._inspection_tree_digests(manifest, raw_baseline, raw_tip, objects), expected)
                 required.assert_called_once_with(("cat-file", "--batch", "--buffer"), stdin=raw_stdin, read_only=True,
                                                 allow_output_overflow=True, allow_unsuitable_result=True)
                 self.assertEqual(objects, {raw_baseline: root_commit, raw_tip: tip_commit})
             objects = {}
-            with mock.patch.object(_Repository, "_required", return_value=GitProcessResult(raw_frames[0] + b"".join(raw_frames[2:]), 0)) as required:
-                self.assertEqual(repository._inspection_tree_digests(manifest, raw_baseline, raw_baseline, objects), expected)
+            with mock.patch.object(SessionResourceRepository, "required", return_value=GitProcessResult(raw_frames[0] + b"".join(raw_frames[2:]), 0)) as required:
+                self.assertEqual(SessionInspectionData(repository)._inspection_tree_digests(manifest, raw_baseline, raw_baseline, objects), expected)
                 self.assertEqual(required.call_args.kwargs["stdin"], queries[0] + b"\n" + b"".join(query + b"\n" for query in queries[2:]))
                 self.assertEqual(objects, {raw_baseline: root_commit})
             for optional in (queries[1] + b" missing\n", raw_frame(raw_tip, b"blob", b"not a commit"),
-                             raw_frame(raw_tip, b"commit", b"x" * (resources_module._MAX_ADMIN_FILE_BYTES + 1))):
+                             raw_frame(raw_tip, b"commit", b"x" * (MAX_SESSION_ADMIN_FILE_BYTES + 1))):
                 altered = raw_frames.copy()
                 altered[1] = optional
                 objects = {}
-                with mock.patch.object(_Repository, "_required", return_value=GitProcessResult(b"".join(altered), 0)):
-                    self.assertEqual(repository._inspection_tree_digests(manifest, raw_baseline, raw_tip, objects), expected)
+                with mock.patch.object(SessionResourceRepository, "required", return_value=GitProcessResult(b"".join(altered), 0)):
+                    self.assertEqual(SessionInspectionData(repository)._inspection_tree_digests(manifest, raw_baseline, raw_tip, objects), expected)
                     self.assertEqual(objects, {raw_baseline: root_commit})
             wrong_id = "d" * len(raw_baseline)
             for index, body in (
@@ -398,20 +407,20 @@ class GitSessionResourceLifecycleTests(GitSessionResourceGitTestCase):
                 altered = raw_frames.copy()
                 oid, kind, _body = raw_objects[index]
                 altered[index] = raw_frame(oid, kind, body)
-                with mock.patch.object(_Repository, "_required", return_value=GitProcessResult(b"".join(altered), 0)), self.assertRaises(resources_module._InspectionPrefetchUnsuitable):
-                    repository._inspection_tree_digests(manifest, raw_baseline, raw_tip, {})
+                with mock.patch.object(SessionResourceRepository, "required", return_value=GitProcessResult(b"".join(altered), 0)), self.assertRaises(InspectionPrefetchUnsuitable):
+                    SessionInspectionData(repository)._inspection_tree_digests(manifest, raw_baseline, raw_tip, {})
             for index in (2, 3, 4):
                 altered = raw_frames.copy()
                 _oid, kind, body = raw_objects[index]
                 altered[index] = raw_frame(wrong_id, kind, body)
-                with mock.patch.object(_Repository, "_required", return_value=GitProcessResult(b"".join(altered), 0)), self.assertRaises(resources_module._InspectionPrefetchUnsuitable):
-                    repository._inspection_tree_digests(manifest, raw_baseline, raw_tip, {})
+                with mock.patch.object(SessionResourceRepository, "required", return_value=GitProcessResult(b"".join(altered), 0)), self.assertRaises(InspectionPrefetchUnsuitable):
+                    SessionInspectionData(repository)._inspection_tree_digests(manifest, raw_baseline, raw_tip, {})
             for index in (2, 3, 4, 5):
                 for required_frame in (queries[index] + b" missing\n", raw_frame(raw_objects[index][0], b"tag", raw_objects[index][2])):
                     altered = raw_frames.copy()
                     altered[index] = required_frame
-                    with mock.patch.object(_Repository, "_required", return_value=GitProcessResult(b"".join(altered), 0)), self.assertRaises(resources_module._InspectionPrefetchUnsuitable):
-                        repository._inspection_tree_digests(manifest, raw_baseline, raw_tip, {})
+                    with mock.patch.object(SessionResourceRepository, "required", return_value=GitProcessResult(b"".join(altered), 0)), self.assertRaises(InspectionPrefetchUnsuitable):
+                        SessionInspectionData(repository)._inspection_tree_digests(manifest, raw_baseline, raw_tip, {})
             missing_tree = raw_frames.copy()
             missing_tree[2] = queries[2] + b" missing\n"
             for malformed_batch in (
@@ -422,19 +431,19 @@ class GitSessionResourceLifecycleTests(GitSessionResourceGitTestCase):
                 b"".join(missing_tree) + b"malformed after unsuitable",
                 b"".join(raw_frames[:-1]) + raw_frames[-1].replace(b" blob ", b" blob 0", 1),
             ):
-                with mock.patch.object(_Repository, "_required", return_value=GitProcessResult(malformed_batch, 0)), self.assertRaises(GitSessionResourceError) as caught:
-                    repository._inspection_tree_digests(manifest, raw_baseline, raw_tip, {})
+                with mock.patch.object(SessionResourceRepository, "required", return_value=GitProcessResult(malformed_batch, 0)), self.assertRaises(GitSessionResourceError) as caught:
+                    SessionInspectionData(repository)._inspection_tree_digests(manifest, raw_baseline, raw_tip, {})
                 self.assertIs(caught.exception.code, GitSessionFailureCode.RECOVERY_REQUIRED)
-            for bound, value in (("_MAX_INSPECTION_OBJECTS", len(queries) - 1), ("_MAX_STDOUT_BYTES", len(raw_stdin) - 1)):
-                with mock.patch.object(resources_module, bound, value), mock.patch.object(_Repository, "_required") as required, self.assertRaises(resources_module._InspectionPrefetchUnsuitable):
-                    repository._inspection_tree_digests(manifest, raw_baseline, raw_tip, {})
+            for bound, value in (("_MAX_INSPECTION_OBJECTS", len(queries) - 1), ("MAX_GIT_PROCESS_STDOUT_BYTES", len(raw_stdin) - 1)):
+                with mock.patch.object(inspection_data, bound, value), mock.patch.object(SessionResourceRepository, "required") as required, self.assertRaises(InspectionPrefetchUnsuitable):
+                    SessionInspectionData(repository)._inspection_tree_digests(manifest, raw_baseline, raw_tip, {})
                 required.assert_not_called()
             unsupported_manifest = GitBaselineManifest((GitManifestEntry("fixture", expected["fixture/0"]), GitManifestEntry("fixture/0", expected["fixture/0"])))
-            with mock.patch.object(_Repository, "_required") as required, self.assertRaises(resources_module._InspectionPrefetchUnsuitable):
-                repository._inspection_tree_digests(unsupported_manifest, raw_baseline, raw_tip, {})
+            with mock.patch.object(SessionResourceRepository, "required") as required, self.assertRaises(InspectionPrefetchUnsuitable):
+                SessionInspectionData(repository)._inspection_tree_digests(unsupported_manifest, raw_baseline, raw_tip, {})
             required.assert_not_called()
-            with mock.patch.object(resources_module, "_MAX_INSPECTION_OBJECTS", 1), self.assertRaises(resources_module._InspectionPrefetchUnsuitable):
-                resources_module._inspection_tree_children(memoryview(child_tree), len(raw_baseline) // 2)
+            with mock.patch.object(inspection_data, "_MAX_INSPECTION_OBJECTS", 1), self.assertRaises(InspectionPrefetchUnsuitable):
+                inspection_data._inspection_tree_children(memoryview(child_tree), len(raw_baseline) // 2)
             ref_root = self.test_root / f"loose-refs-{algorithm}"
             common = ref_root / ".git"
             heads = common / "refs/heads"
@@ -453,34 +462,39 @@ class GitSessionResourceLifecycleTests(GitSessionResourceGitTestCase):
             output = b"refs/heads/main\0" + raw_baseline.encode() + b"\0*\n"
             descriptor = os.open(common, os.O_RDONLY | os.O_DIRECTORY)
             root_stat = ref_root.stat()
-            loose = _Repository(ref_root, common, descriptor, (root_stat.st_dev, root_stat.st_ino))
+            leased = SessionResourceRepository(ref_root, common, descriptor, (root_stat.st_dev, root_stat.st_ino))
+            loose = SessionInspectionData(leased)
+            inspector = SessionResourceInspector(leased)
             try:
-                self.assertEqual(resources_module._loose_ref_width(config), len(raw_baseline))
+                self.assertEqual(inspection_data._loose_ref_width(config), len(raw_baseline))
                 for content in (b"", b"malformed object contents"):
                     object_file.write_bytes(content)
                     self.assertEqual(loose._loose_ref_output(), self.run_git(ref_root, *query).stdout)
-                with mock.patch.object(_Repository, "_required", return_value=GitProcessResult(output, 0)) as required:
-                    legacy = loose._read_refs()
+                with mock.patch.object(SessionResourceRepository, "required", return_value=GitProcessResult(output, 0)) as required:
+                    legacy = loose.read_refs()
                     required.assert_called_once_with(query, read_only=True)
                     required.reset_mock()
-                    self.assertEqual(loose._read_refs(allow_loose=True), legacy)
-                    loose._require_refs_current(legacy, allow_loose=True)
+                    self.assertEqual(loose.read_refs(allow_loose=True), legacy)
+                    loose.require_refs_current(legacy, allow_loose=True)
                     required.assert_not_called()
-                with mock.patch.object(_Repository, "_loose_ref_output", return_value=b"malformed\n"), mock.patch.object(_Repository, "_required") as required:
+                with mock.patch.object(SessionInspectionData, "_loose_ref_output", return_value=b"malformed\n"), mock.patch.object(SessionResourceRepository, "required") as required:
                     with self.assertRaises(GitSessionResourceError) as caught:
-                        loose._read_refs(allow_loose=True)
+                        loose.read_refs(allow_loose=True)
                     self.assertIs(caught.exception.code, GitSessionFailureCode.RECOVERY_REQUIRED)
                     required.assert_not_called()
                 for actor in ("list", "provision", "inspect"):
-                    with mock.patch.object(_Repository, "_required", return_value=GitProcessResult(output, 0)) as required, mock.patch.object(
-                        _Repository, "_verify_main", return_value=raw_baseline
-                    ) as verify, mock.patch.object(_Repository, "_facts", return_value=resources_module._Facts({}, {}, {}, {})), mock.patch.object(
-                        _Repository, "_classify", return_value=created
-                    ), mock.patch.object(_Repository, "_require_exhaustive") as exhaustive, mock.patch.object(
-                        _Repository, "_loose_ref_output", wraps=loose._loose_ref_output
+                    with mock.patch.object(SessionResourceRepository, "required", return_value=GitProcessResult(output, 0)) as required, mock.patch.object(
+                        SessionInspectionData, "verify_main", return_value=raw_baseline
+                    ) as verify, mock.patch.object(SessionResourceInspector, "facts", return_value=ResourceFacts({}, {}, {}, {})), mock.patch.object(
+                        SessionResourceInspector, "classify", return_value=created
+                    ), mock.patch.object(SessionResourceInspector, "_require_exhaustive") as exhaustive, mock.patch.object(
+                        SessionInspectionData, "_loose_ref_output", wraps=loose._loose_ref_output
                     ) as fast:
-                        actual = loose.list(manifest) if actor == "list" else getattr(loose, actor)(manifest, created.identity)
-                        self.assertEqual(actual, resources_module.GitSessionResourceInventory(raw_baseline, ()) if actor == "list" else created)
+                        actual = inspector.list(manifest) if actor == "list" else (
+                        SessionResourceProvisioner(leased).provision(manifest, created.identity)
+                        if actor == "provision" else inspector.inspect(manifest, created.identity)
+                    )
+                        self.assertEqual(actual, GitSessionResourceInventory(raw_baseline, ()) if actor == "list" else created)
                         self.assertEqual(fast.call_count, 2 if actor == "inspect" else 0)
                         self.assertEqual(exhaustive.call_count, 1 if actor == "list" else 0)
                         self.assertEqual(verify.call_args.kwargs.get("allow_loose", False), actor == "inspect")
@@ -503,8 +517,8 @@ class GitSessionResourceLifecycleTests(GitSessionResourceGitTestCase):
                 for fallback_path in (common / "objects/pack/fixture.pack", common / "objects/info/alternates"):
                     fallback_path.parent.mkdir(exist_ok=True)
                     fallback_path.write_bytes(b"fixture\n")
-                    with mock.patch.object(_Repository, "_required", return_value=GitProcessResult(complete_output, 0)) as required:
-                        self.assertEqual(loose._read_refs(allow_loose=True).rows, legacy.rows + (("refs/heads/optional", raw_tip, False),))
+                    with mock.patch.object(SessionResourceRepository, "required", return_value=GitProcessResult(complete_output, 0)) as required:
+                        self.assertEqual(loose.read_refs(allow_loose=True).rows, legacy.rows + (("refs/heads/optional", raw_tip, False),))
                         required.assert_called_once_with(query, read_only=True)
                     fallback_path.unlink()
                 optional.unlink()
@@ -543,7 +557,7 @@ class GitSessionResourceLifecycleTests(GitSessionResourceGitTestCase):
                     original_bytes = path.read_bytes() if path.exists() else None
                     mutation = lambda: path.write_bytes(payload)
                     changed = False
-                    with mock.patch.object(resources_module.os, "scandir", side_effect=lambda fd: RefIterator(actual_scan(fd))):
+                    with mock.patch.object(inspection_data.os, "scandir", side_effect=lambda fd: RefIterator(actual_scan(fd))):
                         self.assertIsNone(loose._loose_ref_output())
                     path.unlink() if original_bytes is None else path.write_bytes(original_bytes)
                 mutation = None
@@ -552,10 +566,10 @@ class GitSessionResourceLifecycleTests(GitSessionResourceGitTestCase):
                     fd = actual_open(*args, **kwargs)
                     opened.append(fd)
                     return fd
-                for bound, value in (("_MAX_REFS", 1), ("_MAX_STDOUT_BYTES", 1), ("_MAX_ADMIN_FILE_BYTES", 1),
+                for bound, value in (("_MAX_REFS", 1), ("MAX_GIT_PROCESS_STDOUT_BYTES", 1), ("MAX_SESSION_ADMIN_FILE_BYTES", 1),
                                      ("_MAX_LOOSE_REF_DESCRIPTORS", 4), ("_LOOSE_REF_TIMEOUT_SECONDS", 0)):
                     opened.clear()
-                    with mock.patch.object(resources_module, bound, value), mock.patch.object(resources_module.os, "open", side_effect=tracked_open):
+                    with mock.patch.object(inspection_data, bound, value), mock.patch.object(inspection_data.os, "open", side_effect=tracked_open):
                         self.assertIsNone(loose._loose_ref_output())
                     if bound == "_MAX_LOOSE_REF_DESCRIPTORS":
                         self.assertLessEqual(len(opened), value - 1)
@@ -573,11 +587,11 @@ class GitSessionResourceLifecycleTests(GitSessionResourceGitTestCase):
                         if cleanup_kind == "descriptor" and not failed_close:
                             failed_close = True
                             raise OSError("descriptor cleanup failed")
-                    with mock.patch.object(resources_module.os, "open", side_effect=tracked_open), mock.patch.object(
-                        resources_module.os, "scandir", side_effect=lambda fd: RefIterator(actual_scan(fd))
-                    ), mock.patch.object(resources_module.os, "close", side_effect=cleanup), mock.patch.object(_Repository, "_required") as required:
+                    with mock.patch.object(inspection_data.os, "open", side_effect=tracked_open), mock.patch.object(
+                        inspection_data.os, "scandir", side_effect=lambda fd: RefIterator(actual_scan(fd))
+                    ), mock.patch.object(inspection_data.os, "close", side_effect=cleanup), mock.patch.object(SessionResourceRepository, "required") as required:
                         with self.assertRaises(GitSessionResourceError) as caught:
-                            loose._read_refs(allow_loose=True)
+                            loose.read_refs(allow_loose=True)
                         self.assertIs(caught.exception.code, GitSessionFailureCode.RECOVERY_REQUIRED)
                         required.assert_not_called()
                     for fd in opened:
@@ -597,14 +611,14 @@ class GitSessionResourceLifecycleTests(GitSessionResourceGitTestCase):
                 frames = self.run_git(ref_root, "cat-file", "--batch", "--buffer", input_bytes=batch).stdout
                 self.assertEqual(frames, b"".join(raw_frames))
                 self.assertEqual(loose._loose_object_output(batch), frames)
-                with mock.patch.object(_Repository, "_required") as required:
+                with mock.patch.object(SessionResourceRepository, "required") as required:
                     self.assertEqual(loose._inspection_tree_digests(manifest, raw_baseline, raw_tip, {}, allow_loose=True), expected)
                     required.assert_not_called()
                 def fallback(allow=True):
-                    with mock.patch.object(_Repository, "_required", return_value=GitProcessResult(frames, 0)) as required:
+                    with mock.patch.object(SessionResourceRepository, "required", return_value=GitProcessResult(frames, 0)) as required:
                         self.assertEqual(loose._inspection_tree_digests(manifest, raw_baseline, raw_tip, {}, allow_loose=allow), expected)
                         required.assert_called_once_with(("cat-file", "--batch", "--buffer"), read_only=True, stdin=batch, allow_output_overflow=True, allow_unsuitable_result=True)
-                with mock.patch.object(_Repository, "_loose_object_output", side_effect=AssertionError("loose outside inspect")):
+                with mock.patch.object(SessionInspectionData, "_loose_object_output", side_effect=AssertionError("loose outside inspect")):
                     fallback(False)
                 selected = common / "objects" / blob_ids[0][:2] / blob_ids[0][2:]
                 original_object = selected.read_bytes()
@@ -637,12 +651,12 @@ class GitSessionResourceLifecycleTests(GitSessionResourceGitTestCase):
                 self.assertEqual(loose._loose_object_output(empty.encode() + b"\n"), self.run_git(ref_root, "cat-file", "--batch", input_bytes=empty.encode() + b"\n").stdout)
                 unused = store_object(b"tree", b"40000 empty\0" + bytes.fromhex(empty) + raw_root)
                 commit = store_object(b"commit", root_commit.replace(root_id.encode(), unused.encode(), 1))
-                with mock.patch.object(_Repository, "_required") as required, self.assertRaises(resources_module._InspectionPrefetchUnsuitable):
+                with mock.patch.object(SessionResourceRepository, "required") as required, self.assertRaises(InspectionPrefetchUnsuitable):
                     loose._inspection_tree_digests(manifest, commit, raw_tip, {}, allow_loose=True)
                 required.assert_not_called()
                 retained = {}
-                with mock.patch.object(_Repository, "_tree_digests", return_value=expected) as legacy, mock.patch.object(_Repository, "_required", side_effect=(GitProcessResult(formatted, 0), GitProcessResult(b"", 0))):
-                    self.assertEqual(loose._verify_main(manifest, resources_module._RefSnapshot((("refs/heads/main", commit, True),)), commit_objects=retained, internal_tip=raw_tip, allow_loose=True), commit)
+                with mock.patch.object(SessionInspectionData, "_tree_digests", return_value=expected) as legacy, mock.patch.object(SessionResourceRepository, "required", side_effect=(GitProcessResult(formatted, 0), GitProcessResult(b"", 0))):
+                    self.assertEqual(loose.verify_main(manifest, RefSnapshot((("refs/heads/main", commit, True),)), commit_objects=retained, internal_tip=raw_tip, allow_loose=True), commit)
                     self.assertEqual(retained, {})
                     legacy.assert_called_once_with(commit)
                 selected.write_bytes(zlib.compress(b"blob 8192\0" + b"x" * 8192))
@@ -697,7 +711,7 @@ class GitSessionResourceLifecycleTests(GitSessionResourceGitTestCase):
                             if cleanup_kind == "descriptor": raise OSError("object cleanup failed")
                             target.rename(moved); target.mkdir()
                     try:
-                        with mock.patch.object(objects_module.os, "open", side_effect=tracked_open), mock.patch.object(objects_module.os, "scandir", side_effect=lambda fd: RefIterator(actual_scan(fd))), mock.patch.object(objects_module.os, "close", side_effect=object_cleanup), mock.patch.object(_Repository, "_required") as required:
+                        with mock.patch.object(objects_module.os, "open", side_effect=tracked_open), mock.patch.object(objects_module.os, "scandir", side_effect=lambda fd: RefIterator(actual_scan(fd))), mock.patch.object(objects_module.os, "close", side_effect=object_cleanup), mock.patch.object(SessionResourceRepository, "required") as required:
                             with self.assertRaises(GitSessionResourceError) as caught: loose._inspection_tree_digests(manifest, raw_baseline, raw_tip, {}, allow_loose=True)
                             self.assertIs(caught.exception.code, GitSessionFailureCode.UNSAFE_ROOT if cleanup_kind in ("root", "common") else GitSessionFailureCode.RECOVERY_REQUIRED)
                             required.assert_not_called()
@@ -808,16 +822,16 @@ class GitSessionResourceRestartTests(GitSessionResourceGitTestCase):
 
     def test_internal_ref_prefix_resumes_branch_and_worktree_in_order(self) -> None:
         root = self.initialize_workspace("internal-prefix")
-        real_cas = _Repository._cas_ref
+        real_cas = SessionResourceProvisioner._cas_ref
 
-        def stop_before_branch(repository: _Repository, ref: str, target: str) -> None:
+        def stop_before_branch(repository: SessionResourceProvisioner, ref: str, target: str) -> None:
             if ref.startswith("refs/heads/"):
                 raise OSError
             real_cas(repository, ref, target)
 
         with (
             mock.patch.dict(os.environ, self.session_environment(), clear=True),
-            mock.patch.object(_Repository, "_cas_ref", new=stop_before_branch),
+            mock.patch.object(SessionResourceProvisioner, "_cas_ref", new=stop_before_branch),
         ):
             interrupted = provision_session_resources(root, "novel")
         self.assertIs(interrupted.state, GitSessionResourceState.PROVISIONING)
@@ -837,19 +851,19 @@ class GitSessionResourceRestartTests(GitSessionResourceGitTestCase):
             root, "commit-tree", f"{baseline}^{{tree}}", "-p", baseline,
             input_bytes=b"Concurrent main advance\n", environment=self.session_environment(),
         ).stdout.decode().strip()
-        for hook, ref, target in (
-            ("_verify_main", "refs/heads/main", advanced),
-            ("_classify", recovered.identity.internal_ref, baseline),
+        for owner, hook, ref, target in (
+            (SessionInspectionData, "verify_main", "refs/heads/main", advanced),
+            (SessionResourceInspector, "classify", recovered.identity.internal_ref, baseline),
         ):
             previous = self.run_git(root, "rev-parse", ref).stdout.decode().strip()
-            original = getattr(_Repository, hook)
+            original = getattr(owner, hook)
 
             def drift(repository, *args, **kwargs):
                 self.run_git(root, "update-ref", ref, target, previous)
                 return original(repository, *args, **kwargs)
 
             with mock.patch.dict(os.environ, self.session_environment(), clear=True):
-                with mock.patch.object(_Repository, hook, drift):
+                with mock.patch.object(owner, hook, drift):
                     with self.assertRaises(GitSessionResourceError) as caught:
                         inspect_session_resources(root, "novel")
             self.assertIs(caught.exception.code, GitSessionFailureCode.RECOVERY_REQUIRED)

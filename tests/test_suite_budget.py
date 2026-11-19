@@ -570,11 +570,16 @@ class SuiteBudgetTests(unittest.TestCase):
         self.assertEqual(workspace_current["max_test_source_lines"], 154860)
         self.assertIsNone(suite_budget.check_monotonic(workspace_current, artifact_planning_current))
         self._assert_source_limit_neighbors_rejected(workspace_current, artifact_planning_current)
-        integrated_current = suite_budget.load_budget()
+        integrated_current = dict(suite_budget.load_budget(), max_test_source_lines=155219)
         self.assertEqual(integrated_current["max_test_source_lines"], 155219)
         for prior in (workspace_current, response_contract_current):
             self.assertIsNone(suite_budget.check_monotonic(integrated_current, prior))
             self._assert_source_limit_neighbors_rejected(integrated_current, prior)
+
+        git_owners_current = suite_budget.load_budget()
+        self.assertEqual(git_owners_current["max_test_source_lines"], 155394)
+        self.assertIsNone(suite_budget.check_monotonic(integrated_current, git_owners_current))
+        self._assert_source_limit_neighbors_rejected(git_owners_current, integrated_current)
         ids = runner_profile.HOSTED_METHOD_IDS
         self.assertEqual(runner_evidence.manifest(ids)["digest"],
                          'sha256:6b7a6aee7e6557ef274a6ff18f3205c75132e0b1e043d3f4de11ff075e104a54')

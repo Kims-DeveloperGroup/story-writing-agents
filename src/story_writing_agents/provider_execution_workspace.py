@@ -11,7 +11,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from .git.repository_lock import current_thread_token
-from .git.session_resources import GitSessionGenerationPin
+from .git.session_generation import GitSessionGenerationPin
 
 
 _PROVENANCE_PREFIX = "sha256:"

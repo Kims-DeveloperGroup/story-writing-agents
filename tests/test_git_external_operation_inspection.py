@@ -23,6 +23,8 @@ from story_writing_agents.git import (
     GitRepositoryAdapter,
     GitRepositoryState,)
 
+from story_writing_agents.git import external_operation_inspection
+from story_writing_agents.git.adapter_execution import GitAdapterExecution
 from tests.git_contract_fixture import DisposableGitTestCase, exception_graph
 
 
@@ -161,8 +163,8 @@ class GitExternalOperationInspectionTests(DisposableGitTestCase):
         _install_markers(root, ("MERGE_HEAD",), secret=b"private")
         adapter = GitRepositoryAdapter(root)
         with mock.patch.object(
-            GitRepositoryAdapter,
-            "_run_git",
+            GitAdapterExecution,
+            "run_git",
             side_effect=AssertionError("external operation inspection must not run Git"),
         ) as run_git:
             result = adapter.inspect_external_operation()
@@ -257,19 +259,19 @@ class GitExternalOperationInspectionTests(DisposableGitTestCase):
 
         racing = self.initialized_repository("racing-root")
         race_adapter = GitRepositoryAdapter(racing)
-        original = GitRepositoryAdapter._bind_root
+        original = external_operation_inspection.bind_root
         observations = 0
 
-        def changed_identity(instance):
+        def changed_identity(root):
             nonlocal observations
-            self.assertIs(instance, race_adapter)
+            self.assertEqual(root, racing)
             observations += 1
-            identity = original(instance)
+            identity = original(root)
             return identity if observations == 1 else (identity[0], identity[1] + 1)
 
         with mock.patch.object(
-            GitRepositoryAdapter,
-            "_bind_root",
+            external_operation_inspection,
+            "bind_root",
             autospec=True,
             side_effect=changed_identity,
         ):
@@ -302,8 +304,8 @@ class GitExternalOperationInspectionTests(DisposableGitTestCase):
         filesystem_before = _tree_snapshot(root)
         adapter = GitRepositoryAdapter(root)
         with mock.patch.object(
-            GitRepositoryAdapter,
-            "_run_git",
+            GitAdapterExecution,
+            "run_git",
             side_effect=AssertionError("inspection must not run Git"),
         ) as run_git:
             result = adapter.inspect_external_operation()
@@ -341,15 +343,28 @@ class GitExternalOperationInspectionTests(DisposableGitTestCase):
         )
 
         modules, edges = module_graph(_SOURCE_ROOT)
-        self.assertEqual(len(modules), 298)
-        self.assertEqual(len(edges), 1822)
+        self.assertEqual(len(modules), 314)
+        self.assertEqual(len(edges), 1914)
         git_contracts = "story_writing_agents.git.contracts"
         git_adapter = "story_writing_agents.git.adapter"
         self.assertEqual(
             {target for source, target in edges if source == git_adapter},
-            {git_contracts, "story_writing_agents.git.process"},
+            {
+                "story_writing_agents.git.adapter_contracts",
+                "story_writing_agents.git.adapter_execution",
+                "story_writing_agents.git.contracts",
+                "story_writing_agents.git.external_operation_inspection",
+                "story_writing_agents.git.repository_baseline",
+                "story_writing_agents.git.repository_metadata",
+                "story_writing_agents.git.repository_topology",
+            },
         )
         self.assertFalse({target for source, target in edges if source == git_contracts})
+        inspector = "story_writing_agents.git.external_operation_inspection"
+        self.assertEqual(
+            {target for source, target in edges if source == inspector},
+            {git_contracts, "story_writing_agents.git.adapter_contracts"},
+        )
         assert_acyclic(self, modules, edges)
 
 

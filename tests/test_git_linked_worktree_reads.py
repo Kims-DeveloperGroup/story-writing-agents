@@ -29,7 +29,9 @@ from story_writing_agents.git import (
     GitStatus,
     GitTopologyKind,
 )
-from story_writing_agents.git import adapter as adapter_module
+from story_writing_agents.git import repository_metadata
+from story_writing_agents.git.adapter_contracts import AdapterFailure
+from story_writing_agents.git.adapter_execution import GitAdapterExecution
 
 from tests.git_contract_fixture import DisposableGitTestCase, exception_graph
 
@@ -107,7 +109,10 @@ class GitLinkedWorktreeReadContractTests(unittest.TestCase):
             for node in ast.walk(tree)
             if isinstance(node, ast.ImportFrom) and node.level == 1
         }
-        self.assertEqual(dependencies, {"contracts", "process"})
+        self.assertEqual(dependencies, {
+            "adapter_contracts", "adapter_execution", "contracts", "external_operation_inspection",
+            "repository_baseline", "repository_metadata", "repository_topology",
+        })
 
     def test_status_and_log_guard_external_identity_before_body_and_after_success(
         self,
@@ -127,38 +132,38 @@ class GitLinkedWorktreeReadContractTests(unittest.TestCase):
 
             with (
                 mock.patch.object(
-                    GitRepositoryAdapter,
-                    "_inspect_topology",
+                    repository_metadata,
+                    "inspect_topology",
                     return_value=(
                         GitRepositoryTopology(GitTopologyKind.LINKED_WORKTREE),
                         _IDENTITY,
                     ),
                 ),
                 mock.patch.object(
-                    GitRepositoryAdapter,
-                    "_inspect_external_operation",
+                    repository_metadata,
+                    "inspect_external_operation",
                     autospec=True,
                     side_effect=inspect_external,
                 ),
                 mock.patch.object(
-                    GitRepositoryAdapter,
-                    "_symbolic_head",
+                    GitAdapterExecution,
+                    "symbolic_head",
                     return_value=None,
                 ),
                 mock.patch.object(
-                    GitRepositoryAdapter,
-                    "_head_id",
+                    GitAdapterExecution,
+                    "head_id",
                     autospec=True,
                     side_effect=head,
                 ),
                 mock.patch.object(
-                    GitRepositoryAdapter,
+                    repository_metadata,
                     "_repository_changes",
                     return_value=((), ()),
                 ),
                 mock.patch.object(
-                    GitRepositoryAdapter,
-                    "_bind_root",
+                    repository_metadata,
+                    "bind_root",
                     return_value=_IDENTITY,
                 ),
             ):
@@ -175,7 +180,7 @@ class GitLinkedWorktreeReadContractTests(unittest.TestCase):
         scenarios = (
             (
                 "ordinary",
-                adapter_module._AdapterFailure(
+                AdapterFailure(
                     GitFailureCode.COMMAND_FAILED,
                     exit_code=7,
                 ),
@@ -192,7 +197,7 @@ class GitLinkedWorktreeReadContractTests(unittest.TestCase):
             ),
             (
                 "drift-precedence",
-                adapter_module._AdapterFailure(
+                AdapterFailure(
                     GitFailureCode.COMMAND_FAILED,
                     exit_code=7,
                 ),
@@ -206,8 +211,8 @@ class GitLinkedWorktreeReadContractTests(unittest.TestCase):
                 with self.subTest(operation=operation, scenario=name):
                     with (
                         mock.patch.object(
-                            GitRepositoryAdapter,
-                            "_inspect_topology",
+                            repository_metadata,
+                            "inspect_topology",
                             return_value=(
                                 GitRepositoryTopology(
                                     GitTopologyKind.LINKED_WORKTREE
@@ -216,23 +221,23 @@ class GitLinkedWorktreeReadContractTests(unittest.TestCase):
                             ),
                         ),
                         mock.patch.object(
-                            GitRepositoryAdapter,
-                            "_inspect_external_operation",
+                            repository_metadata,
+                            "inspect_external_operation",
                             side_effect=guards,
                         ) as external,
                         mock.patch.object(
-                            GitRepositoryAdapter,
-                            "_symbolic_head",
+                            GitAdapterExecution,
+                            "symbolic_head",
                             return_value=None,
                         ),
                         mock.patch.object(
-                            GitRepositoryAdapter,
-                            "_head_id",
+                            GitAdapterExecution,
+                            "head_id",
                             side_effect=body_failure,
                         ),
                         mock.patch.object(
-                            GitRepositoryAdapter,
-                            "_bind_root",
+                            repository_metadata,
+                            "bind_root",
                             return_value=_IDENTITY,
                         ),
                         self.assertRaises(GitOperationError) as raised,
@@ -370,15 +375,15 @@ class GitLinkedWorktreeReadIntegrationTests(DisposableGitTestCase):
         _root, linked, _head = self._linked_repository("marker-drift")
         marker = _administrative_directory(linked) / "MERGE_HEAD"
         marker.write_bytes(b"stable marker")
-        original_head = GitRepositoryAdapter._head_id
+        original_head = GitAdapterExecution.head_id
 
         def remove_marker(instance, identity, *, allow_absent=False):
             marker.unlink()
             return original_head(instance, identity, allow_absent=allow_absent)
 
         with mock.patch.object(
-            GitRepositoryAdapter,
-            "_head_id",
+            GitAdapterExecution,
+            "head_id",
             autospec=True,
             side_effect=remove_marker,
         ):
@@ -391,7 +396,7 @@ class GitLinkedWorktreeReadIntegrationTests(DisposableGitTestCase):
         _root, admin_linked, _head = self._linked_repository("admin-drift")
         administrative = _administrative_directory(admin_linked)
         displaced_admin = administrative.with_name(administrative.name + "-preserved")
-        original_changes = GitRepositoryAdapter._repository_changes
+        original_changes = repository_metadata._repository_changes
 
         def replace_admin(instance, identity, head):
             result = original_changes(instance, identity, head)
@@ -399,7 +404,7 @@ class GitLinkedWorktreeReadIntegrationTests(DisposableGitTestCase):
             return result
 
         with mock.patch.object(
-            GitRepositoryAdapter,
+            repository_metadata,
             "_repository_changes",
             autospec=True,
             side_effect=replace_admin,
@@ -412,7 +417,7 @@ class GitLinkedWorktreeReadIntegrationTests(DisposableGitTestCase):
 
         _root, root_linked, _head = self._linked_repository("root-drift")
         displaced_root = root_linked.with_name(root_linked.name + "-preserved")
-        original_symbolic = GitRepositoryAdapter._symbolic_head
+        original_symbolic = GitAdapterExecution.symbolic_head
 
         def replace_root(instance, identity, *, allow_detached=False):
             result = original_symbolic(
@@ -425,8 +430,8 @@ class GitLinkedWorktreeReadIntegrationTests(DisposableGitTestCase):
             return result
 
         with mock.patch.object(
-            GitRepositoryAdapter,
-            "_symbolic_head",
+            GitAdapterExecution,
+            "symbolic_head",
             autospec=True,
             side_effect=replace_root,
         ):

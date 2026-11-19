@@ -31,6 +31,7 @@ from .process import (
     GitProcessRunner,
 )
 from .session_contracts import GitSessionResourceInspection
+from .session_generation import GitSessionGenerationIdentity
 from .session_history import (
     GitSessionHistory,
     GitSessionRecoveryHistory,
@@ -45,10 +46,7 @@ from .session_history_contracts import (
     GitSessionIdentitySource,
     build_candidate_record,
 )
-from .session_resources import (
-    GitSessionGenerationIdentity,
-    require_ready_git_session_resources,
-)
+from .session_resources import require_ready_git_session_resources
 from .story_commit_contracts import (
     StoryCommitApplicationEvidence,
     StoryCommitCandidate,

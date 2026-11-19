@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..git.story_commits import (
+from ..git.story_commit_recovery import (
     StoryCommitRecoverySnapshot,
     inspect_story_commit_recovery_history,
 )
@@ -14,8 +14,8 @@ from ..git.session_contracts import (
     GitSessionResourceInventory,
 )
 from ..git.session_history import GitSessionHistorySnapshot, open_git_session_history
+from ..git.session_generation import GitSessionGenerationPin
 from ..git.session_resources import (
-    GitSessionGenerationPin,
     inspect_git_session_resources as _inspect_git_session_resources,
     list_git_session_resources as _list_git_session_resources,
     provision_git_session_resources as _provision_git_session_resources,
