@@ -1348,3 +1348,46 @@ controller graph는1,688간선이며 module index는299행이다. 단순히 두 
 1,550행으로 **155,394행(+175)**입니다. 2026-11-15 포괄 승인을 실제
 `155219→155394` 소스 전이에 적용합니다. 기존 2,544개 ID, cap 합 8,690 및
 샤드·시간·worker 상한을 유지합니다. 통합 그래프는 314모듈, 1,914간선입니다.
+
+### #1049 Consensus 의미 소유권 분리의 소스 전이
+
+#1049는 기존 세 정의의 의미 법칙을 실제 도메인 owner 3개·공개 API 15개로 옮긴다.
+기존 Case·ID·subTest cap·fixture·profile·weight·launch와 시간·worker 상한은 유지한다.
+사용자의 모든 이슈에 대한 소스 행 추가 사전 승인을 적용한다.
+
+- 정확 source-only 전이는 **155,219 → 155,318행(+99)**이다.
+- raw **149,079** + support **4,689** + legacy **1,550** = **155,318**이다.
+- 기존 mapper consumer/import 전이 **+1**, 기존 API·export·namespace·graph·packaging
+  검증 **+82**, 기존 예산 정책 Case **+16**을 각각 공개한다.
+- generic `suite_budget.py`의 정확 전이 분기는 별도 **ordinary 17 / physical 17행**이다.
+  이 비용은 위 canonical charge 밖이며, 기존 support/legacy credit으로 재계상하지 않는다.
+- 기존 source 전이 이력·음성 검증·schema와 tuple 계약을 유지한다. 새 strict pair는
+  **155,219 → 155,318**만 추가하고 인접 source 값 및 Case/subTest·시간 완화는 거부한다.
+
+같은 테스트 파일의 기존 Root handoff consumer 때문에 원래 collection 단계의
+`StoryRuntime` import는 유지한다. 순수 mapper 호출은 실제 공개 owner로 옮기되,
+파일 전체의 Root import 독립이나 준비 비용 제거를 주장하지 않는다.
+개발 정책 검증에는 승인된 목적별 시간 기준을 적용하고 실제 비용을 기록한다.
+Story runtime·CLI·I/O·process·자원 수명 기능의 실제 회귀 기준은 완화하지 않는다.
+
+### #1049와 #974 통합 소스 배정
+
+#974 main `a5824011928ba2a94ef3e454bd102f819e80d022`와 #1049의
+`821fd48213edafa1067287ffa34e84ec5ce8ebf7`를 정상 merge로 결합한다.
+위 두 source-only 전이 이력과 검증은 각각 보존하며 새 현재 배정을 별도로 기록한다.
+
+- 통합 source 한도는 **155,510행**이다.
+  raw **149,271** + support **4,689** + legacy **1,550** = **155,510**이다.
+- #974 main **155,394 → 155,510(+116)**은 기존 #1049의99행과
+  기존 BudgetCase 안의 통합 검증17행으로 구성한다.
+- #1049 이전 head **155,318 → 155,510(+192)**은 main의175행과
+  같은 통합 검증17행으로 구성한다.
+- 새 generic source-only 분기 **ordinary 17 / physical 17행**은
+  canonical Python source charge 밖의 별도 비용이며 숨기거나 support credit으로 돌리지 않는다.
+- 두 정확 pair **(155,394,155,510)**, **(155,318,155,510)**만 추가한다.
+  원래 history·schema·인접 source 한도·Case/subTest·시간/cap 복합 거부를 유지한다.
+- Case/ID·시나리오·subTest cap·fixture/MRO·weight/profile/launch·시간·worker
+  상한을 확장하지 않는다. 소스 행 증가는 기존 전역 사전 승인을 적용한다.
+
+기존 소스의 공식 결과와 새 main 통합 결과를 구분한다. 실제 결합 source의
+공개 API·graph·source 예산·선택 검증과 필수 전체 CI를 다시 확인한다.

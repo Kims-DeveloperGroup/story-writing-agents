@@ -43,6 +43,12 @@ from story_writing_agents.lead_preparation import (
 import story_writing_agents
 from story_writing_agents import conversations
 from story_writing_agents.conversations import artifact_revision_sources
+from story_writing_agents.consensus import (
+    provider_reply_mapping,
+    provider_request_policy,
+    authoring_qualification,
+)
+from story_writing_agents import authoring_admission
 from story_writing_agents.lead_preparation import recommendation_preparation, recommendation_requests
 from story_writing_agents.lead_preparation import recommendation_decisions
 from story_writing_agents.lead_task_transitions import LeadTaskRef
@@ -373,8 +379,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 314)
-        self.assertEqual(len(edges), 1914)
+        self.assertEqual(len(modules), 317)
+        self.assertEqual(len(edges), 1938)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -1751,6 +1757,44 @@ class RagModuleBoundaryTests(unittest.TestCase):
                     'story_writing_agents.runtime_resources.collaboration_event_journal',
                 },
             ),
+            (
+                provider_reply_mapping,
+                {'map_consensus_provider_reply'},
+                {
+                    'story_writing_agents.agents',
+                    'story_writing_agents.consensus.contracts',
+                    'story_writing_agents.consensus.execution',
+                    'story_writing_agents.models',
+                    'story_writing_agents.reply_trace',
+                    'story_writing_agents.specialist_routing',
+                },
+            ),
+            (
+                provider_request_policy,
+                {'require_running_consensus_request', 'consensus_provider_phase', 'review_only_audit_event', 'consensus_continuation_context', 'consensus_expected_reviewed_proposal', 'consensus_agent_request', 'consensus_authored_material_required', 'consensus_report_material_required'},
+                {
+                    'story_writing_agents.agents',
+                    'story_writing_agents.consensus.contracts',
+                    'story_writing_agents.consensus.execution',
+                    'story_writing_agents.consensus.projection',
+                    'story_writing_agents.consensus.serialization',
+                    'story_writing_agents.conversations',
+                    'story_writing_agents.models',
+                    'story_writing_agents.reply_trace',
+                    'story_writing_agents.specialist_routing',
+                },
+            ),
+            (
+                authoring_qualification,
+                {'consensus_lineage_changed', 'record_consensus_lineage_hop', 'consensus_admission_inputs', 'manuscript_admission_source', 'consensus_admission_source_fact', 'qualify_consensus_authoring_sources'},
+                {
+                    'story_writing_agents.authoring_admission',
+                    'story_writing_agents.consensus.contracts',
+                    'story_writing_agents.consensus.serialization',
+                    'story_writing_agents.core_document_readiness',
+                    'story_writing_agents.writing_artifacts.references',
+                },
+            ),
         )
         for owner, public_names, peer_names in planned_owners:
             self.assertEqual({target for source, target in edges if source == owner.__name__}, peer_names)
@@ -2063,11 +2107,16 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 'implicit_document_goal',
                 'validate_document_task_origin',
             )),
+            (provider_reply_mapping, ('map_consensus_provider_reply',)),
+            (provider_request_policy, ('require_running_consensus_request', 'consensus_provider_phase', 'review_only_audit_event', 'consensus_continuation_context', 'consensus_expected_reviewed_proposal', 'consensus_agent_request', 'consensus_authored_material_required', 'consensus_report_material_required')),
+            (authoring_qualification, ('consensus_lineage_changed', 'record_consensus_lineage_hop', 'consensus_admission_inputs', 'manuscript_admission_source', 'consensus_admission_source_fact', 'qualify_consensus_authoring_sources')),
         ):
             self.assertEqual(set(owner.__all__), set(exported))
             actual = {name for name, value in vars(owner).items()
                 if not name.startswith("_") and callable(value) and getattr(value, "__module__", None) == owner.__name__}
             self.assertEqual(actual, {name for name in exported if callable(getattr(owner, name))})
+        self.assertIs(provider_request_policy.ArtifactProposalState, conversations.ArtifactProposalState)
+        self.assertIs(authoring_qualification.admission_digest, authoring_admission.admission_digest)
         for owner, function_name, parameter_names, keyword_names, defaults, postponed in (
             (collaboration_response_decoding, 'decode_artifact_synthesis', ('answer', 'proposal', 'attempt_id', 'reply_event_ids', 'replies', 'candidate'), ('proposal', 'attempt_id', 'reply_event_ids', 'replies', 'candidate'), {}, False),
             (collaboration_response_decoding, 'decode_specialist_reply', ('answer', 'proposal', 'attempt_id', 'assignment', 'dispatch_event_id', 'premise_dependencies'), ('proposal', 'attempt_id', 'assignment', 'dispatch_event_id', 'premise_dependencies'), {'premise_dependencies': ()}, False),
@@ -2139,6 +2188,21 @@ class RagModuleBoundaryTests(unittest.TestCase):
             (lead_front_values, 'front_submitted_call_count', ('events', 'step_id'), (), {}, False),
             (reply_contract_values, 'lead_rejection_failure_code', ('source_owner_rejection', 'prepare_selected', 'declared_artifact_intent', 'decoded'), (), {}, True),
             (artifact_objective_planning, 'clarify_unprepared_authoring_proposal', ('outcome', 'document_selection', 'document_node'), ('document_selection', 'document_node'), {}, False),
+            (provider_reply_mapping, 'map_consensus_provider_reply', ('invocation', 'reply', 'authored_material', 'report_material'), ('authored_material', 'report_material'), {'authored_material': None, 'report_material': None}, False),
+            (provider_request_policy, 'require_running_consensus_request', ('invocation', 'stored'), (), {}, False),
+            (provider_request_policy, 'consensus_provider_phase', ('invocation',), (), {}, False),
+            (provider_request_policy, 'review_only_audit_event', ('invocation', 'stored'), (), {}, False),
+            (provider_request_policy, 'consensus_continuation_context', ('input_text', 'ruling', 'conflicts'), (), {}, False),
+            (provider_request_policy, 'consensus_expected_reviewed_proposal', ('reviewed_projection',), (), {}, False),
+            (provider_request_policy, 'consensus_agent_request', ('invocation', 'phase', 'input_text', 'candidate_text', 'expected_reviewed_proposal', 'review_messages'), (), {}, False),
+            (provider_request_policy, 'consensus_authored_material_required', ('invocation', 'reply'), (), {}, False),
+            (provider_request_policy, 'consensus_report_material_required', ('invocation', 'reply'), (), {}, False),
+            (authoring_qualification, 'consensus_lineage_changed', ('original', 'material', 'direction_material'), (), {}, False),
+            (authoring_qualification, 'record_consensus_lineage_hop', ('original', 'seen'), (), {}, False),
+            (authoring_qualification, 'consensus_admission_inputs', ('input_kind', 'material', 'direction_material', 'ruling_material'), (), {}, False),
+            (authoring_qualification, 'manuscript_admission_source', ('handle', 'snapshots', 'facts'), (), {}, False),
+            (authoring_qualification, 'consensus_admission_source_fact', ('alias', 'kind', 'handle', 'text', 'revision_digest'), (), {}, False),
+            (authoring_qualification, 'qualify_consensus_authoring_sources', ('identity', 'workflow_id', 'material', 'assessment', 'input_kind', 'direction_material', 'ruling_material', 'source_revision_id', 'authoring_target', 'facts'), ('input_kind', 'direction_material', 'ruling_material', 'source_revision_id', 'authoring_target', 'facts'), {}, False),
         ):
             function = getattr(owner, function_name)
             self.assertEqual(function.__qualname__, function_name)
@@ -2194,6 +2258,21 @@ class RagModuleBoundaryTests(unittest.TestCase):
                      'prepare_specialist_advisory_intent',
                      'specialist_advisory_assignment',
                      'specialist_advisory_budget', 'decode_artifact_synthesis', 'decode_specialist_reply', 'decode_lead_synthesis', 'required_unresolved_input_ids', 'decode_continuation_intent', 'specialist_result_contract', 'lead_synthesis_result_contract', 'artifact_revision_source', 'LEAD_CORRECTABLE_RESPONSE_REJECTION_CODES', 'LEAD_RESPONSE_CORRECTION_INSTRUCTION',
+                    'map_consensus_provider_reply',
+            'require_running_consensus_request',
+            'consensus_provider_phase',
+            'review_only_audit_event',
+            'consensus_continuation_context',
+            'consensus_expected_reviewed_proposal',
+            'consensus_agent_request',
+            'consensus_authored_material_required',
+            'consensus_report_material_required',
+            'consensus_lineage_changed',
+            'record_consensus_lineage_hop',
+            'consensus_admission_inputs',
+            'manuscript_admission_source',
+            'consensus_admission_source_fact',
+            'qualify_consensus_authoring_sources',
         ):
             self.assertNotIn(name, story_writing_agents.__all__)
             self.assertFalse(hasattr(story_writing_agents, name))
@@ -2450,6 +2529,9 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             "story_writing_agents/lead_preparation/lead_answer_authority.py",
             "story_writing_agents/lead_preparation/lead_front_values.py",
             "story_writing_agents/conversations/artifact_revision_sources.py",
+            "story_writing_agents/consensus/provider_reply_mapping.py",
+            "story_writing_agents/consensus/provider_request_policy.py",
+            "story_writing_agents/consensus/authoring_qualification.py",
             )
             with zipfile.ZipFile(story_wheel) as archive:
                 for package_path in group_package_paths:
