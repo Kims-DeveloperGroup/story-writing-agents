@@ -791,7 +791,7 @@ class SessionTransitionAssessmentTests(unittest.TestCase):
                 (2, "git.session_contracts"),
                 (2, "git.session_history_contracts"),
                 (2, "session_lifecycle"),
-                (2, "workspace.initialization"),
+                (2, "workspace.session_resources"),
                 (1, "contracts"),
                 (1, "reconciliation"),
             },

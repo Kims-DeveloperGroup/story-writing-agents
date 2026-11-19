@@ -33,7 +33,10 @@ from ..session_lifecycle import (
     SessionDurableState,
     SessionLifecycleState,
 )
-from ..workspace.initialization import inspect_session_history, inspect_session_resources
+from ..workspace.session_resources import (
+    inspect_session_history,
+    inspect_session_resources,
+)
 from .contracts import (
     SessionArtifactApplicationEvidence,
     SessionRecoveryError,

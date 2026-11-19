@@ -203,6 +203,7 @@ relationships, read sources, and apply/persist artifacts through a repository bo
 `repository` owns artifact filesystem mutation and strict core absence batches; private stores own durable metadata. The public `read_actions.ReferenceReadResult` preserves actual authorized delivery proofs beside closeable bytes; no lower reference owner imports context or backend code.
 Session callers borrow descriptor-bound repositories from the workspace binding; root configuration remains the control plane.
 Runtime references retain exact session-owned evidence and release their generation pin at terminal use. `references.coalesce_reference_aliases` owns physical alias coverage; `authorization` projects exact logical-alias proofs from captured bytes through the public `runtime_references` facade without another READ.
+`_application_store` owns locked Apply, recovery, and publication. `application_journal` owns persisted values, strict codecs, and shape validation and depends on value contracts.
 Callers must not import `_storage`, `_application_store`, or `_reference_evidence`.
 
 ### Git resources, history, checkpoints, and story commits
@@ -227,19 +228,17 @@ generation facts bracket both checks. This owner never mutates Git for role proj
 
 ### Workspace, runtime state, and session lifecycle
 
-Responsibility: validate workspace schema/security, initialize workspaces, derive runtime
-state paths, manage session lifecycle, and assess/reconcile recovery transitions.
+Responsibility: validate workspace schema, initialize roots, derive runtime paths, manage session lifecycle, and assess/reconcile recovery.
 
-- `workspace`, `workspace.core`, `workspace.session_record_validation`, `workspace.session_source_workspace`, `workspace.schema`, `workspace.initialization`, `workspace.session_role_projection`, `workspace._policy_baselines`, `runtime_state_paths`, `session_lifecycle`
-- `session_recovery`, `session_recovery.contracts`, `session_recovery.transition_assessment`, `session_recovery.reconciliation`
-
-`workspace.core` owns path validation and ordinary workspace/configuration views; `session_source_workspace` owns descriptor-bound session source reads and cleanup while borrowing artifact bindings; `session_record_validation` owns pure agent/debate record checks and depends only on error contracts; `initialization` owns creation,
-session artifact bindings, guarded repositories, and opaque generation-pin composition. Views borrow retained session
-roots through bounded owner contracts. `schema` owns schema-v2 validation and current initializer defaults; `_policy_baselines` retains immutable published bytes for exact initialization compatibility.
-The binding calls the Git owner's index and effective-ignore proof after exclusion preparation
-and again after role publication. `session_role_projection` owns create-only, read-only native
-role files and the private Git exclusion: `/.agents/` must be its final nonempty record, and
-bounded positive short writes finish on the retained descriptor before fsync and readback.
+`workspace` is the public facade. `workspace.core` owns ordinary paths and configuration and delegates persisted records to `session_records`.
+`initialization` owns root creation and recovery. `discovery` owns nearest-root lookup. Both use `root_contracts` and `root_filesystem`.
+`schema` validates schema-v2, `policy_material` owns current policy bytes, and `policy_scaffold` validates current and historical materials and permitted configuration.
+`session_resources` composes Git session operations. `session_artifact_binding` owns guarded repositories, root descriptors, and generation pins.
+`session_source_workspace` borrows guarded access for descriptor-bound source reads. `session_record_validation` owns pure record checks. `debate_context_codec` owns the versioned sidecar shape.
+The binding runs Git index and effective-ignore proofs after exclusion preparation and again after role publication.
+`session_role_projection` owns create-only read-only role files and the private Git exclusion. `/.agents/` is its final nonempty record.
+Bounded positive short writes complete on the retained descriptor before fsync and readback.
+`runtime_state_paths` and `session_lifecycle` manage state paths and lifecycle. `session_recovery` contains contracts, transition assessment, and reconciliation.
 Recovery contracts point inward; reconciliation borrows opaque Git generation authority.
 For known Apply, recovery projects either the exact extant Commit request or typed reprepare, while Commit still requires its single-use structured decision.
 Workspace readers accept optional bounded validation details and legacy entries without them.

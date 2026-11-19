@@ -35,13 +35,13 @@ from story_writing_agents.agents import CORE_DOCUMENTS
 from story_writing_agents.git.session_contracts import (
     GIT_SESSION_WORKTREE_SIBLING_SUFFIX,
 )
-from story_writing_agents.workspace.initialization import (
+from story_writing_agents.workspace.root_contracts import (
     WorkspaceRootInspection,
     WorkspaceRootRole,
     WorkspaceRootState,
-    compose_session_artifact_binding,
-    provision_session_resources,
 )
+from story_writing_agents.workspace.session_artifact_binding import compose_session_artifact_binding
+from story_writing_agents.workspace.session_resources import provision_session_resources
 
 
 HandlerResult: TypeAlias = AgentReply | BaseException | Awaitable[AgentReply]

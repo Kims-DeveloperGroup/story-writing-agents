@@ -13,10 +13,12 @@ from unittest import mock
 
 from story_writing_agents import Workspace, WorkspaceFormatError, WorkspaceSecurityError
 from story_writing_agents.workspace import open_workspace_root_directory
-from story_writing_agents.workspace.initialization import (
+from story_writing_agents.workspace.root_contracts import (
     WorkspaceRootInspection,
     WorkspaceRootRole,
     WorkspaceRootState,
+)
+from story_writing_agents.workspace.session_resources import (
     list_session_resources,
     provision_session_resources,
 )

@@ -7,7 +7,7 @@ from dataclasses import (
     field,
 )
 from .reply_trace import ReplyTrace
-from .workspace.initialization import (
+from .workspace.session_artifact_binding import (
     SessionArtifactBinding,
     SessionArtifactGenerationPin,
 )

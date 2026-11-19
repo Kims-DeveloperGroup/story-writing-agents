@@ -19,7 +19,7 @@ from story_writing_agents.agent_context.progress import (
 )
 from story_writing_agents.errors import ProviderAuthenticationRequiredError
 from story_writing_agents.prompts import PromptAssembler
-from story_writing_agents.workspace.initialization import compose_session_artifact_binding
+from story_writing_agents.workspace.session_artifact_binding import compose_session_artifact_binding
 from story_writing_agents.provider_adapter import (
     ProviderInvocation,
     ProviderInvocationError,

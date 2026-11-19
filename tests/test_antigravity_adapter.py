@@ -50,12 +50,12 @@ from story_writing_agents.provider_adapter import (
     provider_failure_accounting,
 )
 from story_writing_agents.provider_process import ProcessRequest, ProcessResult
-from story_writing_agents.workspace.initialization import (
+from story_writing_agents.workspace.session_artifact_binding import (
     SessionArtifactBindingError,
     SessionArtifactAccess,
     compose_session_artifact_binding,
-    provision_session_resources,
 )
+from story_writing_agents.workspace.session_resources import provision_session_resources
 
 from tests.helpers import initialized_workspace, live_provider_execution_workspace, pristine_initialized_workspace
 from story_writing_agents.agent_context.request_compaction import compact_context_payload

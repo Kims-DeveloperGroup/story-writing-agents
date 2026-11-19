@@ -532,7 +532,8 @@ class SuiteBudgetTests(unittest.TestCase):
         ):
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(task_admission_current, subtest_caps=caps), request_policy_current)
         self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, task_admission_current, dict(request_policy_current, subtest_caps={**request_policy_current["subtest_caps"], matrix_id: 2}))
-        artifact_planning_current = dict(suite_budget.load_budget(), max_test_source_lines=154774)
+        workspace_current = dict(suite_budget.load_budget(), max_test_source_lines=154860)
+        artifact_planning_current = dict(workspace_current, max_test_source_lines=154774)
         self.assertEqual(artifact_planning_current["max_test_source_lines"], 154774)
         self.assertIsNone(suite_budget.check_monotonic(artifact_planning_current, task_admission_current))
         self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, artifact_planning_current, dict(artifact_planning_current, max_test_source_lines=152814))
@@ -549,7 +550,7 @@ class SuiteBudgetTests(unittest.TestCase):
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(artifact_planning_current, subtest_caps=caps), task_admission_current)
         self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, artifact_planning_current, dict(task_admission_current, subtest_caps={**task_admission_current["subtest_caps"], matrix_id: 2}))
 
-        response_contract_current = suite_budget.load_budget()
+        response_contract_current = dict(suite_budget.load_budget(), max_test_source_lines=155128)
         self.assertEqual(response_contract_current["max_test_source_lines"], 155128)
         self.assertIsNone(suite_budget.check_monotonic(response_contract_current, artifact_planning_current))
         self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, response_contract_current, dict(artifact_planning_current, max_test_source_lines=154305))
@@ -566,6 +567,14 @@ class SuiteBudgetTests(unittest.TestCase):
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(response_contract_current, subtest_caps=caps), artifact_planning_current)
         self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, response_contract_current, dict(artifact_planning_current, subtest_caps={**artifact_planning_current["subtest_caps"], matrix_id: 2}))
 
+        self.assertEqual(workspace_current["max_test_source_lines"], 154860)
+        self.assertIsNone(suite_budget.check_monotonic(workspace_current, artifact_planning_current))
+        self._assert_source_limit_neighbors_rejected(workspace_current, artifact_planning_current)
+        integrated_current = suite_budget.load_budget()
+        self.assertEqual(integrated_current["max_test_source_lines"], 155219)
+        for prior in (workspace_current, response_contract_current):
+            self.assertIsNone(suite_budget.check_monotonic(integrated_current, prior))
+            self._assert_source_limit_neighbors_rejected(integrated_current, prior)
         ids = runner_profile.HOSTED_METHOD_IDS
         self.assertEqual(runner_evidence.manifest(ids)["digest"],
                          'sha256:6b7a6aee7e6557ef274a6ff18f3205c75132e0b1e043d3f4de11ff075e104a54')

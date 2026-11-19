@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from ..git.story_commits import StoryCommitService
-from ..workspace.initialization import SessionArtifactGenerationPin
+from ..workspace.session_artifact_binding import SessionArtifactGenerationPin
 from ..conversations import StoryCommitRequestPayload
 
 

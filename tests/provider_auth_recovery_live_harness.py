@@ -34,7 +34,7 @@ from story_writing_agents.interactive_controller._lead_policy import Interactive
 from story_writing_agents.provider_auth import ProviderAuthService
 from story_writing_agents.provider_process import ProcessResult
 from story_writing_agents.workspace import WORKSPACE_DIRECTORIES
-from story_writing_agents.workspace.initialization import provision_session_resources
+from story_writing_agents.workspace.session_resources import provision_session_resources
 from tests.helpers import initialize_test_workspace
 
 

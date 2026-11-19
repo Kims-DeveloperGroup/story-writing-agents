@@ -284,7 +284,7 @@ def check_monotonic(current: dict[str, Any], base: dict[str, Any]) -> None:
             return
         if (
             (base["max_test_source_lines"], current["max_test_source_lines"])
-                in ((154078, 154305), (154305, 154774))
+                in ((154078, 154305), (154305, 154774), (154774, 154860))
             and base["schema_version"] == current["schema_version"] == 1
             and tuple(base[name] for name in time_fields) == tuple(current[name] for name in time_fields) == (18000, 3600)
             and len(base["subtest_caps"]) == len(current["subtest_caps"]) == 2544
@@ -301,7 +301,7 @@ def check_monotonic(current: dict[str, Any], base: dict[str, Any]) -> None:
                 return
         if (
             (base["max_test_source_lines"], current["max_test_source_lines"])
-                == (154774, 155128)
+                in ((154774, 155128), (154860, 155219), (155128, 155219))
             and base["schema_version"] == current["schema_version"] == 1
             and tuple(base[name] for name in time_fields) == tuple(current[name] for name in time_fields) == (18000, 3600)
             and len(base["subtest_caps"]) == len(current["subtest_caps"]) == 2544

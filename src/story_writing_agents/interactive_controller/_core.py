@@ -171,7 +171,7 @@ from ..session_lifecycle import (
     provider_work_is_ready,
 )
 from ..workspace import Workspace
-from ..workspace.initialization import (
+from ..workspace.session_artifact_binding import (
     SessionArtifactBindingError,
     compose_session_artifact_binding,
 )

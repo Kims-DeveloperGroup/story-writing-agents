@@ -40,7 +40,7 @@ from tests.provider_wire_fixture import (
     result as wire_result,
 )
 from tests.helpers import materialize_pristine_initialized_workspace
-from story_writing_agents.workspace.initialization import provision_session_resources
+from story_writing_agents.workspace.session_resources import provision_session_resources
 from dataclasses import asdict
 from tests.lead_fixtures.preparation_data import (
     LEAD_FIXTURE_READINESS_DOCUMENTS,

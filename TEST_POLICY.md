@@ -939,6 +939,11 @@ filter a parent method's subTests and report that parent as fully verified.
 | One submitted-failure combination | Its `LeadSubmittedFailureRecoveryTests` method, retaining real closure and restart. | Shared submission, correction, taint or accounting changes: run all ten combinations, the retained pre-submission core and affected context lifecycle checks. |
 | Scope/review codec | The retained pure codec ID and its direct typed consumer. | Encoded shape, current-offer or transport changes: add the separated QUESTION and selected-v9 contract IDs and relevant producer/decoder checks. |
 | Small schema factoring/ref rule | `LeadSchemaFactoringTests.test_small_factoring_annotations_and_owner_refs_are_exact`. | Shared rule owner, schema family, repair or wire vocabulary changes: include the full schema catalogue and affected Lead/specialist/synthesis producers. |
+| Workspace root discovery or initialization | Exact dangling-sentinel discovery or scaffold retry case. | Root acceptance, bootstrap ordering, or Git readiness changes: add main/session discovery, schema-v2 initialization, and recovery cases. |
+| Ordinary workspace records or debate context codec | Exact persisted context tampering case. | Record serialization, owner paths, or descriptor handling changes: include existing agent/debate history, path guard, context collision, and root replacement cases. |
+| Workspace policy material | `PublishedWorkspacePolicyFixtureTests.test_independent_published_bytes_and_current_initializer_are_exact`. | Historical scaffold admission or runtime policy loading changes: add the Git-backed `WorkspacePolicyCompatibilityTests` cases. |
+| Session artifact binding or generation pin | Exact session inventory/root invariant or provider process generation-drift case. | Binding, lease, or descriptor lifetime changes: include existing source reads, Apply/Commit, generation cleanup, and publication cases that borrow the affected access. |
+| Artifact application journal | `ArtifactApplicationRecoveryTests.test_after_journal_recovers_before_authoritative_reads_and_retry_is_unchanged`. | Shared persisted shape, recovery, or lock changes: include lifecycle, recovery, inspection, and application seam cases. |
 | Apply or default-budget boundary | Its matching-Apply or default-budget method. | Document identity, candidate inputs, Confirm or chronology changes: include the real document workflow and affected public history/replay/restart checks. Binder spies cannot replace the actual host transition. |
 | Display of unchanged values | The affected view/controller checks. | Controls, DTOs, codecs or forwarded selections change: include their source and host boundaries. |
 
@@ -1303,3 +1308,35 @@ source guard는 수락154,774에서 최종155,128로 가는 단일 aggregate pai
 실제 구현에서 더 계상했으며 상향 Root 경로·private/globals 위반은 없다. 기존 Case·assertion·
 fixture·MRO·receipt·numeric weight·profile·generic17 guard를 보존한다. source 본문과 경계의
 정적 복원은 기능·성능·전체 CI·리뷰 완료를 대신하지 않으며 최종 동일 source의 공식 검증을 유지한다.
+
+## #973의 workspace·application journal 분리 소스 배정
+
+`aac5d831` 기준 154,774행에서 기존 테스트의 소유자별 import·patch와 실제 모듈 경계를
+확인하는 단언을 갱신하고 기존 Workspace 사례의 정의를 분리합니다. raw 148,630행, 추출 support 4,680행, 기존 보조
+1,550행으로 **154,860행(+86)**입니다. 필요한 소스 행에 대한 2026-11-15 포괄 승인을
+`154774→154860` 한 번에 적용합니다. 기존 2,544개 ID, cap 합 8,690, 18,000초 및
+3,600초의 시간 상한, 최대 4 worker, shard 분할과 hosted profile을 유지합니다.
+
+## #1048과 #973 main 통합의 소스 편성 — 2026-11-19
+
+이 절은 #1048 C4의 155,128행과 #973 main의 154,860행을 통합한 현재 편성이다.
+앞의 각 분리·소스 전이·측정 기록은 해당 snapshot의 이력으로 보존한다.
+통합 main `3937eaed11e540cfd1a865a9c974e7f14bf1fdf4`와 #1048의 의미 정책 분리를
+함께 유지한 실제 비용은 raw148,980 + support4,689 + legacy1,550 = **155,219행**이다.
+main 154,860→155,219는 +359행(#1048의 기존354행+통합 정책 검증5행),
+#1048 155,128→155,219는 +91행(#973의86행+통합 정책 검증5행)이다.
+사용자의 필요한 소스 행 추가 포괄 승인을 적용하며 별도의 추가 여유는 두지 않는다.
+
+정확한 source-only 전이 `154860→155219`와 `155128→155219`만 추가하고,
+양쪽의 기존 `154774→155128`·`154774→154860` 및 모든 이전 허용·이웃 거부를 보존한다.
+기존 개발 정책 메서드에 통합 전이와 인접 값 거절5행을 더했으며 새 Case·ID·subTest는 없다.
+`tests/suite_budget.py`의 기존 frozen 계상 밖 generic guard는17ordinary/17physical행을
+그대로 유지한다. 통합 guard는 같은 줄을 교체했으므로 이 부분의 추가 비용은0행이다.
+기존 support 원장4,689행과 미확인 legacy1,550행을 누락·공제·중복 청구하지 않는다.
+
+실제 통합 Runtime graph는298모듈/1,822간선, DAG이다. 상대 import graph는1,819간선,
+controller graph는1,688간선이며 module index는299행이다. 단순히 두 그래프를 더한
+전망값으로 처리하지 않고 실제 선언·공급자·109개 graph 기대를 독립 대조한다.
+전체2,544개 ID와 cap-map/cap합8,690·실제 subTest8,340·hosted163개/30클래스·399weight·
+최대4worker 및18,000/3,600초 상한을 유지한다. 실제 실행 결과·현재 source identity·
+전체 CI·리뷰 종료는 별도 완료 조건이며, 통합 전 C4의 시간 판단을 새 head의 성공으로 쓰지 않는다.

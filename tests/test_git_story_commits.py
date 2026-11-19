@@ -43,7 +43,7 @@ from story_writing_agents.git.story_commit_contracts import (
     StoryCommitState,
 )
 from story_writing_agents.git.story_commits import StoryCommitService
-from story_writing_agents.workspace.initialization import (
+from story_writing_agents.workspace.session_artifact_binding import (
     SessionArtifactBindingError,
     compose_session_artifact_binding,
 )

@@ -459,7 +459,7 @@ from .specialist_routing import (
 )
 from .workspace import Workspace
 from .workspace.session_source_workspace import SessionSourceWorkspace
-from .workspace.initialization import (
+from .workspace.session_artifact_binding import (
     SessionArtifactAccess,
     SessionArtifactBinding,
     SessionArtifactBindingError,

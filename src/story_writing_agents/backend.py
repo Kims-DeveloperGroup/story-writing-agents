@@ -213,10 +213,12 @@ from .writing_artifacts.read_actions import (
 )
 from .workspace import Workspace
 from .runtime_state_paths import CONTEXTUAL_PROVIDER_DIRECTORY
-from .workspace.initialization import (
+from .workspace.root_contracts import main_workspace_root as _main_workspace_root
+from .workspace.session_artifact_binding import (
     SessionArtifactBinding,
     compose_session_artifact_binding as _compose_session_artifact_binding,
-    main_workspace_root as _main_workspace_root,
+)
+from .workspace.session_resources import (
     provision_session_resources as _provision_session_resources,
     require_ready_session_resources as _require_ready_session_resources,
 )

@@ -1320,7 +1320,7 @@ class DebugLogContractTests(unittest.TestCase):
                 for node in ast.walk(core_tree)
                 if isinstance(node, ast.ImportFrom) and node.level == 2
             },
-            {"agents", "conversations", "errors", "models", "writing_artifacts"},
+            {"conversations", "errors", "models", "writing_artifacts"},
         )
         owner_tree = ast.parse(filesystem_owner.read_text(encoding="utf-8"))
         self.assertEqual(

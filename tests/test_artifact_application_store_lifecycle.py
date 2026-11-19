@@ -27,6 +27,7 @@ from story_writing_agents.writing_artifacts import (ARTIFACT_APPLICATION_SCHEMA_
 )
 from story_writing_agents.writing_artifacts import (_application_store as application_store_module,
 )
+from story_writing_agents.writing_artifacts.application_journal import relationship_digest
 from story_writing_agents.writing_artifacts.relationship_policy import (ArtifactRelationshipError,
     validate_artifact_relationships,
 )
@@ -82,8 +83,7 @@ def _request(repository: WritingArtifactRepository,
         candidate_revision=candidate_revision,
         candidate_digest="sha256:" + "a" * 64,
         change_set_digest=change_set.change_set_digest,
-        relationship_validation_digest=(application_store_module._relationship_digest(validation)
-        ),
+        relationship_validation_digest=relationship_digest(validation),
     )
     return ArtifactApplicationRequest(ARTIFACT_APPLICATION_SCHEMA_VERSION,
         provenance,
