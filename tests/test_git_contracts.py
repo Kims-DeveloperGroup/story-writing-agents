@@ -274,7 +274,7 @@ class GitContractTests(unittest.TestCase):
             mock.patch.object(process_module.subprocess, "Popen") as popen,
         ):
             adapter = GitRepositoryAdapter(root)
-        self.assertEqual(adapter._root, root)  # noqa: SLF001
+        self.assertEqual(adapter._execution.root, root)  # noqa: SLF001
         lstat.assert_not_called()
         popen.assert_not_called()
 
