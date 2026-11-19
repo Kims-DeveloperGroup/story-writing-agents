@@ -122,7 +122,7 @@ def read_definition_source(
             ),
         )
     )
-    return b"".join(fragments), tuple(components)
+    return b"".join(fragments) + b"\n", tuple(components)
 
 
 __all__ = ("read_definition_source",)
