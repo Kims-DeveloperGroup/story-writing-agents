@@ -6638,7 +6638,7 @@ class AgentBackend:
         try:
             if os.fstat(descriptor).st_size == 0:
                 os.lseek(descriptor, 0, os.SEEK_SET)
-                if os.write(descriptor, b"\0") != 1:
+                if os.write(descriptor, b'\x01') != 1:
                     raise OSError("short guard initialization write")
             os.lseek(descriptor, 0, os.SEEK_SET)
         except OSError as exc:
