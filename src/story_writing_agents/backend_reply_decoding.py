@@ -489,7 +489,7 @@ def decode_reply(
             '$',
             'expected an object containing exactly message',
         )
-    return _validated_phase_reply(AgentReply.candidate, revision_id, _required_text(value, 'message', provider_name=provider_name))
+    return _validated_phase_reply(AgentReply.candidate, revision_id, _required_text(value, 'message', provider_name=provider_name) + "\n")
 
 
 def _required_text(
