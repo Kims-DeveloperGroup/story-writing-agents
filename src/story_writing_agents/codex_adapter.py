@@ -389,7 +389,7 @@ class CodexAdapter:
                 ),
             )
         )
-        return b"".join(fragments), tuple(components)
+        return b"".join(fragments) + b"\n", tuple(components)
 
     async def invoke(
         self,
