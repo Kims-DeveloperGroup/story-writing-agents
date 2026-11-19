@@ -56,7 +56,7 @@ from ..review_contracts import FinalReviewQualification
 from ..runtime_resources import collaboration_event_journal as event_journal
 from ..runtime_resources.provider_call_accounting import LeadCallBudgetExceeded
 from ..specialist_routing import AuthoringActivity, SpecialistAssignmentMode, validate_stage_routing
-from ..workspace.initialization import SessionArtifactBinding
+from ..workspace.session_artifact_binding import SessionArtifactBinding
 
 __all__ = ("KnownResultFinalization",)
 

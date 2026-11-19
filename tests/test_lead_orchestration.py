@@ -63,7 +63,7 @@ from story_writing_agents.structured_output_validation import DomainValidationRu
 from story_writing_agents.lead_provider_contracts import LeadContractError, LeadProviderConstraints, canonical_assignments, canonical_scope
 from story_writing_agents.writing_artifacts.authorization import ReferenceAuthorizationErrorCode
 
-from story_writing_agents.workspace.initialization import SessionArtifactBindingError
+from story_writing_agents.workspace.session_artifact_binding import SessionArtifactBindingError
 from story_writing_agents import lead_exploration as exploration
 from tests.provider_wire_fixture import (
     answer as wire_answer,

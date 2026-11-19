@@ -37,7 +37,7 @@ from ..lead_preparation import (
 from ..lead_provider_contracts import empty_core_status_evidence
 from ..runtime_resources import session_worktree_access
 from ..structured_output_validation import validation_failure
-from ..workspace.initialization import SessionArtifactBinding
+from ..workspace.session_artifact_binding import SessionArtifactBinding
 from ..workspace.session_source_workspace import SessionSourceWorkspace
 from ..writing_artifacts import parse_artifact_references
 

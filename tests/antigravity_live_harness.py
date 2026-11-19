@@ -907,7 +907,7 @@ class ConversationCase:
     def setup(self):
         os.environ.update(GIT_AUTHOR_NAME='Story Live Test', GIT_AUTHOR_EMAIL='story-live@example.invalid', GIT_COMMITTER_NAME='Story Live Test', GIT_COMMITTER_EMAIL='story-live@example.invalid')
         from story_writing_agents.workspace import Workspace
-        from story_writing_agents.workspace.initialization import provision_session_resources
+        from story_writing_agents.workspace.session_resources import provision_session_resources
         main_workspace = initialize_workspace(self.directory / 'workspace')
         resources = provision_session_resources(main_workspace.root, self.session)
         self.workspace = Workspace(resources.identity.worktree_root)
@@ -960,7 +960,7 @@ class ConversationCase:
             StoryCommitApplicationEvidence, StoryCommitConfirmation,
             StoryCommitDecision, StoryCommitState,
         )
-        from story_writing_agents.workspace.initialization import compose_story_commit_service
+        from story_writing_agents.workspace.session_artifact_binding import compose_story_commit_service
         repository = WritingArtifactRepository(self.workspace.root)
         base = {name: self.workspace.path(name).read_bytes() for name in repository.list_paths()}
         operations = []
@@ -1305,7 +1305,7 @@ class ConversationCase:
     async def diagnostic_cases(self):
         from story_writing_agents.prompts import PromptAssembler
         from story_writing_agents.provider_adapter import ProviderInvocation, ProviderInvocationError
-        from story_writing_agents.workspace.initialization import compose_session_artifact_binding
+        from story_writing_agents.workspace.session_artifact_binding import compose_session_artifact_binding
         from story_writing_agents.provider_contract_guidance import add_contract_guidance, describe_schema
         schema = describe_schema({"type": "object", "additionalProperties": False,
             "description": "Complete the diagnostic request with a supports_proposal specialist result and brief nonempty response_text.",

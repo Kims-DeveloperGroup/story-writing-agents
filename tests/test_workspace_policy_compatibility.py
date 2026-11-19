@@ -16,7 +16,7 @@ from story_writing_agents.antigravity_adapter import AntigravityAdapter
 from story_writing_agents.codex_adapter import CodexAdapter
 from story_writing_agents.git import GitBaselineManifest, GitManifestEntry
 from story_writing_agents.prompts import PromptAssembler
-from story_writing_agents.workspace import initialization
+from story_writing_agents.workspace import schema
 from story_writing_agents.workspace.schema import (
     WorkspaceScaffoldEntry,
     canonical_initializer_scaffold,
@@ -127,7 +127,7 @@ class WorkspacePolicyCompatibilityTests(DisposableGitTestCase):
         if fixtures is not None:
             # This fixture substitutes independently published bytes only while
             # creating the original baseline, never during the admission under test.
-            with mock.patch.object(initialization, "canonical_initializer_scaffold", return_value=_legacy_scaffold(fixtures)):
+            with mock.patch.object(schema, "canonical_initializer_scaffold", return_value=_legacy_scaffold(fixtures)):
                 Workspace(root).initialize()
         else:
             Workspace(root).initialize()

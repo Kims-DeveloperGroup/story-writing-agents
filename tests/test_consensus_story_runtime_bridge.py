@@ -42,10 +42,8 @@ from story_writing_agents.consensus.contracts import (
 from story_writing_agents.consensus.material_store import ConsensusMaterialStore
 from story_writing_agents.consensus.serialization import serialize_consensus_workflow, deserialize_consensus_workflow
 from story_writing_agents.models import AgentReplyNextPhase
-from story_writing_agents.workspace.initialization import (
-    SessionArtifactBindingError,
-    provision_session_resources,
-)
+from story_writing_agents.workspace.session_artifact_binding import SessionArtifactBindingError
+from story_writing_agents.workspace.session_resources import provision_session_resources
 from story_writing_agents.writing_artifacts.read_actions import (
     ReferenceReadAction,
     ReferenceReadActionKind,

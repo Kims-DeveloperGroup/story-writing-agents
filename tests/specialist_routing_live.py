@@ -19,7 +19,7 @@ from story_writing_agents import codex_adapter, antigravity_adapter
 from story_writing_agents.agents import ROSTER
 from story_writing_agents import conversations as c
 from story_writing_agents.workspace import WORKSPACE_DIRECTORIES, initialize_workspace
-from story_writing_agents.workspace.initialization import provision_session_resources
+from story_writing_agents.workspace.session_resources import provision_session_resources
 
 CASES = (
     ("empty-outline-ko", ("plot_architect",), True,
@@ -374,7 +374,7 @@ async def evaluate_objective(output: Path, *, setup_only: bool = False):
     try:
         with (mock.patch.object(codex_adapter, 'run_process', guard(codex_adapter.run_process, 'codex')),
               mock.patch.object(antigravity_adapter, 'run_process', guard(antigravity_adapter.run_process, 'antigravity'))):
-            from story_writing_agents.workspace import initialization
+            from story_writing_agents.workspace import schema
             from story_writing_agents.workspace.schema import WorkspaceScaffoldEntry, canonical_initializer_scaffold
             fixtures = Path(__file__).parent / 'fixtures/workspace_policy_baselines/published_main_1e482fe'
             provenance = json.loads((fixtures / 'manifest.json').read_text())
@@ -387,7 +387,7 @@ async def evaluate_objective(output: Path, *, setup_only: bool = False):
             temporary = tempfile.TemporaryDirectory(prefix='routing-644-objective-')
             temporary_root = Path(temporary.name).resolve()
             # Substitute independently captured bytes only during original baseline creation.
-            with mock.patch.object(initialization, 'canonical_initializer_scaffold', return_value=scaffold):
+            with mock.patch.object(schema, 'canonical_initializer_scaffold', return_value=scaffold):
                 main = initialize_workspace(temporary_root / 'workspace')
             main.require_ready()
             resources = provision_session_resources(main.root, 'synthetic')

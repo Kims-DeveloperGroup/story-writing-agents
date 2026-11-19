@@ -7,7 +7,7 @@ import unittest
 from contextlib import contextmanager
 from dataclasses import asdict, replace
 from unittest import mock
-from story_writing_agents.workspace import initialization as workspace_initialization
+from story_writing_agents.workspace import session_artifact_binding
 from story_writing_agents import ReplyTraceOrigin, StoryRuntime, agents, conversations
 from story_writing_agents import lead_provider_contracts, specialist_routing, structured_output_validation
 from story_writing_agents.conversation_storage import ConversationStorageServices
@@ -55,7 +55,7 @@ def _fast_prevalidated_session_binding(runtime, session_id):
 
     binding = runtime.bind_session_artifacts(session_id)
     with (mock.patch.object(StoryRuntime, 'bind_session_artifacts', return_value=binding),
-        mock.patch.object(workspace_initialization, '_require_ready_locked_git_session_resources',
+        mock.patch.object(session_artifact_binding, '_require_ready_locked_git_session_resources',
         return_value=binding.resources)):
         yield
 

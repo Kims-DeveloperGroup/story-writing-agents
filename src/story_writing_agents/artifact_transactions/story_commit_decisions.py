@@ -14,7 +14,7 @@ from ..git.story_commit_contracts import (
     StoryCommitRecoveryAction,
 )
 from ..workspace import Workspace
-from ..workspace.initialization import (
+from ..workspace.session_artifact_binding import (
     compose_session_artifact_binding,
     compose_story_commit_service,
 )

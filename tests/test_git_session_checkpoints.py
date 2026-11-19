@@ -34,7 +34,7 @@ from story_writing_agents.git.story_commit_contracts import (
     StoryCommitFailureCode,
 )
 from story_writing_agents.git.story_commits import StoryCommitService
-from story_writing_agents.workspace.initialization import provision_session_resources
+from story_writing_agents.workspace.session_resources import provision_session_resources
 from story_writing_agents.workspace.schema import canonical_initializer_scaffold
 
 from tests.test_git_story_commit_candidates import StoryCommitGitTestCase, manifest

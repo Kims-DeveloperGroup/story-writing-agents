@@ -21,7 +21,7 @@ from ..errors import (
     WorkspaceSecurityError,
 )
 from ..workspace import Workspace
-from ..workspace.initialization import (
+from ..workspace.session_artifact_binding import (
     SessionArtifactBinding,
     SessionArtifactBindingError,
     SessionArtifactGenerationPin,

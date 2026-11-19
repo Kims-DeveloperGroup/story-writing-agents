@@ -24,10 +24,10 @@ from story_writing_agents.errors import (
     WorkspaceVersionUnsupportedError,
 )
 from story_writing_agents.workspace import initialization as initialization_module
-from story_writing_agents.workspace.initialization import (
+from story_writing_agents.workspace.initialization import initialize_workspace_root
+from story_writing_agents.workspace.root_contracts import (
     WorkspaceRootInspection,
     WorkspaceRootState,
-    initialize_workspace_root,
 )
 from story_writing_agents.workspace.schema import (
     CANONICAL_CORE_DOCUMENT_PATHS,

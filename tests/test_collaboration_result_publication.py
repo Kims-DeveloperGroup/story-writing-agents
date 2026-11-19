@@ -7,7 +7,7 @@ from unittest import mock
 from story_writing_agents import StoryRuntime, agents, conversations
 from story_writing_agents.conversation_storage import ConversationStorageServices
 from story_writing_agents.runtime_resources import collaboration_event_journal as event_journal
-from story_writing_agents.workspace import initialization as workspace_initialization
+from story_writing_agents.workspace.session_artifact_binding import SessionArtifactBinding
 from tests.lead_fixtures import preparation_data, provider_responses, runtime_setup
 from tests import test_specialist_orchestration_accounting as accounting
 from tests.test_specialist_orchestration_execution import (
@@ -148,7 +148,7 @@ class CollaborationResultPublicationTests(runtime_setup.LeadOrchestrationTestCas
         active = 0
         guard_depth = 0
         maximum_guard_depth = 0
-        original_open = workspace_initialization.SessionArtifactBinding.open_ready_resources
+        original_open = SessionArtifactBinding.open_ready_resources
 
         @contextmanager
         def tracked_open(binding):
@@ -179,7 +179,7 @@ class CollaborationResultPublicationTests(runtime_setup.LeadOrchestrationTestCas
         self.backend.enqueue_for(agents.LEAD_ORCHESTRATOR, preparation_data.synthesis_outcome())
 
         with (_fast_prevalidated_session_binding(self.runtime, self.session_id),
-            mock.patch.object(workspace_initialization.SessionArtifactBinding, 'open_ready_resources', tracked_open)):
+            mock.patch.object(SessionArtifactBinding, 'open_ready_resources', tracked_open)):
             task = _confirmed_execution_task_fixture(self.runtime, proposed)
             await asyncio.wait_for(all_entered.wait(), timeout=_SYNCHRONIZATION_TIMEOUT_SECONDS)
             self.assertEqual(peak, 3)

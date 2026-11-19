@@ -28,9 +28,11 @@ from story_writing_agents.git.session_contracts import (
 from story_writing_agents.git import session_resources as resources_module
 from story_writing_agents.git import inspection_objects as objects_module
 from story_writing_agents.git.session_resources import _Repository
-from story_writing_agents.workspace.initialization import (
+from story_writing_agents.workspace.session_artifact_binding import (
     SessionArtifactBindingError,
     compose_session_artifact_binding,
+)
+from story_writing_agents.workspace.session_resources import (
     inspect_session_resources,
     list_session_resources,
     provision_session_resources,

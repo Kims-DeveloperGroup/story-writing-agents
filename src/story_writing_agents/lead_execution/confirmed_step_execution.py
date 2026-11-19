@@ -69,7 +69,10 @@ from ..lead_preparation import (
     reply_contract_values,
 )
 from ..runtime_resources import collaboration_event_journal as event_journal
-from ..workspace.initialization import SessionArtifactBinding, SessionArtifactBindingError
+from ..workspace.session_artifact_binding import (
+    SessionArtifactBinding,
+    SessionArtifactBindingError,
+)
 
 __all__ = ["ConfirmedStepExecution"]
 

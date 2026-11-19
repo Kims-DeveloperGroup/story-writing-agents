@@ -12,7 +12,7 @@ from unittest import mock
 from story_writing_agents import StoryRuntime, Workspace
 from story_writing_agents import conversations as c
 from story_writing_agents.agents import LEAD_ORCHESTRATOR, PLOT_ARCHITECT
-from story_writing_agents.workspace.initialization import provision_session_resources
+from story_writing_agents.workspace.session_resources import provision_session_resources
 from story_writing_agents.writing_artifacts.repository import WritingArtifactRepository
 from tests.lead_fixtures import preparation_data, provider_responses, runtime_setup
 from story_writing_agents.specialist_routing import AuthoringActivity

@@ -917,6 +917,11 @@ filter a parent method's subTests and report that parent as fully verified.
 | One submitted-failure combination | Its `LeadSubmittedFailureRecoveryTests` method, retaining real closure and restart. | Shared submission, correction, taint or accounting changes: run all ten combinations, the retained pre-submission core and affected context lifecycle checks. |
 | Scope/review codec | The retained pure codec ID and its direct typed consumer. | Encoded shape, current-offer or transport changes: add the separated QUESTION and selected-v9 contract IDs and relevant producer/decoder checks. |
 | Small schema factoring/ref rule | `LeadSchemaFactoringTests.test_small_factoring_annotations_and_owner_refs_are_exact`. | Shared rule owner, schema family, repair or wire vocabulary changes: include the full schema catalogue and affected Lead/specialist/synthesis producers. |
+| Workspace root discovery or initialization | Exact dangling-sentinel discovery or scaffold retry case. | Root acceptance, bootstrap ordering, or Git readiness changes: add main/session discovery, schema-v2 initialization, and recovery cases. |
+| Ordinary workspace records or debate context codec | Exact persisted context tampering case. | Record serialization, owner paths, or descriptor handling changes: include existing agent/debate history, path guard, context collision, and root replacement cases. |
+| Workspace policy material | `PublishedWorkspacePolicyFixtureTests.test_independent_published_bytes_and_current_initializer_are_exact`. | Historical scaffold admission or runtime policy loading changes: add the Git-backed `WorkspacePolicyCompatibilityTests` cases. |
+| Session artifact binding or generation pin | Exact session inventory/root invariant or provider process generation-drift case. | Binding, lease, or descriptor lifetime changes: include existing source reads, Apply/Commit, generation cleanup, and publication cases that borrow the affected access. |
+| Artifact application journal | `ArtifactApplicationRecoveryTests.test_after_journal_recovers_before_authoritative_reads_and_retry_is_unchanged`. | Shared persisted shape, recovery, or lock changes: include lifecycle, recovery, inspection, and application seam cases. |
 | Apply or default-budget boundary | Its matching-Apply or default-budget method. | Document identity, candidate inputs, Confirm or chronology changes: include the real document workflow and affected public history/replay/restart checks. Binder spies cannot replace the actual host transition. |
 | Display of unchanged values | The affected view/controller checks. | Controls, DTOs, codecs or forwarded selections change: include their source and host boundaries. |
 
@@ -1224,3 +1229,11 @@ ordinary16행/physical17행 증가로 별도 공개한다.
 수정안은 원 concrete Case가 도메인 plain class의 같은 함수 객체를 직접 바인딩한다. 원 MRO·fixture 수명·Case ID와399 weight bytes를 유지하고, 원163 launch순서/mixed19/실제30클래스를 audited-163-v11로 감사한다. 새 도메인 정의 module은 등록 owner의 실제 기존 focused ID로 선택하고, bound 함수의 실제 정의 module도 검증한다. full/shard/hosted/LPT·기본GC·18,000/3,600초·최대4worker는 변경하지 않는다. 실제 collector/모듈선택/동일HEAD CI와 성능 게이트의 통과는 별도 공식 증거가 필요하다.
 
 현행 소스 계상은 raw148,078 + counted support4,677 + 기존미확인1,550 = **154,305행**이다. 기준154,078 대비 총227행(raw224/support3)이며, 실패한 D154,264 이후41행을 포함한다. 필요한 추가 행은 사용자의 모든 이슈 소스 행 포괄 승인을 적용했다. 신규 Case·시나리오·subTest와 시간·worker 예외는 없다. 기존 범용 selector/runner 도구의 변경은 원래 계상 경계 밖의 비용으로 별도 공개하며, 테스트 본문/단언을 도구로 옮겨 누락시키지 않는다. receipt14는 두 실행 ID 재키잉을 취소한 moves0·전후 caps digest동일 상태이며, 앞선13개 단계의 원기록과 검증은 보존한다.
+
+## #973의 workspace·application journal 분리 소스 배정
+
+`aac5d831` 기준 154,774행에서 기존 테스트의 소유자별 import·patch와 실제 모듈 경계를
+확인하는 단언을 갱신하고 기존 Workspace 사례의 정의를 분리합니다. raw 148,630행, 추출 support 4,680행, 기존 보조
+1,550행으로 **154,860행(+86)**입니다. 필요한 소스 행에 대한 2026-11-15 포괄 승인을
+`154774→154860` 한 번에 적용합니다. 기존 2,544개 ID, cap 합 8,690, 18,000초 및
+3,600초의 시간 상한, 최대 4 worker, shard 분할과 hosted profile을 유지합니다.

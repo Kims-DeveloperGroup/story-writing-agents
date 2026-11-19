@@ -18,9 +18,9 @@ from story_writing_agents.git.session_history_contracts import (
     GitSessionHistorySnapshot,
 )
 from story_writing_agents.workspace import initialization as initialization_module
-from story_writing_agents.workspace.initialization import (
+from story_writing_agents.workspace.session_artifact_binding import compose_story_commit_service
+from story_writing_agents.workspace.session_resources import (
     compose_session_checkpoint_service,
-    compose_story_commit_service,
     inspect_session_history,
     provision_session_resources,
     require_ready_session_resources,
@@ -102,9 +102,9 @@ class WorkspaceSessionHistoryCompositionTests(GitSessionResourceGitTestCase):
         self.assertFalse(history_root.exists())
         self.assertEqual(self.repository_snapshot(root), repository_before)
         modules, edges = _module_graph()
-        self.assertEqual((len(modules), len(edges)), (281, 1662))
+        self.assertEqual((len(modules), len(edges)), (293, 1715))
         self.assertFalse(_has_cycle(modules, edges))
-        self.assertIn(("workspace.initialization", "git.session_history"), edges)
+        self.assertIn(("workspace.session_resources", "git.session_history"), edges)
 
 
 if __name__ == "__main__":

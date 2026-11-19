@@ -57,7 +57,8 @@ from story_writing_agents.session_recovery.transition_assessment import (
     SessionTransitionOperation,
     SessionTransitionScope,
 )
-from story_writing_agents.workspace import initialization as workspace_initialization
+from story_writing_agents.workspace.discovery import discover_workspace_root
+from story_writing_agents.workspace.root_contracts import LEGACY_WORKSPACE_SENTINELS
 
 from tests.helpers import ScriptedBackend, pristine_initialized_workspace
 
@@ -372,9 +373,7 @@ class WorkspaceDiscoveryTests(unittest.TestCase):
 
     def test_dangling_exact_legacy_sentinel_is_nearest_unsafe_boundary(self) -> None:
         outer = pristine_initialized_workspace(self)
-        self.assertEqual(workspace_initialization._LEGACY_SENTINELS,
-            _LEGACY_WORKSPACE_SENTINELS,
-        )
+        self.assertEqual(LEGACY_WORKSPACE_SENTINELS, _LEGACY_WORKSPACE_SENTINELS)
 
         for index, relative in enumerate(_LEGACY_WORKSPACE_SENTINELS):
             with self.subTest(relative=relative):
@@ -398,7 +397,7 @@ class WorkspaceDiscoveryTests(unittest.TestCase):
                     self.skipTest("symbolic links are unavailable")
 
                 before = boundary_snapshot(inner)
-                discovered = workspace_initialization.discover_workspace_root(child)
+                discovered = discover_workspace_root(child)
                 self.assertEqual(discovered, inner)
                 self.assertNotEqual(discovered, outer.root)
                 with self.assertRaises(WorkspaceSecurityError) as raised:

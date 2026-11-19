@@ -41,7 +41,7 @@ from story_writing_agents.git.session_history_contracts import (
     advance_commit_operation,
     build_candidate_record,
 )
-from story_writing_agents.workspace.initialization import provision_session_resources
+from story_writing_agents.workspace.session_resources import provision_session_resources
 from story_writing_agents.workspace.schema import canonical_initializer_scaffold
 
 from tests.git_contract_fixture import exception_graph

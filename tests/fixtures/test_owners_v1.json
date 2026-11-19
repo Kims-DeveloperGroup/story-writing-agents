@@ -6795,7 +6795,9 @@
         "tests.test_workspace_and_config.WorkspaceContractTests.test_utf8_and_json_read_errors_are_explicit_and_nonmutating",
         "tests.test_workspace_and_config.WorkspaceContractTests.test_workspace_facade_exports_and_signatures_are_exact"
       ],
-      "depends_on": []
+      "depends_on": [
+        "tests.test_workspace_records"
+      ]
     },
     {
       "name": "tests.test_workspace_fixtures",
@@ -6840,6 +6842,38 @@
         "tests.test_workspace_policy_compatibility.PublishedWorkspacePolicyFixtureTests.test_independent_published_main_baseline_is_exact",
         "tests.test_workspace_policy_compatibility.PublishedWorkspacePolicyFixtureTests.test_independent_published_objective_baseline_is_exact",
         "tests.test_workspace_policy_compatibility.WorkspacePolicyCompatibilityTests.test_fresh_legacy_and_current_main_admission_are_isolated_and_read_only"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "tests.test_workspace_records",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/test_workspace_records.py"
+      ],
+      "focused_ids": [
+        "tests.test_workspace_and_config.DebateContextSidecarTests.test_absent_fresh_included_and_empty_schemas_are_exact",
+        "tests.test_workspace_and_config.DebateContextSidecarTests.test_create_only_collision_preserves_bytes_and_blocks_reservation",
+        "tests.test_workspace_and_config.DebateContextSidecarTests.test_tampering_and_duplicate_fields_raise_without_rewriting",
+        "tests.test_workspace_and_config.WorkspaceContractTests.test_all_default_prompts_are_checked_in_byte_identical_for_fresh_workspace",
+        "tests.test_workspace_and_config.WorkspaceContractTests.test_generic_writes_reject_canonical_artifacts_but_keep_other_helpers",
+        "tests.test_workspace_and_config.WorkspaceContractTests.test_generic_writes_reject_reserved_case_and_normalization_aliases",
+        "tests.test_workspace_and_config.WorkspaceContractTests.test_path_traversal_absolute_paths_and_symlink_escape_are_rejected",
+        "tests.test_workspace_and_config.WorkspaceContractTests.test_session_state_symlink_alias_is_rejected_without_target_mutation",
+        "tests.test_workspace_and_config.WorkspaceContractTests.test_utf8_and_json_read_errors_are_explicit_and_nonmutating",
+        "tests.test_workspace_and_config.WorkspaceContractTests.test_workspace_facade_exports_and_signatures_are_exact"
+      ],
+      "affected_ids": [
+        "tests.test_workspace_and_config.DebateContextSidecarTests.test_absent_fresh_included_and_empty_schemas_are_exact",
+        "tests.test_workspace_and_config.DebateContextSidecarTests.test_create_only_collision_preserves_bytes_and_blocks_reservation",
+        "tests.test_workspace_and_config.DebateContextSidecarTests.test_tampering_and_duplicate_fields_raise_without_rewriting",
+        "tests.test_workspace_and_config.WorkspaceContractTests.test_all_default_prompts_are_checked_in_byte_identical_for_fresh_workspace",
+        "tests.test_workspace_and_config.WorkspaceContractTests.test_generic_writes_reject_canonical_artifacts_but_keep_other_helpers",
+        "tests.test_workspace_and_config.WorkspaceContractTests.test_generic_writes_reject_reserved_case_and_normalization_aliases",
+        "tests.test_workspace_and_config.WorkspaceContractTests.test_path_traversal_absolute_paths_and_symlink_escape_are_rejected",
+        "tests.test_workspace_and_config.WorkspaceContractTests.test_session_state_symlink_alias_is_rejected_without_target_mutation",
+        "tests.test_workspace_and_config.WorkspaceContractTests.test_utf8_and_json_read_errors_are_explicit_and_nonmutating",
+        "tests.test_workspace_and_config.WorkspaceContractTests.test_workspace_facade_exports_and_signatures_are_exact"
       ],
       "depends_on": []
     },
@@ -14051,6 +14085,340 @@
         "runtime-resources.collaboration_event_journal",
         "runtime.collaboration_result_publication"
       ]
+    },
+    {
+      "name": "workspace.discovery",
+      "boundary": "workspace-discovery",
+      "paths": [
+        "src/story_writing_agents/workspace/discovery.py"
+      ],
+      "focused_ids": [
+        "tests.test_cli_context.WorkspaceDiscoveryTests.test_dangling_exact_legacy_sentinel_is_nearest_unsafe_boundary"
+      ],
+      "affected_ids": [
+        "tests.test_cli_context.WorkspaceDiscoveryTests.test_dangling_exact_legacy_sentinel_is_nearest_unsafe_boundary",
+        "tests.test_cli_context.CliDefaultPersistenceTests.test_conversation_default_schema_and_v1_artifact_fail_unchanged",
+        "tests.test_cli_context.CliDefaultPersistenceTests.test_conversation_defaults_are_independent_exact_v2_records",
+        "tests.test_cli_context.CliDefaultPersistenceTests.test_default_session_missing_save_load_and_resolve_are_exact",
+        "tests.test_cli_context.CliDefaultPersistenceTests.test_default_session_schema_is_strict_and_v1_is_unchanged",
+        "tests.test_cli_context.CliDefaultPersistenceTests.test_identifier_symlink_and_atomic_write_failures_are_safe",
+        "tests.test_cli_context.CliDefaultPersistenceTests.test_malformed_and_non_utf8_defaults_reject_without_rewriting",
+        "tests.test_cli_context.CliDefaultPersistenceTests.test_read_time_disappearance_is_absent_but_other_io_propagates",
+        "tests.test_cli_context.CliDefaultPersistenceTests.test_symlinked_default_directory_and_file_are_rejected_safely",
+        "tests.test_cli_context.DirectiveAndInspectDefaultTests.test_nested_cwd_infers_default_for_directive_and_inspect",
+        "tests.test_cli_context.LifecycleAutomationTests.test_create_requires_target_saves_default_after_success_and_formats_json",
+        "tests.test_cli_context.LifecycleAutomationTests.test_lifecycle_grammar_has_no_session_option_or_legacy_actions",
+        "tests.test_cli_context.LifecycleAutomationTests.test_noninteractive_pause_active_staged_denial_preserves_durable_state_and_releases_only_new_claim",
+        "tests.test_cli_context.LifecycleAutomationTests.test_noninteractive_reopen_uses_active_default_conversation_and_preserves_awaiting_request_r9",
+        "tests.test_cli_context.LifecycleAutomationTests.test_pause_uses_optional_default_and_always_retains_it",
+        "tests.test_cli_context.LifecycleAutomationTests.test_reopen_explicit_and_default_save_only_after_success",
+        "tests.test_cli_context.RunInputModuleTests.test_draft_loader_errors_are_typed_and_provider_free",
+        "tests.test_cli_context.RunInputModuleTests.test_shared_draft_loader_preserves_full_path_semantics",
+        "tests.test_cli_context.WorkspaceDiscoveryTests.test_nearest_strict_workspace_and_explicit_precedence",
+        "tests.test_cli_context.WorkspaceDiscoveryTests.test_uninitialized_and_absent_discovery_are_actionable",
+        "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_exact_session_workspace_activates_without_relaxing_linked_worktrees",
+        "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_internal_wrapper_surface_is_typed_and_public_facades_do_not_expand",
+        "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_main_and_session_discovery_return_nearest_typed_identity",
+        "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_moved_session_worktree_is_recovery_required_and_never_cleaned",
+        "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_multiple_exact_sessions_are_sorted_and_main_remains_ready",
+        "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_session_workspace_missing_required_configuration_is_recovery",
+        "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_session_workspace_staged_unknown_is_recovery_without_mutation",
+        "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_session_workspace_treats_unknown_provider_tree_as_opaque"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "workspace.initialization",
+      "boundary": "workspace-initialization",
+      "paths": [
+        "src/story_writing_agents/workspace/initialization.py"
+      ],
+      "focused_ids": [
+        "tests.test_workspace_v2_initialization.WorkspaceV2RecoveryTests.test_same_instance_is_terminal_after_scaffold_failure_and_fresh_retry_recovers"
+      ],
+      "affected_ids": [
+        "tests.test_workspace_v2_initialization.WorkspaceV2RecoveryTests.test_same_instance_is_terminal_after_scaffold_failure_and_fresh_retry_recovers",
+        "tests.test_workspace_v2_initialization.WorkspaceV2InitializationCapabilityTests.test_missing_descriptor_capabilities_fail_before_mutation",
+        "tests.test_workspace_v2_initialization.WorkspaceV2InitializationTests.test_missing_and_empty_roots_create_exact_clean_sha1_baselines",
+        "tests.test_workspace_v2_initialization.WorkspaceV2RejectionTests.test_legacy_versions_malformed_and_arbitrary_roots_are_nonmutating",
+        "tests.test_workspace_v2_initialization.WorkspaceV2SchemaTests.test_journal_codec_is_exact_canonical_strict_and_deeply_validated",
+        "tests.test_workspace_v2_initialization.WorkspaceV2SchemaTests.test_marker_codec_is_exact_canonical_strict_and_deeply_validated",
+        "tests.test_workspace_v2_initialization.WorkspaceV2SchemaTests.test_scaffold_paths_bytes_digests_and_core_identities_are_exact",
+        "tests.test_workspace_v2_initialization.WorkspaceV2SchemaTests.test_session_topology_policy_is_static_and_identifier_only",
+        "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_exact_session_workspace_activates_without_relaxing_linked_worktrees",
+        "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_internal_wrapper_surface_is_typed_and_public_facades_do_not_expand",
+        "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_main_and_session_discovery_return_nearest_typed_identity",
+        "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_moved_session_worktree_is_recovery_required_and_never_cleaned",
+        "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_multiple_exact_sessions_are_sorted_and_main_remains_ready",
+        "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_session_workspace_missing_required_configuration_is_recovery",
+        "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_session_workspace_staged_unknown_is_recovery_without_mutation",
+        "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_session_workspace_treats_unknown_provider_tree_as_opaque",
+        "tests.test_workspace_policy_compatibility.PublishedWorkspacePolicyFixtureTests.test_independent_published_bytes_and_current_initializer_are_exact",
+        "tests.test_workspace_policy_compatibility.PublishedWorkspacePolicyFixtureTests.test_independent_published_main_baseline_is_exact",
+        "tests.test_workspace_policy_compatibility.PublishedWorkspacePolicyFixtureTests.test_independent_published_objective_baseline_is_exact",
+        "tests.test_workspace_policy_compatibility.WorkspacePolicyCompatibilityTests.test_fresh_legacy_and_current_main_admission_are_isolated_and_read_only",
+        "tests.test_workspace_fixtures.WorkspaceFixtureContractTests.test_caller_owned_target_is_exact_absent_independent_and_failure_safe",
+        "tests.test_workspace_fixtures.WorkspaceFixtureContractTests.test_copies_have_independent_git_config_refs_and_application_state",
+        "tests.test_workspace_fixtures.WorkspaceFixtureContractTests.test_corrupt_copy_and_replaced_root_fail_closed",
+        "tests.test_workspace_fixtures.WorkspaceFixtureContractTests.test_guarded_and_validated_tiers_bind_exact_fresh_ready_shape",
+        "tests.test_workspace_fixtures.WorkspaceFixtureContractTests.test_real_initializer_tier_remains_real_and_independent",
+        "tests.test_workspace_fixtures.WorkspaceFixtureContractTests.test_same_session_ids_create_separate_worktrees_and_refs",
+        "tests.test_workspace_fixtures.WorkspaceFixtureContractTests.test_template_integrity_cleanup_and_phase_timings_are_observable"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "workspace.root-boundary",
+      "boundary": "filesystem-boundary",
+      "paths": [
+        "src/story_writing_agents/workspace/root_contracts.py",
+        "src/story_writing_agents/workspace/root_filesystem.py"
+      ],
+      "focused_ids": [
+        "tests.test_workspace_fixtures.WorkspaceFixtureContractTests.test_corrupt_copy_and_replaced_root_fail_closed"
+      ],
+      "affected_ids": [
+        "tests.test_cli_context.WorkspaceDiscoveryTests.test_dangling_exact_legacy_sentinel_is_nearest_unsafe_boundary",
+        "tests.test_workspace_v2_initialization.WorkspaceV2RecoveryTests.test_same_instance_is_terminal_after_scaffold_failure_and_fresh_retry_recovers",
+        "tests.test_workspace_v2_initialization.WorkspaceV2InitializationCapabilityTests.test_missing_descriptor_capabilities_fail_before_mutation",
+        "tests.test_workspace_v2_initialization.WorkspaceV2InitializationTests.test_missing_and_empty_roots_create_exact_clean_sha1_baselines",
+        "tests.test_workspace_v2_initialization.WorkspaceV2RejectionTests.test_legacy_versions_malformed_and_arbitrary_roots_are_nonmutating",
+        "tests.test_workspace_v2_initialization.WorkspaceV2SchemaTests.test_journal_codec_is_exact_canonical_strict_and_deeply_validated",
+        "tests.test_workspace_v2_initialization.WorkspaceV2SchemaTests.test_marker_codec_is_exact_canonical_strict_and_deeply_validated",
+        "tests.test_workspace_v2_initialization.WorkspaceV2SchemaTests.test_scaffold_paths_bytes_digests_and_core_identities_are_exact",
+        "tests.test_workspace_v2_initialization.WorkspaceV2SchemaTests.test_session_topology_policy_is_static_and_identifier_only",
+        "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_exact_session_workspace_activates_without_relaxing_linked_worktrees",
+        "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_internal_wrapper_surface_is_typed_and_public_facades_do_not_expand",
+        "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_main_and_session_discovery_return_nearest_typed_identity",
+        "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_moved_session_worktree_is_recovery_required_and_never_cleaned",
+        "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_multiple_exact_sessions_are_sorted_and_main_remains_ready",
+        "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_session_workspace_missing_required_configuration_is_recovery",
+        "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_session_workspace_staged_unknown_is_recovery_without_mutation",
+        "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_session_workspace_treats_unknown_provider_tree_as_opaque",
+        "tests.test_workspace_session_history.WorkspaceSessionHistoryCompositionTests.test_internal_wrapper_uses_main_root_manifest_and_noncreating_snapshot",
+        "tests.test_workspace_session_history.WorkspaceSessionHistoryCompositionTests.test_valid_dirty_settings_flow_through_real_idle_session_services",
+        "tests.test_workspace_fixtures.WorkspaceFixtureContractTests.test_corrupt_copy_and_replaced_root_fail_closed"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "workspace.policy-scaffold",
+      "boundary": "workspace-policy",
+      "paths": [
+        "src/story_writing_agents/workspace/schema.py",
+        "src/story_writing_agents/workspace/policy_scaffold.py",
+        "src/story_writing_agents/workspace/policy_material.py",
+        "src/story_writing_agents/workspace/_policy_baselines.py",
+        "src/story_writing_agents/workspace/_policy_baselines_editorial.py",
+        "src/story_writing_agents/workspace/_policy_baselines_guidance.py",
+        "src/story_writing_agents/workspace/_policy_baselines_legacy.py"
+      ],
+      "focused_ids": [
+        "tests.test_workspace_policy_compatibility.PublishedWorkspacePolicyFixtureTests.test_independent_published_bytes_and_current_initializer_are_exact"
+      ],
+      "affected_ids": [
+        "tests.test_workspace_policy_compatibility.PublishedWorkspacePolicyFixtureTests.test_independent_published_bytes_and_current_initializer_are_exact",
+        "tests.test_workspace_policy_compatibility.PublishedWorkspacePolicyFixtureTests.test_independent_published_main_baseline_is_exact",
+        "tests.test_workspace_policy_compatibility.PublishedWorkspacePolicyFixtureTests.test_independent_published_objective_baseline_is_exact",
+        "tests.test_workspace_policy_compatibility.WorkspacePolicyCompatibilityTests.test_fresh_legacy_and_current_main_admission_are_isolated_and_read_only",
+        "tests.test_workspace_v2_initialization.WorkspaceV2InitializationCapabilityTests.test_missing_descriptor_capabilities_fail_before_mutation",
+        "tests.test_workspace_v2_initialization.WorkspaceV2InitializationTests.test_missing_and_empty_roots_create_exact_clean_sha1_baselines",
+        "tests.test_workspace_v2_initialization.WorkspaceV2RecoveryTests.test_same_instance_is_terminal_after_scaffold_failure_and_fresh_retry_recovers",
+        "tests.test_workspace_v2_initialization.WorkspaceV2RejectionTests.test_legacy_versions_malformed_and_arbitrary_roots_are_nonmutating",
+        "tests.test_workspace_v2_initialization.WorkspaceV2SchemaTests.test_journal_codec_is_exact_canonical_strict_and_deeply_validated",
+        "tests.test_workspace_v2_initialization.WorkspaceV2SchemaTests.test_marker_codec_is_exact_canonical_strict_and_deeply_validated",
+        "tests.test_workspace_v2_initialization.WorkspaceV2SchemaTests.test_scaffold_paths_bytes_digests_and_core_identities_are_exact",
+        "tests.test_workspace_v2_initialization.WorkspaceV2SchemaTests.test_session_topology_policy_is_static_and_identifier_only",
+        "tests.test_workspace_fixtures.WorkspaceFixtureContractTests.test_caller_owned_target_is_exact_absent_independent_and_failure_safe",
+        "tests.test_workspace_fixtures.WorkspaceFixtureContractTests.test_copies_have_independent_git_config_refs_and_application_state",
+        "tests.test_workspace_fixtures.WorkspaceFixtureContractTests.test_corrupt_copy_and_replaced_root_fail_closed",
+        "tests.test_workspace_fixtures.WorkspaceFixtureContractTests.test_guarded_and_validated_tiers_bind_exact_fresh_ready_shape",
+        "tests.test_workspace_fixtures.WorkspaceFixtureContractTests.test_real_initializer_tier_remains_real_and_independent",
+        "tests.test_workspace_fixtures.WorkspaceFixtureContractTests.test_same_session_ids_create_separate_worktrees_and_refs",
+        "tests.test_workspace_fixtures.WorkspaceFixtureContractTests.test_template_integrity_cleanup_and_phase_timings_are_observable"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "workspace.session-resources",
+      "boundary": "session-resources",
+      "paths": [
+        "src/story_writing_agents/workspace/session_resources.py"
+      ],
+      "focused_ids": [
+        "tests.test_git_session_resources.GitSessionResourceLifecycleTests.test_create_reopen_and_inventory_are_exact_and_root_invariant"
+      ],
+      "affected_ids": [
+        "tests.test_git_session_resources.GitSessionResourceLifecycleTests.test_create_reopen_and_inventory_are_exact_and_root_invariant",
+        "tests.test_git_session_resources.GitSessionResourceRestartTests.test_internal_ref_prefix_resumes_branch_and_worktree_in_order",
+        "tests.test_git_session_resources.GitSessionResourceSafetyTests.test_preexisting_file_and_symlink_siblings_are_preserved_before_mutation",
+        "tests.test_git_session_history.GitSessionHistorySafetyTests.test_commit_checkpoint_transitions_restart_and_inventory_are_exact",
+        "tests.test_git_session_history.GitSessionHistorySafetyTests.test_snapshot_fails_closed_on_drift_corruption_and_preserves_lease",
+        "tests.test_git_session_checkpoints.SessionCheckpointGitTests.test_sha1_create_update_delete_have_exact_metadata_and_preserve_every_nonref_invariant",
+        "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_exact_session_workspace_activates_without_relaxing_linked_worktrees",
+        "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_internal_wrapper_surface_is_typed_and_public_facades_do_not_expand",
+        "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_main_and_session_discovery_return_nearest_typed_identity",
+        "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_moved_session_worktree_is_recovery_required_and_never_cleaned",
+        "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_multiple_exact_sessions_are_sorted_and_main_remains_ready",
+        "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_session_workspace_missing_required_configuration_is_recovery",
+        "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_session_workspace_staged_unknown_is_recovery_without_mutation",
+        "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_session_workspace_treats_unknown_provider_tree_as_opaque",
+        "tests.test_workspace_session_history.WorkspaceSessionHistoryCompositionTests.test_internal_wrapper_uses_main_root_manifest_and_noncreating_snapshot",
+        "tests.test_workspace_session_history.WorkspaceSessionHistoryCompositionTests.test_valid_dirty_settings_flow_through_real_idle_session_services",
+        "tests.test_session_recovery_reconciliation.SessionRecoveryArtifactTests.test_application_is_looked_up_only_by_exact_id_and_owner_outcomes_remain_distinct",
+        "tests.test_session_recovery_reconciliation.SessionRecoveryBoundaryTests.test_failures_are_content_safe_no_authority_is_retained_and_boundary_is_exact",
+        "tests.test_session_recovery_reconciliation.SessionRecoveryDriftTests.test_each_owner_generation_drift_returns_outcome_unknown_without_mixing_snapshots",
+        "tests.test_session_recovery_reconciliation.SessionRecoveryLifecycleTests.test_completed_provider_progress_advances_without_provider_or_execution_replay",
+        "tests.test_session_recovery_reconciliation.SessionRecoveryLifecycleTests.test_focused_canonical_empty_history_is_ready_after_stable_owner_checks",
+        "tests.test_session_recovery_reconciliation.SessionRecoveryLifecycleTests.test_lifecycle_gate_matrix_blocks_without_observing_or_acquiring_owners",
+        "tests.test_session_recovery_reconciliation.SessionRecoveryLifecycleTests.test_ordinary_lead_outcomes_allow_all_transitions_after_two_generations",
+        "tests.test_session_recovery_reconciliation.SessionRecoveryLifecycleTests.test_retryable_read_only_history_allows_reopen_but_keeps_uncertain_git_gated",
+        "tests.test_session_recovery_reconciliation.SessionRecoveryLifecycleTests.test_unmatched_submitted_lead_is_inspectable_only_without_downstream_facts",
+        "tests.test_session_recovery_reconciliation.SessionRecoveryLifecycleTests.test_unproposed_lead_history_accepts_terminal_git_inventory",
+        "tests.test_session_recovery_reconciliation.SessionRecoveryLifecycleTests.test_unproposed_lead_history_blocks_unresolved_git_inventory",
+        "tests.test_session_recovery_reconciliation.SessionRecoveryLifecycleTests.test_unproposed_lead_history_preserves_owner_and_drift_blockers",
+        "tests.test_session_recovery_reconciliation.SessionRecoveryOwnerObservationTests.test_committed_selection_alone_reads_current_head_log_and_requires_exact_match",
+        "tests.test_session_recovery_reconciliation.SessionRecoveryOwnerObservationTests.test_two_snapshot_sequence_and_exact_session_worktree_selection_are_closed",
+        "tests.test_session_recovery_reconciliation.SessionRecoveryOwnerObservationTests.test_unique_candidate_commit_checkpoint_selection_ignores_unrelated_terminal_history",
+        "tests.test_session_recovery_reconciliation.SessionRecoveryReconcilerContractTests.test_exact_direct_surface_signatures_constructor_validation_and_no_io",
+        "tests.test_session_recovery_reconciliation.SessionRecoveryStateTests.test_applied_staged_and_committed_states_use_complete_correlated_predecessors",
+        "tests.test_session_recovery_reconciliation.SessionRecoveryStateTests.test_missing_foreign_duplicate_and_contradictory_evidence_fail_closed",
+        "tests.test_session_recovery_reconciliation.SessionRecoveryStateTests.test_recovery_then_uncertainty_then_terminal_precedence_is_deterministic"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "workspace.session-artifact-binding",
+      "boundary": "artifact-binding",
+      "paths": [
+        "src/story_writing_agents/workspace/session_artifact_binding.py"
+      ],
+      "focused_ids": [
+        "tests.test_provider_process_streaming.TestProviderProcessStreaming.test_non_streaming_runs_normally"
+      ],
+      "affected_ids": [
+        "tests.test_provider_process_streaming.TestProviderProcessStreaming.test_non_streaming_runs_normally",
+        "tests.test_git_session_resources.GitSessionResourceLifecycleTests.test_create_reopen_and_inventory_are_exact_and_root_invariant",
+        "tests.test_git_session_resources.GitSessionResourceRestartTests.test_internal_ref_prefix_resumes_branch_and_worktree_in_order",
+        "tests.test_git_session_resources.GitSessionResourceSafetyTests.test_preexisting_file_and_symlink_siblings_are_preserved_before_mutation",
+        "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_exact_session_workspace_activates_without_relaxing_linked_worktrees",
+        "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_internal_wrapper_surface_is_typed_and_public_facades_do_not_expand",
+        "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_main_and_session_discovery_return_nearest_typed_identity",
+        "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_moved_session_worktree_is_recovery_required_and_never_cleaned",
+        "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_multiple_exact_sessions_are_sorted_and_main_remains_ready",
+        "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_session_workspace_missing_required_configuration_is_recovery",
+        "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_session_workspace_staged_unknown_is_recovery_without_mutation",
+        "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests.test_session_workspace_treats_unknown_provider_tree_as_opaque",
+        "tests.test_provider_process_streaming.TestProviderProcessStreaming.test_async_callback_is_awaited",
+        "tests.test_provider_process_streaming.TestProviderProcessStreaming.test_callback_cancellation_cleans_up_sibling_tasks",
+        "tests.test_provider_process_streaming.TestProviderProcessStreaming.test_callback_exception_does_not_abort_stream_drain",
+        "tests.test_provider_process_streaming.TestProviderProcessStreaming.test_cancelled_error_in_callback_propagates",
+        "tests.test_provider_process_streaming.TestProviderProcessStreaming.test_future_callback_is_awaited",
+        "tests.test_provider_process_streaming.TestProviderProcessStreaming.test_streaming_handles_lines_larger_than_64k_buffer",
+        "tests.test_provider_process_streaming.TestProviderProcessStreaming.test_streaming_handles_multichunk_large_line_and_many_lines_in_single_chunk",
+        "tests.test_provider_process_streaming.TestProviderProcessStreaming.test_streaming_receives_lines_in_real_time",
+        "tests.test_provider_process_streaming.TestProviderProcessStreaming.test_streaming_selects_streaming_when_stdout_has_read_without_readline",
+        "tests.test_provider_process_streaming.TestProviderProcessStreaming.test_streaming_timeout_terminates_process",
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_confirm_starts_one_atomic_dispatch_batch_then_runs_three_in_parallel",
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_persistent_validation_publication_failure_keeps_result_unknown",
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_result_persistence_failure_cleans_marker_after_provider_completion",
+        "tests.test_collaboration_result_publication.CollaborationResultPublicationTests.test_synthesis_cancellation_preserves_specialist_result_and_never_reruns_it",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation",
+        "tests.test_git_story_commits.StoryCommitServiceTests.test_only_exact_commit_decision_authorizes_and_confirmation_cannot_replay"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "writing-artifacts.application-journal",
+      "boundary": "application-journal",
+      "paths": [
+        "src/story_writing_agents/writing_artifacts/_application_store.py",
+        "src/story_writing_agents/writing_artifacts/application_journal.py"
+      ],
+      "focused_ids": [
+        "tests.test_artifact_application_store_recovery.ArtifactApplicationRecoveryTests.test_after_journal_recovers_before_authoritative_reads_and_retry_is_unchanged"
+      ],
+      "affected_ids": [
+        "tests.test_artifact_application_store_recovery.ArtifactApplicationRecoveryTests.test_after_journal_recovers_before_authoritative_reads_and_retry_is_unchanged",
+        "tests.test_artifact_application_inspection.ArtifactApplicationInspectionTests.test_absent_safe_identity_returns_none_with_only_exact_lock_bootstrap_topology",
+        "tests.test_artifact_application_inspection.ArtifactApplicationInspectionTests.test_corruption_and_recovery_required_are_distinct_content_safe_failures",
+        "tests.test_artifact_application_inspection.ArtifactApplicationInspectionTests.test_existing_identity_returns_original_applied_result_repeatedly_without_writes_or_reapply",
+        "tests.test_artifact_application_inspection.ArtifactApplicationInspectionTests.test_malformed_type_and_subclass_identity_reject_before_lock_or_delegation",
+        "tests.test_artifact_application_inspection.ArtifactApplicationInspectionTests.test_one_lock_one_delegation_and_no_mutation_or_external_owner_route",
+        "tests.test_artifact_application_inspection.ArtifactApplicationInspectionTests.test_pending_journal_recovers_and_audits_before_returning_exact_applied_result",
+        "tests.test_artifact_application_seam.ArtifactApplicationBoundaryTests.test_repository_has_one_application_seam_and_no_orchestrator_context_provider_confirmation_or_git_path",
+        "tests.test_artifact_application_seam.ArtifactApplicationSeamTests.test_application_changes_replace_rename_and_delete_captured_sources_as_drift",
+        "tests.test_artifact_application_seam.ArtifactApplicationSeamTests.test_attached_core_paths_change_relationship_digest_and_mismatch_fails_closed",
+        "tests.test_artifact_application_seam.ArtifactApplicationSeamTests.test_one_lock_and_one_delegation_return_applied_then_unchanged",
+        "tests.test_artifact_application_seam.ArtifactApplicationSeamTests.test_only_exact_revalidated_request_authority_reaches_the_repository_lock",
+        "tests.test_artifact_application_seam.ArtifactApplicationSeamTests.test_public_operational_failures_are_coded_content_safe_and_context_free",
+        "tests.test_artifact_application_store_lifecycle.ArtifactApplicationLifecycleTests.test_catalog_tracks_only_current_membership_while_history_preserves_rename_and_delete_facts",
+        "tests.test_artifact_application_store_lifecycle.ArtifactApplicationLifecycleTests.test_core_create_patch_replace_succeed_and_core_rename_delete_fail_before_publication",
+        "tests.test_artifact_application_store_lifecycle.ArtifactApplicationLifecycleTests.test_each_operation_enforces_presence_absence_and_source_digest_before_journal",
+        "tests.test_artifact_application_store_lifecycle.ArtifactApplicationLifecycleTests.test_later_applications_preserve_prior_history_and_audit_exact_current_projection",
+        "tests.test_artifact_application_store_lifecycle.ArtifactApplicationLifecycleTests.test_multifile_request_applies_all_five_operations_and_returns_exact_applied_result",
+        "tests.test_artifact_application_store_lifecycle.ArtifactApplicationLifecycleTests.test_prior_create_only_catalog_transaction_and_commit_shapes_fail_closed_without_rewrite",
+        "tests.test_artifact_application_store_lifecycle.ArtifactApplicationLifecycleTests.test_temporary_commit_consensus_delegates_to_new_engine_and_persists_only_new_schemas",
+        "tests.test_artifact_application_store_recovery.ArtifactApplicationBoundaryTests.test_store_is_sole_persistence_interpreter_and_matches_boundary",
+        "tests.test_artifact_application_store_recovery.ArtifactApplicationGitBoundaryTests.test_application_changes_no_git_index_refs_or_staging_and_imports_no_git_code",
+        "tests.test_artifact_application_store_recovery.ArtifactApplicationLeaseTests.test_one_repository_lease_spans_every_application_fault_point",
+        "tests.test_artifact_application_store_recovery.ArtifactApplicationRecoveryTests.test_after_revalidation_keeps_old_authority_and_clean_retry_applies_once",
+        "tests.test_artifact_application_store_recovery.ArtifactApplicationRecoveryTests.test_each_after_target_ordinal_recovers_five_operation_topology_once",
+        "tests.test_artifact_application_store_recovery.ArtifactApplicationRecoveryTests.test_metadata_tail_faults_recover_new_authority_and_completed_lookup_is_idempotent",
+        "tests.test_artifact_application_store_recovery.ArtifactApplicationSecurityTests.test_application_targets_and_authority_fail_closed_on_symlink_hardlink_alias_and_root_replacement"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "workspace.session-records",
+      "boundary": "workspace-records",
+      "paths": [
+        "src/story_writing_agents/workspace/session_records.py",
+        "src/story_writing_agents/workspace/core.py"
+      ],
+      "focused_ids": [
+        "tests.test_workspace_and_config.DebateContextSidecarTests.test_tampering_and_duplicate_fields_raise_without_rewriting"
+      ],
+      "affected_ids": [
+        "tests.test_workspace_and_config.DebateContextSidecarTests.test_absent_fresh_included_and_empty_schemas_are_exact",
+        "tests.test_workspace_and_config.DebateContextSidecarTests.test_create_only_collision_preserves_bytes_and_blocks_reservation",
+        "tests.test_workspace_and_config.DebateContextSidecarTests.test_tampering_and_duplicate_fields_raise_without_rewriting",
+        "tests.test_workspace_and_config.WorkspaceContractTests.test_all_default_prompts_are_checked_in_byte_identical_for_fresh_workspace",
+        "tests.test_workspace_and_config.WorkspaceContractTests.test_generic_writes_reject_canonical_artifacts_but_keep_other_helpers",
+        "tests.test_workspace_and_config.WorkspaceContractTests.test_generic_writes_reject_reserved_case_and_normalization_aliases",
+        "tests.test_workspace_and_config.WorkspaceContractTests.test_path_traversal_absolute_paths_and_symlink_escape_are_rejected",
+        "tests.test_workspace_and_config.WorkspaceContractTests.test_session_state_symlink_alias_is_rejected_without_target_mutation",
+        "tests.test_workspace_and_config.WorkspaceContractTests.test_utf8_and_json_read_errors_are_explicit_and_nonmutating",
+        "tests.test_workspace_and_config.WorkspaceContractTests.test_workspace_facade_exports_and_signatures_are_exact",
+        "tests.agent_context.sources.test_authority_adapters.RealAuthorityAdapterTests.test_active_debate_and_all_four_owner_states_are_public_exact_and_isolated",
+        "tests.test_workspace_session_history.WorkspaceSessionHistoryCompositionTests.test_internal_wrapper_uses_main_root_manifest_and_noncreating_snapshot",
+        "tests.test_workspace_session_history.WorkspaceSessionHistoryCompositionTests.test_valid_dirty_settings_flow_through_real_idle_session_services",
+        "tests.test_workspace_fixtures.WorkspaceFixtureContractTests.test_corrupt_copy_and_replaced_root_fail_closed"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "workspace.debate-context-codec",
+      "boundary": "workspace-context-codec",
+      "paths": [
+        "src/story_writing_agents/workspace/debate_context_codec.py"
+      ],
+      "focused_ids": [
+        "tests.test_workspace_and_config.DebateContextSidecarTests.test_tampering_and_duplicate_fields_raise_without_rewriting"
+      ],
+      "affected_ids": [
+        "tests.test_workspace_and_config.DebateContextSidecarTests.test_absent_fresh_included_and_empty_schemas_are_exact",
+        "tests.test_workspace_and_config.DebateContextSidecarTests.test_create_only_collision_preserves_bytes_and_blocks_reservation",
+        "tests.test_workspace_and_config.DebateContextSidecarTests.test_tampering_and_duplicate_fields_raise_without_rewriting"
+      ],
+      "depends_on": []
     },
     {
       "name": "workspace.session-record-validation",

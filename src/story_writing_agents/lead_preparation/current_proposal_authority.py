@@ -20,7 +20,7 @@ from ..conversations import CollaborationStepKind
 from ..core_document_readiness import CoreDocumentReadinessNeeded
 from ..agents import LEAD_ORCHESTRATOR
 from ..agents import SPECIALIST_IDS
-from ..workspace.initialization import SessionArtifactBinding
+from ..workspace.session_artifact_binding import SessionArtifactBinding
 from ..specialist_routing import SpecialistAssignmentMode
 from ..lead_preparation import authoring_authority
 from ..lead_preparation import reply_contract_values

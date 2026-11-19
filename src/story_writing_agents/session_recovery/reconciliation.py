@@ -37,16 +37,18 @@ from ..git.session_history_contracts import (
     GitSessionHistoryState,
 )
 from ..git.session_resources import GitSessionGenerationPin
+from ..git.story_commits import StoryCommitRecoverySnapshot
 from ..session_lifecycle import (
     SessionAccessState,
     SessionDurableState,
     SessionLifecycleState,
 )
-from ..workspace.initialization import (
+from ..workspace.session_artifact_binding import (
     SessionArtifactBinding,
     SessionArtifactBindingError,
-    StoryCommitRecoverySnapshot,
     compose_session_artifact_binding,
+)
+from ..workspace.session_resources import (
     inspect_session_history,
     inspect_session_resources,
     inspect_story_commit_recovery_snapshot,
