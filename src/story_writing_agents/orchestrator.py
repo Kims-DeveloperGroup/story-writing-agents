@@ -5352,7 +5352,7 @@ class StoryRuntime:
                                 "end_line": actual[identity].boundary.end,
                             } for identity in ids)
                             decoded_discussion = LeadDiscussionReport(
-                                response_kind=value.get("kind", "answer"), response_text=value["message"],
+                                response_kind=value.get("kind", "answer"), response_text="diagnostic discussion response",
                                 origin_control_event_id=task_transition.event_id,
                                 associated_task_ref=task_receipt.source_task_ref, used_evidence=facts,
                             )
