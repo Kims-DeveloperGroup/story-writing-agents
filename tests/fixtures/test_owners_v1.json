@@ -18837,6 +18837,108 @@
         "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_empty_inventory_does_not_add_unaffected_owners_and_mixed_scope_does"
       ],
       "depends_on": []
+    },
+    {
+      "name": "consensus.provider-reply-mapping",
+      "boundary": "existing-cases",
+      "paths": [
+        "src/story_writing_agents/consensus/provider_reply_mapping.py"
+      ],
+      "focused_ids": [
+        "tests.test_consensus_runtime_correlation.ConsensusRuntimeCorrelationTests.test_all_six_routes_map_exact_typed_results"
+      ],
+      "affected_ids": [
+        "tests.test_consensus_deadlock_continuation.ConsensusDeadlockContinuationTests.test_interruption_and_second_deadlock_never_publish",
+        "tests.test_consensus_deadlock_continuation.ConsensusDeadlockContinuationTests.test_invalid_sources_and_material_fail_before_provider_or_workflow_mutation",
+        "tests.test_consensus_execution.ConsensusExecutionTests.test_all_six_phase_routes_are_exact_and_running_precedes_provider",
+        "tests.test_consensus_execution.ConsensusExecutionTests.test_append_uncertainty_never_invokes_early_or_claims_durability",
+        "tests.test_consensus_execution.ConsensusExecutionTests.test_audit_validation_details_keep_provider_ordinal_order",
+        "tests.test_consensus_execution.ConsensusExecutionTests.test_partial_audit_failure_keeps_completed_provider_diagnostics",
+        "tests.test_consensus_execution.ConsensusExecutionTests.test_tail_request_decision_binding_and_capability_replay_fail_before_callbacks",
+        "tests.test_consensus_runtime_adapter.ConsensusRuntimeAdapterTests.test_interrupt_closes_running_phase_and_deadlock_resume_is_nonpublishing",
+        "tests.test_consensus_runtime_adapter.ConsensusRuntimeAdapterTests.test_restart_loses_authority_and_cannot_replay_confirmation",
+        "tests.test_consensus_runtime_adapter.ConsensusRuntimeAdapterTests.test_stale_tail_and_request_mismatch_preserve_fresh_authority",
+        "tests.test_consensus_runtime_correlation.ConsensusRuntimeCorrelationTests.test_all_six_routes_map_exact_typed_results",
+        "tests.test_consensus_runtime_correlation.ConsensusRuntimeCorrelationTests.test_finalization_handoff_exposes_review_only_lineage",
+        "tests.test_consensus_runtime_correlation.ConsensusRuntimeCorrelationTests.test_provider_trace_survives_consensus_mapping",
+        "tests.test_consensus_runtime_correlation.ConsensusRuntimeCorrelationTests.test_runtime_fallback_maps_draft_failure_and_later_deadlocks",
+        "tests.test_consensus_runtime_correlation.ConsensusRuntimeCorrelationTests.test_synthesis_next_phase_deadlock_and_mismatches_are_fail_closed",
+        "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_artifact_input_uses_authorized_reference_read_and_stale_digest_fails",
+        "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_continuation_repair_receives_ruling_and_conflicts_and_wrapper_binds_session",
+        "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_interrupt_cancels_all_matching_auditors_and_cleans_registry",
+        "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_phase_mapping_is_exact_and_finalization_is_read_only",
+        "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_prompt_and_supplied_draft_are_execution_authored_before_audit",
+        "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_reject_revise_restart_and_session_ownership_fail_before_provider"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "consensus.provider-request-policy",
+      "boundary": "existing-cases",
+      "paths": [
+        "src/story_writing_agents/consensus/provider_request_policy.py"
+      ],
+      "focused_ids": [
+        "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_prompt_and_supplied_draft_are_execution_authored_before_audit"
+      ],
+      "affected_ids": [
+        "tests.test_consensus_deadlock_continuation.ConsensusDeadlockContinuationTests.test_interruption_and_second_deadlock_never_publish",
+        "tests.test_consensus_deadlock_continuation.ConsensusDeadlockContinuationTests.test_invalid_sources_and_material_fail_before_provider_or_workflow_mutation",
+        "tests.test_consensus_execution.ConsensusExecutionTests.test_all_six_phase_routes_are_exact_and_running_precedes_provider",
+        "tests.test_consensus_execution.ConsensusExecutionTests.test_append_uncertainty_never_invokes_early_or_claims_durability",
+        "tests.test_consensus_execution.ConsensusExecutionTests.test_audit_validation_details_keep_provider_ordinal_order",
+        "tests.test_consensus_execution.ConsensusExecutionTests.test_partial_audit_failure_keeps_completed_provider_diagnostics",
+        "tests.test_consensus_execution.ConsensusExecutionTests.test_tail_request_decision_binding_and_capability_replay_fail_before_callbacks",
+        "tests.test_consensus_runtime_adapter.ConsensusRuntimeAdapterTests.test_interrupt_closes_running_phase_and_deadlock_resume_is_nonpublishing",
+        "tests.test_consensus_runtime_adapter.ConsensusRuntimeAdapterTests.test_restart_loses_authority_and_cannot_replay_confirmation",
+        "tests.test_consensus_runtime_adapter.ConsensusRuntimeAdapterTests.test_stale_tail_and_request_mismatch_preserve_fresh_authority",
+        "tests.test_consensus_runtime_correlation.ConsensusRuntimeCorrelationTests.test_all_six_routes_map_exact_typed_results",
+        "tests.test_consensus_runtime_correlation.ConsensusRuntimeCorrelationTests.test_finalization_handoff_exposes_review_only_lineage",
+        "tests.test_consensus_runtime_correlation.ConsensusRuntimeCorrelationTests.test_provider_trace_survives_consensus_mapping",
+        "tests.test_consensus_runtime_correlation.ConsensusRuntimeCorrelationTests.test_runtime_fallback_maps_draft_failure_and_later_deadlocks",
+        "tests.test_consensus_runtime_correlation.ConsensusRuntimeCorrelationTests.test_synthesis_next_phase_deadlock_and_mismatches_are_fail_closed",
+        "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_artifact_input_uses_authorized_reference_read_and_stale_digest_fails",
+        "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_continuation_repair_receives_ruling_and_conflicts_and_wrapper_binds_session",
+        "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_interrupt_cancels_all_matching_auditors_and_cleans_registry",
+        "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_phase_mapping_is_exact_and_finalization_is_read_only",
+        "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_prompt_and_supplied_draft_are_execution_authored_before_audit",
+        "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_reject_revise_restart_and_session_ownership_fail_before_provider"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "consensus.authoring-qualification",
+      "boundary": "existing-cases",
+      "paths": [
+        "src/story_writing_agents/consensus/authoring_qualification.py"
+      ],
+      "focused_ids": [
+        "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_artifact_input_uses_authorized_reference_read_and_stale_digest_fails"
+      ],
+      "affected_ids": [
+        "tests.test_consensus_deadlock_continuation.ConsensusDeadlockContinuationTests.test_interruption_and_second_deadlock_never_publish",
+        "tests.test_consensus_deadlock_continuation.ConsensusDeadlockContinuationTests.test_invalid_sources_and_material_fail_before_provider_or_workflow_mutation",
+        "tests.test_consensus_execution.ConsensusExecutionTests.test_all_six_phase_routes_are_exact_and_running_precedes_provider",
+        "tests.test_consensus_execution.ConsensusExecutionTests.test_append_uncertainty_never_invokes_early_or_claims_durability",
+        "tests.test_consensus_execution.ConsensusExecutionTests.test_audit_validation_details_keep_provider_ordinal_order",
+        "tests.test_consensus_execution.ConsensusExecutionTests.test_partial_audit_failure_keeps_completed_provider_diagnostics",
+        "tests.test_consensus_execution.ConsensusExecutionTests.test_tail_request_decision_binding_and_capability_replay_fail_before_callbacks",
+        "tests.test_consensus_runtime_adapter.ConsensusRuntimeAdapterTests.test_interrupt_closes_running_phase_and_deadlock_resume_is_nonpublishing",
+        "tests.test_consensus_runtime_adapter.ConsensusRuntimeAdapterTests.test_restart_loses_authority_and_cannot_replay_confirmation",
+        "tests.test_consensus_runtime_adapter.ConsensusRuntimeAdapterTests.test_stale_tail_and_request_mismatch_preserve_fresh_authority",
+        "tests.test_consensus_runtime_correlation.ConsensusRuntimeCorrelationTests.test_all_six_routes_map_exact_typed_results",
+        "tests.test_consensus_runtime_correlation.ConsensusRuntimeCorrelationTests.test_finalization_handoff_exposes_review_only_lineage",
+        "tests.test_consensus_runtime_correlation.ConsensusRuntimeCorrelationTests.test_provider_trace_survives_consensus_mapping",
+        "tests.test_consensus_runtime_correlation.ConsensusRuntimeCorrelationTests.test_runtime_fallback_maps_draft_failure_and_later_deadlocks",
+        "tests.test_consensus_runtime_correlation.ConsensusRuntimeCorrelationTests.test_synthesis_next_phase_deadlock_and_mismatches_are_fail_closed",
+        "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_artifact_input_uses_authorized_reference_read_and_stale_digest_fails",
+        "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_continuation_repair_receives_ruling_and_conflicts_and_wrapper_binds_session",
+        "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_interrupt_cancels_all_matching_auditors_and_cleans_registry",
+        "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_phase_mapping_is_exact_and_finalization_is_read_only",
+        "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_prompt_and_supplied_draft_are_execution_authored_before_audit",
+        "tests.test_consensus_story_runtime_bridge.ConsensusStoryRuntimeBridgeTests.test_reject_revise_restart_and_session_ownership_fail_before_provider"
+      ],
+      "depends_on": []
     }
   ],
   "ignored_names": [

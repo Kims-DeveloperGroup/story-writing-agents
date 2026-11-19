@@ -1523,6 +1523,100 @@
           "clarify_unprepared_authoring_proposal required document_selection/document_node keyword-only"
         ]
       }
+    },
+    {
+      "issue": 1049,
+      "origin_commit": "ae1fe47943ae858107f2c847edeafb16615b32ae",
+      "approved_source_delta": 99,
+      "planned_raw_delta": 99,
+      "planned_support_delta": 0,
+      "legacy_unresolved_lines": 1550,
+      "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
+      "generic_tooling_physical_delta_excluded": 17,
+      "origins": [
+        {
+          "source": "tests/test_consensus_runtime_correlation.py",
+          "sha256": "0c9a13d5561ffa0a8cdf60685d8475a869947af5d30c3aa3f58ebb22cd625aa0",
+          "source_ranges": [
+            [
+              102,
+              117
+            ],
+            [
+              119,
+              190
+            ],
+            [
+              192,
+              223
+            ],
+            [
+              225,
+              253
+            ],
+            [
+              255,
+              280
+            ]
+          ],
+          "declarations": [
+            "test_provider_trace_survives_consensus_mapping",
+            "test_all_six_routes_map_exact_typed_results",
+            "test_synthesis_next_phase_deadlock_and_mismatches_are_fail_closed",
+            "test_runtime_fallback_maps_draft_failure_and_later_deadlocks",
+            "test_finalization_handoff_exposes_review_only_lineage"
+          ],
+          "destinations": [
+            "tests/test_consensus_runtime_correlation.py"
+          ],
+          "counting": "Existing Case definitions and canonical IDs remain in place; public mapper transport or source-only boundary validation, no Case/fixture/receipt move."
+        },
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "8c47d78606b0ade320261870feefee174a601c9027a907179853b0794e277be5",
+          "source_ranges": [
+            [
+              366,
+              1715
+            ],
+            [
+              1718,
+              2067
+            ],
+            [
+              2151,
+              2621
+            ]
+          ],
+          "declarations": [
+            "test_inventory_edges_cycles_and_sole_dual_importer_match_the_brief",
+            "test_supported_module_surfaces_do_not_expand_the_root_facade",
+            "test_temporary_base_and_optional_artifacts_exclude_vendored_source"
+          ],
+          "destinations": [
+            "tests/test_rag_module_and_packaging_boundary.py"
+          ],
+          "counting": "Existing Case definitions and canonical IDs remain in place; public mapper transport or source-only boundary validation, no Case/fixture/receipt move."
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "4933408a3b65a43f193399282cbe08028edf73dca2020a4f1218acb56f3ed371",
+          "source_ranges": [
+            [
+              77,
+              735
+            ]
+          ],
+          "declarations": [
+            "test_new_id_increased_subtests_and_relaxed_time_are_rejected"
+          ],
+          "destinations": [
+            "tests/test_suite_budget.py"
+          ],
+          "counting": "Existing Case definitions and canonical IDs remain in place; public mapper transport or source-only boundary validation, no Case/fixture/receipt move."
+        }
+      ],
+      "counting": "Source-only 149079+4689+1550=155318; accepted base155219 delta99. Mapper public-owner import1; existing RAG API/export/namespace/graph/packaging82; existing BudgetCase16. Canonical IDs/caps/receipts/weights/profile/launch and historical strict transitions unchanged. Exact generic suite_budget branch17 physical/ordinary rows is separately disclosed outside frozen source charge. Original collection-phase Root import remains necessary for the existing handoff consumer."
     }
   ]
 }

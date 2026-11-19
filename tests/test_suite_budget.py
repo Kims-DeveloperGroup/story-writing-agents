@@ -570,11 +570,28 @@ class SuiteBudgetTests(unittest.TestCase):
         self.assertEqual(workspace_current["max_test_source_lines"], 154860)
         self.assertIsNone(suite_budget.check_monotonic(workspace_current, artifact_planning_current))
         self._assert_source_limit_neighbors_rejected(workspace_current, artifact_planning_current)
-        integrated_current = suite_budget.load_budget()
+        integrated_current = dict(suite_budget.load_budget(), max_test_source_lines=155219)
         self.assertEqual(integrated_current["max_test_source_lines"], 155219)
         for prior in (workspace_current, response_contract_current):
             self.assertIsNone(suite_budget.check_monotonic(integrated_current, prior))
             self._assert_source_limit_neighbors_rejected(integrated_current, prior)
+        consensus_policy_current = suite_budget.load_budget()
+        self.assertEqual(consensus_policy_current["max_test_source_lines"], 155318)
+        self.assertIsNone(suite_budget.check_monotonic(consensus_policy_current, integrated_current))
+        self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, consensus_policy_current, dict(consensus_policy_current, max_test_source_lines=152814))
+        self._assert_source_limit_neighbors_rejected(consensus_policy_current, integrated_current)
+        for field, value in (("schema_version", 2), ("max_sequential_wall_seconds", 18001), ("max_shard_wall_seconds", 3601)):
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(consensus_policy_current, **{field: value}), integrated_current)
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, consensus_policy_current, dict(integrated_current, **{field: value}))
+        for caps in (
+            {key: value for key, value in consensus_policy_current["subtest_caps"].items() if key != zero_id},
+            {**consensus_policy_current["subtest_caps"], "tests.unreviewed.Case.test_extra": 0},
+            {**consensus_policy_current["subtest_caps"], matrix_id: 2},
+            {**consensus_policy_current["subtest_caps"], matrix_id: 0},
+        ):
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(consensus_policy_current, subtest_caps=caps), integrated_current)
+        self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, consensus_policy_current, dict(integrated_current, subtest_caps={**integrated_current["subtest_caps"], matrix_id: 2}))
+
         ids = runner_profile.HOSTED_METHOD_IDS
         self.assertEqual(runner_evidence.manifest(ids)["digest"],
                          'sha256:6b7a6aee7e6557ef274a6ff18f3205c75132e0b1e043d3f4de11ff075e104a54')

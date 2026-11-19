@@ -1340,3 +1340,24 @@ controller graph는1,688간선이며 module index는299행이다. 단순히 두 
 전체2,544개 ID와 cap-map/cap합8,690·실제 subTest8,340·hosted163개/30클래스·399weight·
 최대4worker 및18,000/3,600초 상한을 유지한다. 실제 실행 결과·현재 source identity·
 전체 CI·리뷰 종료는 별도 완료 조건이며, 통합 전 C4의 시간 판단을 새 head의 성공으로 쓰지 않는다.
+
+### #1049 Consensus 의미 소유권 분리의 소스 전이
+
+#1049는 기존 세 정의의 의미 법칙을 실제 도메인 owner 3개·공개 API 15개로 옮긴다.
+기존 Case·ID·subTest cap·fixture·profile·weight·launch와 시간·worker 상한은 유지한다.
+사용자의 모든 이슈에 대한 소스 행 추가 사전 승인을 적용한다.
+
+- 정확 source-only 전이는 **155,219 → 155,318행(+99)**이다.
+- raw **149,079** + support **4,689** + legacy **1,550** = **155,318**이다.
+- 기존 mapper consumer/import 전이 **+1**, 기존 API·export·namespace·graph·packaging
+  검증 **+82**, 기존 예산 정책 Case **+16**을 각각 공개한다.
+- generic `suite_budget.py`의 정확 전이 분기는 별도 **ordinary 17 / physical 17행**이다.
+  이 비용은 위 canonical charge 밖이며, 기존 support/legacy credit으로 재계상하지 않는다.
+- 기존 source 전이 이력·음성 검증·schema와 tuple 계약을 유지한다. 새 strict pair는
+  **155,219 → 155,318**만 추가하고 인접 source 값 및 Case/subTest·시간 완화는 거부한다.
+
+같은 테스트 파일의 기존 Root handoff consumer 때문에 원래 collection 단계의
+`StoryRuntime` import는 유지한다. 순수 mapper 호출은 실제 공개 owner로 옮기되,
+파일 전체의 Root import 독립이나 준비 비용 제거를 주장하지 않는다.
+개발 정책 검증에는 승인된 목적별 시간 기준을 적용하고 실제 비용을 기록한다.
+Story runtime·CLI·I/O·process·자원 수명 기능의 실제 회귀 기준은 완화하지 않는다.

@@ -39,6 +39,7 @@ from story_writing_agents.models import (
     AgentReplyNextPhase,
 )
 from story_writing_agents.orchestrator import StoryRuntime
+from story_writing_agents.consensus import provider_reply_mapping
 from story_writing_agents.reply_trace import ReplyTrace, ReplyTraceOrigin
 
 from tests.test_collaboration_events import _reviewed_artifact_proposal
@@ -112,7 +113,7 @@ class ConsensusRuntimeCorrelationTests(unittest.TestCase):
         reply = replace(AgentReply.candidate("r0", content), trace=trace)
         authored = candidate_material_handle(hashlib.sha256(content.encode()).hexdigest())
 
-        result = StoryRuntime.map_consensus_provider_reply(invocation, reply, authored_material=authored,)
+        result = provider_reply_mapping.map_consensus_provider_reply(invocation, reply, authored_material=authored,)
 
         self.assertEqual(result.trace, trace)
 
@@ -174,7 +175,7 @@ class ConsensusRuntimeCorrelationTests(unittest.TestCase):
         )
         for invocation, reply, material, kind, verdict, next_phase in routes:
             with self.subTest(phase=invocation.phase):
-                result = StoryRuntime.map_consensus_provider_reply(invocation, reply, authored_material=material,)
+                result = provider_reply_mapping.map_consensus_provider_reply(invocation, reply, authored_material=material,)
                 self.assertIs(result.kind, kind)
                 self.assertIs(result.audit_verdict, verdict)
                 self.assertIs(result.next_phase, next_phase)
@@ -192,11 +193,11 @@ class ConsensusRuntimeCorrelationTests(unittest.TestCase):
     def test_synthesis_next_phase_deadlock_and_mismatches_are_fail_closed(self) -> None:
         invocation = _invocation(ConsensusPhase.SYNTHESIS, LEAD_ORCHESTRATOR, 1)
         finalization = AgentReply.synthesis("r0", "ready", AgentReplyNextPhase.FINALIZATION)
-        mapped = StoryRuntime.map_consensus_provider_reply(invocation, finalization)
+        mapped = provider_reply_mapping.map_consensus_provider_reply(invocation, finalization)
         self.assertIs(mapped.next_phase, ConsensusPhase.FINALIZATION)
 
         deadlock = AgentReply.deadlock("r0", "three audits cannot be reconciled")
-        mapped_deadlock = StoryRuntime.map_consensus_provider_reply(invocation, deadlock)
+        mapped_deadlock = provider_reply_mapping.map_consensus_provider_reply(invocation, deadlock)
         self.assertIs(mapped_deadlock.kind, ConsensusPhaseOutputKind.DEADLOCK)
         self.assertTrue(mapped_deadlock.deadlocked)
         self.assertIs(mapped_deadlock.candidate_material, _CANDIDATE)
@@ -216,7 +217,7 @@ class ConsensusRuntimeCorrelationTests(unittest.TestCase):
         for candidate_invocation, reply, material in invalid:
             with self.subTest(invocation=candidate_invocation, reply=reply):
                 with self.assertRaises(ValueError):
-                    StoryRuntime.map_consensus_provider_reply(
+                    provider_reply_mapping.map_consensus_provider_reply(
                         candidate_invocation,
                         reply,
                         authored_material=material,
@@ -225,7 +226,7 @@ class ConsensusRuntimeCorrelationTests(unittest.TestCase):
     def test_runtime_fallback_maps_draft_failure_and_later_deadlocks(self) -> None:
         fallback = AgentReply.deadlock("r0", "provider response rejected twice")
 
-        draft = StoryRuntime.map_consensus_provider_reply(
+        draft = provider_reply_mapping.map_consensus_provider_reply(
             _invocation(ConsensusPhase.DRAFT, EXECUTION_SPECIALIST, 1),
             fallback,
         )
@@ -238,7 +239,7 @@ class ConsensusRuntimeCorrelationTests(unittest.TestCase):
             (ConsensusPhase.FINALIZATION, LEAD_ORCHESTRATOR),
         ):
             with self.subTest(phase=phase):
-                result = StoryRuntime.map_consensus_provider_reply(_invocation(phase, agent_id, 1), fallback,)
+                result = provider_reply_mapping.map_consensus_provider_reply(_invocation(phase, agent_id, 1), fallback,)
                 self.assertIs(result.kind, ConsensusPhaseOutputKind.DEADLOCK)
                 self.assertIs(result.candidate_material, _CANDIDATE)
                 self.assertTrue(result.deadlocked)
@@ -246,7 +247,7 @@ class ConsensusRuntimeCorrelationTests(unittest.TestCase):
                 self.assertIsNone(fallback.reviewed_proposal_digest)
 
         with self.assertRaisesRegex(ValueError, "cannot retain authored material"):
-            StoryRuntime.map_consensus_provider_reply(
+            provider_reply_mapping.map_consensus_provider_reply(
                 _invocation(ConsensusPhase.REPAIR, EXECUTION_SPECIALIST, 1),
                 fallback,
                 authored_material=_CANDIDATE,
@@ -256,7 +257,7 @@ class ConsensusRuntimeCorrelationTests(unittest.TestCase):
         reviewed = _reviewed_artifact_proposal()
         invocation = _invocation(ConsensusPhase.FINALIZATION, LEAD_ORCHESTRATOR, 1)
         reply = AgentReply.finalization("r0", reviewed.proposal_id, reviewed.proposal_digest)
-        result = StoryRuntime.map_consensus_provider_reply(invocation, reply)
+        result = provider_reply_mapping.map_consensus_provider_reply(invocation, reply)
         projection = SimpleNamespace(current_artifact_state=ArtifactProposalState.REVIEWED,
             current_reviewed_artifact_proposal=reviewed, current_artifact_application_request=None,
             current_artifact_application_result=None)
@@ -272,7 +273,7 @@ class ConsensusRuntimeCorrelationTests(unittest.TestCase):
         for proposal_id, digest in (("different-proposal", reviewed.proposal_digest),
                                     (reviewed.proposal_id, "sha256:" + "f" * 64)):
             stale = AgentReply.finalization("r0", proposal_id, digest)
-            stale_result = StoryRuntime.map_consensus_provider_reply(invocation, stale)
+            stale_result = provider_reply_mapping.map_consensus_provider_reply(invocation, stale)
             with self.assertRaises(ValueError):
                 StoryRuntime.consensus_artifact_review_handoff(runtime, invocation, stale, stale_result)
         projection.current_artifact_application_request = object()
