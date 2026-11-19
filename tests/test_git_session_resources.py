@@ -853,7 +853,7 @@ class GitSessionResourceRestartTests(GitSessionResourceGitTestCase):
         ).stdout.decode().strip()
         for owner, hook, ref, target in (
             (SessionInspectionData, "verify_main", "refs/heads/main", advanced),
-            (SessionResourceInspector, "facts", recovered.identity.internal_ref, baseline),
+            (SessionResourceInspector, "classify", recovered.identity.internal_ref, baseline),
         ):
             previous = self.run_git(root, "rev-parse", ref).stdout.decode().strip()
             original = getattr(owner, hook)
