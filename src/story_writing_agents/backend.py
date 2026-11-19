@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import story_writing_agents.backend_reply_decoding as backend_reply_decoding
+import story_writing_agents.provider_session_claim_guard as provider_session_claim_guard
 import story_writing_agents.provider_session_timestamps as provider_session_timestamps
 import story_writing_agents.provider_thread_records as provider_thread_records
 from .agents import LEAD_ORCHESTRATOR
@@ -18,7 +19,6 @@ from .provider_response_mapping import (
 import asyncio
 import atexit
 import contextvars
-import errno
 import hashlib
 import inspect
 import json
@@ -26,7 +26,6 @@ import os
 import re
 import shutil
 import socket
-import stat
 import tempfile
 import threading
 import time
@@ -44,22 +43,6 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping, TypeVar
-
-if os.name == "posix":
-    try:
-        import fcntl as _fcntl
-    except ImportError:
-        _fcntl = None
-else:
-    _fcntl = None
-
-if os.name == "nt":
-    try:
-        import msvcrt as _msvcrt
-    except ImportError:
-        _msvcrt = None
-else:
-    _msvcrt = None
 
 from .agents import ROSTER
 from .structured_output_validation import (
@@ -145,7 +128,6 @@ from .errors import (
     SessionOwnershipUnknownError,
     SessionPausedError,
     WorkspaceFormatError,
-    WorkspaceSecurityError,
     WorkspaceVersionUnsupportedError,
 )
 from .git.session_contracts import GitSessionResourceInspection
@@ -230,7 +212,6 @@ _SESSION_DIRECTORY = "agent_states/orchestrator_state/provider_sessions"
 _CONTEXT_REFERENCE_TERMINATED_ATTRIBUTE = "_context_reference_terminated"
 _ACCESS_CLAIM_GUARD = f"{_SESSION_DIRECTORY}/.access-claims.lock"
 _UNSUPPORTED_V1_ACCESS_CLAIM_GUARD = f"{_SESSION_DIRECTORY}/.lease-claims.lock"
-_WINDOWS_LOCK_RETRY_SECONDS = 0.05
 _ACCESS_DIAGNOSTIC_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
 
 
@@ -3029,7 +3010,9 @@ class AgentBackend:
                 "updated_at": now,
                 "provider_threads": {},
             }
-            with self._access_claim_guard():
+            with provider_session_claim_guard.access_claim_guard(
+                self.workspace, _SESSION_DIRECTORY, _ACCESS_CLAIM_GUARD,
+            ):
                 self._reject_unsupported_access_artifacts(session)
                 if self._manifest_exists(session):
                     self._read_manifest(session, missing_ok=False)
@@ -6442,7 +6425,9 @@ class AgentBackend:
         relative = self._access_claim_relative(session)
         token = uuid.uuid4().hex
         value = self._new_access_claim(session, token)
-        with self._access_claim_guard():
+        with provider_session_claim_guard.access_claim_guard(
+            self.workspace, _SESSION_DIRECTORY, _ACCESS_CLAIM_GUARD,
+        ):
             try:
                 self.workspace.write_json(relative, value, overwrite=False)
                 return token
@@ -6468,238 +6453,14 @@ class AgentBackend:
             self.workspace.write_json(relative, value)
             return token
 
-    @contextmanager
-    def _access_claim_guard(self) -> Iterator[None]:
-        """Serialize one complete provider-session access claim transaction."""
-
-        descriptor = self._open_access_claim_guard()
-        locked = False
-        active_error: BaseException | None = None
-        try:
-            try:
-                self._lock_access_claim_guard(descriptor)
-            except BackendProtocolError:
-                raise
-            except Exception as exc:
-                raise BackendProtocolError(
-                    "provider session access claim guard could not be locked: "
-                    f"{type(exc).__name__}"
-                ) from None
-            locked = True
-            self._verify_access_claim_guard(descriptor)
-            yield
-        except BaseException as exc:
-            active_error = exc
-            raise
-        finally:
-            unlock_error: BaseException | None = None
-            if locked:
-                try:
-                    self._unlock_access_claim_guard(descriptor)
-                except BaseException as exc:
-                    unlock_error = exc
-            close_error: BaseException | None = None
-            try:
-                os.close(descriptor)
-            except BaseException as exc:
-                close_error = exc
-            cleanup_error: BaseException | None = None
-            if unlock_error is not None:
-                cleanup_error = (
-                    unlock_error
-                    if not isinstance(unlock_error, Exception)
-                    else BackendProtocolError(
-                        "provider session access claim guard could not be unlocked: "
-                        f"{type(unlock_error).__name__}"
-                    )
-                )
-            if close_error is not None:
-                translated_close_error = (
-                    close_error
-                    if not isinstance(close_error, Exception)
-                    else BackendProtocolError(
-                        "provider session access claim guard could not be closed: "
-                        f"{type(close_error).__name__}"
-                    )
-                )
-                if cleanup_error is None:
-                    cleanup_error = translated_close_error
-                else:
-                    cleanup_error.add_note(str(translated_close_error))
-            # A normal body exit has committed the claim. Never turn that into
-            # a false claim failure: successful close releases the advisory lock,
-            # while an ambiguous close is not retried and the token returns so the
-            # caller can track and release access. Exceptional work keeps its
-            # original error and receives only bounded cleanup notes.
-            if cleanup_error is not None and active_error is not None:
-                active_error.add_note(str(cleanup_error))
-
-    def _open_access_claim_guard(self) -> int:
-        """Open, secure, verify, and platform-initialize the claim guard.
-
-        The caller owns the returned descriptor. Setup failures close it before
-        propagating a bounded backend or workspace error.
-        """
-
-        _, target = self._access_claim_guard_paths()
-        flags = os.O_CREAT | os.O_RDWR
-        for flag_name in (
-            "O_CLOEXEC",
-            "O_NOINHERIT",
-            "O_BINARY",
-            "O_NOFOLLOW",
-        ):
-            flags |= getattr(os, flag_name, 0)
-        try:
-            descriptor = os.open(target, flags, 0o600)
-        except OSError as exc:
-            raise BackendProtocolError(
-                "provider session access claim guard could not be opened: "
-                f"{type(exc).__name__}"
-            ) from None
-
-        try:
-            try:
-                os.set_inheritable(descriptor, False)
-            except Exception as exc:
-                raise BackendProtocolError(
-                    "provider session access claim guard could not be secured: "
-                    f"{type(exc).__name__}"
-                ) from None
-            self._verify_access_claim_guard(descriptor)
-            if _fcntl is None and _msvcrt is not None:
-                self._initialize_windows_access_claim_guard(descriptor)
-            return descriptor
-        except BaseException as exc:
-            try:
-                os.close(descriptor)
-            except OSError as close_error:
-                exc.add_note(
-                    "provider session access claim guard close failed: "
-                    f"{type(close_error).__name__}"
-                )
-            raise
-
-    def _access_claim_guard_paths(self) -> tuple[Path, Path]:
-        """Resolve safe guard parent and file paths without creating either.
-
-        Unsafe paths or a missing/non-directory parent raise workspace errors.
-        """
-
-        try:
-            parent = self.workspace.path(_SESSION_DIRECTORY)
-            target = self.workspace.path(_ACCESS_CLAIM_GUARD)
-        except WorkspaceSecurityError:
-            raise WorkspaceFormatError(
-                "provider session access claim guard path is unsafe"
-            ) from None
-        if not parent.is_dir():
-            raise WorkspaceFormatError(
-                "provider session access claim guard parent is not a directory"
-            )
-        return parent, target
-
-    def _verify_access_claim_guard(self, descriptor: int) -> None:
-        """Verify both guard references are regular and, when meaningful, identical.
-
-        Inspection failures raise ``BackendProtocolError``; unsafe type or
-        identity changes raise ``WorkspaceFormatError``.
-        """
-
-        _, target = self._access_claim_guard_paths()
-        try:
-            opened = os.fstat(descriptor)
-            pathname = os.stat(target, follow_symlinks=False)
-        except OSError as exc:
-            raise BackendProtocolError(
-                "provider session access claim guard could not be inspected: "
-                f"{type(exc).__name__}"
-            ) from None
-        if not stat.S_ISREG(opened.st_mode) or not stat.S_ISREG(pathname.st_mode):
-            raise WorkspaceFormatError(
-                "provider session access claim guard is not a regular file"
-            )
-        opened_identity = (opened.st_dev, opened.st_ino)
-        pathname_identity = (pathname.st_dev, pathname.st_ino)
-        identity_is_meaningful = any((*opened_identity, *pathname_identity))
-        if identity_is_meaningful and opened_identity != pathname_identity:
-            raise WorkspaceFormatError(
-                "provider session access claim guard identity changed"
-            )
-
-    @staticmethod
-    def _initialize_windows_access_claim_guard(descriptor: int) -> None:
-        """Ensure a Windows one-byte lock region exists and rewind the file.
-
-        The guard is written only when empty; seek or write failures become
-        ``BackendProtocolError``.
-        """
-
-        try:
-            if os.fstat(descriptor).st_size == 0:
-                os.lseek(descriptor, 0, os.SEEK_SET)
-                if os.write(descriptor, b"\0") != 1:
-                    raise OSError("short guard initialization write")
-            os.lseek(descriptor, 0, os.SEEK_SET)
-        except OSError as exc:
-            raise BackendProtocolError(
-                "provider session access claim guard could not be initialized: "
-                f"{type(exc).__name__}"
-            ) from None
-
-    @staticmethod
-    def _lock_access_claim_guard(descriptor: int) -> None:
-        """Acquire the platform advisory lock for a guard descriptor.
-
-        POSIX acquisition blocks; Windows contention is retried. Unsupported
-        platforms raise ``BackendProtocolError`` and other OS errors propagate.
-        """
-
-        if _fcntl is not None:
-            _fcntl.flock(descriptor, _fcntl.LOCK_EX)
-            return
-        if _msvcrt is None:
-            raise BackendProtocolError(
-                "provider session access claim guard is unsupported on this platform"
-            )
-        contention_errors = {
-            errno.EACCES,
-            getattr(errno, "EDEADLK", errno.EACCES),
-        }
-        while True:
-            os.lseek(descriptor, 0, os.SEEK_SET)
-            try:
-                _msvcrt.locking(descriptor, _msvcrt.LK_NBLCK, 1)
-                return
-            except OSError as exc:
-                if exc.errno not in contention_errors:
-                    raise
-                time.sleep(_WINDOWS_LOCK_RETRY_SECONDS)
-
-    @staticmethod
-    def _unlock_access_claim_guard(descriptor: int) -> None:
-        """Release the platform advisory lock for a guard descriptor.
-
-        Unsupported platforms raise ``BackendProtocolError``; OS failures
-        propagate to the claim-guard cleanup policy.
-        """
-
-        if _fcntl is not None:
-            _fcntl.flock(descriptor, _fcntl.LOCK_UN)
-            return
-        if _msvcrt is None:
-            raise BackendProtocolError(
-                "provider session access claim guard is unsupported on this platform"
-            )
-        os.lseek(descriptor, 0, os.SEEK_SET)
-        _msvcrt.locking(descriptor, _msvcrt.LK_UNLCK, 1)
-
     def _release_access_claim(self, session_id: str, token: str) -> None:
         """Guard, compare, and remove only this backend's exact access claim."""
 
         session = self.workspace.validate_identifier(session_id)
         relative = self._access_claim_relative(session)
-        with self._access_claim_guard():
+        with provider_session_claim_guard.access_claim_guard(
+            self.workspace, _SESSION_DIRECTORY, _ACCESS_CLAIM_GUARD,
+        ):
             self._reject_unsupported_access_artifacts(session)
             target = self.workspace.path(relative)
             if not target.exists():
