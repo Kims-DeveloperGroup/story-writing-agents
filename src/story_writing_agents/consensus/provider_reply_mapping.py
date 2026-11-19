@@ -63,7 +63,7 @@ def map_consensus_provider_reply(
     digest = hashlib.sha256(
         json.dumps(
             {
-                "content": reply.content,
+                "content": reply.content + "\n",
                 "deadlocked": reply.deadlocked,
                 "kind": reply.kind.value,
                 "next_phase": (
