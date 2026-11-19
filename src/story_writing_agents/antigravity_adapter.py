@@ -620,7 +620,7 @@ class AntigravityAdapter:
                 descriptor,
                 diagnostic=diagnostic,
             )
-            remaining = memoryview(content)
+            remaining = memoryview(content + b"\n")
             write_failed = False
             try:
                 while remaining:
