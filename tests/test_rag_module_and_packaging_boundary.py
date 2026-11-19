@@ -49,6 +49,7 @@ from story_writing_agents.consensus import (
     authoring_qualification,
 )
 from story_writing_agents import authoring_admission
+from story_writing_agents import antigravity_adapter, antigravity_rules
 from story_writing_agents.lead_preparation import recommendation_preparation, recommendation_requests
 from story_writing_agents.lead_preparation import recommendation_decisions
 from story_writing_agents.lead_task_transitions import LeadTaskRef
@@ -379,8 +380,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 317)
-        self.assertEqual(len(edges), 1938)
+        self.assertEqual(len(modules), 318)
+        self.assertEqual(len(edges), 1939)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -1889,6 +1890,9 @@ class RagModuleBoundaryTests(unittest.TestCase):
         ):
             self.assertEqual({target for source, target in edges if source == owner.__name__}, expected_targets)
             self.assertEqual({source for source, target in edges if target == owner.__name__}, expected_sources)
+        antigravity_rules_owner = "story_writing_agents.antigravity_rules"
+        self.assertEqual({target for source, target in edges if source == antigravity_rules_owner}, set())
+        self.assertEqual({source for source, target in edges if target == antigravity_rules_owner}, {"story_writing_agents.antigravity_adapter"})
 
 
     def test_supported_module_surfaces_do_not_expand_the_root_facade(self) -> None:
@@ -2110,6 +2114,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             (provider_reply_mapping, ('map_consensus_provider_reply',)),
             (provider_request_policy, ('require_running_consensus_request', 'consensus_provider_phase', 'review_only_audit_event', 'consensus_continuation_context', 'consensus_expected_reviewed_proposal', 'consensus_agent_request', 'consensus_authored_material_required', 'consensus_report_material_required')),
             (authoring_qualification, ('consensus_lineage_changed', 'record_consensus_lineage_hop', 'consensus_admission_inputs', 'manuscript_admission_source', 'consensus_admission_source_fact', 'qualify_consensus_authoring_sources')),
+            (antigravity_rules, ("read_rules_source", "install_rules")),
         ):
             self.assertEqual(set(owner.__all__), set(exported))
             actual = {name for name, value in vars(owner).items()
@@ -2203,6 +2208,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
             (authoring_qualification, 'manuscript_admission_source', ('handle', 'snapshots', 'facts'), (), {}, False),
             (authoring_qualification, 'consensus_admission_source_fact', ('alias', 'kind', 'handle', 'text', 'revision_digest'), (), {}, False),
             (authoring_qualification, 'qualify_consensus_authoring_sources', ('identity', 'workflow_id', 'material', 'assessment', 'input_kind', 'direction_material', 'ruling_material', 'source_revision_id', 'authoring_target', 'facts'), ('input_kind', 'direction_material', 'ruling_material', 'source_revision_id', 'authoring_target', 'facts'), {}, False),
+            (antigravity_rules, "read_rules_source", ("source",), (), {}, True),
+            (antigravity_rules, "install_rules", ("target", "content"), (), {}, True),
         ):
             function = getattr(owner, function_name)
             self.assertEqual(function.__qualname__, function_name)
@@ -2276,6 +2283,16 @@ class RagModuleBoundaryTests(unittest.TestCase):
         ):
             self.assertNotIn(name, story_writing_agents.__all__)
             self.assertFalse(hasattr(story_writing_agents, name))
+        self.assertIs(get_type_hints(antigravity_rules.read_rules_source)["source"], Path)
+        self.assertIs(get_type_hints(antigravity_rules.read_rules_source)["return"], bytes)
+        self.assertIs(get_type_hints(antigravity_rules.install_rules)["target"], Path)
+        self.assertIs(get_type_hints(antigravity_rules.install_rules)["content"], bytes)
+        self.assertIs(get_type_hints(antigravity_rules.install_rules)["return"], type(None))
+        self.assertIs(antigravity_rules.os, antigravity_adapter.os)
+        self.assertFalse(hasattr(antigravity_adapter.AntigravityAdapter, "_read_rules_source"))
+        self.assertFalse(hasattr(antigravity_adapter.AntigravityAdapter, "_install_rules"))
+        self.assertNotIn("read_rules_source", story_writing_agents.__all__)
+        self.assertNotIn("install_rules", story_writing_agents.__all__)
 
 
 class RagPackagingBoundaryTests(unittest.TestCase):
@@ -2532,6 +2549,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             "story_writing_agents/consensus/provider_reply_mapping.py",
             "story_writing_agents/consensus/provider_request_policy.py",
             "story_writing_agents/consensus/authoring_qualification.py",
+            "story_writing_agents/antigravity_rules.py",
             )
             with zipfile.ZipFile(story_wheel) as archive:
                 for package_path in group_package_paths:

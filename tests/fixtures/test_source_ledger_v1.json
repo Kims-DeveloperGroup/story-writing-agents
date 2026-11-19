@@ -1643,6 +1643,57 @@
         "new_Cases_scenarios_subTests_IDmoves_receipts_weights_profiles": 0,
         "counting": "Preserve original Issue1049 155219 to155318 (+99) and merged Main974 155219 to155394 (+175) histories. Combined source155510 adds17 counted ordinary rows to the existing BudgetCase for both exact parent floors and adjacent/schema/time/caps negatives. Both parent cases, caps, fixture lifetimes and registry remain; shared graph expectations use the actual combined scanner scopes."
       }
+    },
+    {
+      "issue": 1059,
+      "origin_commit": "ef92fa9738178c1708a5597e20e3838afd913444",
+      "origins": [
+        {
+          "source": "tests/test_antigravity_adapter.py",
+          "sha256": "5f79f3609a00e0895af79f44f96e9e5a9740f0f66919ac812b2055bc2574735b",
+          "source_ranges": [
+            [
+              538,
+              659
+            ],
+            [
+              1054,
+              1183
+            ],
+            [
+              710,
+              812
+            ],
+            [
+              137,
+              138
+            ]
+          ],
+          "declarations": [
+            "test_binding_is_stable_isolated_and_uses_private_custom_agent",
+            "test_command_stdin_paths_and_fresh_resume_results_are_exact",
+            "test_mode_failures_are_best_effort_but_controls_propagate",
+            "_expected_antigravity_role"
+          ],
+          "destinations": [
+            "tests/test_antigravity_rules.py"
+          ],
+          "counting": "Three existing decorator-inclusive whole methods into plain definitions; same function aliases on original concrete TestCase. Sole two-row helper moves once. Original Case IDs, MRO, setup/cleanup, assertions and cap map remain."
+        }
+      ],
+      "approved_source_delta": 73,
+      "planned_raw_delta": 73,
+      "planned_support_delta": 0,
+      "legacy_unresolved_lines": 1550,
+      "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
+      "generic_tooling_physical_delta_excluded": 17,
+      "cost_components": {
+        "definition_headers_imports_class_canonical_aliases_and_same_fake_lookup_net": 29,
+        "existing_RAG_API_graph_packaging": 18,
+        "existing_BudgetCase_definition_and_strict_source_checks": 26
+      },
+      "counting": "Actual raw149344/support4689/legacy1550=155583; exact source-only155510 to155583. No ID-receipt, Case/profile/weight/launch rekey or fixture prewarm. Generic exact guard17 ordinary/physical rows remains outside the frozen source charge. Absolute owner import produces canonical318/1939, relative-only318/1935, controller318/1802.",
+      "CI_correction": "Restore original future-annotations flag and canonical ProcessRequest supplier in the actual definition module; +1 raw row. Failed155582 candidate remains only in immutable prior evidence, not a stable source guard/history pair."
     }
   ]
 }
