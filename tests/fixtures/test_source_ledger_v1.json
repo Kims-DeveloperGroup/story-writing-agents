@@ -1694,6 +1694,70 @@
       },
       "counting": "Actual raw149344/support4689/legacy1550=155583; exact source-only155510 to155583. No ID-receipt, Case/profile/weight/launch rekey or fixture prewarm. Generic exact guard17 ordinary/physical rows remains outside the frozen source charge. Absolute owner import produces canonical318/1939, relative-only318/1935, controller318/1802.",
       "CI_correction": "Restore original future-annotations flag and canonical ProcessRequest supplier in the actual definition module; +1 raw row. Failed155582 candidate remains only in immutable prior evidence, not a stable source guard/history pair."
+    },
+{
+  "issue": 1060,
+  "origin_commit": "a78d2ec85a3aadc71a592589790dd908c99d72c8",
+  "origins": [
+    {
+      "source": "tests/test_codex_backend.py",
+      "sha256": "c72681b0892acdb37ae403111c093c3f89dfa03ec78028030112aec821cb2639",
+      "source_ranges": [
+        [
+          5834,
+          5902
+        ],
+        [
+          7473,
+          7589
+        ],
+        [
+          7591,
+          7623
+        ],
+        [
+          380,
+          383
+        ],
+        [
+          386,
+          400
+        ],
+        [
+          499,
+          511
+        ],
+        [
+          514,
+          517
+        ],
+        [
+          520,
+          522
+        ]
+      ],
+      "destination": "tests/test_backend_reply_decoding.py",
+      "counting": "Three whole existing method definitions (219 physical source rows) and five original producers move once; public producer renames and public runtime decoder call transports only. Canonical direct function aliases retain Case IDs, MRO, fixture lifetime, assertions and caps5/13/0."
     }
+  ],
+  "approved_source_delta": 104,
+  "planned_raw_delta": 104,
+  "planned_support_delta": 0,
+  "legacy_unresolved_lines": 1550,
+  "exact_source_pair": [
+    155583,
+    155687
+  ],
+  "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
+  "generic_tooling_ordinary_delta_excluded": 17,
+  "generic_tooling_physical_delta_excluded": 17,
+  "cost_components": {
+    "definitions_public_producers_imports_aliases_net": 24,
+    "existing_RAG_API_graph_packaging": 46,
+    "existing_BudgetCase_definition_and_strict_source_checks": 34
+  },
+  "counting": "Source-only allocation. No Case IDs, caps, receipts, profile, weight, launch or shard changes. Original compiler future annotations and nested code flags preserved. Existing historical stages remain physically unchanged; actual generic exact-pair guard rows are outside frozen source count."
+}
+
   ]
 }

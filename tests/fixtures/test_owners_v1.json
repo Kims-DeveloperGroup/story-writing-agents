@@ -2082,6 +2082,7 @@
         "lead-fixtures.preparation-data",
         "tests.test_agent_context_accounting",
         "tests.test_agent_exchange_viewer",
+        "tests.test_backend_reply_decoding",
         "tests.test_specialist_routing_runtime"
       ]
     },
@@ -6720,6 +6721,8 @@
         "tests.lead_preparation.test_specialist_response_semantics",
         "tests.test_antigravity_adapter",
         "tests.test_antigravity_rules",
+        "tests.test_backend_reply_decoding",
+        "tests.test_codex_backend",
         "tests.test_specialist_orchestration_execution"
       ]
     },
@@ -19272,6 +19275,50 @@
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_mode_failures_are_best_effort_but_controls_propagate"
       ],
       "depends_on": []
+    },
+    {
+      "name": "backend.reply-decoding",
+      "boundary": "existing-cases",
+      "paths": [
+        "src/story_writing_agents/backend_reply_decoding.py"
+      ],
+      "focused_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_strict_phase_reply_mapping",
+        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_decoder_rejects_malformed_duplicate_and_schema_errors",
+        "tests.test_codex_backend.CodexBackendTestCase.test_conversation_projects_exact_payload_schema_and_no_artifacts"
+      ],
+      "affected_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_antigravity_public_operations_use_provider_neutral_diagnostics",
+        "tests.test_codex_backend.CodexBackendTestCase.test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread",
+        "tests.test_codex_backend.CodexBackendTestCase.test_conversation_projects_exact_payload_schema_and_no_artifacts",
+        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_decoder_rejects_malformed_duplicate_and_schema_errors",
+        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_read_explicit_null_is_not_an_omitted_end_sequence",
+        "tests.test_codex_backend.CodexBackendTestCase.test_strict_phase_reply_mapping",
+        "tests.test_codex_backend.ConversationModelContractTests.test_exact_frozen_slotted_models_and_converse_signature",
+        "tests.test_codex_backend.ConversationModelContractTests.test_retrieval_bound_signature_and_sync_handler_protocol_are_exact"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "tests.test_backend_reply_decoding",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/test_backend_reply_decoding.py"
+      ],
+      "focused_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_strict_phase_reply_mapping",
+        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_decoder_rejects_malformed_duplicate_and_schema_errors",
+        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_read_explicit_null_is_not_an_omitted_end_sequence"
+      ],
+      "affected_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_strict_phase_reply_mapping",
+        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_decoder_rejects_malformed_duplicate_and_schema_errors",
+        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_read_explicit_null_is_not_an_omitted_end_sequence"
+      ],
+      "depends_on": [
+        "context-execution-fixture",
+        "lead-fixtures.material-values"
+      ]
     }
   ],
   "ignored_names": [
