@@ -1757,6 +1757,36 @@
     "existing_BudgetCase_definition_and_strict_source_checks": 34
   },
   "counting": "Source-only allocation. No Case IDs, caps, receipts, profile, weight, launch or shard changes. Original compiler future annotations and nested code flags preserved. Existing historical stages remain physically unchanged; actual generic exact-pair guard rows are outside frozen source count."
+},
+{
+  "issue": 1063,
+  "origin_commit": "7b4020428617ddc00eb9a69ecb70e9467613cbba",
+  "origins": [
+    {
+      "source": "tests/test_agent_policy_composition.py",
+      "sha256": "2499f968e2c3ee41d93e71c6e40342c91dd6bd919b4a5524caa0e9b2779f04f5"
+    },
+    {
+      "source": "tests/test_antigravity_adapter.py",
+      "sha256": "1ffb37b53382ef75b1ba7394de5adce67062b49898cd4900df040dccddd511d2"
+    }
+  ],
+  "approved_source_delta": 30,
+  "planned_raw_delta": 30,
+  "planned_support_delta": 0,
+  "legacy_unresolved_lines": 1550,
+  "exact_source_pair": [
+    155687,
+    155717
+  ],
+  "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
+  "generic_tooling_ordinary_delta_excluded": 0,
+  "generic_tooling_physical_delta_excluded": 0,
+  "cost_components": {
+    "existing_RAG_API_graph_packaging": 26,
+    "existing_BudgetCase_strict_source_pair": 4
+  },
+  "counting": "raw149448\u2192149478, support4689, 1550 legacy. Existing Case/subTest/worker limits retained."
 }
 
   ]

@@ -19,7 +19,7 @@ from story_writing_agents.agents import (
     behavior_policy_files,
 )
 from story_writing_agents.antigravity_adapter import AntigravityAdapter
-from story_writing_agents.codex_adapter import CodexAdapter
+from story_writing_agents.codex_definition_sources import read_definition_source
 from story_writing_agents.errors import WorkspaceFormatError
 from story_writing_agents.prompts import PromptAssembler
 
@@ -142,7 +142,7 @@ class AgentPolicyCompositionTests(unittest.TestCase):
         for component in definition.behavior_policy_components:
             component.path.write_text("MUTATED_AFTER_BINDING", encoding="utf-8")
 
-        codex_bytes, codex_components = CodexAdapter._definition_file(definition)
+        codex_bytes, codex_components = read_definition_source(definition)
         antigravity_bytes, antigravity_components = AntigravityAdapter._definition_file(definition)
         permission_text = b" ".join(captured.split())
         self.assertIn(b"Do not invoke tools except the bound provider's required structured-result delivery mechanism", permission_text)
