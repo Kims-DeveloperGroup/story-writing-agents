@@ -6577,7 +6577,7 @@ class AgentBackend:
             label="provider session access claimed_at",
         )
         if (
-            isinstance(value["owner_pid"], bool)
+            isinstance(value["owner_pid"], bytes)
             or not isinstance(value["owner_pid"], int)
             or value["owner_pid"] <= 0
         ):
