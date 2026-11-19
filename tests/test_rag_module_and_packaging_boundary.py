@@ -32,6 +32,11 @@ from story_writing_agents.lead_preparation import (
     collaboration_response_decoding,
     lead_material_inputs,
     outcome_decoding,
+    call_rule_factory,
+    lead_answer_authority,
+    lead_document_nodes,
+    lead_evidence_receipts,
+    lead_front_values,
 )
 import story_writing_agents
 from story_writing_agents import conversations
@@ -366,8 +371,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 284)
-        self.assertEqual(len(edges), 1709)
+        self.assertEqual(len(modules), 286)
+        self.assertEqual(len(edges), 1754)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -1045,6 +1050,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             "story_writing_agents.conversations.events", "story_writing_agents.interactive_terminal._collaboration_view",
             "story_writing_agents.artifact_transactions.artifact_application_authority", "story_writing_agents.lead_preparation.outcome_decoding",
             "story_writing_agents.lead_execution.known_result_finalization",
+            'story_writing_agents.lead_preparation.lead_answer_authority',
             "story_writing_agents.lead_preparation.call_rule_factory", "story_writing_agents.lead_provider_contracts", "story_writing_agents.orchestrator"})
         self.assertIn("story_writing_agents.document_plan", modules)
         self.assertEqual({target for source, target in edges if source == "story_writing_agents.document_plan"}, {
@@ -1067,6 +1073,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         'story_writing_agents.lead_preparation.lead_task_control',
             'story_writing_agents.lead_preparation.artifact_objective_planning',
             'story_writing_agents.lead_preparation.lead_consultation_planning',
+            'story_writing_agents.lead_preparation.call_rule_factory',
+            'story_writing_agents.lead_preparation.lead_front_values',
             'story_writing_agents.lead_preparation.lead_material_inputs',
                                                                                                                  })
         self.assertIn("story_writing_agents.blocking_work", modules)
@@ -1134,6 +1142,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             'story_writing_agents.lead_preparation.current_lead_inputs',
             'story_writing_agents.lead_preparation.lead_source_qualification',
             'story_writing_agents.lead_preparation.review_material_validation',
+            'story_writing_agents.lead_preparation.lead_front_values',
             'story_writing_agents.orchestrator',
         })
         lead_evidence_receipts = "story_writing_agents.lead_preparation.lead_evidence_receipts"
@@ -1144,6 +1153,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             "story_writing_agents.lead_preparation",
             "story_writing_agents.lead_preparation.reply_contract_values",
             "story_writing_agents.specialist_routing",
+            'story_writing_agents.lead_preparation.authoring_authority',
             "story_writing_agents.structured_output_validation",
         })
         self.assertEqual({source for source, target in edges if target == lead_evidence_receipts}, {
@@ -1258,6 +1268,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             'story_writing_agents.lead_preparation',
             'story_writing_agents.lead_preparation.authoring_authority',
             'story_writing_agents.specialist_routing',
+            'story_writing_agents.lead_preparation.reply_contract_values',
             'story_writing_agents.writing_artifacts',
         })
         self.assertEqual({source for source, target in edges if target == lead_document_nodes}, {"story_writing_agents.orchestrator"})
@@ -1580,6 +1591,9 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 'story_writing_agents.lead_preparation',
                 'story_writing_agents.lead_preparation.reply_contract_values',
                 'story_writing_agents.lead_provider_contracts',
+                'story_writing_agents.lead_exploration',
+                'story_writing_agents.lead_preparation.response_rules',
+                'story_writing_agents.lead_task_transitions',
                 'story_writing_agents.specialist_routing',
             }, {'story_writing_agents.orchestrator'}),
             (collaboration_response_decoding, {
@@ -1604,6 +1618,38 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 'story_writing_agents.lead_task_transitions',
                 'story_writing_agents.specialist_routing',
             }, {'story_writing_agents.conversations.context', 'story_writing_agents.orchestrator'}),
+            (lead_answer_authority, {
+                'story_writing_agents.agent_context.actions',
+                'story_writing_agents.agent_context.manifest',
+                'story_writing_agents.artifact_proposals',
+                'story_writing_agents.authoring_admission',
+                'story_writing_agents.conversations.context',
+                'story_writing_agents.conversations.event_vocabulary',
+                'story_writing_agents.conversations.events',
+                'story_writing_agents.lead_exploration',
+                'story_writing_agents.lead_premise_decisions',
+                'story_writing_agents.lead_preparation',
+                'story_writing_agents.lead_preparation.authoring_authority',
+                'story_writing_agents.lead_preparation.reply_contract_values',
+                'story_writing_agents.lead_provider_contracts',
+                'story_writing_agents.lead_task_transitions',
+                'story_writing_agents.review_contracts',
+                'story_writing_agents.specialist_routing',
+                'story_writing_agents.structured_output_validation',
+            }, {'story_writing_agents.orchestrator'}),
+            (lead_front_values, {
+                'story_writing_agents.agent_task_projection',
+                'story_writing_agents.authoring_admission',
+                'story_writing_agents.conversations.context',
+                'story_writing_agents.conversations.event_vocabulary',
+                'story_writing_agents.conversations.events',
+                'story_writing_agents.document_plan',
+                'story_writing_agents.lead_preparation',
+                'story_writing_agents.lead_preparation.lead_material_inputs',
+                'story_writing_agents.lead_preparation.reply_contract_values',
+                'story_writing_agents.lead_provider_contracts',
+                'story_writing_agents.specialist_routing',
+            }, {'story_writing_agents.orchestrator'}),
         ):
             self.assertEqual({target for source, target in edges if source == owner.__name__}, expected_targets)
             self.assertEqual({source for source, target in edges if target == owner.__name__}, expected_sources)
@@ -1766,8 +1812,45 @@ class RagModuleBoundaryTests(unittest.TestCase):
         self.assertIsInstance(specialist_advisory_values.ADVISORY_USER_IMPACT, str)
         for owner, exported in (
             (collaboration_response_decoding, ('decode_artifact_synthesis', 'decode_specialist_reply', 'decode_lead_synthesis', 'required_unresolved_input_ids', 'decode_continuation_intent', 'normalize_locked_collaboration_answer')),
-            (collaboration_response_contracts, ('specialist_result_contract', 'lead_synthesis_result_contract', 'LEAD_CORRECTABLE_RESPONSE_REJECTION_CODES', 'LEAD_RESPONSE_CORRECTION_INSTRUCTION')),
+            (collaboration_response_contracts, ('specialist_result_contract', 'lead_synthesis_result_contract', 'LEAD_CORRECTABLE_RESPONSE_REJECTION_CODES', 'LEAD_RESPONSE_CORRECTION_INSTRUCTION', 'prepare_lead_rule_seed')),
             (artifact_revision_sources, ('artifact_revision_source',)),
+            (lead_answer_authority, (
+                'discussion_report',
+                'exploration_answer_content',
+                'authority_free_response',
+                'validate_premise_reviewers',
+                'superseding_recommendation',
+                'validate_selected_preparation',
+                'offered_authoring_scope',
+                'transition_source_request',
+                'retained_transition_source',
+                'validate_current_scope',
+                'scope_interpretation',
+                'objective_scope',
+                'validate_preliminary_targets',
+                'validate_nonworkflow_answer',
+                'resolved_proposal_intent',
+                'validate_user_task_selection',
+                'validate_adoption_answer',
+                'adoption_review_assignments',
+                'validate_premise_answer',
+                'validate_authoring_admission_inputs',
+                'validate_proposal_relation',
+                'validate_artifact_request',
+                'validate_premise_question',
+            )),
+            (lead_front_values, (
+                'lead_front_material_prefix',
+                'lead_front_material_suffix',
+                'recommendation_preparation_material',
+            )),
+            (lead_document_nodes, (
+                'document_plan_views',
+                'validate_document_node',
+                'automatic_document_node',
+                'document_candidate_inputs',
+                'validate_document_target',
+            )),
         ):
             self.assertEqual(set(owner.__all__), set(exported))
             actual = {name for name, value in vars(owner).items()
@@ -1791,6 +1874,37 @@ class RagModuleBoundaryTests(unittest.TestCase):
             (premise_preparation, 'premise_synthesis_result', ('proposal', 'attempt_id', 'ids', 'replies', 'summary', 'report'), (), {}, False),
             (outcome_decoding, 'diagnose_collaboration_fallback', ('answer',), (), {}, True),
             (collaboration_response_decoding, 'normalize_locked_collaboration_answer', ('answer', 'constraints'), (), {}, False),
+            (lead_answer_authority, 'discussion_report', ('value', 'authorization', 'task_transition', 'task_receipt'), (), {}, False),
+            (lead_answer_authority, 'exploration_answer_content', ('value', 'request_event_id', 'artifact_reads'), (), {}, False),
+            (lead_answer_authority, 'authority_free_response', ('value', 'spec', 'binding_pinned'), (), {}, False),
+            (lead_answer_authority, 'validate_premise_reviewers', ('intent', 'materialized'), (), {}, False),
+            (lead_answer_authority, 'superseding_recommendation', ('decoded', 'request', 'interpretation', 'inputs'), (), {}, False),
+            (lead_answer_authority, 'validate_selected_preparation', ('decoded', 'prepare_selected'), (), {}, False),
+            (lead_answer_authority, 'offered_authoring_scope', ('decoded', 'admission', 'offered_tasks'), (), {}, False),
+            (lead_answer_authority, 'transition_source_request', ('receipt', 'selected_prior', 'scope', 'session_id', 'step_id', 'conversation_id'), (), {}, False),
+            (lead_answer_authority, 'retained_transition_source', ('projection', 'failure', 'receipt', 'selected_prior'), (), {}, False),
+            (lead_answer_authority, 'validate_current_scope', ('selected_prior', 'selected_current', 'retained_transition_source'), (), {}, False),
+            (lead_answer_authority, 'scope_interpretation', ('scope', 'target_prior', 'provisional_brief_refinement'), (), {}, False),
+            (lead_answer_authority, 'objective_scope', ('decoded', 'scope', 'projection'), (), {}, False),
+            (lead_answer_authority, 'validate_preliminary_targets', ('review', 'scope', 'targets'), (), {}, False),
+            (lead_answer_authority, 'validate_nonworkflow_answer', ('decoded', 'scope', 'evidence'), (), {}, False),
+            (lead_answer_authority, 'resolved_proposal_intent', ('intent', 'declared_scope', 'resolved_scope'), (), {}, False),
+            (lead_document_nodes, 'validate_document_target', ('scope', 'target_path'), (), {}, True),
+            (lead_answer_authority, 'validate_user_task_selection', ('decoded', 'receipt', 'source_review_revision', 'source_artifact_revision', 'selected_document_review_path', 'task_material_events'), (), {}, False),
+            (lead_answer_authority, 'validate_adoption_answer', ('decoded', 'scope', 'capture'), (), {}, False),
+            (lead_answer_authority, 'adoption_review_assignments', ('intent', 'inputs'), (), {}, False),
+            (lead_answer_authority, 'validate_premise_answer', ('decoded', 'scope', 'capture'), (), {}, False),
+            (lead_answer_authority, 'validate_authoring_admission_inputs', ('decoded', 'historical_user_sources', 'source_scope'), (), {}, False),
+            (lead_answer_authority, 'validate_proposal_relation', ('intent', 'expected_relation'), (), {}, False),
+            (lead_answer_authority, 'validate_artifact_request', ('decoded', 'scope', 'expected_relation'), (), {}, False),
+            (lead_evidence_receipts, 'read_reviewer_inputs', ('receipts',), (), {}, True),
+            (lead_answer_authority, 'validate_premise_question', ('intent', 'premise_question_id'), (), {}, False),
+            (collaboration_response_contracts, 'prepare_lead_rule_seed', ('discussion_only', 'discussion_constraints', 'expected_relation', 'inputs', 'offered_tasks', 'constraints', 'successor_only', 'task_receipt', 'revision_source_scope', 'source_artifact_revision', 'selected_document_review_path', 'interaction_mode'), ('discussion_only', 'discussion_constraints', 'expected_relation', 'inputs', 'offered_tasks', 'constraints', 'successor_only', 'task_receipt', 'revision_source_scope', 'source_artifact_revision', 'selected_document_review_path', 'interaction_mode'), {}, False),
+            (outcome_decoding, 'diagnose_lead_answer', ('answer', 'discussion_constraints', 'discussion_only', 'constraints', 'read_ids', 'read_reviewers', 'interaction_mode'), ('discussion_constraints', 'discussion_only', 'constraints', 'read_ids', 'read_reviewers', 'interaction_mode'), {}, True),
+            (call_rule_factory, 'front_constraints', ('inputs', 'task_material_events', 'historical_user_sources', 'readiness_pin', 'offered_tasks', 'successor_only', 'objective_projection', 'conversation_id', 'preparation_request', 'is_revision', 'preparation_present', 'premise_question_id', 'adoption_capture', 'document_selection', 'document_node', 'selected_path'), ('inputs', 'task_material_events', 'historical_user_sources', 'readiness_pin', 'offered_tasks', 'successor_only', 'objective_projection', 'conversation_id', 'preparation_request', 'is_revision', 'preparation_present', 'premise_question_id', 'adoption_capture', 'document_selection', 'document_node', 'selected_path'), {}, True),
+            (lead_front_values, 'lead_front_material_prefix', ('document_selection', 'document_node', 'candidate_material', 'conversation_id', 'constraints', 'historical_user_sources', 'objective_projection'), (), {}, False),
+            (lead_front_values, 'lead_front_material_suffix', ('objective_projection', 'objective_events', 'binding_prior', 'ordinary_front_cap', 'successor_only', 'inputs'), (), {}, False),
+            (lead_front_values, 'recommendation_preparation_material', ('request_event', 'decision_event', 'start_event', 'inputs', 'candidate_material_by_input', 'objective_events'), (), {}, False),
         ):
             function = getattr(owner, function_name)
             self.assertEqual(function.__qualname__, function_name)
@@ -2099,6 +2213,8 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             "story_writing_agents/lead_preparation/review_material_validation.py",
             "story_writing_agents/lead_preparation/collaboration_response_contracts.py",
             "story_writing_agents/lead_preparation/collaboration_response_decoding.py",
+            "story_writing_agents/lead_preparation/lead_answer_authority.py",
+            "story_writing_agents/lead_preparation/lead_front_values.py",
             "story_writing_agents/conversations/artifact_revision_sources.py",
             )
             with zipfile.ZipFile(story_wheel) as archive:

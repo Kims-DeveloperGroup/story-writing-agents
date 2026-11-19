@@ -22,6 +22,14 @@ from ..specialist_routing import (
     SpecialistAssignmentMode,
 )
 from . import reply_contract_values
+from ..conversations.events import CollaborationInputRevision
+from ..lead_provider_contracts import LeadDiscussionConstraints
+from ..lead_provider_contracts import LeadExplorationConstraints
+from ..lead_exploration import LeadInteractionMode
+from ..conversations.event_vocabulary import LeadProposalRelation
+from ..lead_task_transitions import LeadTaskTransitionReceipt
+from typing import Mapping
+from . import response_rules
 
 
 LEAD_CORRECTABLE_RESPONSE_REJECTION_CODES = frozenset(
@@ -190,9 +198,46 @@ def lead_synthesis_result_contract(
     )
 
 
+
+
+def prepare_lead_rule_seed(
+    *,
+    discussion_only: bool,
+    discussion_constraints: LeadDiscussionConstraints | None,
+    expected_relation: LeadProposalRelation,
+    inputs: tuple[CollaborationInputRevision, ...],
+    offered_tasks: Mapping[tuple[str, int], AuthoringScope | None],
+    constraints: LeadProviderConstraints | LeadExplorationConstraints,
+    successor_only: bool,
+    task_receipt: LeadTaskTransitionReceipt | None,
+    revision_source_scope: AuthoringScope | None,
+    source_artifact_revision: bool,
+    selected_document_review_path: str | None,
+    interaction_mode: LeadInteractionMode,
+) -> LeadResultRuleSeed:
+    return reply_contract_values.lead_discussion_result_contract(discussion_constraints) if discussion_only else response_rules.lead_revision_result_contract(
+        expected_relation,
+        tuple((item.input_id for item in inputs)),
+        tuple(offered_tasks),
+        constraints,
+        discussion_constraints,
+        fresh_revision_only=successor_only or (task_receipt is not None and task_receipt.target_task_id is not None),
+        source_scope=revision_source_scope,
+        artifact_revision_only=source_artifact_revision,
+        selected_document_review_path=selected_document_review_path,
+    ) if discussion_constraints is not None else reply_contract_values.lead_result_rule_seed("lead-exploration-response-v1", constraints.schema()) if interaction_mode is LeadInteractionMode.EXPLORATION else response_rules.lead_front_result_contract(
+            expected_relation,
+            tuple(item.input_id for item in inputs),
+            tuple(offered_tasks),
+            constraints=constraints,
+            fresh_revision_only=successor_only or (task_receipt is not None and task_receipt.target_task_id is not None),
+        )
+
+
 __all__ = (
     'specialist_result_contract',
     'lead_synthesis_result_contract',
     'LEAD_CORRECTABLE_RESPONSE_REJECTION_CODES',
     'LEAD_RESPONSE_CORRECTION_INSTRUCTION',
+    'prepare_lead_rule_seed',
 )

@@ -1226,40 +1226,43 @@ ordinary16행/physical17행 증가로 별도 공개한다.
 현행 소스 계상은 raw148,078 + counted support4,677 + 기존미확인1,550 = **154,305행**이다. 기준154,078 대비 총227행(raw224/support3)이며, 실패한 D154,264 이후41행을 포함한다. 필요한 추가 행은 사용자의 모든 이슈 소스 행 포괄 승인을 적용했다. 신규 Case·시나리오·subTest와 시간·worker 예외는 없다. 기존 범용 selector/runner 도구의 변경은 원래 계상 경계 밖의 비용으로 별도 공개하며, 테스트 본문/단언을 도구로 옮겨 누락시키지 않는다. receipt14는 두 실행 ID 재키잉을 취소한 moves0·전후 caps digest동일 상태이며, 앞선13개 단계의 원기록과 검증은 보존한다.
 
 
-## #1048 첫 응답 계약과 기존 의미 정의 분리 소스 배정
+## #1048 응답·요청 자료·Lead 의미 정책 분리 소스 배정
 
 사용자의 필요한 행 추가 포괄 승인을 적용한다. 수락 main
 `aac5d831437a5bcb4fdbc35f197eb3d4affb422b`의 raw148,544/support4,680/legacy1,550,
-합계154,774행에서 raw148,713/support4,689/legacy1,550, 합계154,952행으로
-정확히178행(raw169/support9)을 계상한다. 기존 네 Case의119물리행·35assert·cap3을
+합계154,774행에서 raw148,829/support4,689/legacy1,550, 합계155,068행으로
+정확히294행(raw285/support9)을 계상한다. 기존 네 Case의119물리행·35assert·cap3을
 정의 모듈로 옮기고 필수 helper3개를 단일 소유로 연결하며, 실제 공개 API·namespace·
 graph·packaging·선택/예산 경계의 기존 검증 비용을 포함한다. 이동 본문은 한 번만 세고
 기존 미확인1,550행과 이미 계상한 지원 코드를 공제하거나 다시 청구하지 않는다.
 
-source-only `154774→154952` 전이는 기존 schema1·Case2,544·각 ID/cap 및 전체 cap8,690의
+source-only `154774→155068` 전이는 기존 schema1·Case2,544·각 ID/cap 및 전체 cap8,690의
 동등성, 기존 시간18,000/3,600초와 함께 검증한다. 기존14개 이관 receipt·399 weight·
 163 profile/mixed19·30개 실행 클래스와 최대4worker를 바꾸지 않는다.
-`tests/suite_budget.py`의 새 정확 source 전이 guard17ordinary/17physical행은
-기존 frozen 계상 경계 밖의 물리 비용으로 별도 공개하며, 테스트/단언을 그곳으로 옮겨
-비용을 누락시키지 않는다. 신규 Case·시나리오·subTest·시간/worker 예외는 없다.
+`tests/suite_budget.py`의 정확 source 전이 guard17ordinary/17physical행은
+기존 frozen 계상 경계 밖의 물리 비용으로 별도 공개하며, stage3 추가분은0행이다.
+테스트/단언을 그곳으로 옮겨 비용을 누락시키지 않는다. 신규 Case·시나리오·subTest·
+시간/worker 예외는 없다.
 
-이 배정은 #1048의 현재 계약·요청 값 분리 비용이다. 같은 이슈의 host 후속 단계는 실제
-diff를 별도로 계상하며 이178행을 여유로 전용하지 않는다. Story runtime의 실제
-성능 회귀는 실패로 판단하고, 미세한 정상 측정 변동과 테스트 예산 정책 Case의
-전체 시간 영향에 관한 기존 사용자 기준을 유지한다.
+이 배정은 #1048의 현재 응답 계약·요청 값·Lead 의미 정책 분리 비용이다. 실제
+Story runtime 성능 회귀는 실패로 판단하고, 미세한 정상 측정 변동과 테스트 예산
+정책 Case의 전체 시간 영향에 관한 기존 사용자 기준을 유지한다. source 배정은
+최종 기능·성능·전체 CI·리뷰 성공이나 이슈 완료를 뜻하지 않는다.
 
-첫 커밋의140행 배정 뒤 기존 incoming 기대집합 누락2행을 보완해 stage1의142행으로
-정정했다. 중간154,914행의 관측과 실패는 PR 이력에 보존하며 현재 정확 전이만
-최신 계상으로 사용한다. 신규 세 모듈의 명시적 `__all__`22물리행은 production
-공개 경계 선언이며 테스트 소스 상한의 비용과 구분한다.
+stage1 첫 커밋140행 배정 뒤 기존 incoming 기대집합2행을 보완해142행으로 정정했다.
+stage2의9개 요청·전제·진단·정규화 API와 기존4owner 경계 검증은36raw행이다.
+이36행은 초기35행과 decoder의 실제 supplier 기대집합 보완1행을 포함한다.
+API qualname guard는 이름이 실제 바인딩된 기존 loop로 옮겨 단언과 물리 비용을 유지했다.
+stage1+stage2의 현재 전 단계 배정은178행(raw169/support9)이었다.
 
-stage2의 요청 값·전제 provenance/result·진단·scope 정규화9API를 기존4owner로
-옮기고 실제signature/주석스타일·graph14edge/incoming·owner 검증을 동기화해
-추가36raw행을 계상했다. 여기에는 초기35행과 기존 decoder graph 기대집합의
-필수 supplier 보완1행을 포함한다. API qualname guard는 실제 이름이 바인딩된
-기존 loop로 옮겨 단언과 물리 비용을 유지했다. 전체 #1048 현재 배정은178행이며 중간154,914/154,916은
-미통합 이슈의 관측 이력으로 보존한다. 새 aggregate guard를 중간값마다 누적하지
-않고 accepted main154,774에서 현재154,952로 가는 단일 정확 전이만 갱신한다.
-기존 material/outcome의 future annotation과 기존API 계약은 유지하며, 새6API의
-실제 canonical 타입 공급·get_type_hints와 나머지 eager API 검증을 구분한다.
-이 source 배정은 최종 기능·성능·전체 CI·리뷰의 성공을 뜻하지 않는다.
+stage3은 기존 Lead host 의미25개와 front 요청6개를 공개 owner에 연결한다. 필요한
+기존 RAG API table31행·module import5행·packaging 경로2행·명시 export37행·
+기존 supplier 기대집합9행·신규2owner graph32행, 합계116raw행을 추가 계상한다.
+전체 #1048 현재 배정은294행(raw285/support9)이다. 기존 module의 annotation 방식을
+보존하고 canonical 타입 공급·raw 주석 스타일·get_type_hints 검증을 구분한다.
+기존 assertion·부정 사례를 유지하며 실제 graph와 공개 경계에 검증을 맞춘다.
+
+중간154,914/154,916/154,951/154,952행 관측과 실패는 PR 이력에 보존한다.
+미통합 이슈의 중간값마다 source guard를 누적하지 않고 수락 main154,774에서 현재
+155,068로 가는 단일 정확 aggregate 전이만 갱신한다. 이후 실제 diff 비용과 기반 변경은
+정확히 다시 계상하며 이294행을 다른 작업의 여유나 예산 완화로 전용하지 않는다.

@@ -41,12 +41,15 @@ from ..document_plan import (
 from ..specialist_routing import AuthoringActivity, AuthoringIntent
 from ..writing_artifacts import ArtifactRenameOperation
 from . import authoring_authority
+from ..specialist_routing import AuthoringScope
+from . import reply_contract_values
 
 __all__ = (
-    "document_plan_views",
-    "validate_document_node",
-    "automatic_document_node",
-    "document_candidate_inputs",
+    'document_plan_views',
+    'validate_document_node',
+    'automatic_document_node',
+    'document_candidate_inputs',
+    'validate_document_target',
 )
 
 
@@ -273,3 +276,11 @@ def document_candidate_inputs(
             continue
         additions.append(expected)
     return (*inputs, *additions)
+
+
+def validate_document_target(
+    scope: AuthoringScope,
+    target_path: str,
+) -> None:
+    if scope.target_paths != (target_path,):
+        raise reply_contract_values.LeadOutcomeValidationError("document selection requires its exact disclosed target")

@@ -49,6 +49,20 @@ from ..agent_context.contracts.bound_call import (
 from ..backend import BoundAgent
 from ..errors import BackendProtocolError
 from ..writing_artifacts import parse_artifact_references
+from ..authoring_admission import AdmissionSource
+from ..conversations.event_vocabulary import ArtifactObjectiveState
+from ..specialist_routing import AuthoringScope
+from ..conversations.events import CollaborationEvent
+from ..conversations.context import CollaborationHistoryProjection
+from ..document_plan import DocumentNodeBinding
+from ..document_plan import DocumentNodeSelection
+from ..lead_exploration import ExplorationAdoptionCapture
+from ..conversations.events import LeadRecommendationRequestPayload
+from typing import Mapping
+from . import authoring_authority
+from ..document_plan import document_node_binding_to_dict
+from ..document_plan import document_node_selection_to_dict
+from ..document_plan import document_value_digest
 
 def provided_review_targets(inputs: tuple[CollaborationInputRevision, ...]) -> tuple[ReviewTarget, ...]:
     targets = []
@@ -397,3 +411,55 @@ def validated_context_provider_factory(
     ):
         raise BackendProtocolError("bound context_provider() must be synchronous")
     return factory
+
+
+def front_constraints(
+    *,
+    inputs: tuple[CollaborationInputRevision, ...],
+    task_material_events: tuple[CollaborationEvent, ...],
+    historical_user_sources: tuple[tuple[AdmissionSource, str], ...],
+    readiness_pin: str,
+    offered_tasks: Mapping[tuple[str, int], AuthoringScope | None],
+    successor_only: bool,
+    objective_projection: CollaborationHistoryProjection,
+    conversation_id: str,
+    preparation_request: LeadRecommendationRequestPayload | None,
+    is_revision: bool,
+    preparation_present: bool,
+    premise_question_id: str | None,
+    adoption_capture: ExplorationAdoptionCapture | None,
+    document_selection: DocumentNodeSelection | None,
+    document_node: DocumentNodeBinding | None,
+    selected_path: str | None,
+) -> LeadProviderConstraints:
+    constraints = LeadProviderConstraints(
+        per_assignment_input_ids=tuple(f"selected_material_{ordinal}" for ordinal in range(1, len(task_material_events) + 1)) + (("adopted_idea",) if adoption_capture is not None else ()),
+        input_ids=tuple(item.input_id for item in inputs),
+        historical_user_source_ids=tuple(source.source_id for source, _text in historical_user_sources),
+        readiness_source_basis_ref=readiness_pin,
+        reviewer_inputs=tuple(
+            (reviewer, item.input_id) for item in inputs
+            if item.kind in {CollaborationInputKind.CORE_DOCUMENT, CollaborationInputKind.MANUSCRIPT,
+                             CollaborationInputKind.WRITING_ARTIFACT}
+            for reviewer in (authoring_authority.core_reviewer(item.locator),) if reviewer is not None
+        ),
+        task_revisions=tuple(offered_tasks),
+        source_ids=() if successor_only else tuple(dict.fromkeys(("current_response",
+            *(item.event_id for item in objective_projection.offered_draft_sources),
+            *(item.input_id for item in inputs)))),
+        objective_ids=tuple(item.facts.objective_id for item in objective_projection.artifact_objectives
+            if item.state is ArtifactObjectiveState.OPEN
+            and item.facts.origin_conversation_id == conversation_id),
+        allow_read_sources=not preparation_present,
+        scope=(preparation_request.authoring_scope
+               if preparation_request is not None and not is_revision else None),
+        preparation_kind=None if preparation_request is None else preparation_request.kind.value,
+        preparation_objective_id=None if preparation_request is None else preparation_request.objective_id,
+        preparation_targets=() if preparation_request is None else preparation_request.target_paths,
+        preparation_specialists=() if preparation_request is None else preparation_request.specialist_ids,
+        recommendation_only=is_revision,
+        premise_question_id=premise_question_id,
+        adoption_intent=adoption_capture.selection.intent if adoption_capture is not None else None,
+        adoption_targets=adoption_capture.selection.target_paths if adoption_capture is not None else (),
+     preliminary_targets=provided_review_targets(inputs), document_node_digest=(document_value_digest(document_node_selection_to_dict(document_selection)) if document_selection is not None else None if document_node is None else document_value_digest(document_node_binding_to_dict(document_node))), document_target_paths=(None if selected_path is None else (selected_path,)))
+    return constraints

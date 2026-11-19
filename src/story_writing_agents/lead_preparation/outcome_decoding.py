@@ -59,6 +59,13 @@ from ..structured_output_validation import (
     validation_failure,
 )
 from . import reply_contract_values
+from ..lead_provider_contracts import LeadDiscussionConstraints
+from ..lead_provider_contracts import LeadExplorationConstraints
+from ..lead_exploration import LeadInteractionMode
+from ..lead_provider_contracts import LeadProviderConstraints
+from ..structured_output_validation import bounded_chunks
+from ..structured_output_validation import diagnose_json_text
+from . import outcome_decoding
 
 
 class _DuplicateJsonKey(ValueError):
@@ -702,3 +709,25 @@ def diagnose_collaboration_fallback(
     if type(value) is dict and not visible_text(value.get("message")):
         return (DomainValidationRule.MESSAGE_REQUIRED,)
     return (DomainValidationRule.LEAD_OUTCOME_REJECTED,)
+
+
+def diagnose_lead_answer(
+    answer: str,
+    *,
+    discussion_constraints: LeadDiscussionConstraints | None,
+    discussion_only: bool,
+    constraints: LeadProviderConstraints | LeadExplorationConstraints,
+    read_ids: tuple[str, ...],
+    read_reviewers: tuple[tuple[str, str], ...],
+    interaction_mode: LeadInteractionMode,
+) -> tuple[DomainValidationRule, ...]:
+    if discussion_constraints is not None:
+        try:
+            value = json.loads(answer)
+        except (ValueError, TypeError):
+            value = None
+        if discussion_only or (type(value) is dict and "writing_task_scope" not in value):
+            return bounded_chunks(diagnose_json_text(
+                answer, reply_contract_values.lead_discussion_result_contract(discussion_constraints).schema_value(),
+            ))
+    return constraints.diagnose(answer, read_ids=read_ids, read_reviewers=read_reviewers) or (() if interaction_mode is LeadInteractionMode.EXPLORATION else outcome_decoding.lead_outcome_validation_details(answer))
