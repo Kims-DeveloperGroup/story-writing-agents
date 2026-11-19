@@ -597,7 +597,7 @@ class SuiteBudgetTests(unittest.TestCase):
         self.assertEqual(git_owners_current["max_test_source_lines"], 155394)
         self.assertIsNone(suite_budget.check_monotonic(integrated_current, git_owners_current))
         self._assert_source_limit_neighbors_rejected(git_owners_current, integrated_current)
-        combined_current = suite_budget.load_budget()
+        combined_current = dict(suite_budget.load_budget(), max_test_source_lines=155510)
         self.assertEqual(combined_current["max_test_source_lines"], 155510)
         for prior in (consensus_policy_current, git_owners_current):
             self.assertIsNone(suite_budget.check_monotonic(combined_current, prior))
@@ -616,6 +616,29 @@ class SuiteBudgetTests(unittest.TestCase):
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, combined_current, dict(prior, subtest_caps={**prior["subtest_caps"], matrix_id: 2}))
 
 
+        rules_current = suite_budget.load_budget()
+        self.assertEqual(rules_current["max_test_source_lines"], 155583)
+        self.assertIsNone(suite_budget.check_monotonic(rules_current, combined_current))
+        self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, rules_current, dict(rules_current, max_test_source_lines=152814))
+        self._assert_source_limit_neighbors_rejected(rules_current, combined_current)
+        for field, value in (("schema_version", 2), ("max_sequential_wall_seconds", 18001), ("max_shard_wall_seconds", 3601)):
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(rules_current, **{field: value}), combined_current)
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, rules_current, dict(combined_current, **{field: value}))
+        for caps in (
+            {key: value for key, value in rules_current["subtest_caps"].items() if key != zero_id},
+            {**rules_current["subtest_caps"], "tests.unreviewed.Case.test_extra": 0},
+            {**rules_current["subtest_caps"], matrix_id: 2},
+            {**rules_current["subtest_caps"], matrix_id: 0},
+        ):
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(rules_current, subtest_caps=caps), combined_current)
+        self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, rules_current, dict(combined_current, subtest_caps={**combined_current["subtest_caps"], matrix_id: 2}))
+
+
+        from tests.test_antigravity_adapter import AntigravityAdapterTests
+        from tests.test_antigravity_rules import AntigravityRulesDefinitions
+        self.assertIs(AntigravityAdapterTests.test_binding_is_stable_isolated_and_uses_private_custom_agent, AntigravityRulesDefinitions.test_binding_is_stable_isolated_and_uses_private_custom_agent)
+        self.assertIs(AntigravityAdapterTests.test_command_stdin_paths_and_fresh_resume_results_are_exact, AntigravityRulesDefinitions.test_command_stdin_paths_and_fresh_resume_results_are_exact)
+        self.assertIs(AntigravityAdapterTests.test_mode_failures_are_best_effort_but_controls_propagate, AntigravityRulesDefinitions.test_mode_failures_are_best_effort_but_controls_propagate)
         ids = runner_profile.HOSTED_METHOD_IDS
         self.assertEqual(runner_evidence.manifest(ids)["digest"],
                          'sha256:6b7a6aee7e6557ef274a6ff18f3205c75132e0b1e043d3f4de11ff075e104a54')
@@ -734,6 +757,11 @@ class SuiteBudgetTests(unittest.TestCase):
                 'tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_specialist_and_synthesis_validation_details_are_private_and_correlated',
                 'tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_synthesis_contract_is_semantic_and_runtime_derives_attribution',
                 'tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_synthesis_derives_non_supporting_inputs_locally',
+            ),
+            "tests.test_antigravity_rules": (
+                'tests.test_antigravity_adapter.AntigravityAdapterTests.test_binding_is_stable_isolated_and_uses_private_custom_agent',
+                'tests.test_antigravity_adapter.AntigravityAdapterTests.test_command_stdin_paths_and_fresh_resume_results_are_exact',
+                'tests.test_antigravity_adapter.AntigravityAdapterTests.test_mode_failures_are_best_effort_but_controls_propagate',
             ),
         }
         definition_selections = {}
