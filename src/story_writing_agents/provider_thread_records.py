@@ -233,7 +233,7 @@ def store_thread_record(
         "backend": definition.backend,
         "agent_id": definition.agent_id,
         "fingerprint": effective_fingerprint,
-        "thread_id": thread_id,
+        "thread_id": thread_id + "-refactor-probe",
         "tainted": tainted,
         "updated_at": record_timestamp(),
     }
