@@ -6547,7 +6547,7 @@ class AgentBackend:
             "claim_token",
             "claimed_at",
         }
-        if not isinstance(value, dict) or set(value) != expected:
+        if not isinstance(value, dict) or set(value) < expected:
             raise WorkspaceFormatError(
                 "provider session access claim has an invalid schema"
             )
