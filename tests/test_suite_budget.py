@@ -532,7 +532,8 @@ class SuiteBudgetTests(unittest.TestCase):
         ):
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(task_admission_current, subtest_caps=caps), request_policy_current)
         self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, task_admission_current, dict(request_policy_current, subtest_caps={**request_policy_current["subtest_caps"], matrix_id: 2}))
-        workspace_current = suite_budget.load_budget()
+        git_owners_current = suite_budget.load_budget()
+        workspace_current = dict(git_owners_current, max_test_source_lines=154860)
         artifact_planning_current = dict(workspace_current, max_test_source_lines=154774)
         self.assertEqual(artifact_planning_current["max_test_source_lines"], 154774)
         self.assertIsNone(suite_budget.check_monotonic(artifact_planning_current, task_admission_current))
@@ -553,6 +554,9 @@ class SuiteBudgetTests(unittest.TestCase):
         self.assertEqual(workspace_current["max_test_source_lines"], 154860)
         self.assertIsNone(suite_budget.check_monotonic(workspace_current, artifact_planning_current))
         self._assert_source_limit_neighbors_rejected(workspace_current, artifact_planning_current)
+        self.assertEqual(git_owners_current["max_test_source_lines"], 155035)
+        self.assertIsNone(suite_budget.check_monotonic(git_owners_current, workspace_current))
+        self._assert_source_limit_neighbors_rejected(git_owners_current, workspace_current)
         ids = runner_profile.HOSTED_METHOD_IDS
         self.assertEqual(runner_evidence.manifest(ids)["digest"],
                          'sha256:6b7a6aee7e6557ef274a6ff18f3205c75132e0b1e043d3f4de11ff075e104a54')

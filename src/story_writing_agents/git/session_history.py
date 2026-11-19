@@ -44,12 +44,14 @@ from .session_history_contracts import (
     encode_checkpoint_operation,
     encode_commit_operation,
 )
-from .session_resources import (
+from .session_generation import (
     GitSessionGenerationIdentity,
     GitSessionGenerationPin,
-    GitSessionRecoveryTopology,
     acquire_locked_git_session_generation_pin,
     capture_locked_git_session_generation,
+)
+from .session_resources import (
+    GitSessionRecoveryTopology,
     require_ready_git_session_resources,
     require_ready_locked_git_session_resources,
     require_story_commit_recovery_locked_git_session_resources,

@@ -38,12 +38,14 @@ from ..git.session_contracts import (
     GitSessionResourceInspection,
     GitSessionResourceState,
 )
-from ..git.session_resources import (
+from ..git.session_generation import (
     GitSessionGenerationIdentity,
     GitSessionGenerationPin,
     acquire_git_session_generation_pin,
     capture_locked_git_session_generation,
     require_locked_git_session_untracked_prefix,
+)
+from ..git.session_resources import (
     require_ready_git_session_resources as _require_ready_git_session_resources,
     require_ready_locked_git_session_resources as _require_ready_locked_git_session_resources,
 )

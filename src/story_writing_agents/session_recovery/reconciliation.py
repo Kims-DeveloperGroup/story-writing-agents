@@ -36,8 +36,8 @@ from ..git.session_history_contracts import (
     GitSessionHistorySnapshot,
     GitSessionHistoryState,
 )
-from ..git.session_resources import GitSessionGenerationPin
-from ..git.story_commits import StoryCommitRecoverySnapshot
+from ..git.session_generation import GitSessionGenerationPin
+from ..git.story_commit_recovery import StoryCommitRecoverySnapshot
 from ..session_lifecycle import (
     SessionAccessState,
     SessionDurableState,

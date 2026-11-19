@@ -361,8 +361,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 293)
-        self.assertEqual(len(edges), 1718)
+        self.assertEqual(len(modules), 309)
+        self.assertEqual(len(edges), 1810)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -609,7 +609,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             "workspace.root_filesystem": {"errors"},
             "workspace.session_artifact_binding": {
                 "errors", "git", "git.repository_lock", "git.session_contracts",
-                "git.session_resources", "git.story_commits", "provider_execution_workspace",
+                "git.session_generation", "git.session_resources", "git.story_commits", "provider_execution_workspace",
                 "workspace.policy_scaffold", "workspace.root_contracts", "workspace.root_filesystem",
                 "workspace.session_role_projection", "writing_artifacts.repository",
             },
@@ -619,7 +619,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             },
             "workspace.session_resources": {
                 "git.session_checkpoints", "git.session_contracts", "git.session_history",
-                "git.session_resources", "git.story_commits", "workspace.policy_scaffold",
+                "git.session_generation", "git.session_resources", "git.story_commit_recovery", "workspace.policy_scaffold",
                 "workspace.root_contracts",
             },
         }
@@ -634,29 +634,42 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 owner,
             )
         git_dependencies = {
-            "story_writing_agents.git": {'story_writing_agents.git.adapter', 'story_writing_agents.git.contracts'},
+            "story_writing_agents.git": {
+                "story_writing_agents.git.adapter",
+                "story_writing_agents.git.contracts",
+            },
             "story_writing_agents.git.contracts": set(),
             "story_writing_agents.git.process": {
                 "story_writing_agents.git.contracts",
             },
             "story_writing_agents.git.adapter": {
+                "story_writing_agents.git.adapter_contracts",
+                "story_writing_agents.git.adapter_execution",
                 "story_writing_agents.git.contracts",
-                "story_writing_agents.git.process",
+                "story_writing_agents.git.external_operation_inspection",
+                "story_writing_agents.git.repository_baseline",
+                "story_writing_agents.git.repository_metadata",
+                "story_writing_agents.git.repository_topology",
             },
             "story_writing_agents.git.session_contracts": {
                 "story_writing_agents.git.contracts",
             },
             "story_writing_agents.git.session_resources": {
                 "story_writing_agents.git.contracts",
-                "story_writing_agents.git.inspection_objects",
-                "story_writing_agents.git.process",
                 "story_writing_agents.git.repository_lock",
                 "story_writing_agents.git.session_contracts",
+                "story_writing_agents.git.session_generation",
+                "story_writing_agents.git.session_provisioning",
+                "story_writing_agents.git.session_resource_files",
+                "story_writing_agents.git.session_resource_inspection",
+                "story_writing_agents.git.session_resource_repository",
+                "story_writing_agents.git.session_resource_values",
             },
             "story_writing_agents.git.story_commit_candidates": {
                 "story_writing_agents.git.contracts",
                 "story_writing_agents.git.process",
                 "story_writing_agents.git.session_contracts",
+                "story_writing_agents.git.session_generation",
                 "story_writing_agents.git.session_history",
                 "story_writing_agents.git.session_history_contracts",
                 "story_writing_agents.git.session_resources",
@@ -665,22 +678,141 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.writing_artifacts.repository",
             },
             "story_writing_agents.git.story_commits": {
-                "story_writing_agents.git.adapter",
                 "story_writing_agents.git.contracts",
                 "story_writing_agents.git.process",
                 "story_writing_agents.git.repository_lock",
                 "story_writing_agents.git.session_contracts",
+                "story_writing_agents.git.session_generation",
                 "story_writing_agents.git.session_history",
                 "story_writing_agents.git.session_history_contracts",
-                "story_writing_agents.git.session_resources",
                 "story_writing_agents.git.story_commit_candidates",
                 "story_writing_agents.git.story_commit_contracts",
+                "story_writing_agents.git.story_commit_git",
+                "story_writing_agents.git.story_commit_recovery",
+                "story_writing_agents.git.story_commit_session",
             },
         }
         for source, expected in git_dependencies.items():
             context = nullcontext() if source.endswith((".story_commit_candidates", ".story_commits")) else self.subTest(git_source=source)
             with context:
                 self.assertEqual({target for edge_source, target in edges if edge_source == source}, expected, source)
+        extracted_git_dependencies = {
+            "git.adapter_contracts": {
+                "git.contracts",
+            },
+            "git.adapter_execution": {
+                "git.adapter_contracts",
+                "git.contracts",
+                "git.process",
+            },
+            "git.external_operation_inspection": {
+                "git.adapter_contracts",
+                "git.contracts",
+            },
+            "git.repository_baseline": {
+                "git.adapter_contracts",
+                "git.adapter_execution",
+                "git.contracts",
+                "git.repository_topology",
+            },
+            "git.repository_metadata": {
+                "git.adapter_contracts",
+                "git.adapter_execution",
+                "git.contracts",
+                "git.external_operation_inspection",
+                "git.repository_topology",
+            },
+            "git.repository_topology": {
+                "git.adapter_contracts",
+                "git.adapter_execution",
+                "git.contracts",
+            },
+            "git.session_generation": {
+                "git.process",
+                "git.repository_lock",
+                "git.session_contracts",
+                "git.session_resource_files",
+                "git.session_resource_values",
+            },
+            "git.session_inspection_data": {
+                "git.contracts",
+                "git.inspection_objects",
+                "git.process",
+                "git.session_contracts",
+                "git.session_resource_files",
+                "git.session_resource_repository",
+                "git.session_resource_values",
+            },
+            "git.session_provisioning": {
+                "git.contracts",
+                "git.session_contracts",
+                "git.session_resource_files",
+                "git.session_resource_inspection",
+                "git.session_resource_repository",
+                "git.session_resource_values",
+            },
+            "git.session_resource_files": {
+                "git.session_contracts",
+                "git.session_resource_values",
+            },
+            "git.session_resource_inspection": {
+                "git.contracts",
+                "git.process",
+                "git.session_contracts",
+                "git.session_inspection_data",
+                "git.session_resource_files",
+                "git.session_resource_repository",
+                "git.session_resource_values",
+            },
+            "git.session_resource_repository": {
+                "git.contracts",
+                "git.process",
+                "git.repository_lock",
+                "git.session_contracts",
+                "git.session_resource_files",
+                "git.session_resource_values",
+            },
+            "git.session_resource_values": {
+                "git.contracts",
+                "git.session_contracts",
+            },
+            "git.story_commit_git": {
+                "git.adapter",
+                "git.contracts",
+                "git.process",
+                "git.session_contracts",
+                "git.session_history_contracts",
+                "git.story_commit_candidates",
+                "git.story_commit_contracts",
+                "git.story_commit_session",
+            },
+            "git.story_commit_recovery": {
+                "git.contracts",
+                "git.process",
+                "git.session_contracts",
+                "git.session_generation",
+                "git.session_history",
+                "git.session_history_contracts",
+                "git.session_resources",
+                "git.story_commit_candidates",
+                "git.story_commit_contracts",
+                "git.story_commit_git",
+                "git.story_commit_session",
+            },
+            "git.story_commit_session": {
+                "git.session_contracts",
+                "git.session_generation",
+                "git.session_history",
+                "git.session_history_contracts",
+                "git.story_commit_contracts",
+            },
+        }
+        for owner, expected in extracted_git_dependencies.items():
+            actual = {
+                target.removeprefix("story_writing_agents.")
+                for source, target in edges if source == f"story_writing_agents.{owner}"
+            }
+            self.assertEqual(actual, expected, owner)
         changed_storage_dependencies = {
             "story_writing_agents.conversation_storage.composition": {
                 "story_writing_agents.conversation_search",
