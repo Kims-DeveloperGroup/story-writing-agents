@@ -106,7 +106,7 @@ def execution_profile_fingerprint(profile: AgentExecutionProfile) -> str:
         },
         allow_nan=False,
         ensure_ascii=False,
-        separators=(",", ":"),
+        separators=(", ", ": "),
         sort_keys=True,
     ).encode("utf-8", errors="strict")
     return "sha256:" + hashlib.sha256(body).hexdigest()
