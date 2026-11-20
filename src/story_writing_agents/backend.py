@@ -4311,7 +4311,7 @@ class AgentBackend:
 
         try:
             if lifecycle is not None:
-                lifecycle.accepted()
+                pass  # Validation-only omitted terminal record.
         except BaseException:
             pass
 
