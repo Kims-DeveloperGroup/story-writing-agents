@@ -246,9 +246,14 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
-        command_preflight_current = suite_budget.load_budget()
+        exchange_finalization_current = suite_budget.load_budget()
+        *legacy_move_receipts, defaults_stage, wire_stage, stream_stage, invocation_stage, exchange_finalization_stage = load_receipt()
+        exchange_finalization_moves = exchange_finalization_stage["moves"]
+        command_preflight_current = dict(exchange_finalization_current, max_test_source_lines=156611,
+                                         subtest_caps=dict(exchange_finalization_current["subtest_caps"]))
+        for move in exchange_finalization_moves:
+            command_preflight_current["subtest_caps"][move["old_id"]] = command_preflight_current["subtest_caps"].pop(move["new_id"])
         invocation_current = dict(command_preflight_current, max_test_source_lines=156558)
-        *legacy_move_receipts, defaults_stage, wire_stage, stream_stage, invocation_stage = load_receipt()
         invocation_moves = invocation_stage["moves"]
         stream_current = dict(invocation_current, max_test_source_lines=156459, subtest_caps=dict(invocation_current["subtest_caps"]))
         for move in invocation_moves:
@@ -724,6 +729,8 @@ class SuiteBudgetTests(unittest.TestCase):
         self._assert_source_limit_neighbors_rejected(invocation_current, stream_current)
         self.assertIsNone(suite_budget.check_monotonic(command_preflight_current, invocation_current))
         self._assert_source_limit_neighbors_rejected(command_preflight_current, invocation_current)
+        self.assertIsNone(suite_budget.check_monotonic(exchange_finalization_current, command_preflight_current))
+        self._assert_source_limit_neighbors_rejected(exchange_finalization_current, command_preflight_current)
         invocation_caps = invocation_current["subtest_caps"]
         invocation_id = next(move["new_id"] for move in invocation_moves if move["subtest_cap"])
         for changed_caps in (
@@ -877,6 +884,19 @@ class SuiteBudgetTests(unittest.TestCase):
             selected = select_impact(real, paths=(path,))
             self.assertEqual(selected["focused_manifest"]["ordered_ids"], focused)
             self.assertEqual(selected["affected_manifest"]["ordered_ids"], affected)
+        self.assertTrue(all(move["old_id"] not in real.ids for move in exchange_finalization_moves))
+        for module, count in (
+            ("test_agent_exchange_capture_lifecycle", 6),
+            ("test_agent_exchange_provider_diagnostics", 7),
+        ):
+            moved = runner_selection.select(real, modules=[f"tests.{module}"])
+            expected = sorted(move["new_id"] for move in exchange_finalization_moves
+                              if move["destination"] == f"tests/{module}.py")
+            self.assertEqual(len(expected), count)
+            self.assertEqual(moved.ids, tuple(expected))
+            selected = select_impact(real, paths=(f"tests/{module}.py",))
+            self.assertEqual(selected["focused_manifest"]["ordered_ids"], expected)
+            self.assertEqual(selected["affected_manifest"]["ordered_ids"], expected)
         definitions = (
             ("tests.lead_preparation.test_specialist_advisory_scope", "SpecialistAdvisoryScopeCases",
              "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation",
