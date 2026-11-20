@@ -15248,6 +15248,165 @@
           ]
         }
       ]
+    },
+    {
+      "schema_version": 1,
+      "issue": 1091,
+      "origin_commit": "f8090ab80ea957afc5b7cf0c0c53bffbe221ce25",
+      "original_caps_sha256": "a49ec017285634e6e0be8e23c353dc9a2029e9edb7b67f7e637a9358991e4cbd",
+      "expected_caps_sha256": "34c1ce085f7c98e0fa9ddbee984b179cf8cebd6130c1abcb294145effcb56883",
+      "moves": [
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_codex_adapter_extract_stream_text_ignores_non_string_values",
+          "new_id": "tests.test_codex_adapter_streaming.CodexAdapterStreamingTests.test_codex_adapter_extract_stream_text_ignores_non_string_values",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_codex_adapter_streaming.py",
+          "original_file_sha256": "e4ed25c584f3b0faa71529958be8c47a2d9fb50fcebbf8b9766a2b7d447aa370",
+          "original_method_ast_sha256": "720b5b61ad32f8f34328263ed412afc57fb57f7c6077b4462a4e22f8a699640e",
+          "expected_method_ast_sha256": "720b5b61ad32f8f34328263ed412afc57fb57f7c6077b4462a4e22f8a699640e"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_codex_adapter_handles_id_less_items_independently",
+          "new_id": "tests.test_codex_adapter_streaming.CodexAdapterStreamingTests.test_codex_adapter_handles_id_less_items_independently",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_codex_adapter_streaming.py",
+          "original_file_sha256": "e4ed25c584f3b0faa71529958be8c47a2d9fb50fcebbf8b9766a2b7d447aa370",
+          "original_method_ast_sha256": "c1329abdde25348dd269fdf0cf00ed2cbbef3f4a4e6b03880bf8fb3819ae2bb8",
+          "expected_method_ast_sha256": "c1329abdde25348dd269fdf0cf00ed2cbbef3f4a4e6b03880bf8fb3819ae2bb8"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_codex_adapter_handles_structured_reasoning_and_cumulative_deltas",
+          "new_id": "tests.test_codex_adapter_streaming.CodexAdapterStreamingTests.test_codex_adapter_handles_structured_reasoning_and_cumulative_deltas",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_codex_adapter_streaming.py",
+          "original_file_sha256": "e4ed25c584f3b0faa71529958be8c47a2d9fb50fcebbf8b9766a2b7d447aa370",
+          "original_method_ast_sha256": "6fb4521a4bf3ed79e158d75532c8ef3393abd9e610106965e94299786bf9c74d",
+          "expected_method_ast_sha256": "6fb4521a4bf3ed79e158d75532c8ef3393abd9e610106965e94299786bf9c74d"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_codex_adapter_item_completed_retires_state_on_conflicting_descriptor",
+          "new_id": "tests.test_codex_adapter_streaming.CodexAdapterStreamingTests.test_codex_adapter_item_completed_retires_state_on_conflicting_descriptor",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_codex_adapter_streaming.py",
+          "original_file_sha256": "e4ed25c584f3b0faa71529958be8c47a2d9fb50fcebbf8b9766a2b7d447aa370",
+          "original_method_ast_sha256": "1d5cbd735ddec749990adec84e96ed3a4149262af4fc17c51aada84ccb961e60",
+          "expected_method_ast_sha256": "1d5cbd735ddec749990adec84e96ed3a4149262af4fc17c51aada84ccb961e60"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_codex_adapter_item_delta_derives_nested_type_and_fails_closed_on_unknown",
+          "new_id": "tests.test_codex_adapter_streaming.CodexAdapterStreamingTests.test_codex_adapter_item_delta_derives_nested_type_and_fails_closed_on_unknown",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_codex_adapter_streaming.py",
+          "original_file_sha256": "e4ed25c584f3b0faa71529958be8c47a2d9fb50fcebbf8b9766a2b7d447aa370",
+          "original_method_ast_sha256": "ce7cd2f3d8077ecb8eae410c278c05e4b438e72510ba87606a65be642ba63f76",
+          "expected_method_ast_sha256": "ce7cd2f3d8077ecb8eae410c278c05e4b438e72510ba87606a65be642ba63f76"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_codex_adapter_rejects_conflicting_or_mismatched_item_type_on_delta",
+          "new_id": "tests.test_codex_adapter_streaming.CodexAdapterStreamingTests.test_codex_adapter_rejects_conflicting_or_mismatched_item_type_on_delta",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_codex_adapter_streaming.py",
+          "original_file_sha256": "e4ed25c584f3b0faa71529958be8c47a2d9fb50fcebbf8b9766a2b7d447aa370",
+          "original_method_ast_sha256": "a82cdc6abdf019ab51accb2fcced930f5d231b6ac4a79ec85d35f548e4590063",
+          "expected_method_ast_sha256": "a82cdc6abdf019ab51accb2fcced930f5d231b6ac4a79ec85d35f548e4590063"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_codex_adapter_rejects_conflicting_top_level_and_nested_descriptors",
+          "new_id": "tests.test_codex_adapter_streaming.CodexAdapterStreamingTests.test_codex_adapter_rejects_conflicting_top_level_and_nested_descriptors",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_codex_adapter_streaming.py",
+          "original_file_sha256": "e4ed25c584f3b0faa71529958be8c47a2d9fb50fcebbf8b9766a2b7d447aa370",
+          "original_method_ast_sha256": "371786edc155bd07d0a5b2ffdcafa4219865d24b67a067cb7617874aebf3f4e3",
+          "expected_method_ast_sha256": "371786edc155bd07d0a5b2ffdcafa4219865d24b67a067cb7617874aebf3f4e3"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_codex_adapter_rejects_duplicate_keys_and_nonfinite_values_in_stream",
+          "new_id": "tests.test_codex_adapter_streaming.CodexAdapterStreamingTests.test_codex_adapter_rejects_duplicate_keys_and_nonfinite_values_in_stream",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_codex_adapter_streaming.py",
+          "original_file_sha256": "e4ed25c584f3b0faa71529958be8c47a2d9fb50fcebbf8b9766a2b7d447aa370",
+          "original_method_ast_sha256": "c70680dad88677d7e7407d3c4ff651812f7312b3b9d969ae2443c9faece58ad7",
+          "expected_method_ast_sha256": "c70680dad88677d7e7407d3c4ff651812f7312b3b9d969ae2443c9faece58ad7"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_codex_adapter_rejects_explicit_null_or_non_string_item_type_on_delta",
+          "new_id": "tests.test_codex_adapter_streaming.CodexAdapterStreamingTests.test_codex_adapter_rejects_explicit_null_or_non_string_item_type_on_delta",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_codex_adapter_streaming.py",
+          "original_file_sha256": "e4ed25c584f3b0faa71529958be8c47a2d9fb50fcebbf8b9766a2b7d447aa370",
+          "original_method_ast_sha256": "5eea0d89c5a66581d176b09e407e38cd2226ab739566c58a7514b1b8ada4cb8d",
+          "expected_method_ast_sha256": "5eea0d89c5a66581d176b09e407e38cd2226ab739566c58a7514b1b8ada4cb8d"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_codex_adapter_rejects_invalid_utf8_in_stream_line",
+          "new_id": "tests.test_codex_adapter_streaming.CodexAdapterStreamingTests.test_codex_adapter_rejects_invalid_utf8_in_stream_line",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_codex_adapter_streaming.py",
+          "original_file_sha256": "e4ed25c584f3b0faa71529958be8c47a2d9fb50fcebbf8b9766a2b7d447aa370",
+          "original_method_ast_sha256": "cbb2951a3e8aabb4c87bcae1412a542638068139b7f603b73cb465e56d3262d7",
+          "expected_method_ast_sha256": "cbb2951a3e8aabb4c87bcae1412a542638068139b7f603b73cb465e56d3262d7"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_codex_adapter_rejects_resurrected_completed_item_id_with_explicit_type",
+          "new_id": "tests.test_codex_adapter_streaming.CodexAdapterStreamingTests.test_codex_adapter_rejects_resurrected_completed_item_id_with_explicit_type",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_codex_adapter_streaming.py",
+          "original_file_sha256": "e4ed25c584f3b0faa71529958be8c47a2d9fb50fcebbf8b9766a2b7d447aa370",
+          "original_method_ast_sha256": "2ba3be26717bb39481f7d79f77c2e0ef1abd1eacdde55a40da362a7f74a70bed",
+          "expected_method_ast_sha256": "2ba3be26717bb39481f7d79f77c2e0ef1abd1eacdde55a40da362a7f74a70bed"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_codex_adapter_retires_both_candidate_ids_on_conflicting_id_descriptor",
+          "new_id": "tests.test_codex_adapter_streaming.CodexAdapterStreamingTests.test_codex_adapter_retires_both_candidate_ids_on_conflicting_id_descriptor",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_codex_adapter_streaming.py",
+          "original_file_sha256": "e4ed25c584f3b0faa71529958be8c47a2d9fb50fcebbf8b9766a2b7d447aa370",
+          "original_method_ast_sha256": "049b26cc75785245bbe3ce42bc298fc285fb53aced6621a5f28bcf3fdcd1bf51",
+          "expected_method_ast_sha256": "049b26cc75785245bbe3ce42bc298fc285fb53aced6621a5f28bcf3fdcd1bf51"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_codex_adapter_retires_top_level_id_on_item_completed_with_missing_nested_item",
+          "new_id": "tests.test_codex_adapter_streaming.CodexAdapterStreamingTests.test_codex_adapter_retires_top_level_id_on_item_completed_with_missing_nested_item",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_codex_adapter_streaming.py",
+          "original_file_sha256": "e4ed25c584f3b0faa71529958be8c47a2d9fb50fcebbf8b9766a2b7d447aa370",
+          "original_method_ast_sha256": "edff537b66bb0a03fe6e154ad04af98f19f54e2530564d7c54037af86d722c38",
+          "expected_method_ast_sha256": "edff537b66bb0a03fe6e154ad04af98f19f54e2530564d7c54037af86d722c38"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_codex_adapter_streams_item_delta_and_avoids_completed_replay",
+          "new_id": "tests.test_codex_adapter_streaming.CodexAdapterStreamingTests.test_codex_adapter_streams_item_delta_and_avoids_completed_replay",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_codex_adapter_streaming.py",
+          "original_file_sha256": "e4ed25c584f3b0faa71529958be8c47a2d9fb50fcebbf8b9766a2b7d447aa370",
+          "original_method_ast_sha256": "f8103195b59b37f8e87118d4f2f20aad0acc1136fb20deea7adbe4b1a2eb51cf",
+          "expected_method_ast_sha256": "f8103195b59b37f8e87118d4f2f20aad0acc1136fb20deea7adbe4b1a2eb51cf"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_codex_adapter_streams_status_reasoning_and_message_events",
+          "new_id": "tests.test_codex_adapter_streaming.CodexAdapterStreamingTests.test_codex_adapter_streams_status_reasoning_and_message_events",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_codex_adapter_streaming.py",
+          "original_file_sha256": "e4ed25c584f3b0faa71529958be8c47a2d9fb50fcebbf8b9766a2b7d447aa370",
+          "original_method_ast_sha256": "27eff0eea6f8e98da35eb7a283168ba8372995030cbc5fefcc9175026c08e137",
+          "expected_method_ast_sha256": "27eff0eea6f8e98da35eb7a283168ba8372995030cbc5fefcc9175026c08e137"
+        }
+      ]
     }
   ]
 }

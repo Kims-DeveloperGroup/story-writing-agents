@@ -63,8 +63,9 @@ from story_writing_agents.errors import (
 from story_writing_agents.session_lifecycle import SessionAccessState, SessionDurableState, SessionLifecycleState
 from story_writing_agents.workspace import Workspace
 from story_writing_agents import antigravity_adapter, antigravity_recovery_matching, antigravity_response_decoding, antigravity_rules
-from story_writing_agents import codex_adapter, codex_definition_sources
+from story_writing_agents import codex_adapter, codex_definition_sources, codex_stream_observation
 from story_writing_agents.agent_context import ContextComponentBytes
+from story_writing_agents.agent_context.progress import ProviderStreamSink
 from story_writing_agents.agent_context.manifest import ContextScope
 from story_writing_agents.config import ConfigurationSnapshot
 from story_writing_agents.provider_adapter import AgentExecutionProfile
@@ -398,8 +399,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 334)
-        self.assertEqual(len(edges), 2020)
+        self.assertEqual(len(modules), 335)
+        self.assertEqual(len(edges), 2023)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -1943,6 +1944,15 @@ class RagModuleBoundaryTests(unittest.TestCase):
             },
         )
         self.assertEqual({source for source, target in edges if target == backend_reply_owner}, {"story_writing_agents.backend"})
+        codex_stream_owner = codex_stream_observation.__name__
+        self.assertEqual(
+            {target for source, target in edges if source == codex_stream_owner},
+            {"story_writing_agents.agent_context.progress", "story_writing_agents.codex_event_decoding"},
+        )
+        self.assertEqual(
+            {source for source, target in edges if target == codex_stream_owner},
+            {"story_writing_agents.codex_adapter"},
+        )
         codex_definition_owner = "story_writing_agents.codex_definition_sources"
         self.assertEqual(
             {target for source, target in edges if source == codex_definition_owner},
@@ -2281,6 +2291,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             (antigravity_recovery_matching, ("MALFORMED_FUNCTION_CALL", "NativeEvidenceUnavailable",
                                             "matches_current_finish", "native_steps")),
             (codex_definition_sources, ("read_definition_source",)),
+            (codex_stream_observation, ("make_stream_line_handler",)),
             (provider_thread_records, (
                 "PROVIDER_FINGERPRINT_PATTERN", "PROVIDER_SESSION_SCHEMA_VERSION", "PROVIDER_THREAD_ID_PATTERN",
                 "context_thread_id", "context_thread_key_payload", "context_thread_record", "context_thread_relative",
@@ -2405,6 +2416,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             (antigravity_recovery_matching, "matches_current_finish",
              ("steps", "prompt", "structured_output", "native_error"), (), {}, True),
             (codex_definition_sources, "read_definition_source", ("definition",), (), {}, True),
+            (codex_stream_observation, "make_stream_line_handler", ("agent_id", "stream_sink"), (), {}, True),
             (provider_thread_records, "validate_thread_record", ("value",), (), {}, True),
             (provider_session_timestamps, "record_timestamp", (), (), {}, True),
             (provider_session_claim_guard, "access_claim_guard",
@@ -2571,6 +2583,13 @@ class RagModuleBoundaryTests(unittest.TestCase):
             get_type_hints(codex_definition_sources.read_definition_source),
             {"definition": models.AgentDefinition, "return": tuple[bytes, tuple[ContextComponentBytes, ...]]},
         )
+        self.assertEqual(
+            get_type_hints(codex_stream_observation.make_stream_line_handler),
+            {"agent_id": str, "stream_sink": ProviderStreamSink | None, "return": Callable[[bytes], None]},
+        )
+        self.assertIs(codex_adapter.codex_stream_observation, codex_stream_observation)
+        self.assertNotIn("make_stream_line_handler", story_writing_agents.__all__)
+        self.assertFalse(hasattr(story_writing_agents, "make_stream_line_handler"))
         self.assertIs(codex_adapter.codex_definition_sources, codex_definition_sources)
         self.assertFalse(hasattr(codex_adapter.CodexAdapter, "_definition_file"))
         self.assertNotIn("read_definition_source", story_writing_agents.__all__)
@@ -3054,6 +3073,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             "story_writing_agents/antigravity_rules.py",
             "story_writing_agents/backend_reply_decoding.py",
             "story_writing_agents/codex_definition_sources.py",
+            "story_writing_agents/codex_stream_observation.py",
             "story_writing_agents/provider_session_access_records.py",
             "story_writing_agents/provider_session_access_transactions.py",
             "story_writing_agents/provider_context_thread_store.py",

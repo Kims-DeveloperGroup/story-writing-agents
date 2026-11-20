@@ -246,9 +246,13 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
-        wire_current = suite_budget.load_budget(Path(__file__).with_name("fixtures") / "test_budget_v1.json")
+        stream_current = suite_budget.load_budget()
+        *legacy_move_receipts, defaults_stage, wire_stage, stream_stage = load_receipt()
+        stream_moves = stream_stage["moves"]
+        wire_current = dict(stream_current, max_test_source_lines=156369, subtest_caps=dict(stream_current["subtest_caps"]))
+        for move in stream_moves:
+            wire_current["subtest_caps"][move["old_id"]] = wire_current["subtest_caps"].pop(move["new_id"])
         split_current = dict(wire_current, max_test_source_lines=156274, subtest_caps=dict(wire_current["subtest_caps"]))
-        *legacy_move_receipts, defaults_stage, wire_stage = load_receipt()
         wire_moves = wire_stage["moves"]
         for move in wire_moves:
             split_current["subtest_caps"][move["old_id"]] = split_current["subtest_caps"].pop(move["new_id"])
@@ -707,6 +711,17 @@ class SuiteBudgetTests(unittest.TestCase):
         self.assertEqual(wire_current["max_test_source_lines"], 156369)
         self.assertIsNone(suite_budget.check_monotonic(wire_current, split_current))
         self._assert_source_limit_neighbors_rejected(wire_current, split_current)
+        self.assertEqual(stream_current["max_test_source_lines"], 156459)
+        self.assertIsNone(suite_budget.check_monotonic(stream_current, wire_current))
+        self._assert_source_limit_neighbors_rejected(stream_current, wire_current)
+        stream_id = stream_moves[0]["new_id"]
+        stream_caps = stream_current["subtest_caps"]
+        for changed_caps in (
+            {key: cap for key, cap in stream_caps.items() if key != stream_id},
+            {**stream_caps, "tests.unreviewed.Case.test_extra": 0},
+            {**stream_caps, stream_id: 1},
+        ):
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(stream_current, subtest_caps=changed_caps), wire_current)
         wire_id = next(move["new_id"] for move in wire_moves if move["subtest_cap"])
         wire_caps = wire_current["subtest_caps"]
         for changed_caps in (
@@ -729,6 +744,7 @@ class SuiteBudgetTests(unittest.TestCase):
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(decoder_current, **{field: value}), rules_current)
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(split_current, **{field: value}), execution_profiles_current)
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(wire_current, **{field: value}), split_current)
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(stream_current, **{field: value}), wire_current)
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, decoder_current, dict(rules_current, **{field: value}))
         for caps in (
             {key: value for key, value in decoder_current["subtest_caps"].items() if key != zero_id},
@@ -787,6 +803,20 @@ class SuiteBudgetTests(unittest.TestCase):
         selected_wire = select_impact(real, paths=("tests/test_conversation_retrieval_wire.py",))
         self.assertEqual(selected_wire["focused_manifest"]["ordered_ids"], [next(move["new_id"] for move in wire_moves if move["old_id"].endswith(".test_retrieval_schema_uses_supported_strict_object_subset"))])
         self.assertEqual(selected_wire["affected_manifest"]["ordered_ids"], list(moved_wire.ids))
+        moved_streaming = runner_selection.select(real, modules=["tests.test_codex_adapter_streaming"])
+        retained_streaming = runner_selection.select(real, modules=["tests.test_adapter_streaming"])
+        self.assertEqual(moved_streaming.ids, tuple(sorted(move["new_id"] for move in stream_moves)))
+        self.assertEqual(len(retained_streaming.ids), 32)
+        self.assertTrue(all(move["old_id"] not in real.ids for move in stream_moves))
+        self.assertTrue(all(type(case).__bases__ == (unittest.IsolatedAsyncioTestCase,) and type(case).__module__ == "tests.test_codex_adapter_streaming" for case in moved_streaming.tests))
+        for path, expected in (
+            ("tests/test_adapter_streaming.py", list(retained_streaming.ids)),
+            ("tests/test_codex_adapter_streaming.py", list(moved_streaming.ids)),
+            ("tests/adapter_streaming_fixture.py", sorted((*retained_streaming.ids, *moved_streaming.ids))),
+        ):
+            selected = select_impact(real, paths=(path,))
+            self.assertEqual(selected["focused_manifest"]["ordered_ids"], expected)
+            self.assertEqual(selected["affected_manifest"]["ordered_ids"], expected)
         definitions = (
             ("tests.lead_preparation.test_specialist_advisory_scope", "SpecialistAdvisoryScopeCases",
              "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation",

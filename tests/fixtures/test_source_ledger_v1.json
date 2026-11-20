@@ -3,6 +3,7 @@
   "legacy_unresolved_lines": 1550,
   "origin_commit": "3b74dce89a2fffd726b94a739c87d4524c3deed7",
   "counted_support_files": [
+    "tests/adapter_streaming_fixture.py",
     "tests/agent_context/invocation/execution_fixture.py",
     "tests/agent_context/invocation/session_fixture.py",
     "tests/agent_context/ledger/ledger_fixture.py",
@@ -2309,6 +2310,127 @@
     "registered_id_move_guard": 3
   },
   "counting": "Raw 150005\u2192150047 + registered 4719\u21924772 + legacy 1550. Existing 3 Cases moved 1:1, count/cap/individual weight shares/time/worker frozen."
-}
+},
+    {
+      "issue": 1091,
+      "origin_commit": "f8090ab80ea957afc5b7cf0c0c53bffbe221ce25",
+      "origins": [
+        {
+          "source": "tests/test_adapter_streaming.py",
+          "sha256": "e4ed25c584f3b0faa71529958be8c47a2d9fb50fcebbf8b9766a2b7d447aa370",
+          "source_ranges": [
+            [
+              31,
+              36
+            ],
+            [
+              48,
+              54
+            ],
+            [
+              58,
+              70
+            ],
+            [
+              72,
+              76
+            ],
+            [
+              90,
+              147
+            ],
+            [
+              149,
+              204
+            ],
+            [
+              420,
+              465
+            ],
+            [
+              562,
+              598
+            ],
+            [
+              1105,
+              1163
+            ],
+            [
+              1165,
+              1216
+            ],
+            [
+              1218,
+              1265
+            ],
+            [
+              1267,
+              1325
+            ],
+            [
+              1493,
+              1536
+            ],
+            [
+              1538,
+              1584
+            ],
+            [
+              1623,
+              1665
+            ],
+            [
+              1667,
+              1711
+            ],
+            [
+              1747,
+              1787
+            ],
+            [
+              1789,
+              1829
+            ],
+            [
+              1831,
+              1839
+            ]
+          ]
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "282becd869f05886460f6a582f1218dbbf8cf36bf23f3234deedbcde2408abd6"
+        },
+        {
+          "source": "tests/id_moves.py",
+          "sha256": "a99b057ae62a770f4991edfd9098fd80f5b7238ab950de20bce44b1a296640ed"
+        },
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "1f8b4eafb7593b659738de52be6d17664a8a40d6cfaa6e45898a1d359bad6426"
+        }
+      ],
+      "approved_source_delta": 90,
+      "planned_raw_delta": 44,
+      "planned_support_delta": 46,
+      "legacy_unresolved_lines": 1550,
+      "exact_source_pair": [
+        156369,
+        156459
+      ],
+      "original_caps_sha256": "a49ec017285634e6e0be8e23c353dc9a2029e9edb7b67f7e637a9358991e4cbd",
+      "expected_caps_sha256": "34c1ce085f7c98e0fa9ddbee984b179cf8cebd6130c1abcb294145effcb56883",
+      "current_receipt_sha256": "8e691a89e55f2efecdef31b3f5f324e02046c99679688ca9b973e8c48a9fbfff",
+      "generic_tooling_ordinary_delta_excluded": 7,
+      "generic_tooling_physical_delta_excluded": 7,
+      "cost_components": {
+        "separated_test_files_raw": -6,
+        "existing_graph_api_packaging_case_raw": 20,
+        "existing_budget_case_raw": 30,
+        "shared_fixture_counted_support": 43,
+        "strict_movement_stage_counted_support": 3
+      },
+      "counting": "Each of 15 existing test methods moves once, retaining its fixture and original assertions. Counts preserve all eight existing numeric graph pins; the numeric changes have zero net source rows."
+    }
   ]
 }
