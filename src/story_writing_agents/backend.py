@@ -6406,7 +6406,7 @@ class AgentBackend:
             definition_fingerprint=definition_fingerprint,
             policy_fingerprint=policy_fingerprint,
         )
-        if record is None:
+        if record is not None:
             return
         self.workspace.write_json(relative, record)
 
