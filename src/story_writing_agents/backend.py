@@ -6320,7 +6320,7 @@ class AgentBackend:
         manifest = provider_session_artifacts.read_manifest(self.workspace, session_id, missing_ok=False)
         assert manifest is not None
         return provider_thread_records.select_thread_record(
-            manifest, key, effective_fingerprint,
+            {"provider_threads": {}}, key, effective_fingerprint,
         )
 
     def _store_thread(
