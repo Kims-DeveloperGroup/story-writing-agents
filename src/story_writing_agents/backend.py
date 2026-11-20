@@ -4,12 +4,10 @@ from __future__ import annotations
 import story_writing_agents.backend_reply_decoding as backend_reply_decoding
 import story_writing_agents.provider_context_thread_store as provider_context_thread_store
 import story_writing_agents.provider_manifest_thread_store as provider_manifest_thread_store
-import story_writing_agents.provider_session_access_records as provider_session_access_records
 import story_writing_agents.provider_session_access_transactions as provider_session_access_transactions
 import story_writing_agents.provider_session_artifacts as provider_session_artifacts
-import story_writing_agents.provider_session_claim_guard as provider_session_claim_guard
 import story_writing_agents.provider_session_lifecycle_queries as provider_session_lifecycle_queries
-import story_writing_agents.provider_session_timestamps as provider_session_timestamps
+import story_writing_agents.provider_session_transitions as provider_session_transitions
 import story_writing_agents.provider_thread_records as provider_thread_records
 from .agents import LEAD_ORCHESTRATOR
 from .provider_schema_projection import require_schema_projection
@@ -33,7 +31,6 @@ import shutil
 import tempfile
 import threading
 import time
-import uuid
 from .structured_output_validation import (
     validation_failure,
     carry_validation,
@@ -125,12 +122,10 @@ from .errors import (
     ConfigurationError,
     ConversationRetrievalSemanticError,
     SessionAccessBlockedError,
-    SessionExistsError,
     SessionIdError,
     SessionNotFoundError,
     SessionOwnershipUnknownError,
     SessionPausedError,
-    WorkspaceFormatError,
 )
 from .git.session_contracts import GitSessionResourceInspection
 from .models import (
@@ -1977,6 +1972,9 @@ class AgentBackend:
         self._access_transactions = provider_session_access_transactions.ProviderSessionAccessTransactions(
             self._access_claim_tokens, _ACCESS_CLAIM_GUARD,
         )
+        self._session_transitions = provider_session_transitions.ProviderSessionTransitions(
+            self._access_transactions, self._access_claim_tokens, _ACCESS_CLAIM_GUARD,
+        )
         self._thread_locks: dict[tuple[str, str, str], asyncio.Lock] = {}
         self._context_thread_locks: dict[tuple[str, ...], asyncio.Lock] = {}
         self._staging_directories = self._codex_adapter.staging_directories
@@ -2937,56 +2935,8 @@ class AgentBackend:
             session_id=session,
         )
         try:
-            current = self.get_session_lifecycle(session)
-            if current.durable_state is not SessionDurableState.ABSENT:
-                raise SessionExistsError(f"provider session already exists: {session}")
-
-            token = uuid.uuid4().hex
-            claim = provider_session_access_records.new_access_claim(session, token)
-            now = provider_session_timestamps.record_timestamp()
-            provider_session_timestamps.parse_record_timestamp(now, label="provider session timestamp")
-            manifest: dict[str, Any] = {
-                "schema_version": provider_thread_records.PROVIDER_SESSION_SCHEMA_VERSION,
-                "session_id": session,
-                "durable_state": SessionDurableState.READY.value,
-                "created_at": now,
-                "updated_at": now,
-                "provider_threads": {},
-            }
-            with provider_session_claim_guard.access_claim_guard(
-                self.workspace,
-                provider_session_artifacts.PROVIDER_SESSION_DIRECTORY,
-                _ACCESS_CLAIM_GUARD,
-            ):
-                provider_session_artifacts.reject_unsupported_access_artifacts(self.workspace, session)
-                if provider_session_artifacts.manifest_exists(self.workspace, session):
-                    provider_session_artifacts.read_manifest(self.workspace, session, missing_ok=False)
-                    raise SessionExistsError(
-                        f"provider session already exists: {session}"
-                    )
-                if provider_session_artifacts.read_access_claim_if_present(self.workspace, session) is not None:
-                    raise WorkspaceFormatError(
-                        f"provider session access claim has no manifest: {session}"
-                    )
-                self.workspace.write_json(
-                    provider_session_artifacts.access_claim_relative(session),
-                    claim,
-                    overwrite=False,
-                )
-                try:
-                    provider_session_artifacts.write_manifest(self.workspace, session, manifest, overwrite=False)
-                except BaseException as exc:
-                    self._access_transactions.discard_access_claim_after_failed_create(
-                    self.workspace,
-                        session,
-                        token,
-                        exc,
-                    )
-                    raise
-
-            self._access_claim_tokens[session] = token
-            state = provider_session_lifecycle_queries.session_lifecycle_from_manifest(
-                self.workspace, manifest, self._access_transactions.access_state,
+            state = self._session_transitions.create_session_with_access(
+                self.workspace, session, self.get_session_lifecycle,
             )
         except BaseException as exc:
             self._record_debug_error(
@@ -3022,25 +2972,9 @@ class AgentBackend:
             session_id=session,
         )
         try:
-            _, already_owned = self._access_transactions.acquire_access_with_reuse(
+            state = self._session_transitions.reopen_session_with_access(
                 self.workspace, session, self.get_session_lifecycle,
             )
-            try:
-                manifest = provider_session_artifacts.read_manifest(self.workspace, session, missing_ok=False)
-                assert manifest is not None
-                if manifest["durable_state"] != SessionDurableState.READY.value:
-                    manifest["durable_state"] = SessionDurableState.READY.value
-                    manifest["updated_at"] = provider_session_timestamps.advance_record_timestamp(manifest["updated_at"])
-                    provider_session_artifacts.write_manifest(self.workspace, session, manifest)
-                state = provider_session_lifecycle_queries.session_lifecycle_from_manifest(
-                    self.workspace, manifest, self._access_transactions.access_state,
-                )
-            except BaseException:
-                if not already_owned:
-                    token = self._access_claim_tokens.get(session)
-                    if token is not None:
-                        self._access_transactions.release_access_claim(self.workspace, session, token)
-                raise
         except BaseException as exc:
             self._record_debug_error(
                 DebugOperation.SESSION_LIFECYCLE,
@@ -3075,26 +3009,9 @@ class AgentBackend:
             session_id=session,
         )
         try:
-            _, already_owned = self._access_transactions.acquire_access_with_reuse(
+            state = self._session_transitions.pause_session_and_release_access(
                 self.workspace, session, self.get_session_lifecycle,
             )
-            try:
-                manifest = provider_session_artifacts.read_manifest(self.workspace, session, missing_ok=False)
-                assert manifest is not None
-                if manifest["durable_state"] != SessionDurableState.PAUSED.value:
-                    manifest["durable_state"] = SessionDurableState.PAUSED.value
-                    manifest["updated_at"] = provider_session_timestamps.advance_record_timestamp(manifest["updated_at"])
-                    provider_session_artifacts.write_manifest(self.workspace, session, manifest)
-            except BaseException:
-                if not already_owned:
-                    token = self._access_claim_tokens.get(session)
-                    if token is not None:
-                        self._access_transactions.release_access_claim(self.workspace, session, token)
-                raise
-            token = self._access_claim_tokens.get(session)
-            if token is not None:
-                self._access_transactions.release_access_claim(self.workspace, session, token)
-            state = self.get_session_lifecycle(session)
         except BaseException as exc:
             self._record_debug_error(
                 DebugOperation.SESSION_LIFECYCLE,
