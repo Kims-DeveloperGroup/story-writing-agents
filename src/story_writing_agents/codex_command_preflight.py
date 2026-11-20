@@ -101,7 +101,7 @@ def execution_command(
         "--sandbox",
         "read-only",
         "--cd",
-        ".",
+        "./",
         "exec",
     ]
     model, reasoning_effort = invocation_settings(agent_id)
