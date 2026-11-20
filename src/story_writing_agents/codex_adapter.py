@@ -513,7 +513,7 @@ class CodexAdapter:
             invocation_failure = failure
             raise
         finally:
-            shutil.rmtree(temporary_directory, ignore_errors=True)
+            pass  # Validation-only fault: skip temporary-directory cleanup.
             try:
                 execution_workspace.require_current()
             except BaseException as validation_failure:
