@@ -2581,6 +2581,69 @@
         "strict_movement_stage_counted_support": 3
       },
       "counting": "Move seven exact definitions and fourteen shared methods, existing fake bytes and reusable context/inspection helpers. Old 86 and new 7 retain 93 total; original receipt caps and total historical weight retained."
+    },
+    {
+      "issue": 1095,
+      "origin_commit": "19530febd4f4c11b24506ccb7b8b7ef88b8d28e1",
+      "origins": [
+        {
+          "source": "tests/test_artifact_application_contracts.py",
+          "sha256": "a74ef75d61f48125152d383af12960765d98e0cc97f4a7015426d8b771039f88"
+        },
+        {
+          "source": "tests/test_artifact_application_store_recovery.py",
+          "sha256": "f287c94c7bd7176257feadb276f16b6ffe9cbc61ebb7bf10fb5d3db41cf2b3ce"
+        },
+        {
+          "source": "tests/test_artifact_relationship_policy.py",
+          "sha256": "fb40e7941bf31b14b90a7cc83838303b12c448c8ba101935bec49f351a0bbde2"
+        },
+        {
+          "source": "tests/test_git_external_operation_inspection.py",
+          "sha256": "1dbec62cd8e7909ac81f1ea377984d5341444fec73388dfa1478591585dcb00c"
+        },
+        {
+          "source": "tests/test_interactive_controller.py",
+          "sha256": "67ab28f66478be55f9c55f6d0e4d0f200e853cf16c347491e98131f313557813"
+        },
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "18ffbafcae616eeb4c0b1a36259d502e0cd4f89c1588a01be02f2a5851b7bc02"
+        },
+        {
+          "source": "tests/test_session_lifecycle.py",
+          "sha256": "8af753495a335848572d0c2abf643937862f85a05220e93799ce4cbd131920fe"
+        },
+        {
+          "source": "tests/test_session_recovery_contracts.py",
+          "sha256": "bb8db8932664495393137d0a070907aa353838cf18db6706de2aa6441a8333ea"
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "04162bf3891430d1fc26e2209d09958044b9692656c1caeaffd88585440b6550"
+        },
+        {
+          "source": "tests/test_workspace_session_history.py",
+          "sha256": "fe07c0eb44af19e02ee6a31639d515c9efd6797ac624f4282b56a461fcc591aa"
+        }
+      ],
+      "approved_source_delta": 53,
+      "planned_raw_delta": 53,
+      "planned_support_delta": 0,
+      "legacy_unresolved_lines": 1550,
+      "exact_source_pair": [
+        156558,
+        156611
+      ],
+      "expected_caps_sha256": "1ac2e7bda1efe31a96baadd6eb2cdb1756d74932de542e73397aa70fe78dfd9b",
+      "generic_tooling_ordinary_delta_excluded": 8,
+      "generic_tooling_physical_delta_excluded": 8,
+      "cost_components": {
+        "existing_closed_module_graph_api_packaging": 32,
+        "existing_test_owner_selection_checks": 18,
+        "existing_budget_source_pair_and_neighbors": 3
+      },
+      "counting": "Raw ordinary tests 149851 to 149904; registered support 5157 and legacy 1550 unchanged. No added Cases, subTests, IDs, weights, workers, or larger time bounds."
     }
   ]
 }

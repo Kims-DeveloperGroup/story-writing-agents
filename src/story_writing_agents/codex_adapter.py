@@ -15,7 +15,6 @@ import math
 import os
 import re
 import shutil
-import stat
 import tempfile
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -26,9 +25,8 @@ from .agent_context import (
     ProviderCallState,
     ProviderUsage,
 )
-from .agents import ROSTER
 from .config import ConfigurationSnapshot
-from .errors import ConfigurationError, ProviderAuthenticationRequiredError
+from .errors import ProviderAuthenticationRequiredError
 from .git.session_contracts import GIT_SESSION_WORKTREE_SIBLING_SUFFIX
 from .models import AgentDefinition
 from .provider_adapter import (
@@ -50,6 +48,7 @@ from .provider_process import (
     run_process,
 )
 from .provider_execution_workspace import ProviderExecutionWorkspace
+import story_writing_agents.codex_command_preflight as codex_command_preflight
 import story_writing_agents.codex_definition_sources as codex_definition_sources
 import story_writing_agents.codex_invocation_files as codex_invocation_files
 import story_writing_agents.codex_native_context as codex_native_context
@@ -63,8 +62,6 @@ from .codex_event_decoding import (
 
 
 _SAFE_THREAD_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
-# Leave substantial headroom below Darwin's aggregate process-argument ceiling.
-_MAX_DEVELOPER_INSTRUCTIONS_ARGUMENT_UTF8_BYTES = 512 * 1_024
 
 
 class CodexAdapter:
@@ -126,17 +123,13 @@ class CodexAdapter:
     def model(self) -> str | None:
         """Return the construction-time effective system Codex model."""
 
-        return (
-            self._explicit_model
-            if self._explicit_model is not None
-            else self._configuration.system_defaults.codex_model
-        )
+        return codex_command_preflight.model(self._explicit_model, self._configuration)
 
     @property
     def reasoning_effort(self) -> str | None:
         """Return the construction-time system Codex reasoning effort."""
 
-        return self._configuration.system_defaults.codex_reasoning_effort
+        return codex_command_preflight.reasoning_effort(self._configuration)
 
     def bind(self, definition: AgentDefinition) -> ProviderBinding:
         """Read, stage, and revalidate one immutable Codex definition."""
@@ -234,13 +227,18 @@ class CodexAdapter:
                     taint_existing_thread=False,
                 )
             codex_invocation_files.write_schema(schema_path, invocation)
-            command = self._execution_command(
+            command = codex_command_preflight.execution_command(
                 binding.staging_directory,
                 schema_path,
                 output_path,
                 invocation.thread_id,
                 binding.definition.agent_id,
                 execution_workspace,
+                which=lambda: self._which(),
+                get_executable=lambda: self.executable,
+                get_control_root=lambda: self._control_root,
+                get_native_state_directory=lambda: self._native_state_directory,
+                invocation_settings=lambda target: self.invocation_settings(target),
             )
             stdin = invocation.payload_json
             native_state = self._native_state_directory(
@@ -458,117 +456,6 @@ class CodexAdapter:
                 except BaseException:
                     pass
 
-    def _execution_command(
-        self,
-        staging_directory: Path,
-        schema_path: Path,
-        output_path: Path,
-        thread_id: str | None,
-        agent_id: str | None,
-        execution_workspace: ProviderExecutionWorkspace,
-    ) -> list[str]:
-        """Build the native Codex command for the exact execution workspace."""
-
-        execution_workspace.require_current()
-        resolved_executable = self._which()(self.executable)
-        if resolved_executable is None:
-            raise ProviderInvocationError(
-                f"Codex CLI executable was not found: {self.executable}",
-                taint_existing_thread=False,
-            )
-        executable = Path(os.path.realpath(resolved_executable))
-        staging = Path(os.path.realpath(staging_directory))
-        schema = Path(os.path.realpath(schema_path))
-        output = Path(os.path.realpath(output_path))
-        session_root = Path(os.path.realpath(execution_workspace.worktree_root))
-        session_container = self._control_root.with_name(
-            self._control_root.name + GIT_SESSION_WORKTREE_SIBLING_SUFFIX
-        )
-        if session_root != session_container / execution_workspace.session_id:
-            raise ProviderInvocationError(
-                "Codex execution workspace is unavailable",
-                taint_existing_thread=False,
-            )
-        self._native_state_directory(
-            session_root=session_root,
-            session_container=session_container,
-            staging=staging,
-            output=output,
-        )
-        definition_path = staging / "AGENTS.md"
-        try:
-            developer_instructions = definition_path.read_text(
-                encoding="utf-8",
-                errors="strict",
-            )
-        except (OSError, UnicodeError) as exc:
-            raise ProviderInvocationError(
-                "Codex bound instructions are unavailable",
-                taint_existing_thread=False,
-            ) from exc
-        developer_instructions_argument = (
-            "developer_instructions="
-            + json.dumps(developer_instructions, ensure_ascii=False)
-        )
-        if (
-            len(developer_instructions_argument.encode("utf-8", errors="strict"))
-            > _MAX_DEVELOPER_INSTRUCTIONS_ARGUMENT_UTF8_BYTES
-        ):
-            raise ProviderInvocationError(
-                "Codex bound instructions exceed the safe process argument limit",
-                taint_existing_thread=False,
-            )
-        command = [
-            os.fspath(executable),
-            "--ask-for-approval",
-            "never",
-            "--sandbox",
-            "read-only",
-            "--cd",
-            ".",
-            "exec",
-        ]
-        model, reasoning_effort = self.invocation_settings(agent_id)
-        if model is not None:
-            command.extend(["--model", model])
-        if reasoning_effort is not None:
-            command.extend(
-                ["--config", f'model_reasoning_effort="{reasoning_effort}"']
-            )
-        if thread_id is not None:
-            command.append("resume")
-        command.extend(
-            [
-                "--json",
-                "--skip-git-repo-check",
-                "--ignore-user-config",
-                "--ignore-rules",
-                "--disable",
-                "apps",
-                "--disable",
-                "multi_agent",
-                "--disable",
-                "shell_tool",
-                "--disable",
-                "web_search",
-                "--config",
-                'web_search="disabled"',
-                "--config",
-                "project_root_markers=[]",
-                "--config",
-                developer_instructions_argument,
-                "--output-schema",
-                os.fspath(schema),
-                "--output-last-message",
-                os.fspath(output),
-            ]
-        )
-        if thread_id is not None:
-            command.append(thread_id)
-        command.append("-")
-        execution_workspace.require_current()
-        return command
-
     def _native_state_directory(
         self,
         *,
@@ -578,54 +465,13 @@ class CodexAdapter:
         output: Path,
     ) -> Path:
         """Return a narrow, owned Codex state root or fail before launch."""
-
-        configured_native_state = Path(
-            os.environ.get("CODEX_HOME", os.fspath(Path.home() / ".codex"))
+        return codex_command_preflight.native_state_directory(
+            session_root=session_root,
+            session_container=session_container,
+            staging=staging,
+            output=output,
+            get_control_root=lambda: self._control_root,
         )
-        if not configured_native_state.is_absolute():
-            raise ProviderInvocationError(
-                "Codex native state directory is unsafe",
-                taint_existing_thread=False,
-            )
-        native_state = Path(os.path.realpath(configured_native_state))
-        home = Path(os.path.realpath(Path.home()))
-
-        def overlaps(first: Path, second: Path) -> bool:
-            return bool(
-                first == second
-                or first in second.parents
-                or second in first.parents
-            )
-
-        try:
-            observed = os.stat(native_state, follow_symlinks=False)
-        except OSError:
-            observed = None
-        effective_uid = os.geteuid() if hasattr(os, "geteuid") else None
-        if (
-            observed is None
-            or not stat.S_ISDIR(observed.st_mode)
-            or effective_uid is None
-            or observed.st_uid != effective_uid
-            or stat.S_IMODE(observed.st_mode) & 0o022
-            or native_state == Path(native_state.anchor)
-            or native_state == home
-            or any(
-                overlaps(native_state, protected)
-                for protected in (
-                    session_root,
-                    session_container,
-                    staging,
-                    output.parent,
-                    self._control_root,
-                )
-            )
-        ):
-            raise ProviderInvocationError(
-                "Codex native state directory is unsafe",
-                taint_existing_thread=False,
-            )
-        return native_state
 
     def command(
         self,
@@ -636,62 +482,15 @@ class CodexAdapter:
         agent_id: str | None = None,
     ) -> list[str]:
         """Build the established value-preserving Codex command line."""
-
-        command = [
+        return codex_command_preflight.command(
             self.executable,
-            "--ask-for-approval",
-            "never",
-            "--sandbox",
-            "read-only",
-            "--cd",
-            str(staging_directory),
-            "exec",
-        ]
-        model, reasoning_effort = self.invocation_settings(agent_id)
-        if model is not None:
-            command.extend(["--model", model])
-        if reasoning_effort is not None:
-            command.extend(
-                [
-                    "--config",
-                    f'model_reasoning_effort="{reasoning_effort}"',
-                ]
-            )
-        if thread_id is not None:
-            command.append("resume")
-        command.extend(
-            [
-                "--json",
-                "--skip-git-repo-check",
-                "--ignore-user-config",
-                "--ignore-rules",
-                "--disable",
-                "apps",
-                "--disable",
-                "multi_agent",
-                "--disable",
-                "shell_tool",
-                "--disable",
-                "web_search",
-                "--config",
-                'web_search="disabled"',
-                "--config",
-                "project_root_markers=[]",
-                "--config",
-                (
-                    "project_doc_max_bytes="
-                    f"{max(32768, (staging_directory / 'AGENTS.md').stat().st_size + 1)}"
-                ),
-                "--output-schema",
-                str(schema_path),
-                "--output-last-message",
-                str(output_path),
-            ]
+            staging_directory,
+            schema_path,
+            output_path,
+            thread_id,
+            agent_id,
+            invocation_settings=lambda target: self.invocation_settings(target),
         )
-        if thread_id is not None:
-            command.append(thread_id)
-        command.append("-")
-        return command
 
     def invocation_settings(
         self,
@@ -701,27 +500,12 @@ class CodexAdapter:
 
         if agent_id is None:
             return self.model, self.reasoning_effort
-        if agent_id not in ROSTER:
-            raise ConfigurationError(f"unknown agent: {agent_id}")
-        if self._execution_profiles is not None:
-            profile = self._execution_profiles.get(agent_id)
-            if profile is None:
-                raise ConfigurationError(
-                    f"Codex execution profile is unavailable: {agent_id}"
-                )
-            return profile.model, profile.effort
-        agent = self._configuration.agent_configs[agent_id]
-        model = (
-            self._explicit_model
-            if self._explicit_model is not None
-            else agent.codex_model
-            or self._configuration.system_defaults.codex_model
+        return codex_command_preflight.invocation_settings(
+            agent_id,
+            execution_profiles=self._execution_profiles,
+            explicit_model=self._explicit_model,
+            configuration=self._configuration,
         )
-        reasoning_effort = (
-            agent.codex_reasoning_effort
-            or self._configuration.system_defaults.codex_reasoning_effort
-        )
-        return model, reasoning_effort
 
     @classmethod
     def _authentication_failure(
@@ -846,7 +630,10 @@ class CodexAdapter:
     def executable_available(self) -> bool:
         """Return whether the configured Codex executable resolves."""
 
-        return self._which()(self.executable) is not None
+        return codex_command_preflight.executable_available(
+            self._which,
+            lambda: self.executable,
+        )
 
     def release(self, binding: ProviderBinding) -> None:
         """Remove one exact ephemeral Codex binding idempotently."""

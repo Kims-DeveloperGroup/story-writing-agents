@@ -63,7 +63,7 @@ from story_writing_agents.errors import (
 from story_writing_agents.session_lifecycle import SessionAccessState, SessionDurableState, SessionLifecycleState
 from story_writing_agents.workspace import Workspace
 from story_writing_agents import antigravity_adapter, antigravity_recovery_matching, antigravity_response_decoding, antigravity_rules
-from story_writing_agents import codex_adapter, codex_definition_sources, codex_invocation_files, codex_stream_observation
+from story_writing_agents import codex_adapter, codex_command_preflight, codex_definition_sources, codex_invocation_files, codex_stream_observation
 from story_writing_agents.agent_context import ContextComponentBytes
 from story_writing_agents.agent_context.progress import ProviderStreamSink
 from story_writing_agents.agent_context.manifest import ContextScope
@@ -399,8 +399,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 336)
-        self.assertEqual(len(edges), 2026)
+        self.assertEqual(len(modules), 337)
+        self.assertEqual(len(edges), 2032)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -1953,6 +1953,20 @@ class RagModuleBoundaryTests(unittest.TestCase):
             {source for source, target in edges if target == codex_stream_owner},
             {"story_writing_agents.codex_adapter"},
         )
+        preflight_owner = codex_command_preflight.__name__
+        self.assertEqual(
+            {target for source, target in edges if source == preflight_owner},
+            {
+                "story_writing_agents.agents",
+                "story_writing_agents.config",
+                "story_writing_agents.errors",
+                "story_writing_agents.git.session_contracts",
+                "story_writing_agents.provider_adapter",
+                "story_writing_agents.provider_execution_workspace",
+            },
+        )
+        self.assertEqual({source for source, target in edges if target == preflight_owner},
+                         {"story_writing_agents.codex_adapter"})
         codex_definition_owner = "story_writing_agents.codex_definition_sources"
         invocation_files_owner = codex_invocation_files.__name__
         self.assertEqual({target for source, target in edges if source == invocation_files_owner},
@@ -2295,6 +2309,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
             (antigravity_rules, ("read_rules_source", "install_rules")),
             (antigravity_recovery_matching, ("MALFORMED_FUNCTION_CALL", "NativeEvidenceUnavailable",
                                             "matches_current_finish", "native_steps")),
+            (codex_command_preflight, ("command", "executable_available", "execution_command",
+                                       "invocation_settings", "model", "native_state_directory", "reasoning_effort")),
             (codex_definition_sources, ("read_definition_source",)),
             (codex_stream_observation, ("make_stream_line_handler",)),
             (codex_invocation_files, ("create_invocation_files", "write_schema", "regular_output_exists",
@@ -2422,6 +2438,20 @@ class RagModuleBoundaryTests(unittest.TestCase):
             (antigravity_recovery_matching, "native_steps", ("content",), (), {}, True),
             (antigravity_recovery_matching, "matches_current_finish",
              ("steps", "prompt", "structured_output", "native_error"), (), {}, True),
+            (codex_command_preflight, "command",
+             ("executable", "staging_directory", "schema_path", "output_path", "thread_id", "agent_id", "invocation_settings"),
+             ("invocation_settings",), {}, True),
+            (codex_command_preflight, "executable_available", ("which", "get_executable"), (), {}, True),
+            (codex_command_preflight, "execution_command",
+             ("staging_directory", "schema_path", "output_path", "thread_id", "agent_id", "execution_workspace",
+              "which", "get_executable", "get_control_root", "get_native_state_directory", "invocation_settings"),
+             ("which", "get_executable", "get_control_root", "get_native_state_directory", "invocation_settings"), {}, True),
+            (codex_command_preflight, "invocation_settings", ("agent_id", "execution_profiles", "explicit_model", "configuration"),
+             ("execution_profiles", "explicit_model", "configuration"), {}, True),
+            (codex_command_preflight, "model", ("explicit_model", "configuration"), (), {}, True),
+            (codex_command_preflight, "native_state_directory", ("session_root", "session_container", "staging", "output", "get_control_root"),
+             ("session_root", "session_container", "staging", "output", "get_control_root"), {}, True),
+            (codex_command_preflight, "reasoning_effort", ("configuration",), (), {}, True),
             (codex_definition_sources, "read_definition_source", ("definition",), (), {}, True),
             (codex_stream_observation, "make_stream_line_handler", ("agent_id", "stream_sink"), (), {}, True),
             (codex_invocation_files, "create_invocation_files", ("make_temporary_directory",), (), {}, True),
@@ -2600,6 +2630,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             {"agent_id": str, "stream_sink": ProviderStreamSink | None, "return": Callable[[bytes], None]},
         )
         self.assertIs(codex_adapter.codex_stream_observation, codex_stream_observation)
+        self.assertIs(codex_adapter.codex_command_preflight, codex_command_preflight)
         self.assertIs(codex_adapter.codex_invocation_files, codex_invocation_files)
         self.assertEqual(get_type_hints(codex_invocation_files.create_invocation_files),
                          {"make_temporary_directory": Callable[[], Callable[..., str]], "return": tuple[Path, Path, Path]})
@@ -3089,6 +3120,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             "story_writing_agents/consensus/authoring_qualification.py",
             "story_writing_agents/antigravity_rules.py",
             "story_writing_agents/backend_reply_decoding.py",
+            "story_writing_agents/codex_command_preflight.py",
             "story_writing_agents/codex_definition_sources.py",
             "story_writing_agents/codex_stream_observation.py",
             "story_writing_agents/codex_invocation_files.py",
