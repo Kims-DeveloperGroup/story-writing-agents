@@ -3,6 +3,7 @@
 from __future__ import annotations
 import story_writing_agents.backend_reply_decoding as backend_reply_decoding
 import story_writing_agents.provider_context_thread_store as provider_context_thread_store
+import story_writing_agents.provider_manifest_thread_store as provider_manifest_thread_store
 import story_writing_agents.provider_session_access_records as provider_session_access_records
 import story_writing_agents.provider_session_access_transactions as provider_session_access_transactions
 import story_writing_agents.provider_session_artifacts as provider_session_artifacts
@@ -2186,7 +2187,8 @@ class AgentBackend:
 
         generation = bound_agent._adapter_generation
         try:
-            stored = self._load_thread(
+            stored = provider_manifest_thread_store.load_manifest_thread(
+                self.workspace,
                 session_id,
                 bound_agent.definition,
                 fingerprint=self._legacy_continuation_fingerprint(
@@ -3439,7 +3441,8 @@ class AgentBackend:
 
         del reference_read
         try:
-            self._taint_thread(
+            provider_manifest_thread_store.taint_manifest_thread(
+                self.workspace,
                 session_id,
                 definition,
                 fingerprint=continuation_fingerprint,
@@ -4201,7 +4204,8 @@ class AgentBackend:
         """Best-effort taint an incomplete retrieval thread without masking failure."""
 
         try:
-            self._taint_thread(
+            provider_manifest_thread_store.taint_manifest_thread(
+                self.workspace,
                 session_id,
                 definition,
                 fingerprint=fingerprint,
@@ -4819,7 +4823,8 @@ class AgentBackend:
             bound_agent,
             execution_workspace,
         )
-        stored = self._load_thread(
+        stored = provider_manifest_thread_store.load_manifest_thread(
+            self.workspace,
             session,
             bound_agent.definition,
             fingerprint=continuation_fingerprint,
@@ -4828,14 +4833,16 @@ class AgentBackend:
 
         def taint_thread() -> None:
             if not best_effort_taint:
-                self._taint_thread(
+                provider_manifest_thread_store.taint_manifest_thread(
+                    self.workspace,
                     session,
                     bound_agent.definition,
                     fingerprint=continuation_fingerprint,
                 )
                 return
             try:
-                self._taint_thread(
+                provider_manifest_thread_store.taint_manifest_thread(
+                    self.workspace,
                     session,
                     bound_agent.definition,
                     fingerprint=continuation_fingerprint,
@@ -5068,12 +5075,14 @@ class AgentBackend:
                 raise
             try:
                 self._require_postsubmission_workspace(invocation)
-                self._store_thread(
+                provider_manifest_thread_store.store_manifest_thread(
+                    self.workspace,
                     session,
                     bound_agent.definition,
                     result.thread_id,
                     tainted=False,
                     fingerprint=continuation_fingerprint,
+                    require_owned_access=self._access_transactions.assert_owned_access,
                 )
                 self._require_postsubmission_workspace(invocation)
             except asyncio.CancelledError:
@@ -6302,73 +6311,6 @@ class AgentBackend:
                 raise BackendProtocolError(
                     "Antigravity CLI headless capabilities could not be verified"
                 )
-
-    def _load_thread(
-        self,
-        session_id: str,
-        definition: AgentDefinition,
-        *,
-        fingerprint: str | None = None,
-    ) -> dict[str, Any] | None:
-        effective_fingerprint = (
-            definition.fingerprint if fingerprint is None else fingerprint
-        )
-        key = provider_thread_records.thread_key(
-            definition,
-            fingerprint=effective_fingerprint,
-        )
-        manifest = provider_session_artifacts.read_manifest(self.workspace, session_id, missing_ok=False)
-        assert manifest is not None
-        return provider_thread_records.select_thread_record(
-            manifest, key, effective_fingerprint,
-        )
-
-    def _store_thread(
-        self,
-        session_id: str,
-        definition: AgentDefinition,
-        thread_id: str,
-        *,
-        tainted: bool,
-        fingerprint: str | None = None,
-    ) -> None:
-        if (
-            not isinstance(thread_id, str)
-            or provider_thread_records.PROVIDER_THREAD_ID_PATTERN.fullmatch(thread_id) is None
-        ):
-            provider_name = "Codex" if definition.backend == "codex" else "Antigravity"
-            raise BackendProtocolError(f"{provider_name} thread ID is invalid")
-        self._access_transactions.assert_owned_access(self.workspace, session_id)
-        effective_fingerprint = (
-            definition.fingerprint if fingerprint is None else fingerprint
-        )
-        if provider_thread_records.PROVIDER_FINGERPRINT_PATTERN.fullmatch(effective_fingerprint) is None:
-            raise BackendProtocolError("provider thread fingerprint is invalid")
-        manifest = provider_session_artifacts.read_manifest(self.workspace, session_id, missing_ok=False)
-        assert manifest is not None
-        provider_thread_records.store_thread_record(
-            manifest,
-            definition,
-            thread_id,
-            tainted=tainted,
-            effective_fingerprint=effective_fingerprint,
-        )
-        provider_session_artifacts.write_manifest(self.workspace, session_id, manifest)
-
-    def _taint_thread(
-        self,
-        session_id: str,
-        definition: AgentDefinition,
-        *,
-        fingerprint: str | None = None,
-    ) -> None:
-        manifest = provider_session_artifacts.read_manifest(self.workspace, session_id, missing_ok=False)
-        assert manifest is not None
-        if not provider_thread_records.taint_thread_record(
-            manifest, definition, fingerprint=fingerprint,
-        ):
-            return
-        provider_session_artifacts.write_manifest(self.workspace, session_id, manifest)
 
     def _assert_provider_work_ready(self, session_id: str) -> None:
         """Require ready durable state and access already held by this backend."""

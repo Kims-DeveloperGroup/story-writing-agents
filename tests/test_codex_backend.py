@@ -25,7 +25,7 @@ from typing import Any, get_type_hints
 from unittest import mock
 from story_writing_agents import CONVERSATION_CONTEXT_POLICY, CONVERSATION_EVENT_SCHEMA_VERSION, AgentBackend, AgentReply, AgentRequest, BoundAgent, CHARACTER_CUSTODIAN, ConversationContextWindow, ConversationEvent, ConversationEventKind, ConversationReply, ConversationRequest, ConversationRetrievalAction, ConversationRetrievalActionHandler, ConversationRetrievalActionKind, ConversationRetrievalAnswerAction, ConversationRetrievalObservation, ConversationRetrievalReadAction, ConversationRetrievalReadObservation, ConversationRetrievalReply, ConversationRetrievalRequest, ConversationRetrievalSearchAction, ConversationRetrievalSearchItem, ConversationRetrievalSearchObservation, ConversationRetrievalSource, EXECUTION_SPECIALIST, PLOT_ARCHITECT, Phase, PromptFileReference, ROSTER, ReplyTrace, ReplyTraceOrigin, SessionAccessState, SessionDurableState, SessionLifecycleState, Workspace
 from story_writing_agents import cli as cli_module
-from story_writing_agents import backend as backend_module, provider_session_artifacts, provider_thread_records
+from story_writing_agents import backend as backend_module, provider_manifest_thread_store, provider_session_artifacts, provider_thread_records
 from story_writing_agents.conversation_retrieval import CONVERSATION_RETRIEVAL_POLICY, ConversationRagAttemptOutcome, ConversationRagContext, ConversationRagExcerpt, serialize_conversation_retrieval_observation
 from story_writing_agents.models import AgentReplyKind, AgentReplyNextPhase
 from story_writing_agents.conversation_rag import ConversationRagDocumentIdentity, ConversationRagDocumentKey, ConversationRagOutcome, ConversationRagReason, ConversationRagSourceReference
@@ -256,17 +256,17 @@ def _rejected_response_artifact_patch():
         "record_rejected_response",)
 
 
-def _wrapped_thread_taint_patch(backend, wrapped):
+def _wrapped_thread_taint_patch():
     return mock.patch.object(
-        backend, "_taint_thread",
-        wraps=wrapped,
+        provider_manifest_thread_store, "taint_manifest_thread",
+        wraps=provider_manifest_thread_store.taint_manifest_thread,
     )
 
 
-def _wrapped_thread_store_patch(backend, wrapped):
+def _wrapped_thread_store_patch():
     return mock.patch.object(
-        backend, "_store_thread",
-        wraps=wrapped,
+        provider_manifest_thread_store, "store_manifest_thread",
+        wraps=provider_manifest_thread_store.store_manifest_thread,
     )
 
 
@@ -2507,7 +2507,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         execution_workspace = await self.enterAsyncContext(
             bound._direct_codex_execution_workspace(session_id, None)
         )
-        original_store_thread = backend._store_thread
+        original_store_thread = provider_manifest_thread_store.store_manifest_thread
 
         def begin(*_args: object, **_kwargs: object) -> Lifecycle:
             events.append("begin")
@@ -2531,7 +2531,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         with (
             _fresh_literal_object_side_effect(backend, '_begin_legacy_agent_exchange', begin),
             mock.patch.object(backend._codex_adapter, "invoke", side_effect=invoke),
-            mock.patch.object(backend, "_store_thread", side_effect=store_thread),
+            mock.patch.object(provider_manifest_thread_store, "store_manifest_thread", side_effect=store_thread),
         ):
             reply = await self._invoke_empty_contract(
                 backend, bound,
@@ -6086,12 +6086,14 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         for index, (label, failure) in enumerate(failures):
             with self.subTest(failure=label):
                 thread_id = f"decode-thread-{index}"
-                backend._store_thread(
+                provider_manifest_thread_store.store_manifest_thread(
+                    backend.workspace,
                     session_id,
                     definition,
                     thread_id,
                     tainted=False,
                     fingerprint=continuation_fingerprint,
+                    require_owned_access=backend._access_transactions.assert_owned_access,
                 )
                 invoke = mock.AsyncMock(
                     return_value=ProviderResult(
@@ -6105,13 +6107,13 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
 
                 with (
                     mock.patch.object(backend._codex_adapter, "invoke", invoke),
-                    _wrapped_thread_taint_patch(backend, backend._taint_thread) as taint,
+                    _wrapped_thread_taint_patch() as taint,
                     mock.patch.object(
                         provider_session_artifacts,
                         "write_manifest",
                         wraps=provider_session_artifacts.write_manifest,
                     ) as write_manifest,
-                    _wrapped_thread_store_patch(backend, backend._store_thread) as store_thread,
+                    _wrapped_thread_store_patch() as store_thread,
                 ):
                     with self.assertRaises(BackendProtocolError) as caught:
                         await self._invoke_empty_contract(
@@ -6125,6 +6127,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
 
                 invoke.assert_awaited_once()
                 taint.assert_called_once_with(
+                    backend.workspace,
                     session_id,
                     definition,
                     fingerprint=continuation_fingerprint,
@@ -6173,24 +6176,26 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         ):
             with self.subTest(error=label):
                 thread_id = f"provider-error-thread-{index}"
-                backend._store_thread(
+                provider_manifest_thread_store.store_manifest_thread(
+                    backend.workspace,
                     session_id,
                     definition,
                     thread_id,
                     tainted=False,
                     fingerprint=continuation_fingerprint,
+                    require_owned_access=backend._access_transactions.assert_owned_access,
                 )
                 invoke = mock.AsyncMock(side_effect=provider_error)
                 decode = mock.Mock()
                 with (
                     mock.patch.object(backend._codex_adapter, "invoke", invoke),
-                    _wrapped_thread_taint_patch(backend, backend._taint_thread) as taint,
+                    _wrapped_thread_taint_patch() as taint,
                     mock.patch.object(
                         provider_session_artifacts,
                         "write_manifest",
                         wraps=provider_session_artifacts.write_manifest,
                     ) as write_manifest,
-                    _wrapped_thread_store_patch(backend, backend._store_thread) as store_thread,
+                    _wrapped_thread_store_patch() as store_thread,
                 ):
                     with self.assertRaises(BackendProtocolError) as caught:
                         await self._invoke_empty_contract(
@@ -6213,6 +6218,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 self.assertIs(self.thread(session_id)["tainted"], should_taint)
                 if should_taint:
                     taint.assert_called_once_with(
+                        backend.workspace,
                         session_id,
                         definition,
                         fingerprint=continuation_fingerprint,
@@ -9031,12 +9037,14 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     )
                     stored_thread = f"stored-{suffix}"
                     rejected_thread = f"rejected-{suffix}"
-                    backend._store_thread(
+                    provider_manifest_thread_store.store_manifest_thread(
+                        backend.workspace,
                         session_id,
                         definition,
                         stored_thread,
                         tainted=False,
                         fingerprint=continuation_fingerprint,
+                        require_owned_access=backend._access_transactions.assert_owned_access,
                     )
                     prior_cause = RuntimeError(f"prior-cause-{suffix}")
                     if decode_kind == "protocol":
@@ -9082,8 +9090,8 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                             "record_rejected_response",
                             side_effect=storage_failure,
                         ) as record,
-                        _wrapped_thread_taint_patch(backend, backend._taint_thread) as taint,
-                        _wrapped_thread_store_patch(backend, backend._store_thread) as store,
+                        _wrapped_thread_taint_patch() as taint,
+                        _wrapped_thread_store_patch() as store,
                     ):
                         try:
                             await self._invoke_empty_contract(
@@ -9111,6 +9119,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                         failure_category=PROVIDER_ERROR_ARTIFACT_FAILURE_CATEGORY,
                     )
                     taint.assert_called_once_with(
+                        backend.workspace,
                         session_id,
                         definition,
                         fingerprint=continuation_fingerprint,
@@ -9295,7 +9304,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     )
                 ),
             ),
-            _fresh_literal_object_side_effect(backend, '_store_thread', persistence_failure),
+            _fresh_literal_object_side_effect(provider_manifest_thread_store, 'store_manifest_thread', persistence_failure),
             _rejected_response_artifact_patch() as record,
             self.assertRaises(OSError) as caught,
         ):
