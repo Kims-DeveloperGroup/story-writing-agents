@@ -246,7 +246,8 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
-        invocation_current = suite_budget.load_budget()
+        command_preflight_current = suite_budget.load_budget()
+        invocation_current = dict(command_preflight_current, max_test_source_lines=156558)
         *legacy_move_receipts, defaults_stage, wire_stage, stream_stage, invocation_stage = load_receipt()
         invocation_moves = invocation_stage["moves"]
         stream_current = dict(invocation_current, max_test_source_lines=156459, subtest_caps=dict(invocation_current["subtest_caps"]))
@@ -721,6 +722,8 @@ class SuiteBudgetTests(unittest.TestCase):
         self.assertEqual(invocation_current["max_test_source_lines"], 156558)
         self.assertIsNone(suite_budget.check_monotonic(invocation_current, stream_current))
         self._assert_source_limit_neighbors_rejected(invocation_current, stream_current)
+        self.assertIsNone(suite_budget.check_monotonic(command_preflight_current, invocation_current))
+        self._assert_source_limit_neighbors_rejected(command_preflight_current, invocation_current)
         invocation_caps = invocation_current["subtest_caps"]
         invocation_id = next(move["new_id"] for move in invocation_moves if move["subtest_cap"])
         for changed_caps in (
@@ -848,7 +851,25 @@ class SuiteBudgetTests(unittest.TestCase):
         invocation_ids = list(moved_invocation.ids)
         shared_fixture_ids = sorted((*retained_codex.ids, *invocation_ids, *runner_selection.selected_ids(real, modules=["tests.test_suite_budget"])))
         process_peer = "tests.test_provider_process_streaming.TestProviderProcessStreaming.test_non_streaming_runs_normally"
+        native_cases = "tests.test_codex_invocation_files.CodexInvocationFilesTests."
+        defaults_cases = "tests.test_codex_backend_defaults.CodexBackendDefaultsTests."
+        backend_cases = "tests.test_codex_backend.CodexBackendTestCase."
+        preflight_focused = sorted((
+            native_cases + "test_binding_stages_isolated_agents_and_turn_omits_static_prompt",
+            defaults_cases + "test_optional_model_and_reasoning_argv_are_exact_for_fresh_and_resume",
+            defaults_cases + "test_agent_model_and_reasoning_argv_are_exact",
+        ))
+        preflight_affected = sorted((
+            *preflight_focused,
+            native_cases + "test_missing_executable_nonzero_and_malformed_output_fail_cleanly",
+            backend_cases + "test_binding_stages_immutable_bytes_after_all_source_paths_become_unsafe",
+            backend_cases + "test_hot_same_provider_profile_applies_now_and_reuses_thread",
+            defaults_cases + "test_model_precedence_and_explicit_none_are_exact",
+            defaults_cases + "test_agent_model_and_reasoning_precedence_uses_immutable_snapshot",
+            defaults_cases + "test_backend_runtime_and_prompts_share_one_snapshot_until_next_lifecycle",
+        ))
         for path, focused, affected in (
+            ("src/story_writing_agents/codex_command_preflight.py", preflight_focused, preflight_affected),
             ("tests/test_codex_invocation_files.py", invocation_ids, invocation_ids),
             ("src/story_writing_agents/codex_invocation_files.py", invocation_ids, sorted((*invocation_ids, process_peer))),
             ("tests/codex_native_process_fixture.py", shared_fixture_ids, shared_fixture_ids),

@@ -2256,6 +2256,29 @@
       ]
     },
     {
+      "name": "codex.command-preflight",
+      "boundary": "existing-cases",
+      "paths": [
+        "src/story_writing_agents/codex_command_preflight.py"
+      ],
+      "focused_ids": [
+        "tests.test_codex_backend_defaults.CodexBackendDefaultsTests.test_agent_model_and_reasoning_argv_are_exact",
+        "tests.test_codex_backend_defaults.CodexBackendDefaultsTests.test_optional_model_and_reasoning_argv_are_exact_for_fresh_and_resume",
+        "tests.test_codex_invocation_files.CodexInvocationFilesTests.test_binding_stages_isolated_agents_and_turn_omits_static_prompt"
+      ],
+      "affected_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_binding_stages_immutable_bytes_after_all_source_paths_become_unsafe",
+        "tests.test_codex_backend.CodexBackendTestCase.test_hot_same_provider_profile_applies_now_and_reuses_thread",
+        "tests.test_codex_backend_defaults.CodexBackendDefaultsTests.test_agent_model_and_reasoning_argv_are_exact",
+        "tests.test_codex_backend_defaults.CodexBackendDefaultsTests.test_agent_model_and_reasoning_precedence_uses_immutable_snapshot",
+        "tests.test_codex_backend_defaults.CodexBackendDefaultsTests.test_backend_runtime_and_prompts_share_one_snapshot_until_next_lifecycle",
+        "tests.test_codex_backend_defaults.CodexBackendDefaultsTests.test_model_precedence_and_explicit_none_are_exact",
+        "tests.test_codex_backend_defaults.CodexBackendDefaultsTests.test_optional_model_and_reasoning_argv_are_exact_for_fresh_and_resume",
+        "tests.test_codex_invocation_files.CodexInvocationFilesTests.test_binding_stages_isolated_agents_and_turn_omits_static_prompt",
+        "tests.test_codex_invocation_files.CodexInvocationFilesTests.test_missing_executable_nonzero_and_malformed_output_fail_cleanly"
+      ]
+    },
+    {
       "name": "codex.invocation-files",
       "boundary": "existing-cases",
       "paths": [
