@@ -1,20 +1,13 @@
 """Concrete Codex CLI backend tests with no credentials or network access."""
 from __future__ import annotations
 from tests.test_provider_schema_spec import check_schema
-from tests.lead_fixtures.preparation_data import (
-    exploration_native_contract as _exploration_native_contract,
-    exploration_outcome as _exploration_outcome,
-    premise_native_contract as _premise_native_contract,
-)
 import asyncio
 import contextlib
 import hashlib
 import inspect
 import io
 import json
-import logging
 import os
-import sys
 import tempfile
 import threading
 import unittest
@@ -23,7 +16,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, get_type_hints
 from unittest import mock
-from story_writing_agents import CONVERSATION_CONTEXT_POLICY, CONVERSATION_EVENT_SCHEMA_VERSION, AgentBackend, AgentReply, AgentRequest, BoundAgent, CHARACTER_CUSTODIAN, ConversationContextWindow, ConversationEvent, ConversationEventKind, ConversationReply, ConversationRequest, ConversationRetrievalAction, ConversationRetrievalActionHandler, ConversationRetrievalActionKind, ConversationRetrievalAnswerAction, ConversationRetrievalObservation, ConversationRetrievalReadAction, ConversationRetrievalReadObservation, ConversationRetrievalReply, ConversationRetrievalRequest, ConversationRetrievalSearchAction, ConversationRetrievalSearchItem, ConversationRetrievalSearchObservation, ConversationRetrievalSource, EXECUTION_SPECIALIST, PLOT_ARCHITECT, Phase, PromptFileReference, ROSTER, ReplyTrace, ReplyTraceOrigin, SessionAccessState, SessionDurableState, SessionLifecycleState, Workspace
+from story_writing_agents import CONVERSATION_CONTEXT_POLICY, AgentBackend, AgentReply, AgentRequest, BoundAgent, CHARACTER_CUSTODIAN, ConversationContextWindow, ConversationEvent, ConversationEventKind, ConversationReply, ConversationRequest, ConversationRetrievalAction, ConversationRetrievalActionHandler, ConversationRetrievalActionKind, ConversationRetrievalAnswerAction, ConversationRetrievalObservation, ConversationRetrievalReadAction, ConversationRetrievalReadObservation, ConversationRetrievalReply, ConversationRetrievalRequest, ConversationRetrievalSearchAction, ConversationRetrievalSearchItem, ConversationRetrievalSearchObservation, ConversationRetrievalSource, EXECUTION_SPECIALIST, PLOT_ARCHITECT, Phase, PromptFileReference, ROSTER, ReplyTrace, ReplyTraceOrigin, SessionAccessState, SessionDurableState, Workspace
 from story_writing_agents import cli as cli_module, conversation_retrieval_wire, provider_direct_call_wire
 from story_writing_agents import backend as backend_module, provider_manifest_thread_store, provider_session_artifacts, provider_thread_records
 from story_writing_agents.conversation_retrieval import CONVERSATION_RETRIEVAL_POLICY, serialize_conversation_retrieval_observation
@@ -41,7 +34,6 @@ from story_writing_agents.debug_log import DEBUG_LOG_RELATIVE_PATH, WorkspaceDeb
 from story_writing_agents.prompts import PromptAssembler
 from story_writing_agents.interactive_settings import ProviderRouteEntry, commit_prepared_settings_save, load_settings_state, prepare_settings_save, update_agent_backend
 from story_writing_agents.orchestrator import StoryRuntime
-from story_writing_agents.lead_preparation import authoring_authority, call_rule_factory
 from story_writing_agents.provider_execution_workspace import ProviderExecutionWorkspace, mint_provider_execution_workspace
 from story_writing_agents.workspace.session_resources import provision_session_resources
 from story_writing_agents.workspace.session_artifact_binding import SessionArtifactBindingError
@@ -53,8 +45,9 @@ from story_writing_agents.provider_process import ProcessRequest, run_process, s
 from story_writing_agents.models import StoryFocusedContextMode
 from story_writing_agents.agent_context.request_compaction import compact_context_payload
 from tests.test_agent_context_accounting import _shared_context_payload
-from tests.provider_wire_fixture import assert_guidance, direct_reply, direct_response
-from tests.helpers import SUPPORTED_ARRAY_ITEMS_SCHEMA_VALIDATOR_SOURCE, all_manuscripts, core_snapshot, initialized_workspace, pristine_initialized_workspace
+from tests.provider_wire_fixture import assert_guidance, direct_reply
+from tests.codex_native_process_fixture import CodexNativeProcessFixture, _context_window, _conversation_pair, _tree_snapshot
+from tests.helpers import initialized_workspace, pristine_initialized_workspace
 from story_writing_agents.agent_context.invocation import provider as ctx_provider
 
 from tests.conversation_retrieval_wire_fixture import (
@@ -74,183 +67,6 @@ from tests.test_backend_reply_decoding import (
 )
 
 
-
-
-_FAKE_CODEX = ("""#!/usr/bin/env python3
-import os
-import signal
-
-mode = os.environ.get("STORY_FAKE_CODEX_MODE", "ok")
-substantive_sleep = os.environ.get("STORY_FAKE_CODEX_SLEEP_SUBSTANTIVE") == "1"
-if mode == "sleep" or substantive_sleep:
-    def terminated(signum, frame):
-        descriptor = os.open(
-            os.environ["STORY_FAKE_CODEX_LOG"],
-            os.O_WRONLY | os.O_CREAT | os.O_APPEND,
-            0o600,
-        )
-        try:
-            os.write(descriptor, b'{"terminated":true}\\n')
-        finally:
-            os.close(descriptor)
-        raise SystemExit(143)
-    signal.signal(signal.SIGTERM, terminated)
-
-import json
-from pathlib import Path
-import sys
-import time
-
-argv = sys.argv[1:]
-log_path = Path(os.environ["STORY_FAKE_CODEX_LOG"])
-
-def append(value):
-    with log_path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(value, ensure_ascii=False) + "\\n")
-
-"""
-    + SUPPORTED_ARRAY_ITEMS_SCHEMA_VALIDATOR_SOURCE
-    + inspect.getsource(direct_response)
-    + """
-raw_payload = sys.stdin.read()
-payload = json.loads(raw_payload)
-reference_prelude = payload.get("operation") == "writing_artifact_reference_read"
-agent_directory = Path(argv[argv.index("--cd") + 1])
-developer_instructions = next(
-    value.split("=", 1)[1]
-    for value in argv
-    if value.startswith("developer_instructions=")
-)
-schema_path = Path(argv[argv.index("--output-schema") + 1])
-schema = json.loads(schema_path.read_text(encoding="utf-8"))
-append({
-    "argv": argv,
-    "payload": payload,
-    "raw_payload": raw_payload,
-    "cwd": os.getcwd(),
-    "agents": json.loads(developer_instructions),
-    "schema": schema,
-})
-
-if not schema_uses_supported_array_items(schema):
-    raise SystemExit(86)
-
-if mode == "sleep" or substantive_sleep:
-    time.sleep(30)
-if mode == "delay":
-    time.sleep(0.25)
-if mode == "nonzero_invalid_stderr":
-    os.write(
-        sys.stderr.fileno(),
-        b"PRIVATE_INVALID_UTF8_STDERR\\xff\\xfe\\x80\\n",
-    )
-    raise SystemExit(7)
-if mode == "nonzero" or os.environ.get("STORY_FAKE_CODEX_FAIL_SUBSTANTIVE") == "1":
-    if "conversation_id" in payload:
-        sensitive = [payload.get("user_input_text", "")]
-        sensitive.extend(item["content_text"] for item in payload["conversation_history"])
-    elif "user_input_text" in payload:
-        sensitive = [payload.get("user_input_text", "")]
-        sensitive.extend(
-            item["content_text"]
-            for item in payload.get("conversation_history", [])
-        )
-    else:
-        sensitive = []
-    prefix = "X" * 5000 if os.environ.get("STORY_FAKE_CODEX_LONG_DIAGNOSTIC") else ""
-    print(
-        prefix
-        + "simulated provider failure: "
-        + " | ".join(sensitive)
-        + " | "
-        + str(agent_directory),
-        file=sys.stderr,
-    )
-    raise SystemExit(7)
-
-output_path = Path(argv[argv.index("--output-last-message") + 1])
-if mode == "symlink_output":
-    output_path.symlink_to(os.environ["STORY_FAKE_CODEX_SYMLINK_TARGET"])
-elif mode == "hardlink_output":
-    os.link(os.environ["STORY_FAKE_CODEX_HARDLINK_TARGET"], output_path)
-elif reference_prelude and "STORY_FAKE_CODEX_REFERENCE_ACTION" in os.environ:
-    output_path.write_text(
-        os.environ["STORY_FAKE_CODEX_REFERENCE_ACTION"],
-        encoding="utf-8",
-    )
-elif mode == "missing_output":
-    pass
-elif "STORY_FAKE_CODEX_PHYSICAL_OUTPUTS" in os.environ:
-    outputs = json.loads(os.environ["STORY_FAKE_CODEX_PHYSICAL_OUTPUTS"])
-    invocations = [
-        json.loads(line)
-        for line in log_path.read_text(encoding="utf-8").splitlines()
-        if line
-    ]
-    physical_index = sum("payload" in item for item in invocations) - 1
-    output_path.write_text(outputs[physical_index], encoding="utf-8")
-elif "STORY_FAKE_CODEX_OUTPUTS" in os.environ:
-    outputs = json.loads(os.environ["STORY_FAKE_CODEX_OUTPUTS"])
-    action_index = payload["conversation_retrieval_control"]["retrieval_action_number"]
-    output_path.write_text(outputs[action_index - 1], encoding="utf-8")
-elif "STORY_FAKE_CODEX_OUTPUT" in os.environ:
-    output_path.write_text(
-        os.environ["STORY_FAKE_CODEX_OUTPUT"],
-        encoding="utf-8",
-    )
-elif mode == "malformed":
-    output_path.write_text("not-json", encoding="utf-8")
-elif "conversation_id" in payload:
-    output_path.write_text(json.dumps({
-        "message": "generated conversation reply",
-    }), encoding="utf-8")
-elif payload["consensus_phase"] == "review_candidate":
-    output_path.write_text(json.dumps({
-        "verdict": "approve",
-        "message": "",
-    }), encoding="utf-8")
-elif payload["consensus_phase"] == "confirm_reviewed_proposal":
-    output_path.write_text(json.dumps({
-        "reviewed_proposal_id": "reviewed-proposal",
-        "reviewed_proposal_digest": "sha256:" + "a" * 64,
-    }), encoding="utf-8")
-elif payload["consensus_phase"] == "synthesize_reviews":
-    output_path.write_text(json.dumps({
-        "next": "finalization",
-        "message": "generated candidate",
-    }), encoding="utf-8")
-else:
-    output_path.write_text(json.dumps({
-        "message": "generated candidate",
-    }), encoding="utf-8")
-
-if output_path.exists() and not output_path.is_symlink() and output_path.stat().st_nlink == 1:
-    output_path.write_text(direct_response(output_path.read_text(encoding="utf-8"), payload), encoding="utf-8")
-if mode == "invalid_event_utf8":
-    sys.stdout.buffer.write(b"\\xff")
-elif "resume" not in argv:
-    print(json.dumps({
-        "type": "thread.started",
-        "thread_id": os.environ.get("STORY_FAKE_CODEX_THREAD_ID") or (
-            "thread-"
-            + payload.get("session_id", "reference-read")
-            + "-"
-            + (
-                payload["agent_id"]
-                if "agent_id" in payload
-                else payload["correlation"]["agent_id"]
-            )
-        ),
-    }))
-if "STORY_FAKE_CODEX_USAGE" in os.environ:
-    print(json.dumps({
-        "type": "turn.completed",
-        "usage": json.loads(os.environ["STORY_FAKE_CODEX_USAGE"]),
-    }))
-""")
-
-
-_TIMESTAMP = "2026-08-15T01:02:03+00:00"
 
 
 def _fresh_literal_object_side_effect(target, attribute, value):
@@ -274,54 +90,6 @@ def _wrapped_thread_store_patch():
         provider_manifest_thread_store, "store_manifest_thread",
         wraps=provider_manifest_thread_store.store_manifest_thread,
     )
-
-
-def _conversation_pair(turn_id: str,
-    sequence: int = 1, *,
-    session_id: str = "story_session",
-    conversation_id: str = "conversation_a", recipient: str = PLOT_ARCHITECT,
-    user_content: str = "visible question", outcome_content: str = "visible answer",
-    outcome_kind: ConversationEventKind = ConversationEventKind.AGENT_REPLY,
-) -> tuple[ConversationEvent, ConversationEvent]:
-    def event(offset: int,
-        kind: ConversationEventKind, sender: str,
-        target: str, content: str,
-    ) -> ConversationEvent:
-        return ConversationEvent(CONVERSATION_EVENT_SCHEMA_VERSION,
-            session_id, conversation_id,
-            turn_id, sequence + offset,
-            _TIMESTAMP, sender,
-            target, kind,
-            content,)
-
-    user = event(0, ConversationEventKind.USER_MESSAGE, "user", recipient, user_content)
-    sender = (recipient if outcome_kind is ConversationEventKind.AGENT_REPLY else "runtime"
-    )
-    return user, event(1, outcome_kind, sender, "user", outcome_content)
-
-
-def _context_window(events: tuple[ConversationEvent, ...] = (),
-    *, retained_turns: int | None = None,
-    retained_utf8_bytes: int | None = None, omitted_turns: int = 0,
-) -> ConversationContextWindow:
-    retained = (len({event.turn_id for event in events})
-        if retained_turns is None else retained_turns
-    )
-    retained_bytes = (sum(len(event.content.encode("utf-8")) for event in events)
-        if retained_utf8_bytes is None else retained_utf8_bytes
-    )
-    return ConversationContextWindow(events=events,
-        total_complete_turns=retained + omitted_turns, retained_turns=retained,
-        omitted_turns=omitted_turns, retained_utf8_bytes=retained_bytes,
-        truncated=omitted_turns > 0,)
-
-
-def _tree_snapshot(root: Path) -> dict[str, bytes | None]:
-    if not root.exists():
-        return {}
-    return {path.relative_to(root).as_posix(): (
-            None if path.is_dir() else path.read_bytes())
-        for path in sorted(root.rglob("*"))}
 
 
 def _provider_error_records(workspace: Any) -> list[dict[str, object]]:
@@ -893,7 +661,7 @@ def _configure_process_stop(process, events, first_wait, final_wait):
 
 
 
-class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
+class CodexBackendTestCase(CodexNativeProcessFixture, unittest.IsolatedAsyncioTestCase):
     async def _invoke_empty_contract(self, backend, bound, *, session_id, decode, execution_workspace, **scope):
         return await backend._invoke_provider_structured(
             bound, session_id=session_id, **scope, schema={}, payload={},
@@ -902,63 +670,6 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         backend = self._backend_with_fake_codex()
         self.create_provisioned_session_with_access(backend, session_id)
         return backend
-    async def _bind_definition(self, backend):
-        definition = self.definition()
-        return definition, await backend.bind(definition)
-    def _managed_backend(self):
-        backend = self._backend_with_fake_codex()
-        self.addCleanup(backend.close)
-        return backend
-    def _provisioned_backend(self, session_id):
-        backend = self._managed_backend()
-        self.create_provisioned_session_with_access(backend, session_id)
-        return backend
-    async def _provisioned_bound(self, session_id):
-        backend = self._provisioned_backend(session_id)
-        return backend, await backend.bind(self.definition())
-    def _backend_with_fake_codex(self):
-        return AgentBackend(
-            self.workspace,
-            executable=str(self.executable))
-
-    def setUp(self) -> None:
-        asyncio_diagnostics = logging.StreamHandler(sys.stderr)
-        logging.getLogger("asyncio").addHandler(asyncio_diagnostics)
-        self.addCleanup(asyncio_diagnostics.close)
-        self.addCleanup(logging.getLogger("asyncio").removeHandler, asyncio_diagnostics)
-        self.workspace = pristine_initialized_workspace(self)
-        temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
-        self.fake_directory = Path(temporary.name)
-        native_state = self.fake_directory / "codex-home"
-        native_state.mkdir(mode=0o700)
-        self.executable = self.fake_directory / "fake-codex"
-        self.executable.write_text(_FAKE_CODEX, encoding="utf-8")
-        self.executable.chmod(0o755)
-        self.log_path = self.fake_directory / "invocations.jsonl"
-        self.environment = mock.patch.dict(
-            os.environ,
-            {"STORY_FAKE_CODEX_LOG": str(self.log_path), "CODEX_HOME": str(native_state)},
-        )
-        self.environment.start()
-        self.addCleanup(self.environment.stop)
-
-    def definition(self, agent_id: str = PLOT_ARCHITECT):
-        return PromptAssembler(self.workspace).build_definition(
-            session_id="definition_session",
-            agent_id=agent_id,
-        )
-
-
-    def create_provisioned_session_with_access(
-        self,
-        backend: AgentBackend,
-        session_id: str,
-    ) -> SessionLifecycleState:
-        provision_session_resources(self.workspace.root, session_id)
-        _mark_debug_session_attached(self.workspace)
-        return backend.create_session_with_access(session_id)
-
     async def direct_execution_workspace(
         self,
         bound: object,
@@ -1065,29 +776,6 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual({path: path.read_bytes() for path in retained}, retained)
                 restarted.close()
 
-    async def test_native_mismatched_thread_is_ambiguous_without_replay_proof(self):
-        backend, bound = await self._provisioned_bound('story_session')
-        await bound.converse(self.conversation_request())
-        before = len(self.provider_invocations())
-        native_failures = []
-        invoke = backend._codex_adapter.invoke
-
-        async def observe_native_failure(*args, **kwargs):
-            try:
-                return await invoke(*args, **kwargs)
-            except ProviderInvocationError as failure:
-                native_failures.append(failure)
-                raise
-
-        with mock.patch.object(backend._codex_adapter, "parse_events", return_value=({"type": "thread.started", "thread_id": "foreign-thread"},)), mock.patch.object(backend._codex_adapter, "invoke", new=observe_native_failure):
-            with self.assertRaisesRegex(BackendProtocolError, "different continuation identity") as caught:
-                await bound.converse(self.conversation_request())
-        self.assertEqual(len(native_failures), 1)
-        self.assertIsNone(native_failures[0].continuation_rejection)
-        self.assertEqual(len(self.provider_invocations()), before + 1)
-        await bound.converse(self.conversation_request())
-        self.assertNotIn("resume", self.provider_invocations()[-1]["argv"])
-
     def antigravity_definition(self, agent_id: str = PLOT_ARCHITECT):
         return PromptAssembler(
             self.workspace,
@@ -1096,39 +784,6 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             session_id="definition_session",
             agent_id=agent_id,
         )
-
-    def request(
-        self,
-        *,
-        session_id: str = "story_session",
-        debate_id: str = "debate_one",
-        agent_id: str = PLOT_ARCHITECT,
-        phase: Phase = Phase.DRAFT,
-        revision_id: str = "r0",
-    ) -> AgentRequest:
-        return AgentRequest(
-            session_id=session_id,
-            debate_id=debate_id,
-            agent_id=agent_id,
-            phase=phase,
-            round_number=0,
-            revision_id=revision_id,
-            task="Perform the requested phase.",
-            user_payload="dynamic user input",
-            candidate_payload="dynamic candidate",
-        )
-
-    def conversation_request(self, **overrides: object) -> ConversationRequest:
-        values: dict[str, object] = {
-            "session_id": "story_session",
-            "conversation_id": "conversation_a",
-            "turn_id": "turn_current",
-            "agent_id": PLOT_ARCHITECT,
-            "content": "visible user request",
-            "context": _context_window(),
-        }
-        values.update(overrides)
-        return ConversationRequest(**values)  # type: ignore[arg-type]
 
     def retrieval_request(
         self,
@@ -1146,25 +801,6 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         }
         values.update(overrides)
         return ConversationRetrievalRequest(**values)  # type: ignore[arg-type]
-
-    def invocations(self) -> list[dict[str, object]]:
-        if not self.log_path.exists():
-            return []
-        with self.log_path.open(encoding="utf-8") as invocation_log:
-            return [
-                json.loads(line)
-                for line in invocation_log
-            ]
-
-    def provider_invocations(self) -> list[dict[str, object]]:
-        return [item for item in self.invocations() if "payload" in item]
-
-    async def wait_for_provider_invocations(self, count: int) -> None:
-        for _ in range(200):
-            if len(self.provider_invocations()) >= count:
-                return
-            await asyncio.sleep(0.01)
-        self.fail(f"fake Codex did not record {count} invocations")
 
     def provider_debug_records(
         self,
@@ -1295,20 +931,6 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             f"builtins.{exception_type.__name__}",
         )
 
-    def thread(self, session_id: str) -> dict[str, object]:
-        manifest = self.workspace.read_json(
-            f"agent_states/orchestrator_state/provider_sessions/{session_id}.json"
-        )
-        matches = [
-            thread
-            for thread in manifest["provider_threads"].values()
-            if thread["backend"] == "codex"
-            and thread["agent_id"] == PLOT_ARCHITECT
-        ]
-        if not matches:
-            raise KeyError(f"codex:{PLOT_ARCHITECT}")
-        return max(matches, key=lambda thread: thread["updated_at"])
-
     def write_codex_defaults(
         self,
         model: str | None,
@@ -1435,70 +1057,6 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 ReferenceInvocationState.ACCEPTED,
             ),
         )
-
-    async def test_binding_stages_isolated_agents_and_turn_omits_static_prompt(self) -> None:
-        session_id = "story_session"
-        backend = self._provisioned_backend(session_id)
-        resources = provision_session_resources(self.workspace.root, session_id)
-        definition, bound = await self._bind_definition(backend)
-        staged = (bound.staging_directory / "AGENTS.md").read_text(encoding="utf-8")
-        self.assertIsInstance(bound, BoundAgent)
-        self.assertEqual(bound.vendor, "codex")
-        self.assertNotEqual(bound.staging_directory, resources.identity.worktree_root)
-        self.assertIn(definition.system_prompt_file.read_text(), staged)
-        self.assertIn(definition.persona_file.read_text(), staged)
-        with mock.patch("story_writing_agents.codex_adapter.run_process",
-                        wraps=sys.modules["story_writing_agents.codex_adapter"].run_process) as run:
-            reply = await bound.invoke(self.request(session_id=session_id))
-        request = run.call_args.args[0]
-        self.assertIsNone(request.cwd)
-        self.assertEqual(request.execution_workspace.worktree_root, resources.identity.worktree_root)
-        output = Path(request.command[request.command.index("--output-last-message") + 1])
-        native_arguments = dict(session_root=resources.identity.worktree_root,
-                                session_container=resources.identity.worktree_root.parent,
-                                staging=bound.staging_directory.resolve(), output=output)
-        self.assertEqual(backend._codex_adapter._native_state_directory(**native_arguments),
-                         Path(os.environ["CODEX_HOME"]).resolve())
-        for unsafe_state in ("relative", resources.identity.worktree_root,
-                             resources.identity.worktree_root.parent, bound.staging_directory,
-                             output.parent, self.workspace.root, self.fake_directory / "missing"):
-            with mock.patch.dict(os.environ, {"CODEX_HOME": str(unsafe_state)}):
-                with self.assertRaisesRegex(ProviderInvocationError, "native state directory is unsafe") as unsafe:
-                    backend._codex_adapter._native_state_directory(**native_arguments)
-                self.assertFalse(unsafe.exception.taint_existing_thread)
-        self.assertEqual(reply.content, "generated candidate")
-        invocation = self.invocations()[0]
-        argv = invocation["argv"]
-        self.assertEqual(invocation["cwd"], str(resources.identity.worktree_root))
-        self.assertEqual(argv[argv.index("--cd") + 1], ".")
-        self.assertIn("read-only", argv)
-        self.assertIn("project_root_markers=[]", argv)
-        self.assertIn("--ignore-user-config", argv)
-        self.assertIn("--ignore-rules", argv)
-        self.assertIn("developer_instructions=" + json.dumps(staged, ensure_ascii=False), argv)
-        self.assertNotIn(definition.system_prompt_file.read_text(), invocation["raw_payload"])
-        self.assertNotIn(definition.persona_file.read_text(), invocation["raw_payload"])
-        self.assertEqual(sum(c.serialized_utf8_bytes for c in bound._provider_binding.binding_components), len(staged.encode()))
-        self.assertFalse((resources.identity.worktree_root / "AGENTS.md").exists())
-        root = resources.identity.worktree_root
-        moved = root.with_name(root.name + "-moved")
-        root.rename(moved)
-        self.addCleanup(moved.rename, root)
-        before = len(self.invocations())
-        with self.assertRaises(SessionArtifactBindingError) as caught:
-            await bound.invoke(self.request(session_id=session_id))
-        self.assertEqual(str(caught.exception), "session artifact resources are unavailable")
-        self.assertEqual(len(self.invocations()), before)
-
-
-
-
-
-
-
-
-
-
 
     async def test_binding_stages_immutable_bytes_after_all_source_paths_become_unsafe(
         self,
@@ -4427,251 +3985,6 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         ):
             self.assertNotIn(metadata_name, serialized)
 
-    async def test_conversation_projects_exact_payload_schema_and_no_artifacts(
-        self,
-    ) -> None:
-        session_id = "conversation_session"
-        conversation_id = "conversation_a"
-        prior_user, prior_reply = _conversation_pair(
-            "turn_prior",
-            session_id=session_id,
-            conversation_id=conversation_id,
-            user_content="prior visible question",
-            outcome_content="prior visible answer",
-        )
-        current_user = _conversation_pair(
-            "turn_current",
-            session_id=session_id,
-            conversation_id=conversation_id,
-            user_content="current visible question",
-        )[0]
-        context = _context_window(
-            (prior_user, prior_reply),
-        )
-
-        definition = self.definition()
-        static_content = [
-            reference.read_text() for reference in definition.file_references()
-        ]
-        backend = self._provisioned_backend(session_id)
-        bound = await backend.bind(definition)
-        request = self.conversation_request(
-            session_id=session_id,
-            conversation_id=conversation_id,
-            content=current_user.content,
-            context=context,
-        )
-        visible_reply = "  line\n\t\x00\x1b 한🙂  "
-        raw_reply = json.dumps(
-            {"message": visible_reply}
-        )
-        discussion_before = _tree_snapshot(self.workspace.path("discussion_logs"))
-        core_before = core_snapshot(self.workspace)
-        manuscripts_before = all_manuscripts(self.workspace)
-        output_directory = self.fake_directory / "conversation-output"
-        output_directory.mkdir()
-
-        with mock.patch(
-            "story_writing_agents.backend.tempfile.mkdtemp",
-            return_value=str(output_directory),
-        ):
-            with mock.patch.dict(
-                os.environ,
-                {"STORY_FAKE_CODEX_OUTPUT": raw_reply},
-            ):
-                reply = await bound.converse(request)
-
-        self.assertFalse(output_directory.exists())
-        self.assertEqual(
-            reply,
-            ConversationReply(
-                session_id=session_id,
-                conversation_id=conversation_id,
-                turn_id="turn_current",
-                content=visible_reply,
-                trace=ReplyTrace(
-                    role=PLOT_ARCHITECT,
-                    action="reply",
-                    context_sources=("current_input", "conversation_history"),
-                    recovered_fields=(),
-                    origin=ReplyTraceOrigin.PROVIDER,
-                ),
-            ),
-        )
-        invocation = self.provider_invocations()[0]
-        payload = invocation["payload"]
-        self.assertEqual(
-            set(payload),
-            {
-                "session_id",
-                "conversation_id",
-                "turn_id",
-                "agent_id",
-                "user_input_text",
-                "conversation_history",
-                "protocol_version",
-                "contract_guidance",
-            },
-        )
-        self.assertEqual(
-            tuple(payload[field] for field in tuple(payload)[:5]),
-            (
-                session_id,
-                conversation_id,
-                "turn_current",
-                PLOT_ARCHITECT,
-                current_user.content,
-            ),
-        )
-        context_fields = ("turn_id", "sender", "recipient", "message_type", "content_text")
-        self.assertTrue(
-            all(tuple(item) == context_fields for item in payload["conversation_history"])
-        )
-        self.assertEqual(
-            [tuple(item.values()) for item in payload["conversation_history"]],
-            [
-                (
-                    event.turn_id,
-                    event.sender,
-                    event.recipient,
-                    event.kind.value,
-                    event.content,
-                )
-                for event in (prior_user, prior_reply)
-            ],
-        )
-        schema = invocation["schema"]
-        self.assertEqual(check_schema(schema), ())
-        self.assertEqual(set(schema["properties"]), {"response_type", "response_text"})
-        self.assertEqual(schema["required"], ["response_type", "response_text"])
-        self.assertFalse(schema["additionalProperties"])
-        self.assertEqual(schema["properties"]["response_type"]["enum"], ["conversation_reply"])
-        self.assertEqual(schema["properties"]["response_text"]["minLength"], 1)
-        assert_guidance(self, payload, schema)
-        payload_text = json.dumps(payload, ensure_ascii=False)
-        for content in static_content:
-            if content:
-                self.assertNotIn(content, payload_text)
-
-        self.assertEqual(
-            _tree_snapshot(self.workspace.path("discussion_logs")),
-            discussion_before,
-        )
-        self.assertEqual(core_snapshot(self.workspace), core_before)
-        self.assertEqual(all_manuscripts(self.workspace), manuscripts_before)
-        self.assertEqual(
-            request.context.events,
-            (prior_user, prior_reply),
-        )
-        self.assertEqual(self.workspace.inspect_session(session_id)["debates"], [])
-        from story_writing_agents.agent_context.invocation.context_execution import AgentContextService
-        from story_writing_agents.agent_context.contracts.call_offers import ContextInvocationKind
-        from story_writing_agents.agent_context.invocation.requests import ContextInvocationRequest
-        from story_writing_agents.agent_context.sources.active_debate import ActiveDebateSourceAdapter
-        from story_writing_agents.agent_context.sources.focused_conversation import FocusedConversationSourceAdapter
-        from story_writing_agents.agent_context.sources.own_agent_state import OwnAgentStateSourceAdapter
-        from story_writing_agents.agent_context.sources.writing_artifact import WritingArtifactSourceAdapter
-        from story_writing_agents.conversation_storage import (
-            compose_filesystem_conversation_storage)
-        from story_writing_agents.lead_provider_contracts import (
-            LeadExplorationConstraints, LeadProviderConstraints, LeadResultRuleSeed,
-            PremiseDecisionConstraints)
-        from story_writing_agents.orchestrator import (
-            LeadContractError)
-        OrchestrationLeadCallFactory = call_rule_factory.OrchestrationLeadCallFactory
-        from tests.provider_wire_fixture import lead_fixture_response, lead_fixture_result
-        from tests.agent_context.invocation.execution_fixture import make_material as _material, make_materials as _materials
-
-        service = AgentContextService(self.workspace)
-        storage = compose_filesystem_conversation_storage(self.workspace)
-        repository = WritingArtifactRepository(self.workspace.root)
-
-        async def bound_call(call_id, family, summary=None):
-            nonlocal schema, payload, response
-            authored = lead_fixture_result(json.loads(response)["agent_action"]["task_result"])
-            inputs = tuple(item["input_id"] for item in payload.get("inputs", ()))
-            if family == "lead-exploration-response-v1":
-                authored["response_details"]["ideas"][0]["basis_input_ids"] = {}
-            result_constraints = (LeadExplorationConstraints() if summary is None else
-                PremiseDecisionConstraints("native-question", input_ids=("user_input",),
-                    reply_alternatives=(("native-reply", ("native-alternative",)),)))
-
-            def authorize(answer, _authorization):
-                if summary is None:
-                    findings = result_constraints.diagnose(answer)
-                    if findings:
-                        raise LeadContractError(findings)
-                elif summary:
-                    result_constraints.validate_summary(json.loads(answer))
-                else:
-                    result_constraints.validate_analysis(json.loads(answer))
-
-            factory = OrchestrationLeadCallFactory(
-                LeadProviderConstraints(input_ids=inputs, source_ids=inputs),
-                LeadResultRuleSeed.declare(family, schema), ContextInvocationKind.LEAD.value,
-                definition.language, authorize, authoring_authority.core_reviewer)
-            materials = _materials(payload)
-            current = service.scope(scope.session_id, scope.subject_kind, scope.subject_id,
-                LEAD_ORCHESTRATOR)
-            returned = None
-
-            class ObservedProvider:
-                def __getattr__(self, name):
-                    return getattr(provider, name)
-
-                async def invoke_context(self, request):
-                    nonlocal schema, payload, response, returned
-                    schema, payload = request.schema, request.payload
-                    response = lead_fixture_response(
-                        request, authored, family=1 if summary is False else 0)
-                    returned = await provider.invoke_context(request)
-                    return returned
-
-            request = ContextInvocationRequest(session_id=current.session_id,
-                subject_kind=current.subject_kind, subject_id=current.subject_id,
-                agent_id=LEAD_ORCHESTRATOR, operation_id=call_id, result_correlation_id=call_id,
-                materials=materials, result_contract=factory,
-                invocation_kind=ContextInvocationKind.LEAD,
-                physical_call_limit=1)
-            await service.invoke(request, ObservedProvider(),
-                writing_artifacts=WritingArtifactSourceAdapter(repository, current),
-                focused_conversation=FocusedConversationSourceAdapter(
-                    storage.catalog, storage.event_store, current, None),
-                active_debate=ActiveDebateSourceAdapter(self.workspace, current, None),
-                own_agent_state=OwnAgentStateSourceAdapter(self.workspace, current))
-            return returned
-
-        schema, payload = _exploration_native_contract()
-        definition = self.definition(LEAD_ORCHESTRATOR)
-        provider = (await backend.bind(definition))._context_provider()
-        scope = ContextScope("workspace-context", session_id, ContextSubjectKind.CONVERSATION, "native-exploration", LEAD_ORCHESTRATOR)
-        response, invocations = _exploration_outcome("Native provisional 한글 possibility.", basis_input_ids=()), []
-        async def invoke(_binding, invocation):
-            invocations.append(invocation)
-            return ProviderResult("codex-exploration-thread", response, usage=ProviderUsage(input_tokens=1, output_tokens=1), actual_transport_utf8_bytes=len(invocation.payload_json))
-        with mock.patch.object(backend._codex_adapter, "invoke", new=invoke):
-            explored = await bound_call(
-                "codex-exploration-parity-call", "lead-exploration-response-v1")
-        self.assertEqual((invocations[0].schema, invocations[0].payload_json), (schema, canonical_provider_json(payload)))
-        self.assertEqual(check_schema(invocations[0].schema), ())
-        self.assertEqual((explored.response_text, explored.accounting.state), (response, ProviderCallState.SUBMITTED))
-
-
-        for summary in (False, True):
-            schema, payload, response = _premise_native_contract(summary)
-            native_calls = []
-            async def premise_invoke(binding, invocation):
-                native_calls.append(invocation)
-                return ProviderResult("native-premise-" + str(summary), response, usage=ProviderUsage(input_tokens=1, output_tokens=1), actual_transport_utf8_bytes=len(invocation.payload_json))
-            scope = ContextScope("workspace-context", session_id, ContextSubjectKind.CONVERSATION, "native-premise-" + str(summary), LEAD_ORCHESTRATOR)
-            with mock.patch.object(backend._codex_adapter, "invoke", new=premise_invoke):
-                returned = await bound_call("native-premise-call-" + str(summary),
-                    "premise-decision-summary-v1" if summary else "premise-analysis-response-v1",
-                    summary)
-            self.assertEqual((native_calls[0].schema, native_calls[0].payload_json), (schema, canonical_provider_json(payload)))
-            self.assertEqual(check_schema(native_calls[0].schema), ())
-            self.assertEqual((returned.response_text, returned.accounting.state), (response, ProviderCallState.SUBMITTED))
-
     async def test_conversation_request_snapshots_derived_event_content(self) -> None:
         validated = "VALIDATED_CONTEXT_CONTENT"
         unvalidated = "UNVALIDATED_PROVIDER_CONTENT"
@@ -5485,61 +4798,6 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     taint.assert_not_called()
                     write_manifest.assert_not_called()
 
-    async def test_conversation_provider_failures_taint_without_story_mutation(
-        self,
-    ) -> None:
-        session_id = "transaction_failure"
-        backend, bound = await self._provisioned_bound(session_id)
-        discussion_before = _tree_snapshot(self.workspace.path("discussion_logs"))
-        core_before = core_snapshot(self.workspace)
-        manuscripts_before = all_manuscripts(self.workspace)
-        await bound.converse(
-            self.conversation_request(session_id=session_id, turn_id="turn_seed")
-        )
-        cases = (
-            "nonzero",
-            "invalid_event_utf8",
-            "missing_output",
-        )
-        for index, mode in enumerate(cases):
-            with self.subTest(mode=mode):
-                output_directory = self.fake_directory / f"failure-{index}"
-                temporary = contextlib.nullcontext()
-                if mode == "missing_output":
-                    output_directory.mkdir()
-                    temporary = mock.patch(
-                        "story_writing_agents.backend.tempfile.mkdtemp",
-                        return_value=str(output_directory),
-                    )
-                with temporary:
-                    with mock.patch.dict(
-                        os.environ,
-                        {"STORY_FAKE_CODEX_MODE": mode},
-                    ):
-                        with self.assertRaises(BackendProtocolError):
-                            await bound.converse(
-                                self.conversation_request(
-                                    session_id=session_id,
-                                    turn_id=f"turn_failed_{index}",
-                                )
-                            )
-                if mode == "missing_output":
-                    self.assertFalse(output_directory.exists())
-                self.assertIs(self.thread(session_id)["tainted"], True)
-                await bound.converse(
-                    self.conversation_request(
-                        session_id=session_id,
-                        turn_id=f"turn_recovery_{index}",
-                    )
-                )
-
-        self.assertEqual(
-            _tree_snapshot(self.workspace.path("discussion_logs")),
-            discussion_before,
-        )
-        self.assertEqual(core_snapshot(self.workspace), core_before)
-        self.assertEqual(all_manuscripts(self.workspace), manuscripts_before)
-
     async def test_conversation_cancellation_taints_then_restarts_cleanly(
         self,
     ) -> None:
@@ -5836,145 +5094,6 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("after one repair attempt", reply.content)
                 self.assertNotIn(hidden, reply.content)
                 self.assertNotIn("\x1b", reply.content)
-
-    async def test_missing_executable_nonzero_and_malformed_output_fail_cleanly(
-        self,
-    ) -> None:
-        cases = (
-            (str(self.fake_directory / "missing"), None, "was not found"),
-            (str(self.executable), "nonzero", "status 7"),
-            (str(self.executable), "malformed", "malformed structured output"),
-        )
-        for index, (executable, mode, message) in enumerate(cases):
-            with self.subTest(mode=mode):
-                session = f"failure_session_{index}"
-                backend = AgentBackend(self.workspace, executable=executable)
-                accounting_records: list[ProviderCallAccounting] = []
-                backend._context_accounting_sink = accounting_records.append
-                self.create_provisioned_session_with_access(backend, session)
-                bound = await backend.bind(self.definition())
-                environment = (
-                    contextlib.nullcontext()
-                    if mode is None
-                    else mock.patch.dict(
-                        os.environ,
-                        {"STORY_FAKE_CODEX_MODE": mode},
-                    )
-                )
-                with environment:
-                    if mode == "malformed":
-                        reply = await bound.invoke(self.request(session_id=session))
-                        self.assertIn("after one repair attempt", reply.content)
-                        caught = None
-                    else:
-                        with self.assertRaisesRegex(
-                            BackendProtocolError,
-                            message,
-                        ) as raised:
-                            await bound.invoke(self.request(session_id=session))
-                        caught = raised
-                if caught is not None:
-                    self.assertNotIn("dynamic user input", str(caught.exception))
-                self.assertEqual(
-                    len(accounting_records),
-                    2 if mode == "malformed" else 1,
-                )
-                expected_state = (
-                    ProviderCallState.PREPARED
-                    if mode is None
-                    else ProviderCallState.SUBMITTED
-                )
-                self.assertTrue(
-                    all(record.state is expected_state for record in accounting_records)
-                )
-                if expected_state is ProviderCallState.PREPARED:
-                    self.assertIsNone(accounting_records[0].actual_transport_utf8_bytes)
-                else:
-                    self.assertGreater(
-                        accounting_records[0].actual_transport_utf8_bytes or 0,
-                        0,
-                    )
-                backend.close()
-
-
-
-    async def test_timeout_terminates_the_codex_process(self) -> None:
-        backend = AgentBackend(
-            self.workspace,
-            executable=str(self.executable),
-            timeout_seconds=0.3,
-        )
-        self.addCleanup(backend.close)
-        accounting_records: list[ProviderCallAccounting] = []
-        backend._context_accounting_sink = accounting_records.append
-        self.create_provisioned_session_with_access(backend, "timeout_session")
-        bound = await backend.bind(self.definition())
-        real_wait_for = asyncio.wait_for
-        communication_pending = True
-        native_failures = []
-        native_invoke = backend._codex_adapter.invoke
-
-        async def observe_native_failure(*args, **kwargs):
-            try:
-                return await native_invoke(*args, **kwargs)
-            except ProviderInvocationError as failure:
-                native_failures.append(failure)
-                raise
-
-        async def wait_for_after_provider_ready(awaitable, timeout):
-            nonlocal communication_pending
-            if communication_pending:
-                communication_pending = False
-                communication = asyncio.ensure_future(awaitable)
-                await self.wait_for_provider_invocations(1)
-                return await real_wait_for(communication, timeout=0)
-            return await real_wait_for(awaitable, timeout=timeout)
-
-        with (
-            mock.patch.dict(
-                os.environ,
-                {"STORY_FAKE_CODEX_MODE": "sleep"},
-            ),
-            mock.patch(
-                "story_writing_agents.backend.asyncio.wait_for",
-                new=wait_for_after_provider_ready,
-            ),
-            mock.patch.object(backend._codex_adapter, "invoke", new=observe_native_failure),
-        ):
-            with self.assertRaisesRegex(BackendProtocolError, "timed out") as caught:
-                await bound.invoke(self.request(session_id="timeout_session"))
-        self.assertEqual(len(native_failures), 1)
-        self.assertIsNone(native_failures[0].continuation_rejection)
-        self.assertTrue(
-            any(item.get("terminated") is True for item in self.invocations())
-        )
-        self.assertEqual(len(accounting_records), 1)
-        self.assertIs(accounting_records[0].state, ProviderCallState.SUBMITTED)
-        self.assertGreater(accounting_records[0].actual_transport_utf8_bytes or 0, 0)
-
-    async def test_cancellation_terminates_the_codex_process(self) -> None:
-        backend = self._managed_backend()
-        accounting_records: list[ProviderCallAccounting] = []
-        backend._context_accounting_sink = accounting_records.append
-        self.create_provisioned_session_with_access(backend, "cancel_session")
-        bound = await backend.bind(self.definition())
-        with mock.patch.dict(
-            os.environ,
-            {"STORY_FAKE_CODEX_MODE": "sleep"},
-        ):
-            invocation = asyncio.create_task(
-                bound.invoke(self.request(session_id="cancel_session"))
-            )
-            await self.wait_for_provider_invocations(1)
-            invocation.cancel()
-            with self.assertRaises(asyncio.CancelledError):
-                await invocation
-        self.assertTrue(
-            any(item.get("terminated") is True for item in self.invocations())
-        )
-        self.assertEqual(len(accounting_records), 1)
-        self.assertIs(accounting_records[0].state, ProviderCallState.SUBMITTED)
-        self.assertGreater(accounting_records[0].actual_transport_utf8_bytes or 0, 0)
 
     async def test_unexpected_communication_failure_stops_process_and_propagates(
         self,

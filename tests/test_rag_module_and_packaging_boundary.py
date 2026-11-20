@@ -63,12 +63,12 @@ from story_writing_agents.errors import (
 from story_writing_agents.session_lifecycle import SessionAccessState, SessionDurableState, SessionLifecycleState
 from story_writing_agents.workspace import Workspace
 from story_writing_agents import antigravity_adapter, antigravity_recovery_matching, antigravity_response_decoding, antigravity_rules
-from story_writing_agents import codex_adapter, codex_definition_sources, codex_stream_observation
+from story_writing_agents import codex_adapter, codex_definition_sources, codex_invocation_files, codex_stream_observation
 from story_writing_agents.agent_context import ContextComponentBytes
 from story_writing_agents.agent_context.progress import ProviderStreamSink
 from story_writing_agents.agent_context.manifest import ContextScope
 from story_writing_agents.config import ConfigurationSnapshot
-from story_writing_agents.provider_adapter import AgentExecutionProfile
+from story_writing_agents.provider_adapter import AgentExecutionProfile, ProviderInvocation
 from story_writing_agents.lead_preparation import recommendation_preparation, recommendation_requests
 from story_writing_agents.lead_preparation import recommendation_decisions
 from story_writing_agents.lead_task_transitions import LeadTaskRef
@@ -399,8 +399,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 335)
-        self.assertEqual(len(edges), 2023)
+        self.assertEqual(len(modules), 336)
+        self.assertEqual(len(edges), 2026)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -1954,6 +1954,11 @@ class RagModuleBoundaryTests(unittest.TestCase):
             {"story_writing_agents.codex_adapter"},
         )
         codex_definition_owner = "story_writing_agents.codex_definition_sources"
+        invocation_files_owner = codex_invocation_files.__name__
+        self.assertEqual({target for source, target in edges if source == invocation_files_owner},
+                         {"story_writing_agents.agent_context", "story_writing_agents.provider_adapter"})
+        self.assertEqual({source for source, target in edges if target == invocation_files_owner},
+                         {"story_writing_agents.codex_adapter"})
         self.assertEqual(
             {target for source, target in edges if source == codex_definition_owner},
             {
@@ -2292,6 +2297,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
                                             "matches_current_finish", "native_steps")),
             (codex_definition_sources, ("read_definition_source",)),
             (codex_stream_observation, ("make_stream_line_handler",)),
+            (codex_invocation_files, ("create_invocation_files", "write_schema", "regular_output_exists",
+                                      "read_regular_output", "remove_invocation_directory")),
             (provider_thread_records, (
                 "PROVIDER_FINGERPRINT_PATTERN", "PROVIDER_SESSION_SCHEMA_VERSION", "PROVIDER_THREAD_ID_PATTERN",
                 "context_thread_id", "context_thread_key_payload", "context_thread_record", "context_thread_relative",
@@ -2417,6 +2424,11 @@ class RagModuleBoundaryTests(unittest.TestCase):
              ("steps", "prompt", "structured_output", "native_error"), (), {}, True),
             (codex_definition_sources, "read_definition_source", ("definition",), (), {}, True),
             (codex_stream_observation, "make_stream_line_handler", ("agent_id", "stream_sink"), (), {}, True),
+            (codex_invocation_files, "create_invocation_files", ("make_temporary_directory",), (), {}, True),
+            (codex_invocation_files, "write_schema", ("schema_path", "invocation"), (), {}, True),
+            (codex_invocation_files, "regular_output_exists", ("path",), (), {}, True),
+            (codex_invocation_files, "read_regular_output", ("path",), (), {}, True),
+            (codex_invocation_files, "remove_invocation_directory", ("temporary_directory",), (), {}, True),
             (provider_thread_records, "validate_thread_record", ("value",), (), {}, True),
             (provider_session_timestamps, "record_timestamp", (), (), {}, True),
             (provider_session_claim_guard, "access_claim_guard",
@@ -2588,6 +2600,11 @@ class RagModuleBoundaryTests(unittest.TestCase):
             {"agent_id": str, "stream_sink": ProviderStreamSink | None, "return": Callable[[bytes], None]},
         )
         self.assertIs(codex_adapter.codex_stream_observation, codex_stream_observation)
+        self.assertIs(codex_adapter.codex_invocation_files, codex_invocation_files)
+        self.assertEqual(get_type_hints(codex_invocation_files.create_invocation_files),
+                         {"make_temporary_directory": Callable[[], Callable[..., str]], "return": tuple[Path, Path, Path]})
+        self.assertEqual(get_type_hints(codex_invocation_files.write_schema),
+                         {"schema_path": Path, "invocation": ProviderInvocation, "return": type(None)})
         self.assertNotIn("make_stream_line_handler", story_writing_agents.__all__)
         self.assertFalse(hasattr(story_writing_agents, "make_stream_line_handler"))
         self.assertIs(codex_adapter.codex_definition_sources, codex_definition_sources)
@@ -3074,6 +3091,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             "story_writing_agents/backend_reply_decoding.py",
             "story_writing_agents/codex_definition_sources.py",
             "story_writing_agents/codex_stream_observation.py",
+            "story_writing_agents/codex_invocation_files.py",
             "story_writing_agents/provider_session_access_records.py",
             "story_writing_agents/provider_session_access_transactions.py",
             "story_writing_agents/provider_context_thread_store.py",

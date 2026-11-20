@@ -24,9 +24,7 @@ from typing import Any
 from .agent_context import (
     ContextComponentBytes,
     ProviderCallState,
-    ProviderJsonEncodingError,
     ProviderUsage,
-    canonical_provider_json,
 )
 from .agents import ROSTER
 from .config import ConfigurationSnapshot
@@ -53,6 +51,7 @@ from .provider_process import (
 )
 from .provider_execution_workspace import ProviderExecutionWorkspace
 import story_writing_agents.codex_definition_sources as codex_definition_sources
+import story_writing_agents.codex_invocation_files as codex_invocation_files
 import story_writing_agents.codex_native_context as codex_native_context
 import story_writing_agents.codex_stream_observation as codex_stream_observation
 from .codex_event_decoding import (
@@ -66,76 +65,6 @@ from .codex_event_decoding import (
 _SAFE_THREAD_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 # Leave substantial headroom below Darwin's aggregate process-argument ceiling.
 _MAX_DEVELOPER_INSTRUCTIONS_ARGUMENT_UTF8_BYTES = 512 * 1_024
-_MAX_CODEX_RESPONSE_UTF8_BYTES = 8 * 1_024 * 1_024
-
-
-def _regular_output_exists(path: Path) -> bool:
-    """Return whether the exact output name is currently a regular file."""
-
-    try:
-        observed = os.stat(path, follow_symlinks=False)
-    except OSError:
-        return False
-    return stat.S_ISREG(observed.st_mode)
-
-
-def _read_regular_output(path: Path) -> str:
-    """Read one bounded, identity-stable regular output without following links."""
-
-    descriptor = os.open(
-        path,
-        os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK,
-    )
-    try:
-        before = os.fstat(descriptor)
-        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
-            raise OSError("Codex response output is not a regular file")
-        if before.st_size > _MAX_CODEX_RESPONSE_UTF8_BYTES:
-            raise ProviderInvocationError(
-                "Codex CLI returned oversized structured output",
-                taint_existing_thread=True,
-            )
-        content = bytearray()
-        while len(content) <= _MAX_CODEX_RESPONSE_UTF8_BYTES:
-            chunk = os.read(
-                descriptor,
-                min(
-                    64 * 1_024,
-                    _MAX_CODEX_RESPONSE_UTF8_BYTES + 1 - len(content),
-                ),
-            )
-            if not chunk:
-                break
-            content.extend(chunk)
-        if len(content) > _MAX_CODEX_RESPONSE_UTF8_BYTES:
-            raise ProviderInvocationError(
-                "Codex CLI returned oversized structured output",
-                taint_existing_thread=True,
-            )
-        after = os.fstat(descriptor)
-        if not stat.S_ISREG(after.st_mode) or after.st_nlink != 1:
-            raise OSError("Codex response output is not a regular file")
-        if (
-            before.st_dev,
-            before.st_ino,
-            before.st_mode,
-            before.st_nlink,
-            before.st_size,
-            before.st_mtime_ns,
-            before.st_ctime_ns,
-        ) != (
-            after.st_dev,
-            after.st_ino,
-            after.st_mode,
-            after.st_nlink,
-            after.st_size,
-            after.st_mtime_ns,
-            after.st_ctime_ns,
-        ):
-            raise OSError("Codex response output changed while being read")
-        return bytes(content).decode("utf-8", errors="strict")
-    finally:
-        os.close(descriptor)
 
 
 class CodexAdapter:
@@ -292,11 +221,9 @@ class CodexAdapter:
         native_deadline = time.monotonic() + self.timeout_seconds
         native_precheck = None
         native_pre_source_path, native_pre_rediscovered = None, False
-        temporary_directory = Path(
-            self._make_temporary_directory()(prefix="story-codex-output-")
+        temporary_directory, schema_path, output_path = (
+            codex_invocation_files.create_invocation_files(self._make_temporary_directory)
         )
-        schema_path = temporary_directory / "schema.json"
-        output_path = temporary_directory / "response.json"
         invocation_failure: BaseException | None = None
         submitted = False
         stdin: bytes | None = None
@@ -306,14 +233,7 @@ class CodexAdapter:
                     "Codex request could not be encoded",
                     taint_existing_thread=False,
                 )
-            try:
-                schema_json = canonical_provider_json(invocation.schema)
-            except ProviderJsonEncodingError:
-                raise ProviderInvocationError(
-                    "Codex request could not be encoded",
-                    taint_existing_thread=False,
-                ) from None
-            schema_path.write_bytes(schema_json)
+            codex_invocation_files.write_schema(schema_path, invocation)
             command = self._execution_command(
                 binding.staging_directory,
                 schema_path,
@@ -419,7 +339,7 @@ class CodexAdapter:
 
             try:
                 authentication = (
-                    None if result.returncode == 0 and _regular_output_exists(output_path)
+                    None if result.returncode == 0 and codex_invocation_files.regular_output_exists(output_path)
                     else self._authentication_failure(result.stdout)
                 )
                 if authentication is not None:
@@ -467,7 +387,7 @@ class CodexAdapter:
                         )
                 try:
                     execution_workspace.require_current()
-                    response_text = _read_regular_output(output_path)
+                    response_text = codex_invocation_files.read_regular_output(output_path)
                 except OSError as exc:
                     raise ProviderInvocationError(
                         "Codex CLI did not write its final response",
@@ -513,7 +433,7 @@ class CodexAdapter:
             invocation_failure = failure
             raise
         finally:
-            shutil.rmtree(temporary_directory, ignore_errors=True)
+            codex_invocation_files.remove_invocation_directory(temporary_directory)
             try:
                 execution_workspace.require_current()
             except BaseException as validation_failure:

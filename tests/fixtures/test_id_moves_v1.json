@@ -15407,6 +15407,85 @@
           "expected_method_ast_sha256": "27eff0eea6f8e98da35eb7a283168ba8372995030cbc5fefcc9175026c08e137"
         }
       ]
+    },
+    {
+      "schema_version": 1,
+      "issue": 1093,
+      "origin_commit": "ca2c170550b4e95431286557a8f5b90ab0d6c079",
+      "original_caps_sha256": "34c1ce085f7c98e0fa9ddbee984b179cf8cebd6130c1abcb294145effcb56883",
+      "expected_caps_sha256": "1ac2e7bda1efe31a96baadd6eb2cdb1756d74932de542e73397aa70fe78dfd9b",
+      "moves": [
+        {
+          "old_id": "tests.test_codex_backend.CodexBackendTestCase.test_binding_stages_isolated_agents_and_turn_omits_static_prompt",
+          "new_id": "tests.test_codex_invocation_files.CodexInvocationFilesTests.test_binding_stages_isolated_agents_and_turn_omits_static_prompt",
+          "subtest_cap": 0,
+          "source": "tests/test_codex_backend.py",
+          "destination": "tests/test_codex_invocation_files.py",
+          "original_file_sha256": "65bbdde70ca0aa729ba052416f2cfce801c4cd0df232aba7d1aa7c4d98b551cc",
+          "original_method_ast_sha256": "d70785ef0fb600f831b34a43e9367cbee526676da3d1d7f9ca2fda668d63b424",
+          "expected_method_ast_sha256": "d70785ef0fb600f831b34a43e9367cbee526676da3d1d7f9ca2fda668d63b424"
+        },
+        {
+          "old_id": "tests.test_codex_backend.CodexBackendTestCase.test_cancellation_terminates_the_codex_process",
+          "new_id": "tests.test_codex_invocation_files.CodexInvocationFilesTests.test_cancellation_terminates_the_codex_process",
+          "subtest_cap": 0,
+          "source": "tests/test_codex_backend.py",
+          "destination": "tests/test_codex_invocation_files.py",
+          "original_file_sha256": "65bbdde70ca0aa729ba052416f2cfce801c4cd0df232aba7d1aa7c4d98b551cc",
+          "original_method_ast_sha256": "7ca36ecd4f36814d8e4fb80a584cd449663e29608d1979326089090fd332c39f",
+          "expected_method_ast_sha256": "7ca36ecd4f36814d8e4fb80a584cd449663e29608d1979326089090fd332c39f"
+        },
+        {
+          "old_id": "tests.test_codex_backend.CodexBackendTestCase.test_conversation_projects_exact_payload_schema_and_no_artifacts",
+          "new_id": "tests.test_codex_invocation_files.CodexInvocationFilesTests.test_conversation_projects_exact_payload_schema_and_no_artifacts",
+          "subtest_cap": 0,
+          "source": "tests/test_codex_backend.py",
+          "destination": "tests/test_codex_invocation_files.py",
+          "original_file_sha256": "65bbdde70ca0aa729ba052416f2cfce801c4cd0df232aba7d1aa7c4d98b551cc",
+          "original_method_ast_sha256": "3b0dbea8faa2819533bf51a17d7c325153607f181db60f1d7e5a4d24d3de18e7",
+          "expected_method_ast_sha256": "3b0dbea8faa2819533bf51a17d7c325153607f181db60f1d7e5a4d24d3de18e7"
+        },
+        {
+          "old_id": "tests.test_codex_backend.CodexBackendTestCase.test_conversation_provider_failures_taint_without_story_mutation",
+          "new_id": "tests.test_codex_invocation_files.CodexInvocationFilesTests.test_conversation_provider_failures_taint_without_story_mutation",
+          "subtest_cap": 3,
+          "source": "tests/test_codex_backend.py",
+          "destination": "tests/test_codex_invocation_files.py",
+          "original_file_sha256": "65bbdde70ca0aa729ba052416f2cfce801c4cd0df232aba7d1aa7c4d98b551cc",
+          "original_method_ast_sha256": "7c82629e664cee29564bf7f02c65fcfff77b863b7b26c40b8483c6a2ce363922",
+          "expected_method_ast_sha256": "7c82629e664cee29564bf7f02c65fcfff77b863b7b26c40b8483c6a2ce363922"
+        },
+        {
+          "old_id": "tests.test_codex_backend.CodexBackendTestCase.test_missing_executable_nonzero_and_malformed_output_fail_cleanly",
+          "new_id": "tests.test_codex_invocation_files.CodexInvocationFilesTests.test_missing_executable_nonzero_and_malformed_output_fail_cleanly",
+          "subtest_cap": 3,
+          "source": "tests/test_codex_backend.py",
+          "destination": "tests/test_codex_invocation_files.py",
+          "original_file_sha256": "65bbdde70ca0aa729ba052416f2cfce801c4cd0df232aba7d1aa7c4d98b551cc",
+          "original_method_ast_sha256": "3f515c9390c62e54b41fe71f2ddccb7d944b3ab61866276090d5248ec4af3203",
+          "expected_method_ast_sha256": "3f515c9390c62e54b41fe71f2ddccb7d944b3ab61866276090d5248ec4af3203"
+        },
+        {
+          "old_id": "tests.test_codex_backend.CodexBackendTestCase.test_native_mismatched_thread_is_ambiguous_without_replay_proof",
+          "new_id": "tests.test_codex_invocation_files.CodexInvocationFilesTests.test_native_mismatched_thread_is_ambiguous_without_replay_proof",
+          "subtest_cap": 0,
+          "source": "tests/test_codex_backend.py",
+          "destination": "tests/test_codex_invocation_files.py",
+          "original_file_sha256": "65bbdde70ca0aa729ba052416f2cfce801c4cd0df232aba7d1aa7c4d98b551cc",
+          "original_method_ast_sha256": "9ba13adf9d929320da2d247fe22f8c4b34f48ead5a883867d65d2c4d85d71906",
+          "expected_method_ast_sha256": "9ba13adf9d929320da2d247fe22f8c4b34f48ead5a883867d65d2c4d85d71906"
+        },
+        {
+          "old_id": "tests.test_codex_backend.CodexBackendTestCase.test_timeout_terminates_the_codex_process",
+          "new_id": "tests.test_codex_invocation_files.CodexInvocationFilesTests.test_timeout_terminates_the_codex_process",
+          "subtest_cap": 0,
+          "source": "tests/test_codex_backend.py",
+          "destination": "tests/test_codex_invocation_files.py",
+          "original_file_sha256": "65bbdde70ca0aa729ba052416f2cfce801c4cd0df232aba7d1aa7c4d98b551cc",
+          "original_method_ast_sha256": "3ec1121ce78671820f74434786ad475bb6220cd6c615a74542eb81ceb15280a6",
+          "expected_method_ast_sha256": "3ec1121ce78671820f74434786ad475bb6220cd6c615a74542eb81ceb15280a6"
+        }
+      ]
     }
   ]
 }
