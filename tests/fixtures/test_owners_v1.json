@@ -19623,6 +19623,28 @@
         "tests.test_codex_backend.CodexBackendTestCase.test_thread_persists_across_backend_instances_and_debates"
       ],
       "depends_on": []
+    },
+    {
+      "name": "provider.session-transitions",
+      "boundary": "existing-cases",
+      "paths": [
+        "src/story_writing_agents/provider_session_transitions.py"
+      ],
+      "focused_ids": [
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_create_release_and_duplicate_create_use_exact_artifacts",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_reopen_and_pause_transitions_preserve_provider_state_and_noops",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_write_failures_compensate_only_newly_acquired_access"
+      ],
+      "affected_ids": [
+        "tests.test_antigravity_parity.AntigravityParityTests.test_v2_lifecycle_partitions_threads_and_retains_exact_resume",
+        "tests.test_codex_backend.CodexBackendTestCase.test_pause_disables_invocation_and_reopen_retains_thread",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_create_release_and_duplicate_create_use_exact_artifacts",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_lifecycle_operation_records_cover_success_rejection_and_cleanup",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_release_token_comparison_and_close_preserve_foreign_claims",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_reopen_and_pause_transitions_preserve_provider_state_and_noops",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_write_failures_compensate_only_newly_acquired_access"
+      ],
+      "depends_on": []
     }
   ],
   "ignored_names": [
