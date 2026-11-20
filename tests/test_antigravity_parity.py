@@ -21,7 +21,7 @@ from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 from story_writing_agents import AgentBackend, AgentReply, AgentRequest, BackendProtocolError, CHARACTER_CUSTODIAN, ConversationContextWindow, ConversationReply, ConversationRequest, ConversationRetrievalAction, ConversationRetrievalAnswerAction, ConversationRetrievalObservation, ConversationRetrievalReply, ConversationRetrievalRequest, ConversationRetrievalSearchAction, ConversationRetrievalSearchObservation, EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR, PLOT_ARCHITECT, Phase, ReplyTrace, ReplyTraceOrigin, SessionAccessState, SessionDurableState, SessionPausedError, Verdict
-from story_writing_agents import provider_session_artifacts
+from story_writing_agents import provider_manifest_thread_store, provider_session_artifacts
 from story_writing_agents.config import ConfigManager
 from story_writing_agents.conversations.session_context import MAX_PROVIDER_INPUT_UTF8_BYTES, MAX_PROVIDER_PAYLOAD_UTF8_BYTES
 from story_writing_agents.workspace.session_resources import provision_session_resources
@@ -56,8 +56,11 @@ def _seed_draft_request_fixture(case, session_id):
     return case.request(session_id=session_id, debate_id='seed', phase=Phase.DRAFT)
 
 
-def _wrapped_thread_taint_patch(backend, wrapped):
-    return mock.patch.object(backend, '_taint_thread', wraps=wrapped)
+def _wrapped_thread_taint_patch():
+    return mock.patch.object(
+        provider_manifest_thread_store, 'taint_manifest_thread',
+        wraps=provider_manifest_thread_store.taint_manifest_thread,
+    )
 
 
 def _provider_error_records(workspace: object) -> list[dict[str, object]]:
@@ -1763,7 +1766,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(backend._antigravity_adapter, "invoke", invoke):
             await bound.invoke(self.request(session_id=debate_session, debate_id='agy-capture-seed',
                 phase=Phase.DRAFT, revision_id='seed-revision'))
-            with (_wrapped_thread_taint_patch(backend, backend._taint_thread) as taint):
+            with (_wrapped_thread_taint_patch() as taint):
                 rejected_reply = await bound.invoke(self.request(session_id=debate_session,
                     debate_id=debate_id, phase=Phase.DRAFT, revision_id='expected-revision'))
             self.assertIn("after one repair attempt", rejected_reply.content)
@@ -1772,7 +1775,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(rejected_reply.validation_details[0].startswith("Original response"))
             self.assertTrue(rejected_reply.validation_details[1].startswith("Repair response"))
             self.assertNotIn("PRIVATE_AGY_REJECTED", repr(rejected_reply.validation_details))
-            taint.assert_called_once_with(debate_session, definition,
+            taint.assert_called_once_with(backend.workspace, debate_session, definition,
                 fingerprint=self.antigravity_thread(self.manifest(debate_session))['fingerprint'])
             failed_thread = self.antigravity_thread(self.manifest(debate_session))
             self.assertEqual({'thread_id': failed_thread['thread_id'], 'tainted': failed_thread[
@@ -1905,7 +1908,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         request = ConversationRequest(session_id=session_id,
             conversation_id='identity-conversation', turn_id='identity-turn',
             agent_id=PLOT_ARCHITECT, content='PRIVATE_IDENTITY_REQUEST', context=_empty_context())
-        with (_wrapped_thread_taint_patch(backend, backend._taint_thread) as taint,
+        with (_wrapped_thread_taint_patch() as taint,
             mock.patch.dict(os.environ, {'STORY_FAKE_AGY_MODE': 'empty_required_string'})):
             reply = await bound.converse(request)
 
@@ -1918,7 +1921,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             tuple("$.response_text: expected at least 1 characters, got 0" in chunk
                   for chunk in reply.validation_details),
             (True, True), )
-        taint.assert_called_once_with(session_id, definition, fingerprint=self.antigravity_thread(
+        taint.assert_called_once_with(backend.workspace, session_id, definition, fingerprint=self.antigravity_thread(
             self.manifest(session_id))['fingerprint'])
         failure_calls = self.provider_invocations()[-2:]
         self.assertEqual(len(failure_calls), 2)
@@ -1962,7 +1965,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                     _seed_draft_request_fixture(self, session_id)
                 )
                 seeded = self.antigravity_thread(self.manifest(session_id))
-                with (_wrapped_thread_taint_patch(backend, backend._taint_thread) as taint,
+                with (_wrapped_thread_taint_patch() as taint,
                     mock.patch.object(
                         provider_session_artifacts, 'write_manifest',
                         wraps=provider_session_artifacts.write_manifest,
@@ -1989,7 +1992,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                     for prohibited in (('CONFIDENTIAL_PROVIDER', 'CONFIDENTIAL_CREDENTIAL',
                         'authentication', 'environment', 'credentials')):
                         self.assertNotIn(prohibited, malformed_serialized)
-                taint.assert_called_once_with(session_id, definition, fingerprint=seeded[
+                taint.assert_called_once_with(backend.workspace, session_id, definition, fingerprint=seeded[
                     'fingerprint'])
                 write_manifest.assert_called_once()
                 external_error = str(caught.exception)

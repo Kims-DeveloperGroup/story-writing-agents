@@ -19598,6 +19598,31 @@
         "tests.test_provider_auth_recovery.ContextRecoveryTests.test_noninteractive_auth_errors_and_restart_never_replay"
       ],
       "depends_on": []
+    },
+    {
+      "name": "provider.manifest-thread-store",
+      "boundary": "existing-cases",
+      "paths": [
+        "src/story_writing_agents/provider_manifest_thread_store.py"
+      ],
+      "focused_ids": [
+        "tests.test_antigravity_parity.AntigravityParityTests.test_v2_lifecycle_partitions_threads_and_retains_exact_resume",
+        "tests.test_codex_backend.CodexBackendTestCase.test_structured_decode_failures_taint_existing_thread_once",
+        "tests.test_codex_backend.CodexBackendTestCase.test_thread_persists_across_backend_instances_and_debates"
+      ],
+      "affected_ids": [
+        "tests.test_antigravity_parity.AntigravityParityTests.test_completed_rejection_artifacts_match_codex_for_debate_and_conversation",
+        "tests.test_antigravity_parity.AntigravityParityTests.test_protocol_failures_are_fixed_taint_once_and_restart_fresh",
+        "tests.test_antigravity_parity.AntigravityParityTests.test_schema_failure_repairs_then_falls_back_with_runtime_identity",
+        "tests.test_antigravity_parity.AntigravityParityTests.test_v2_lifecycle_partitions_threads_and_retains_exact_resume",
+        "tests.test_codex_backend.CodexBackendTestCase.test_artifact_failure_is_fail_open_and_preserves_decode_exception",
+        "tests.test_codex_backend.CodexBackendTestCase.test_provider_invocation_error_preserves_adapter_cause_and_taint",
+        "tests.test_codex_backend.CodexBackendTestCase.test_response_capture_precedes_accounting_decode_artifact_and_thread",
+        "tests.test_codex_backend.CodexBackendTestCase.test_structured_decode_failures_taint_existing_thread_once",
+        "tests.test_codex_backend.CodexBackendTestCase.test_success_and_noneligible_shared_seam_failures_do_not_capture",
+        "tests.test_codex_backend.CodexBackendTestCase.test_thread_persists_across_backend_instances_and_debates"
+      ],
+      "depends_on": []
     }
   ],
   "ignored_names": [
