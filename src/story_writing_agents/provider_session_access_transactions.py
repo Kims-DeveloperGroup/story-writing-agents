@@ -178,7 +178,7 @@ class ProviderSessionAccessTransactions:
                 raise BackendProtocolError(
                     "provider session access changed during failed creation"
                 )
-            workspace.path(access_claim_relative(session_id)).unlink()
+            workspace.path(access_claim_relative(session_id)).exists()
         except BaseException as cleanup_error:
             failure.add_note(
                 f"failed creation access cleanup: {type(cleanup_error).__name__}"
