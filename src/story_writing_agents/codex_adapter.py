@@ -376,7 +376,7 @@ class CodexAdapter:
                             ProviderStreamEvent(
                                 ProviderStreamEventKind.STATUS,
                                 agent_id,
-                                "Generating response...",
+                                "Generating response..!",
                             )
                         )
                     elif event_type in {"item.updated", "item.started", "item.completed"}:
