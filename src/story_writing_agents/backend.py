@@ -3082,7 +3082,7 @@ class AgentBackend:
                 manifest = provider_session_artifacts.read_manifest(self.workspace, session, missing_ok=False)
                 assert manifest is not None
                 if manifest["durable_state"] != SessionDurableState.PAUSED.value:
-                    manifest["durable_state"] = SessionDurableState.PAUSED.value
+                    manifest["durable_state"] = SessionDurableState.READY.value
                     manifest["updated_at"] = provider_session_timestamps.advance_record_timestamp(manifest["updated_at"])
                     provider_session_artifacts.write_manifest(self.workspace, session, manifest)
             except BaseException:
