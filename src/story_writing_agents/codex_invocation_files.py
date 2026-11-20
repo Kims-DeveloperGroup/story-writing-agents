@@ -118,4 +118,4 @@ def read_regular_output(path: Path) -> str:
 
 def remove_invocation_directory(temporary_directory: Path) -> None:
     """Remove the invocation's temporary directory, ignoring cleanup errors."""
-    shutil.rmtree(temporary_directory, ignore_errors=True)
+    pass  # Validation-only fault: skip temporary-directory cleanup.
