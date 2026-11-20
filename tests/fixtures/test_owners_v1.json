@@ -637,42 +637,71 @@
         "tests.test_agent_exchange_capture.AgentExchangeCaptureContractTests.test_begin_failures_disable_without_leaking_or_raising",
         "tests.test_agent_exchange_capture.AgentExchangeCaptureContractTests.test_constructor_is_io_free_and_begin_projects_exact_request",
         "tests.test_agent_exchange_capture.AgentExchangeCaptureContractTests.test_exact_closed_surfaces_and_no_root_expansion",
-        "tests.test_agent_exchange_capture.AgentExchangeCaptureContractTests.test_response_projects_exact_result_with_usage_and_nulls",
-        "tests.test_agent_exchange_capture.AgentExchangeCaptureLifecycleTests.test_all_response_terminal_outcomes_are_exact_and_share_identity",
-        "tests.test_agent_exchange_capture.AgentExchangeCaptureLifecycleTests.test_concurrent_begins_generate_unique_safe_exchange_ids",
-        "tests.test_agent_exchange_capture.AgentExchangeCaptureLifecycleTests.test_concurrent_response_and_terminal_calls_close_once",
-        "tests.test_agent_exchange_capture.AgentExchangeCaptureLifecycleTests.test_invalid_transitions_are_noops_and_valid_transition_remains_available",
-        "tests.test_agent_exchange_capture.AgentExchangeCaptureLifecycleTests.test_no_response_failures_and_cancellation_matrix_are_exact",
-        "tests.test_agent_exchange_capture.AgentExchangeCaptureLifecycleTests.test_response_and_terminal_are_attempted_at_most_once_before_append",
-        "tests.test_agent_exchange_capture.ProviderDiagnosticCaptureTests.test_backend_forwards_only_typed_diagnostic_without_replacing_failure",
-        "tests.test_agent_exchange_capture.ProviderDiagnosticCaptureTests.test_diagnostic_failures_disabled_logging_and_concurrent_duplicates_are_fail_open",
-        "tests.test_agent_exchange_capture.ProviderDiagnosticCaptureTests.test_diagnostic_value_is_strict_passive_and_hidden_from_repr",
-        "tests.test_agent_exchange_capture.ProviderDiagnosticCaptureTests.test_failure_response_bytes_are_reversible_and_never_accepted",
-        "tests.test_agent_exchange_capture.ProviderDiagnosticCaptureTests.test_failure_response_handles_nonfinite_json_and_codex_jsonl",
-        "tests.test_agent_exchange_capture.ProviderDiagnosticCaptureTests.test_failure_response_preserves_only_error_status_exit_code_and_stderr",
-        "tests.test_agent_exchange_capture.ProviderDiagnosticCaptureTests.test_recovered_success_records_diagnostic_and_none_default_is_unchanged"
+        "tests.test_agent_exchange_capture.AgentExchangeCaptureContractTests.test_response_projects_exact_result_with_usage_and_nulls"
       ],
       "affected_ids": [
         "tests.test_agent_exchange_capture.AgentExchangeCaptureContractTests.test_begin_failures_disable_without_leaking_or_raising",
         "tests.test_agent_exchange_capture.AgentExchangeCaptureContractTests.test_constructor_is_io_free_and_begin_projects_exact_request",
         "tests.test_agent_exchange_capture.AgentExchangeCaptureContractTests.test_exact_closed_surfaces_and_no_root_expansion",
-        "tests.test_agent_exchange_capture.AgentExchangeCaptureContractTests.test_response_projects_exact_result_with_usage_and_nulls",
-        "tests.test_agent_exchange_capture.AgentExchangeCaptureLifecycleTests.test_all_response_terminal_outcomes_are_exact_and_share_identity",
-        "tests.test_agent_exchange_capture.AgentExchangeCaptureLifecycleTests.test_concurrent_begins_generate_unique_safe_exchange_ids",
-        "tests.test_agent_exchange_capture.AgentExchangeCaptureLifecycleTests.test_concurrent_response_and_terminal_calls_close_once",
-        "tests.test_agent_exchange_capture.AgentExchangeCaptureLifecycleTests.test_invalid_transitions_are_noops_and_valid_transition_remains_available",
-        "tests.test_agent_exchange_capture.AgentExchangeCaptureLifecycleTests.test_no_response_failures_and_cancellation_matrix_are_exact",
-        "tests.test_agent_exchange_capture.AgentExchangeCaptureLifecycleTests.test_response_and_terminal_are_attempted_at_most_once_before_append",
-        "tests.test_agent_exchange_capture.ProviderDiagnosticCaptureTests.test_backend_forwards_only_typed_diagnostic_without_replacing_failure",
-        "tests.test_agent_exchange_capture.ProviderDiagnosticCaptureTests.test_diagnostic_failures_disabled_logging_and_concurrent_duplicates_are_fail_open",
-        "tests.test_agent_exchange_capture.ProviderDiagnosticCaptureTests.test_diagnostic_value_is_strict_passive_and_hidden_from_repr",
-        "tests.test_agent_exchange_capture.ProviderDiagnosticCaptureTests.test_failure_response_bytes_are_reversible_and_never_accepted",
-        "tests.test_agent_exchange_capture.ProviderDiagnosticCaptureTests.test_failure_response_handles_nonfinite_json_and_codex_jsonl",
-        "tests.test_agent_exchange_capture.ProviderDiagnosticCaptureTests.test_failure_response_preserves_only_error_status_exit_code_and_stderr",
-        "tests.test_agent_exchange_capture.ProviderDiagnosticCaptureTests.test_recovered_success_records_diagnostic_and_none_default_is_unchanged"
+        "tests.test_agent_exchange_capture.AgentExchangeCaptureContractTests.test_response_projects_exact_result_with_usage_and_nulls"
       ],
       "depends_on": [
-        "tests.test_agent_context_accounting"
+        "tests.test_agent_context_accounting",
+        "agent-exchange-capture-fixture"
+      ]
+    },
+    {
+      "name": "tests.test_agent_exchange_capture_lifecycle",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/test_agent_exchange_capture_lifecycle.py"
+      ],
+      "focused_ids": [
+        "tests.test_agent_exchange_capture_lifecycle.AgentExchangeCaptureLifecycleTests.test_all_response_terminal_outcomes_are_exact_and_share_identity",
+        "tests.test_agent_exchange_capture_lifecycle.AgentExchangeCaptureLifecycleTests.test_concurrent_begins_generate_unique_safe_exchange_ids",
+        "tests.test_agent_exchange_capture_lifecycle.AgentExchangeCaptureLifecycleTests.test_concurrent_response_and_terminal_calls_close_once",
+        "tests.test_agent_exchange_capture_lifecycle.AgentExchangeCaptureLifecycleTests.test_invalid_transitions_are_noops_and_valid_transition_remains_available",
+        "tests.test_agent_exchange_capture_lifecycle.AgentExchangeCaptureLifecycleTests.test_no_response_failures_and_cancellation_matrix_are_exact",
+        "tests.test_agent_exchange_capture_lifecycle.AgentExchangeCaptureLifecycleTests.test_response_and_terminal_are_attempted_at_most_once_before_append"
+      ],
+      "affected_ids": [
+        "tests.test_agent_exchange_capture_lifecycle.AgentExchangeCaptureLifecycleTests.test_all_response_terminal_outcomes_are_exact_and_share_identity",
+        "tests.test_agent_exchange_capture_lifecycle.AgentExchangeCaptureLifecycleTests.test_concurrent_begins_generate_unique_safe_exchange_ids",
+        "tests.test_agent_exchange_capture_lifecycle.AgentExchangeCaptureLifecycleTests.test_concurrent_response_and_terminal_calls_close_once",
+        "tests.test_agent_exchange_capture_lifecycle.AgentExchangeCaptureLifecycleTests.test_invalid_transitions_are_noops_and_valid_transition_remains_available",
+        "tests.test_agent_exchange_capture_lifecycle.AgentExchangeCaptureLifecycleTests.test_no_response_failures_and_cancellation_matrix_are_exact",
+        "tests.test_agent_exchange_capture_lifecycle.AgentExchangeCaptureLifecycleTests.test_response_and_terminal_are_attempted_at_most_once_before_append"
+      ],
+      "depends_on": [
+        "agent-exchange-capture-fixture"
+      ]
+    },
+    {
+      "name": "tests.test_agent_exchange_provider_diagnostics",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/test_agent_exchange_provider_diagnostics.py"
+      ],
+      "focused_ids": [
+        "tests.test_agent_exchange_provider_diagnostics.ProviderDiagnosticCaptureTests.test_backend_forwards_only_typed_diagnostic_without_replacing_failure",
+        "tests.test_agent_exchange_provider_diagnostics.ProviderDiagnosticCaptureTests.test_diagnostic_failures_disabled_logging_and_concurrent_duplicates_are_fail_open",
+        "tests.test_agent_exchange_provider_diagnostics.ProviderDiagnosticCaptureTests.test_diagnostic_value_is_strict_passive_and_hidden_from_repr",
+        "tests.test_agent_exchange_provider_diagnostics.ProviderDiagnosticCaptureTests.test_failure_response_bytes_are_reversible_and_never_accepted",
+        "tests.test_agent_exchange_provider_diagnostics.ProviderDiagnosticCaptureTests.test_failure_response_handles_nonfinite_json_and_codex_jsonl",
+        "tests.test_agent_exchange_provider_diagnostics.ProviderDiagnosticCaptureTests.test_failure_response_preserves_only_error_status_exit_code_and_stderr",
+        "tests.test_agent_exchange_provider_diagnostics.ProviderDiagnosticCaptureTests.test_recovered_success_records_diagnostic_and_none_default_is_unchanged"
+      ],
+      "affected_ids": [
+        "tests.test_agent_exchange_provider_diagnostics.ProviderDiagnosticCaptureTests.test_backend_forwards_only_typed_diagnostic_without_replacing_failure",
+        "tests.test_agent_exchange_provider_diagnostics.ProviderDiagnosticCaptureTests.test_diagnostic_failures_disabled_logging_and_concurrent_duplicates_are_fail_open",
+        "tests.test_agent_exchange_provider_diagnostics.ProviderDiagnosticCaptureTests.test_diagnostic_value_is_strict_passive_and_hidden_from_repr",
+        "tests.test_agent_exchange_provider_diagnostics.ProviderDiagnosticCaptureTests.test_failure_response_bytes_are_reversible_and_never_accepted",
+        "tests.test_agent_exchange_provider_diagnostics.ProviderDiagnosticCaptureTests.test_failure_response_handles_nonfinite_json_and_codex_jsonl",
+        "tests.test_agent_exchange_provider_diagnostics.ProviderDiagnosticCaptureTests.test_failure_response_preserves_only_error_status_exit_code_and_stderr",
+        "tests.test_agent_exchange_provider_diagnostics.ProviderDiagnosticCaptureTests.test_recovered_success_records_diagnostic_and_none_default_is_unchanged"
+      ],
+      "depends_on": [
+        "agent-exchange-capture-fixture"
       ]
     },
     {
@@ -760,7 +789,7 @@
         "tests.test_agent_exchange_storage.AgentExchangeStorageSecurityTests.test_unsafe_caller_ids_and_unsupported_primitives_fail_safely"
       ],
       "depends_on": [
-        "tests.test_agent_exchange_capture"
+        "agent-exchange-capture-fixture"
       ]
     },
     {
@@ -20287,6 +20316,125 @@
       "depends_on": [
         "codex-event-decoding"
       ]
+    },
+    {
+      "name": "agent-exchange-capture-fixture",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/agent_exchange_capture_fixture.py"
+      ],
+      "focused_ids": [
+        "tests.test_agent_exchange_capture.AgentExchangeCaptureContractTests.test_begin_failures_disable_without_leaking_or_raising",
+        "tests.test_agent_exchange_capture.AgentExchangeCaptureContractTests.test_constructor_is_io_free_and_begin_projects_exact_request",
+        "tests.test_agent_exchange_capture.AgentExchangeCaptureContractTests.test_exact_closed_surfaces_and_no_root_expansion",
+        "tests.test_agent_exchange_capture.AgentExchangeCaptureContractTests.test_response_projects_exact_result_with_usage_and_nulls",
+        "tests.test_agent_exchange_capture_lifecycle.AgentExchangeCaptureLifecycleTests.test_all_response_terminal_outcomes_are_exact_and_share_identity",
+        "tests.test_agent_exchange_capture_lifecycle.AgentExchangeCaptureLifecycleTests.test_concurrent_begins_generate_unique_safe_exchange_ids",
+        "tests.test_agent_exchange_capture_lifecycle.AgentExchangeCaptureLifecycleTests.test_concurrent_response_and_terminal_calls_close_once",
+        "tests.test_agent_exchange_capture_lifecycle.AgentExchangeCaptureLifecycleTests.test_invalid_transitions_are_noops_and_valid_transition_remains_available",
+        "tests.test_agent_exchange_capture_lifecycle.AgentExchangeCaptureLifecycleTests.test_no_response_failures_and_cancellation_matrix_are_exact",
+        "tests.test_agent_exchange_capture_lifecycle.AgentExchangeCaptureLifecycleTests.test_response_and_terminal_are_attempted_at_most_once_before_append",
+        "tests.test_agent_exchange_provider_diagnostics.ProviderDiagnosticCaptureTests.test_backend_forwards_only_typed_diagnostic_without_replacing_failure",
+        "tests.test_agent_exchange_provider_diagnostics.ProviderDiagnosticCaptureTests.test_diagnostic_failures_disabled_logging_and_concurrent_duplicates_are_fail_open",
+        "tests.test_agent_exchange_provider_diagnostics.ProviderDiagnosticCaptureTests.test_diagnostic_value_is_strict_passive_and_hidden_from_repr",
+        "tests.test_agent_exchange_provider_diagnostics.ProviderDiagnosticCaptureTests.test_failure_response_bytes_are_reversible_and_never_accepted",
+        "tests.test_agent_exchange_provider_diagnostics.ProviderDiagnosticCaptureTests.test_failure_response_handles_nonfinite_json_and_codex_jsonl",
+        "tests.test_agent_exchange_provider_diagnostics.ProviderDiagnosticCaptureTests.test_failure_response_preserves_only_error_status_exit_code_and_stderr",
+        "tests.test_agent_exchange_provider_diagnostics.ProviderDiagnosticCaptureTests.test_recovered_success_records_diagnostic_and_none_default_is_unchanged",
+        "tests.test_agent_exchange_storage.AgentExchangeConcurrencyTests.test_threads_serialize_one_agent_and_keep_agent_streams_independent",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageBehaviorTests.test_construction_absent_inventory_and_snapshot_are_noncreating",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageBehaviorTests.test_content_bounds_complete_utf8_prefix_counts_and_full_digest",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageBehaviorTests.test_exact_canonical_schema_key_set_and_request_response_correlation",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageBehaviorTests.test_failed_append_reservations_leave_gaps_without_reuse",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageBehaviorTests.test_global_and_per_stream_sequences_survive_new_store_instances",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageBehaviorTests.test_global_pruning_replaces_split_segment_with_newest_exact_suffix",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageBehaviorTests.test_inventory_is_content_free_ordered_and_snapshot_filters_exact_scope",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageBehaviorTests.test_rotation_keeps_exactly_seven_backups_and_complete_lines",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageFaultTests.test_cleanup_only_failure_is_fixed_and_persisted_record_remains",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageFaultTests.test_control_exception_precedes_cleanup_failure_and_resources_release",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageFaultTests.test_partial_segment_write_rolls_back_and_releases_every_lock",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageFaultTests.test_primary_capacity_failure_precedes_cleanup_io_failure",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageFaultTests.test_prune_and_retained_suffix_replace_failures_recover_next_append",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageFaultTests.test_segment_fsync_failure_rolls_back_and_preserves_prior_record",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageFaultTests.test_stream_state_and_rotation_failures_leave_permitted_gaps",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageSecurityTests.test_duplicate_or_decreasing_sequences_are_rejected",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageSecurityTests.test_malformed_records_states_sequences_and_metadata_fail_closed",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageSecurityTests.test_oversized_state_segment_and_managed_namespace_are_bounded",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageSecurityTests.test_process_lock_contention_is_bounded_and_released",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageSecurityTests.test_root_debug_store_and_session_alias_swaps_are_rejected",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageSecurityTests.test_sibling_debug_logs_are_never_scanned_modified_or_counted",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageSecurityTests.test_state_high_water_below_logs_and_pending_state_are_corrupt",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageSecurityTests.test_symlink_hardlink_fifo_modes_and_unexpected_names_are_rejected",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageSecurityTests.test_unsafe_caller_ids_and_unsupported_primitives_fail_safely"
+      ],
+      "affected_ids": [
+        "tests.test_agent_exchange_capture.AgentExchangeCaptureContractTests.test_begin_failures_disable_without_leaking_or_raising",
+        "tests.test_agent_exchange_capture.AgentExchangeCaptureContractTests.test_constructor_is_io_free_and_begin_projects_exact_request",
+        "tests.test_agent_exchange_capture.AgentExchangeCaptureContractTests.test_exact_closed_surfaces_and_no_root_expansion",
+        "tests.test_agent_exchange_capture.AgentExchangeCaptureContractTests.test_response_projects_exact_result_with_usage_and_nulls",
+        "tests.test_agent_exchange_capture_lifecycle.AgentExchangeCaptureLifecycleTests.test_all_response_terminal_outcomes_are_exact_and_share_identity",
+        "tests.test_agent_exchange_capture_lifecycle.AgentExchangeCaptureLifecycleTests.test_concurrent_begins_generate_unique_safe_exchange_ids",
+        "tests.test_agent_exchange_capture_lifecycle.AgentExchangeCaptureLifecycleTests.test_concurrent_response_and_terminal_calls_close_once",
+        "tests.test_agent_exchange_capture_lifecycle.AgentExchangeCaptureLifecycleTests.test_invalid_transitions_are_noops_and_valid_transition_remains_available",
+        "tests.test_agent_exchange_capture_lifecycle.AgentExchangeCaptureLifecycleTests.test_no_response_failures_and_cancellation_matrix_are_exact",
+        "tests.test_agent_exchange_capture_lifecycle.AgentExchangeCaptureLifecycleTests.test_response_and_terminal_are_attempted_at_most_once_before_append",
+        "tests.test_agent_exchange_provider_diagnostics.ProviderDiagnosticCaptureTests.test_backend_forwards_only_typed_diagnostic_without_replacing_failure",
+        "tests.test_agent_exchange_provider_diagnostics.ProviderDiagnosticCaptureTests.test_diagnostic_failures_disabled_logging_and_concurrent_duplicates_are_fail_open",
+        "tests.test_agent_exchange_provider_diagnostics.ProviderDiagnosticCaptureTests.test_diagnostic_value_is_strict_passive_and_hidden_from_repr",
+        "tests.test_agent_exchange_provider_diagnostics.ProviderDiagnosticCaptureTests.test_failure_response_bytes_are_reversible_and_never_accepted",
+        "tests.test_agent_exchange_provider_diagnostics.ProviderDiagnosticCaptureTests.test_failure_response_handles_nonfinite_json_and_codex_jsonl",
+        "tests.test_agent_exchange_provider_diagnostics.ProviderDiagnosticCaptureTests.test_failure_response_preserves_only_error_status_exit_code_and_stderr",
+        "tests.test_agent_exchange_provider_diagnostics.ProviderDiagnosticCaptureTests.test_recovered_success_records_diagnostic_and_none_default_is_unchanged",
+        "tests.test_agent_exchange_storage.AgentExchangeConcurrencyTests.test_threads_serialize_one_agent_and_keep_agent_streams_independent",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageBehaviorTests.test_construction_absent_inventory_and_snapshot_are_noncreating",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageBehaviorTests.test_content_bounds_complete_utf8_prefix_counts_and_full_digest",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageBehaviorTests.test_exact_canonical_schema_key_set_and_request_response_correlation",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageBehaviorTests.test_failed_append_reservations_leave_gaps_without_reuse",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageBehaviorTests.test_global_and_per_stream_sequences_survive_new_store_instances",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageBehaviorTests.test_global_pruning_replaces_split_segment_with_newest_exact_suffix",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageBehaviorTests.test_inventory_is_content_free_ordered_and_snapshot_filters_exact_scope",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageBehaviorTests.test_rotation_keeps_exactly_seven_backups_and_complete_lines",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageFaultTests.test_cleanup_only_failure_is_fixed_and_persisted_record_remains",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageFaultTests.test_control_exception_precedes_cleanup_failure_and_resources_release",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageFaultTests.test_partial_segment_write_rolls_back_and_releases_every_lock",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageFaultTests.test_primary_capacity_failure_precedes_cleanup_io_failure",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageFaultTests.test_prune_and_retained_suffix_replace_failures_recover_next_append",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageFaultTests.test_segment_fsync_failure_rolls_back_and_preserves_prior_record",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageFaultTests.test_stream_state_and_rotation_failures_leave_permitted_gaps",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageSecurityTests.test_duplicate_or_decreasing_sequences_are_rejected",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageSecurityTests.test_malformed_records_states_sequences_and_metadata_fail_closed",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageSecurityTests.test_oversized_state_segment_and_managed_namespace_are_bounded",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageSecurityTests.test_process_lock_contention_is_bounded_and_released",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageSecurityTests.test_root_debug_store_and_session_alias_swaps_are_rejected",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageSecurityTests.test_sibling_debug_logs_are_never_scanned_modified_or_counted",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageSecurityTests.test_state_high_water_below_logs_and_pending_state_are_corrupt",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageSecurityTests.test_symlink_hardlink_fifo_modes_and_unexpected_names_are_rejected",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageSecurityTests.test_unsafe_caller_ids_and_unsupported_primitives_fail_safely"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "provider-exchange-finalization",
+      "boundary": "provider-exchange-finalization",
+      "paths": [
+        "src/story_writing_agents/agent_exchanges/provider_finalization.py"
+      ],
+      "focused_ids": [
+        "tests.test_agent_exchange_capture_lifecycle.AgentExchangeCaptureLifecycleTests.test_all_response_terminal_outcomes_are_exact_and_share_identity",
+        "tests.test_codex_backend.CodexBackendTestCase.test_debate_and_conversation_capture_order_scope_and_exact_bodies",
+        "tests.test_codex_backend.CodexBackendTestCase.test_response_capture_precedes_accounting_decode_artifact_and_thread"
+      ],
+      "affected_ids": [
+        "tests.test_agent_exchange_capture_lifecycle.AgentExchangeCaptureLifecycleTests.test_all_response_terminal_outcomes_are_exact_and_share_identity",
+        "tests.test_agent_exchange_provider_diagnostics.ProviderDiagnosticCaptureTests.test_backend_forwards_only_typed_diagnostic_without_replacing_failure",
+        "tests.test_antigravity_parity.AntigravityParityTests.test_completed_rejection_artifacts_match_codex_for_debate_and_conversation",
+        "tests.test_antigravity_parity.AntigravityParityTests.test_standard_invocation_captures_and_accounts_rendered_schema_only_for_antigravity",
+        "tests.test_codex_backend.CodexBackendTestCase.test_debate_and_conversation_capture_order_scope_and_exact_bodies",
+        "tests.test_codex_backend.CodexBackendTestCase.test_debate_and_conversation_rejections_repair_then_fall_back_and_capture",
+        "tests.test_codex_backend.CodexBackendTestCase.test_malformed_direct_json_keeps_terminal_code_and_safe_detail",
+        "tests.test_codex_backend.CodexBackendTestCase.test_response_capture_precedes_accounting_decode_artifact_and_thread"
+      ],
+      "depends_on": []
     }
   ],
   "ignored_names": [
