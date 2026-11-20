@@ -3,6 +3,7 @@
 from __future__ import annotations
 import story_writing_agents.backend_reply_decoding as backend_reply_decoding
 import story_writing_agents.provider_context_thread_store as provider_context_thread_store
+import story_writing_agents.provider_execution_profiles as provider_execution_profiles
 import story_writing_agents.provider_manifest_thread_store as provider_manifest_thread_store
 import story_writing_agents.provider_session_access_transactions as provider_session_access_transactions
 import story_writing_agents.provider_session_artifacts as provider_session_artifacts
@@ -151,7 +152,6 @@ from .provider_auth_recovery import provider_activity, validate_provider_replay
 from .provider_adapter import (
     DEFAULT_PROVIDER_TIMEOUT_SECONDS,
     AgentExecutionProfile,
-    ExecutionValueSource,
     ProviderAdapter,
     ProviderBinding,
     ProviderInvocation,
@@ -1885,7 +1885,14 @@ class AgentBackend:
         self._generation_lock = threading.RLock()
         self._next_adapter_generation_id = 1
         self._provider_routes = MappingProxyType(dict(provider_routes))
-        profiles = self._resolve_execution_profiles(configuration)
+        profiles = provider_execution_profiles.resolve_execution_profiles(
+            self.workspace,
+            configuration,
+            backend_overrides=self.backend_overrides,
+            explicit_model=self._explicit_model,
+            explicit_antigravity_model=self._explicit_antigravity_model,
+            explicit_antigravity_effort=self._explicit_antigravity_effort,
+        )
         if any(
             provider_routes[agent_id].provider != profiles[agent_id].provider
             for agent_id in ROSTER
@@ -2003,79 +2010,6 @@ class AgentBackend:
                 activation_state="active",
             )
 
-    def _resolve_execution_profiles(
-        self,
-        configuration: ConfigurationSnapshot,
-    ) -> Mapping[str, AgentExecutionProfile]:
-        """Resolve the sole authoritative provider/model/effort roster."""
-
-        manager = ConfigManager(self.workspace)
-        profiles: dict[str, AgentExecutionProfile] = {}
-        defaults = configuration.system_defaults
-        for agent_id in ROSTER:
-            agent = configuration.agent_configs[agent_id]
-            if agent_id in self.backend_overrides:
-                provider = self.backend_overrides[agent_id]
-                provider_source = ExecutionValueSource.LAUNCH_OVERRIDE
-            elif agent.backend is not None:
-                provider = agent.backend
-                provider_source = ExecutionValueSource.AGENT_CONFIG
-            elif defaults.default_backend is not None:
-                provider = defaults.default_backend
-                provider_source = ExecutionValueSource.SYSTEM_DEFAULT
-            else:
-                provider = "codex"
-                provider_source = ExecutionValueSource.BUILT_IN_DEFAULT
-            provider = manager.validate_backend(provider)
-            assert provider is not None
-
-            if provider == "codex":
-                model, model_source = self._effective_execution_value(
-                    self._explicit_model,
-                    agent.codex_model,
-                    defaults.codex_model,
-                )
-                effort, effort_source = self._effective_execution_value(
-                    None,
-                    agent.codex_reasoning_effort,
-                    defaults.codex_reasoning_effort,
-                )
-            else:
-                model, model_source = self._effective_execution_value(
-                    self._explicit_antigravity_model,
-                    agent.antigravity_model,
-                    defaults.antigravity_model,
-                )
-                effort, effort_source = self._effective_execution_value(
-                    self._explicit_antigravity_effort,
-                    agent.antigravity_effort,
-                    defaults.antigravity_effort,
-                )
-            profiles[agent_id] = AgentExecutionProfile(
-                agent_id=agent_id,
-                provider=provider,
-                provider_source=provider_source,
-                model=model,
-                model_source=model_source,
-                effort=effort,
-                effort_source=effort_source,
-            )
-        return MappingProxyType(profiles)
-
-    @staticmethod
-    def _effective_execution_value(
-        launch_value: str | None,
-        agent_value: str | None,
-        system_value: str | None,
-    ) -> tuple[str | None, ExecutionValueSource]:
-        if launch_value is not None:
-            return launch_value, ExecutionValueSource.LAUNCH_OVERRIDE
-        if agent_value is not None:
-            return agent_value, ExecutionValueSource.AGENT_CONFIG
-        if system_value is not None:
-            return system_value, ExecutionValueSource.SYSTEM_DEFAULT
-        return None, ExecutionValueSource.PROVIDER_DEFAULT
-
     def execution_profile(self, agent_id: str) -> AgentExecutionProfile:
         """Return the exact active profile used for the next agent invocation."""
 
@@ -2087,27 +2021,9 @@ class AgentBackend:
     def execution_profile_fingerprint(self, agent_id: str) -> str:
         """Return provider/model/effort and source facts without prompt content."""
 
-        return self._execution_profile_fingerprint(self.execution_profile(agent_id))
-
-    @staticmethod
-    def _execution_profile_fingerprint(profile: AgentExecutionProfile) -> str:
-        if type(profile) is not AgentExecutionProfile:
-            raise TypeError("execution profile is invalid")
-        body = json.dumps(
-            {
-                "effort": profile.effort,
-                "effort_source": profile.effort_source.value,
-                "model": profile.model,
-                "model_source": profile.model_source.value,
-                "provider": profile.provider,
-                "provider_source": profile.provider_source.value,
-            },
-            allow_nan=False,
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        ).encode("utf-8", errors="strict")
-        return "sha256:" + hashlib.sha256(body).hexdigest()
+        return provider_execution_profiles.execution_profile_fingerprint(
+            self.execution_profile(agent_id)
+        )
 
     def execution_profiles(self) -> tuple[AgentExecutionProfile, ...]:
         """Return the active roster in canonical order."""
@@ -2143,7 +2059,14 @@ class AgentBackend:
             raise TypeError("configuration must be a ConfigurationSnapshot")
         if agent_id not in ROSTER:
             raise ConfigurationError(f"unknown agent: {agent_id}")
-        return self._resolve_execution_profiles(configuration)[agent_id]
+        return provider_execution_profiles.resolve_execution_profiles(
+            self.workspace,
+            configuration,
+            backend_overrides=self.backend_overrides,
+            explicit_model=self._explicit_model,
+            explicit_antigravity_model=self._explicit_antigravity_model,
+            explicit_antigravity_effort=self._explicit_antigravity_effort,
+        )[agent_id]
 
     def _confirm_execution_profile(
         self,
@@ -2234,7 +2157,14 @@ class AgentBackend:
             raise ValueError("provider_routes must contain the complete roster")
         if not isinstance(correlation_id, str) or not correlation_id:
             raise ValueError("correlation_id must be non-empty text")
-        profiles = self._resolve_execution_profiles(configuration)
+        profiles = provider_execution_profiles.resolve_execution_profiles(
+            self.workspace,
+            configuration,
+            backend_overrides=self.backend_overrides,
+            explicit_model=self._explicit_model,
+            explicit_antigravity_model=self._explicit_antigravity_model,
+            explicit_antigravity_effort=self._explicit_antigravity_effort,
+        )
         if any(
             provider_routes[agent_id].provider != profiles[agent_id].provider
             for agent_id in ROSTER

@@ -2154,6 +2154,45 @@
     "existing_BudgetCase_strict_source_pair": 4
   },
   "counting": "raw 149893\u2192149935, support 4689, legacy 1550. Existing Case/subTest/time/worker unchanged."
+},
+
+{
+  "issue": 1085,
+  "origin_commit": "ddfe6881d05396a4ea1ec9a92c13be32e05a1c5f",
+  "origins": [
+    {
+      "source": "tests/test_codex_backend.py",
+      "sha256": "b46b45bdebcd219f63a7da8fdcf976b99c8b5d90d083e302d9de5f9ecac0e9c1"
+    },
+    {
+      "source": "tests/test_session_lifecycle.py",
+      "sha256": "b4b5cb94c93a742b3907233af1eaa63f830fba3813ef7381f447206c5a329f53"
+    },
+    {
+      "source": "tests/test_rag_module_and_packaging_boundary.py",
+      "sha256": "b72a9c46c2bdad95b95347ac18385982b8d4ba599d4f82099ee7a42bdf354ef8"
+    },
+    {
+      "source": "tests/test_suite_budget.py",
+      "sha256": "d0ba9aa24d91906bf2d0621defec96e1b670ca0cc2765754663a6018dbcad0f8"
+    }
+  ],
+  "approved_source_delta": 33,
+  "planned_raw_delta": 33,
+  "planned_support_delta": 0,
+  "legacy_unresolved_lines": 1550,
+  "exact_source_pair": [
+    156174,
+    156207
+  ],
+  "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
+  "generic_tooling_ordinary_delta_excluded": 0,
+  "generic_tooling_physical_delta_excluded": 0,
+  "cost_components": {
+    "existing_execution_profile_API_graph_packaging": 29,
+    "existing_BudgetCase_strict_source_pair": 4
+  },
+  "counting": "raw 149935\u2192149968, support 4689, legacy 1550. Existing Case/subTest/time/worker unchanged."
 }
 
   ]
