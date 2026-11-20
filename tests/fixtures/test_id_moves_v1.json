@@ -15625,6 +15625,85 @@
           "expected_method_ast_sha256": "704f662afb1e4eb945e0b8faf8f631ebf91619784ab1526621a14f89d36ee955"
         }
       ]
+    },
+    {
+      "schema_version": 1,
+      "issue": 1099,
+      "origin_commit": "897bad9d24a48a4910223dea1bbb402ca91bd21f",
+      "original_caps_sha256": "bcd8f54385c89c6d1880ea32348f5d623a6d66d4388877a108aa1800c1148027",
+      "expected_caps_sha256": "b8d9d16e6370b15259cd1cb208c41bb39b8b69229bbc75dfc459b2d4ed9c7545",
+      "moves": [
+        {
+          "old_id": "tests.test_antigravity_adapter.AntigravityRecoveryEvidenceTests.test_captured_shape_and_clean_current_finish_recover",
+          "new_id": "tests.test_antigravity_recovery_evidence.AntigravityRecoveryEvidenceTests.test_captured_shape_and_clean_current_finish_recover",
+          "subtest_cap": 2,
+          "source": "tests/test_antigravity_recovery_evidence.py",
+          "destination": "tests/test_antigravity_recovery_evidence.py",
+          "original_file_sha256": "e6d8f2d235a1a2a39f0f14c8a9c66220a122f174fdbb7d7987a826fb1fb64d05",
+          "original_method_ast_sha256": "4f3a7d8d07fb7c0221ebaebd3f2ef7160ff2d694a4d109b8d29f695520028404",
+          "expected_method_ast_sha256": "54d9b17ed2deeee4e071f575edececde5468e07f3dddf6f144af94503b93c02c"
+        },
+        {
+          "old_id": "tests.test_antigravity_adapter.AntigravityRecoveryEvidenceTests.test_incomplete_ambiguous_nonmonotonic_and_forged_native_steps_reject",
+          "new_id": "tests.test_antigravity_recovery_evidence.AntigravityRecoveryEvidenceTests.test_incomplete_ambiguous_nonmonotonic_and_forged_native_steps_reject",
+          "subtest_cap": 17,
+          "source": "tests/test_antigravity_recovery_evidence.py",
+          "destination": "tests/test_antigravity_recovery_evidence.py",
+          "original_file_sha256": "e6d8f2d235a1a2a39f0f14c8a9c66220a122f174fdbb7d7987a826fb1fb64d05",
+          "original_method_ast_sha256": "2fd937c0666d79c062a63368ca9cf759e87cfa099f18cef8b2d797eae61b689d",
+          "expected_method_ast_sha256": "ddc2b7ba9f47a1a035a46be37548da9ff2de8063cf820197c19828b1d7b8b8e0"
+        },
+        {
+          "old_id": "tests.test_antigravity_adapter.AntigravityRecoveryEvidenceTests.test_missing_preexisting_wrong_request_or_replaced_directory_reject",
+          "new_id": "tests.test_antigravity_recovery_evidence.AntigravityRecoveryEvidenceTests.test_missing_preexisting_wrong_request_or_replaced_directory_reject",
+          "subtest_cap": 0,
+          "source": "tests/test_antigravity_recovery_evidence.py",
+          "destination": "tests/test_antigravity_recovery_evidence.py",
+          "original_file_sha256": "e6d8f2d235a1a2a39f0f14c8a9c66220a122f174fdbb7d7987a826fb1fb64d05",
+          "original_method_ast_sha256": "c4c200009e5c267f5a4fcda412ef17ef965de61db4d48113598886db61222e68",
+          "expected_method_ast_sha256": "bfbfb5a6da1524cf2caae6e937d89f286440c9f1e4b15e61198292f3983c0bd1"
+        },
+        {
+          "old_id": "tests.test_antigravity_adapter.AntigravityRecoveryEvidenceTests.test_reordered_finish_arguments_match_but_scalar_types_do_not",
+          "new_id": "tests.test_antigravity_recovery_evidence.AntigravityRecoveryEvidenceTests.test_reordered_finish_arguments_match_but_scalar_types_do_not",
+          "subtest_cap": 4,
+          "source": "tests/test_antigravity_recovery_evidence.py",
+          "destination": "tests/test_antigravity_recovery_evidence.py",
+          "original_file_sha256": "e6d8f2d235a1a2a39f0f14c8a9c66220a122f174fdbb7d7987a826fb1fb64d05",
+          "original_method_ast_sha256": "e6d9efd14286eee03075535a570dab3a63373bbc5d767a1cd574f198a1234c67",
+          "expected_method_ast_sha256": "e7adf26c9c556cbc8cfa1193bd897c658a7a38f06f1632b0a17b5849adedba76"
+        },
+        {
+          "old_id": "tests.test_antigravity_adapter.AntigravityRecoveryEvidenceTests.test_resume_requires_unchanged_prefix_and_new_matching_request",
+          "new_id": "tests.test_antigravity_recovery_evidence.AntigravityRecoveryEvidenceTests.test_resume_requires_unchanged_prefix_and_new_matching_request",
+          "subtest_cap": 0,
+          "source": "tests/test_antigravity_recovery_evidence.py",
+          "destination": "tests/test_antigravity_recovery_evidence.py",
+          "original_file_sha256": "e6d8f2d235a1a2a39f0f14c8a9c66220a122f174fdbb7d7987a826fb1fb64d05",
+          "original_method_ast_sha256": "cc15b231df1067975f923a861c69ddd5cc51a227b61b984ade8a981b9acfe594",
+          "expected_method_ast_sha256": "3defc13b03385510156f857ae67a8118aa8663ef5565e0d5d02da624da2b90d9"
+        },
+        {
+          "old_id": "tests.test_antigravity_adapter.AntigravityRecoveryEvidenceTests.test_status_identity_schema_and_diagnostic_requirements_remain_strict",
+          "new_id": "tests.test_antigravity_recovery_evidence.AntigravityRecoveryEvidenceTests.test_status_identity_schema_and_diagnostic_requirements_remain_strict",
+          "subtest_cap": 6,
+          "source": "tests/test_antigravity_recovery_evidence.py",
+          "destination": "tests/test_antigravity_recovery_evidence.py",
+          "original_file_sha256": "e6d8f2d235a1a2a39f0f14c8a9c66220a122f174fdbb7d7987a826fb1fb64d05",
+          "original_method_ast_sha256": "2d1638006854074519c394d549570e2929120d674e53d4124f62ae4c02f6a116",
+          "expected_method_ast_sha256": "8d1571a1eb066e9b0a7a8f44b43a688b5a0efd44e39250078361620f152700d2"
+        },
+        {
+          "old_id": "tests.test_antigravity_adapter.AntigravityRecoveryEvidenceTests.test_unsafe_native_paths_and_bounded_trace_reject",
+          "new_id": "tests.test_antigravity_recovery_evidence.AntigravityRecoveryEvidenceTests.test_unsafe_native_paths_and_bounded_trace_reject",
+          "subtest_cap": 7,
+          "source": "tests/test_antigravity_recovery_evidence.py",
+          "destination": "tests/test_antigravity_recovery_evidence.py",
+          "original_file_sha256": "e6d8f2d235a1a2a39f0f14c8a9c66220a122f174fdbb7d7987a826fb1fb64d05",
+          "original_method_ast_sha256": "b2f5db83a764efcad68f569472f68b43dc01a88b587d8ee3d33350621f1a52a8",
+          "expected_method_ast_sha256": "b038656457d0818c22ff96091ed87b18c59d5e8d0d39adc358ffe19107db72fd"
+        }
+      ]
     }
   ]
 }
