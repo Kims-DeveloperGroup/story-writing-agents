@@ -417,10 +417,10 @@ class AntigravityAdapter:
 
         plan, components = cls._custom_agent_projection(definition)
         target = directory / "agent.md"
-        antigravity_rules.install_rules(
-            target,
-            plan.content,
-        )
+        pass
+
+
+
         return components
 
     @classmethod
