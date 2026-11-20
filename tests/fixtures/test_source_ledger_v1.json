@@ -22,7 +22,8 @@
     "tests/lead_fixtures/runtime_setup.py",
     "tests/recommendation_fixture.py",
     "tests/lead_fixtures/specialist_routing.py",
-    "tests/lead_fixtures/artifact_review.py"
+    "tests/lead_fixtures/artifact_review.py",
+    "tests/backend_debug_log_fixture.py"
   ],
   "origins": {
     "test_git_external_operation_inspection.py": {
@@ -2194,6 +2195,40 @@
   },
   "counting": "raw 149935\u2192149968, support 4689, legacy 1550. Existing Case/subTest/time/worker unchanged."
 }
-
+,
+{
+  "issue": 1087,
+  "origin_commit": "938d20969dd268e1557cff00dbae8f823110a832",
+  "origins": [
+    {
+      "source": "tests/test_codex_backend.py",
+      "sha256": "2fc0d45eef969a2481519a64f309635c3257ccd0d4dadf75894f429fb6600485"
+    },
+    {
+      "source": "tests/test_suite_budget.py",
+      "sha256": "f2876beba16cf47bf318c42cb264f639a24d1e887ed481f09b10a2af6af8bae1"
+    }
+  ],
+  "approved_source_delta": 67,
+  "planned_raw_delta": 37,
+  "planned_support_delta": 30,
+  "legacy_unresolved_lines": 1550,
+  "exact_source_pair": [
+    156207,
+    156274
+  ],
+  "expected_caps_sha256": "0d14af735a342f0bde739f20dca64d0ee402dd03f9c83a017fb89cd0219ffa3f",
+  "original_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
+  "current_receipt_sha256": "2d683bd89f317d917c3b31f749ff41a3e2939ea957363a839624bde36381eaf6",
+  "generic_tooling_ordinary_delta_excluded": 15,
+  "generic_tooling_physical_delta_excluded": 15,
+  "cost_components": {
+    "ordinary_test_module_layout": 11,
+    "registered_debug_fixture": 27,
+    "registered_id_move_guard": 3,
+    "existing_budget_case_assertions": 26
+  },
+  "counting": "Raw 149968\u2192150005 + registered 4689\u21924719 + legacy 1550. Existing 10 Cases moved 1:1, count/cap/timing/worker frozen."
+}
   ]
 }

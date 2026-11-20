@@ -15080,6 +15080,122 @@
       "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
       "moves": [],
       "class_moves": []
+    },
+    {
+      "schema_version": 1,
+      "issue": 1087,
+      "origin_commit": "938d20969dd268e1557cff00dbae8f823110a832",
+      "original_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
+      "expected_caps_sha256": "0d14af735a342f0bde739f20dca64d0ee402dd03f9c83a017fb89cd0219ffa3f",
+      "moves": [
+        {
+          "old_id": "tests.test_codex_backend.CodexBackendDefaultsTests.test_agent_model_and_reasoning_argv_are_exact",
+          "new_id": "tests.test_codex_backend_defaults.CodexBackendDefaultsTests.test_agent_model_and_reasoning_argv_are_exact",
+          "subtest_cap": 0,
+          "source": "tests/test_codex_backend.py",
+          "destination": "tests/test_codex_backend_defaults.py",
+          "original_file_sha256": "2fc0d45eef969a2481519a64f309635c3257ccd0d4dadf75894f429fb6600485",
+          "original_method_ast_sha256": "df1ab24f47b21ee05943d118ca22dec74cd7a3d95dde0c7c49d01ba93c6dea0f",
+          "expected_method_ast_sha256": "df1ab24f47b21ee05943d118ca22dec74cd7a3d95dde0c7c49d01ba93c6dea0f"
+        },
+        {
+          "old_id": "tests.test_codex_backend.CodexBackendDefaultsTests.test_agent_model_and_reasoning_precedence_uses_immutable_snapshot",
+          "new_id": "tests.test_codex_backend_defaults.CodexBackendDefaultsTests.test_agent_model_and_reasoning_precedence_uses_immutable_snapshot",
+          "subtest_cap": 0,
+          "source": "tests/test_codex_backend.py",
+          "destination": "tests/test_codex_backend_defaults.py",
+          "original_file_sha256": "2fc0d45eef969a2481519a64f309635c3257ccd0d4dadf75894f429fb6600485",
+          "original_method_ast_sha256": "d8d9ba434a755731a4609f558649da8f2f51d57625d00eb6df31c1009785031a",
+          "expected_method_ast_sha256": "d8d9ba434a755731a4609f558649da8f2f51d57625d00eb6df31c1009785031a"
+        },
+        {
+          "old_id": "tests.test_codex_backend.CodexBackendDefaultsTests.test_backend_runtime_and_prompts_share_one_snapshot_until_next_lifecycle",
+          "new_id": "tests.test_codex_backend_defaults.CodexBackendDefaultsTests.test_backend_runtime_and_prompts_share_one_snapshot_until_next_lifecycle",
+          "subtest_cap": 0,
+          "source": "tests/test_codex_backend.py",
+          "destination": "tests/test_codex_backend_defaults.py",
+          "original_file_sha256": "2fc0d45eef969a2481519a64f309635c3257ccd0d4dadf75894f429fb6600485",
+          "original_method_ast_sha256": "8dfce23ee33e8b925f37f62d06c3665846460d3d559c33f5c113e91ab19ef90f",
+          "expected_method_ast_sha256": "8dfce23ee33e8b925f37f62d06c3665846460d3d559c33f5c113e91ab19ef90f"
+        },
+        {
+          "old_id": "tests.test_codex_backend.CodexBackendDefaultsTests.test_constructor_validation_diagnostics_are_fixed_and_provider_safe",
+          "new_id": "tests.test_codex_backend_defaults.CodexBackendDefaultsTests.test_constructor_validation_diagnostics_are_fixed_and_provider_safe",
+          "subtest_cap": 3,
+          "source": "tests/test_codex_backend.py",
+          "destination": "tests/test_codex_backend_defaults.py",
+          "original_file_sha256": "2fc0d45eef969a2481519a64f309635c3257ccd0d4dadf75894f429fb6600485",
+          "original_method_ast_sha256": "3837800b24357c0cbc39d335f99d590e38d7502d97176ac9d65d315c4a2fcb50",
+          "expected_method_ast_sha256": "3837800b24357c0cbc39d335f99d590e38d7502d97176ac9d65d315c4a2fcb50"
+        },
+        {
+          "old_id": "tests.test_codex_backend.CodexBackendDefaultsTests.test_execution_profiles_resolve_every_source_with_nullable_defaults",
+          "new_id": "tests.test_codex_backend_defaults.CodexBackendDefaultsTests.test_execution_profiles_resolve_every_source_with_nullable_defaults",
+          "subtest_cap": 0,
+          "source": "tests/test_codex_backend.py",
+          "destination": "tests/test_codex_backend_defaults.py",
+          "original_file_sha256": "2fc0d45eef969a2481519a64f309635c3257ccd0d4dadf75894f429fb6600485",
+          "original_method_ast_sha256": "c721458d8ea6cfa388f6deb851eb8f83b17cef5483d56f11ab96103908d29308",
+          "expected_method_ast_sha256": "c721458d8ea6cfa388f6deb851eb8f83b17cef5483d56f11ab96103908d29308"
+        },
+        {
+          "old_id": "tests.test_codex_backend.CodexBackendDefaultsTests.test_explicit_model_validation_retains_exact_value_error",
+          "new_id": "tests.test_codex_backend_defaults.CodexBackendDefaultsTests.test_explicit_model_validation_retains_exact_value_error",
+          "subtest_cap": 9,
+          "source": "tests/test_codex_backend.py",
+          "destination": "tests/test_codex_backend_defaults.py",
+          "original_file_sha256": "2fc0d45eef969a2481519a64f309635c3257ccd0d4dadf75894f429fb6600485",
+          "original_method_ast_sha256": "f44f21aeba781780d1ff2930bbc035f09bb5bd4535942239279d719fe554898d",
+          "expected_method_ast_sha256": "f44f21aeba781780d1ff2930bbc035f09bb5bd4535942239279d719fe554898d"
+        },
+        {
+          "old_id": "tests.test_codex_backend.CodexBackendDefaultsTests.test_full_persisted_schema_precedes_explicit_model_validation",
+          "new_id": "tests.test_codex_backend_defaults.CodexBackendDefaultsTests.test_full_persisted_schema_precedes_explicit_model_validation",
+          "subtest_cap": 3,
+          "source": "tests/test_codex_backend.py",
+          "destination": "tests/test_codex_backend_defaults.py",
+          "original_file_sha256": "2fc0d45eef969a2481519a64f309635c3257ccd0d4dadf75894f429fb6600485",
+          "original_method_ast_sha256": "472200e8b18bff62be03a74a2b1be1ebf2573b8c2d32f114c5f021c08aee95a5",
+          "expected_method_ast_sha256": "472200e8b18bff62be03a74a2b1be1ebf2573b8c2d32f114c5f021c08aee95a5"
+        },
+        {
+          "old_id": "tests.test_codex_backend.CodexBackendDefaultsTests.test_model_precedence_and_explicit_none_are_exact",
+          "new_id": "tests.test_codex_backend_defaults.CodexBackendDefaultsTests.test_model_precedence_and_explicit_none_are_exact",
+          "subtest_cap": 4,
+          "source": "tests/test_codex_backend.py",
+          "destination": "tests/test_codex_backend_defaults.py",
+          "original_file_sha256": "2fc0d45eef969a2481519a64f309635c3257ccd0d4dadf75894f429fb6600485",
+          "original_method_ast_sha256": "17e46c9e59e662daa02c418cf6b89b51bbc0fe8a82afc14b54826bd102ab4941",
+          "expected_method_ast_sha256": "17e46c9e59e662daa02c418cf6b89b51bbc0fe8a82afc14b54826bd102ab4941"
+        },
+        {
+          "old_id": "tests.test_codex_backend.CodexBackendDefaultsTests.test_optional_model_and_reasoning_argv_are_exact_for_fresh_and_resume",
+          "new_id": "tests.test_codex_backend_defaults.CodexBackendDefaultsTests.test_optional_model_and_reasoning_argv_are_exact_for_fresh_and_resume",
+          "subtest_cap": 8,
+          "source": "tests/test_codex_backend.py",
+          "destination": "tests/test_codex_backend_defaults.py",
+          "original_file_sha256": "2fc0d45eef969a2481519a64f309635c3257ccd0d4dadf75894f429fb6600485",
+          "original_method_ast_sha256": "d1c8c7a510d2036a4b21ba7c12d5070d465250779d7fa90480b66dfa6597853e",
+          "expected_method_ast_sha256": "d1c8c7a510d2036a4b21ba7c12d5070d465250779d7fa90480b66dfa6597853e"
+        },
+        {
+          "old_id": "tests.test_codex_backend.CodexBackendDefaultsTests.test_startup_logs_four_exact_active_execution_profile_snapshots",
+          "new_id": "tests.test_codex_backend_defaults.CodexBackendDefaultsTests.test_startup_logs_four_exact_active_execution_profile_snapshots",
+          "subtest_cap": 4,
+          "source": "tests/test_codex_backend.py",
+          "destination": "tests/test_codex_backend_defaults.py",
+          "original_file_sha256": "2fc0d45eef969a2481519a64f309635c3257ccd0d4dadf75894f429fb6600485",
+          "original_method_ast_sha256": "7f3d125f4afe745ea3ce2add3aa9d5d9c2a295841cdcd9c20b667add3902ff8f",
+          "expected_method_ast_sha256": "7f3d125f4afe745ea3ce2add3aa9d5d9c2a295841cdcd9c20b667add3902ff8f"
+        }
+      ],
+      "class_moves": [
+        {
+          "source": "tests/test_codex_backend.py",
+          "class": "CodexBackendDefaultsTests",
+          "destination": "tests/test_codex_backend_defaults.py"
+        }
+      ]
     }
   ]
 }

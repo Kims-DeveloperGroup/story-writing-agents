@@ -246,28 +246,34 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
-        migrated = suite_budget.load_budget(Path(__file__).with_name("fixtures") / "test_budget_v1.json")
+        split_current = suite_budget.load_budget(Path(__file__).with_name("fixtures") / "test_budget_v1.json")
+        migrated = dict(split_current, subtest_caps=dict(split_current["subtest_caps"]))
+        *legacy_move_receipts, defaults_stage = load_receipt()
+        defaults_moves = defaults_stage["moves"]
+        for move in defaults_moves:
+            migrated["subtest_caps"][move["old_id"]] = migrated["subtest_caps"].pop(move["new_id"])
+        execution_profiles_current = dict(migrated, max_test_source_lines=156207, subtest_caps=dict(migrated["subtest_caps"]))
         task_admission_current = dict(migrated, subtest_caps=dict(migrated["subtest_caps"]))
         task_admission_current["max_test_source_lines"] = 154305
-        for move in load_receipt()[-1]["moves"]:
+        for move in legacy_move_receipts[-1]["moves"]:
             migrated["subtest_caps"][move["old_id"]] = migrated["subtest_caps"].pop(move["new_id"])
         migrated["max_test_source_lines"] = 154078
         request_policy_current = dict(migrated, subtest_caps=dict(migrated["subtest_caps"]))
         migrated["max_test_source_lines"] = 153941
         document_policy_current = dict(migrated, subtest_caps=dict(migrated["subtest_caps"]))
-        for move in load_receipt()[-2]["moves"]:
+        for move in legacy_move_receipts[-2]["moves"]:
             migrated["subtest_caps"][move["old_id"]] = migrated["subtest_caps"].pop(move["new_id"])
         migrated["max_test_source_lines"] = 153829
         authority_current = dict(migrated, subtest_caps=dict(migrated["subtest_caps"]))
-        for move in load_receipt()[-3]["moves"]:
+        for move in legacy_move_receipts[-3]["moves"]:
             migrated["subtest_caps"][move["old_id"]] = migrated["subtest_caps"].pop(move["new_id"])
         evidence_current = dict(migrated, subtest_caps=dict(migrated["subtest_caps"]))
-        for move in load_receipt()[-4]["moves"]:
+        for move in legacy_move_receipts[-4]["moves"]:
             migrated["subtest_caps"][move["old_id"]] = migrated["subtest_caps"].pop(move["new_id"])
         material_current = dict(migrated, subtest_caps=dict(migrated["subtest_caps"]))
         fixture_current = dict(material_current, subtest_caps=dict(material_current["subtest_caps"]))
         document_current = dict(fixture_current, subtest_caps=dict(fixture_current["subtest_caps"]))
-        for move in load_receipt()[-5]["moves"]:
+        for move in legacy_move_receipts[-5]["moves"]:
             migrated["subtest_caps"][move["old_id"]] = migrated["subtest_caps"].pop(move["new_id"])
         migrated["max_test_source_lines"] = 152138
         source_current, finalization_current = dict(migrated, subtest_caps=dict(migrated["subtest_caps"])), dict(migrated)
@@ -532,7 +538,7 @@ class SuiteBudgetTests(unittest.TestCase):
         ):
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(task_admission_current, subtest_caps=caps), request_policy_current)
         self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, task_admission_current, dict(request_policy_current, subtest_caps={**request_policy_current["subtest_caps"], matrix_id: 2}))
-        workspace_current = dict(suite_budget.load_budget(), max_test_source_lines=154860)
+        workspace_current = dict(suite_budget.load_budget(), max_test_source_lines=154860, subtest_caps=execution_profiles_current["subtest_caps"])
         artifact_planning_current = dict(workspace_current, max_test_source_lines=154774)
         self.assertEqual(artifact_planning_current["max_test_source_lines"], 154774)
         self.assertIsNone(suite_budget.check_monotonic(artifact_planning_current, task_admission_current))
@@ -550,7 +556,7 @@ class SuiteBudgetTests(unittest.TestCase):
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(artifact_planning_current, subtest_caps=caps), task_admission_current)
         self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, artifact_planning_current, dict(task_admission_current, subtest_caps={**task_admission_current["subtest_caps"], matrix_id: 2}))
 
-        response_contract_current = dict(suite_budget.load_budget(), max_test_source_lines=155128)
+        response_contract_current = dict(suite_budget.load_budget(), max_test_source_lines=155128, subtest_caps=execution_profiles_current["subtest_caps"])
         self.assertEqual(response_contract_current["max_test_source_lines"], 155128)
         self.assertIsNone(suite_budget.check_monotonic(response_contract_current, artifact_planning_current))
         self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, response_contract_current, dict(artifact_planning_current, max_test_source_lines=154305))
@@ -570,12 +576,12 @@ class SuiteBudgetTests(unittest.TestCase):
         self.assertEqual(workspace_current["max_test_source_lines"], 154860)
         self.assertIsNone(suite_budget.check_monotonic(workspace_current, artifact_planning_current))
         self._assert_source_limit_neighbors_rejected(workspace_current, artifact_planning_current)
-        integrated_current = dict(suite_budget.load_budget(), max_test_source_lines=155219)
+        integrated_current = dict(suite_budget.load_budget(), max_test_source_lines=155219, subtest_caps=execution_profiles_current["subtest_caps"])
         self.assertEqual(integrated_current["max_test_source_lines"], 155219)
         for prior in (workspace_current, response_contract_current):
             self.assertIsNone(suite_budget.check_monotonic(integrated_current, prior))
             self._assert_source_limit_neighbors_rejected(integrated_current, prior)
-        consensus_policy_current = dict(suite_budget.load_budget(), max_test_source_lines=155318)
+        consensus_policy_current = dict(suite_budget.load_budget(), max_test_source_lines=155318, subtest_caps=execution_profiles_current["subtest_caps"])
         self.assertEqual(consensus_policy_current["max_test_source_lines"], 155318)
         self.assertIsNone(suite_budget.check_monotonic(consensus_policy_current, integrated_current))
         self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, consensus_policy_current, dict(consensus_policy_current, max_test_source_lines=152814))
@@ -593,11 +599,11 @@ class SuiteBudgetTests(unittest.TestCase):
         self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, consensus_policy_current, dict(integrated_current, subtest_caps={**integrated_current["subtest_caps"], matrix_id: 2}))
 
 
-        git_owners_current = dict(suite_budget.load_budget(), max_test_source_lines=155394)
+        git_owners_current = dict(suite_budget.load_budget(), max_test_source_lines=155394, subtest_caps=execution_profiles_current["subtest_caps"])
         self.assertEqual(git_owners_current["max_test_source_lines"], 155394)
         self.assertIsNone(suite_budget.check_monotonic(integrated_current, git_owners_current))
         self._assert_source_limit_neighbors_rejected(git_owners_current, integrated_current)
-        combined_current = dict(suite_budget.load_budget(), max_test_source_lines=155510)
+        combined_current = dict(suite_budget.load_budget(), max_test_source_lines=155510, subtest_caps=execution_profiles_current["subtest_caps"])
         self.assertEqual(combined_current["max_test_source_lines"], 155510)
         for prior in (consensus_policy_current, git_owners_current):
             self.assertIsNone(suite_budget.check_monotonic(combined_current, prior))
@@ -616,7 +622,7 @@ class SuiteBudgetTests(unittest.TestCase):
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, combined_current, dict(prior, subtest_caps={**prior["subtest_caps"], matrix_id: 2}))
 
 
-        rules_current = dict(suite_budget.load_budget(), max_test_source_lines=155583)
+        rules_current = dict(suite_budget.load_budget(), max_test_source_lines=155583, subtest_caps=execution_profiles_current["subtest_caps"])
         self.assertEqual(rules_current["max_test_source_lines"], 155583)
         self.assertIsNone(suite_budget.check_monotonic(rules_current, combined_current))
         self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, rules_current, dict(rules_current, max_test_source_lines=152814))
@@ -639,61 +645,73 @@ class SuiteBudgetTests(unittest.TestCase):
         self.assertIs(AntigravityAdapterTests.test_binding_is_stable_isolated_and_uses_private_custom_agent, AntigravityRulesDefinitions.test_binding_is_stable_isolated_and_uses_private_custom_agent)
         self.assertIs(AntigravityAdapterTests.test_command_stdin_paths_and_fresh_resume_results_are_exact, AntigravityRulesDefinitions.test_command_stdin_paths_and_fresh_resume_results_are_exact)
         self.assertIs(AntigravityAdapterTests.test_mode_failures_are_best_effort_but_controls_propagate, AntigravityRulesDefinitions.test_mode_failures_are_best_effort_but_controls_propagate)
-        decoder_current = dict(suite_budget.load_budget(), max_test_source_lines=155687)
+        decoder_current = dict(suite_budget.load_budget(), max_test_source_lines=155687, subtest_caps=execution_profiles_current["subtest_caps"])
         self.assertEqual(decoder_current["max_test_source_lines"], 155687)
         self.assertIsNone(suite_budget.check_monotonic(decoder_current, rules_current))
         self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, decoder_current, dict(decoder_current, max_test_source_lines=152814))
         self._assert_source_limit_neighbors_rejected(decoder_current, rules_current)
-        codex_source_current = dict(suite_budget.load_budget(), max_test_source_lines=155717)
+        codex_source_current = dict(suite_budget.load_budget(), max_test_source_lines=155717, subtest_caps=execution_profiles_current["subtest_caps"])
         self.assertEqual(codex_source_current["max_test_source_lines"], 155717)
         self.assertIsNone(suite_budget.check_monotonic(codex_source_current, decoder_current))
         self._assert_source_limit_neighbors_rejected(codex_source_current, decoder_current)
-        recovery_current = dict(suite_budget.load_budget(), max_test_source_lines=155785)
+        recovery_current = dict(suite_budget.load_budget(), max_test_source_lines=155785, subtest_caps=execution_profiles_current["subtest_caps"])
         self.assertEqual(recovery_current["max_test_source_lines"], 155785)
         self.assertIsNone(suite_budget.check_monotonic(recovery_current, codex_source_current))
         self._assert_source_limit_neighbors_rejected(recovery_current, codex_source_current)
-        records_current = dict(suite_budget.load_budget(), max_test_source_lines=155842)
+        records_current = dict(suite_budget.load_budget(), max_test_source_lines=155842, subtest_caps=execution_profiles_current["subtest_caps"])
         self.assertEqual(records_current["max_test_source_lines"], 155842)
         self.assertIsNone(suite_budget.check_monotonic(records_current, recovery_current))
         self._assert_source_limit_neighbors_rejected(records_current, recovery_current)
-        guard_current = dict(suite_budget.load_budget(), max_test_source_lines=155869)
+        guard_current = dict(suite_budget.load_budget(), max_test_source_lines=155869, subtest_caps=execution_profiles_current["subtest_caps"])
         self.assertEqual(guard_current["max_test_source_lines"], 155869)
         self.assertIsNone(suite_budget.check_monotonic(guard_current, records_current))
         self._assert_source_limit_neighbors_rejected(guard_current, records_current)
-        access_records_current = dict(suite_budget.load_budget(), max_test_source_lines=155914)
+        access_records_current = dict(suite_budget.load_budget(), max_test_source_lines=155914, subtest_caps=execution_profiles_current["subtest_caps"])
         self.assertEqual(access_records_current["max_test_source_lines"], 155914)
         self.assertIsNone(suite_budget.check_monotonic(access_records_current, guard_current))
         self._assert_source_limit_neighbors_rejected(access_records_current, guard_current)
-        session_artifacts_current = dict(suite_budget.load_budget(), max_test_source_lines=155960)
+        session_artifacts_current = dict(suite_budget.load_budget(), max_test_source_lines=155960, subtest_caps=execution_profiles_current["subtest_caps"])
         self.assertEqual(session_artifacts_current["max_test_source_lines"], 155960)
         self.assertIsNone(suite_budget.check_monotonic(session_artifacts_current, access_records_current))
         self._assert_source_limit_neighbors_rejected(session_artifacts_current, access_records_current)
-        lifecycle_queries_current = dict(suite_budget.load_budget(), max_test_source_lines=156009)
+        lifecycle_queries_current = dict(suite_budget.load_budget(), max_test_source_lines=156009, subtest_caps=execution_profiles_current["subtest_caps"])
         self.assertEqual(lifecycle_queries_current["max_test_source_lines"], 156009)
         self.assertIsNone(suite_budget.check_monotonic(lifecycle_queries_current, session_artifacts_current))
         self._assert_source_limit_neighbors_rejected(lifecycle_queries_current, session_artifacts_current)
-        access_transactions_current = dict(suite_budget.load_budget(), max_test_source_lines=156046)
+        access_transactions_current = dict(suite_budget.load_budget(), max_test_source_lines=156046, subtest_caps=execution_profiles_current["subtest_caps"])
         self.assertEqual(access_transactions_current["max_test_source_lines"], 156046)
         self.assertIsNone(suite_budget.check_monotonic(access_transactions_current, lifecycle_queries_current))
         self._assert_source_limit_neighbors_rejected(access_transactions_current, lifecycle_queries_current)
-        context_thread_store_current = dict(suite_budget.load_budget(), max_test_source_lines=156086)
+        context_thread_store_current = dict(suite_budget.load_budget(), max_test_source_lines=156086, subtest_caps=execution_profiles_current["subtest_caps"])
         self.assertEqual(context_thread_store_current["max_test_source_lines"], 156086)
         self.assertIsNone(suite_budget.check_monotonic(context_thread_store_current, access_transactions_current))
         self._assert_source_limit_neighbors_rejected(context_thread_store_current, access_transactions_current)
-        manifest_thread_store_current = dict(suite_budget.load_budget(), max_test_source_lines=156132)
+        manifest_thread_store_current = dict(suite_budget.load_budget(), max_test_source_lines=156132, subtest_caps=execution_profiles_current["subtest_caps"])
         self.assertEqual(manifest_thread_store_current["max_test_source_lines"], 156132)
         self.assertIsNone(suite_budget.check_monotonic(manifest_thread_store_current, context_thread_store_current))
         self._assert_source_limit_neighbors_rejected(manifest_thread_store_current, context_thread_store_current)
-        session_transitions_current = dict(suite_budget.load_budget(), max_test_source_lines=156174)
+        session_transitions_current = dict(suite_budget.load_budget(), max_test_source_lines=156174, subtest_caps=execution_profiles_current["subtest_caps"])
         self.assertEqual(session_transitions_current["max_test_source_lines"], 156174)
         self.assertIsNone(suite_budget.check_monotonic(session_transitions_current, manifest_thread_store_current))
         self._assert_source_limit_neighbors_rejected(session_transitions_current, manifest_thread_store_current)
-        execution_profiles_current = suite_budget.load_budget()
         self.assertEqual(execution_profiles_current["max_test_source_lines"], 156207)
         self.assertIsNone(suite_budget.check_monotonic(execution_profiles_current, session_transitions_current))
         self._assert_source_limit_neighbors_rejected(execution_profiles_current, session_transitions_current)
+        self.assertEqual(split_current["max_test_source_lines"], 156274)
+        self.assertIsNone(suite_budget.check_monotonic(split_current, execution_profiles_current))
+        self._assert_source_limit_neighbors_rejected(split_current, execution_profiles_current)
+        moved_id = next(move["new_id"] for move in defaults_moves if move["subtest_cap"])
+        split_caps = split_current["subtest_caps"]
+        for changed_caps in (
+            {key: cap for key, cap in split_caps.items() if key != moved_id},
+            {**split_caps, "tests.unreviewed.Case.test_extra": 0},
+            {**split_caps, moved_id: split_caps[moved_id] + 1},
+            {**split_caps, moved_id: split_caps[moved_id] - 1},
+        ):
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(split_current, subtest_caps=changed_caps), execution_profiles_current)
         for field, value in (("schema_version", 2), ("max_sequential_wall_seconds", 18001), ("max_shard_wall_seconds", 3601)):
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(decoder_current, **{field: value}), rules_current)
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(split_current, **{field: value}), execution_profiles_current)
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, decoder_current, dict(rules_current, **{field: value}))
         for caps in (
             {key: value for key, value in decoder_current["subtest_caps"].items() if key != zero_id},
@@ -737,6 +755,14 @@ class SuiteBudgetTests(unittest.TestCase):
         drift = runner_contracts.CanonicalCollection(cases, (*ids, *runner_profile.HOSTED_MIXED_SERIAL_IDS, ids[0].rsplit(".", 1)[0] + ".test_unreviewed"))
         self.assertRaises(runner_contracts.RunnerError, runner_hosted.hosted_partition, drift, drift)
         real = runner_execution.source_collection_for(self) or runner_collection.discover_canonical()
+        from tests.runner.impact import select_impact
+        moved_defaults = runner_selection.select(real, modules=["tests.test_codex_backend_defaults"])
+        self.assertEqual(moved_defaults.ids, tuple(sorted(move["new_id"] for move in defaults_moves)))
+        self.assertTrue(all(move["old_id"] not in real.ids for move in defaults_moves))
+        self.assertTrue(all(type(case).__bases__ == (unittest.TestCase,) and type(case).__module__ == "tests.test_codex_backend_defaults" for case in moved_defaults.tests))
+        selected_defaults = select_impact(real, paths=("tests/test_codex_backend_defaults.py",))
+        self.assertEqual(selected_defaults["focused_manifest"]["ordered_ids"], ["tests.test_codex_backend_defaults.CodexBackendDefaultsTests.test_execution_profiles_resolve_every_source_with_nullable_defaults"])
+        self.assertEqual(selected_defaults["affected_manifest"]["ordered_ids"], list(moved_defaults.ids))
         definitions = (
             ("tests.lead_preparation.test_specialist_advisory_scope", "SpecialistAdvisoryScopeCases",
              "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation",
