@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import story_writing_agents.backend_reply_decoding as backend_reply_decoding
+import story_writing_agents.provider_context_thread_store as provider_context_thread_store
 import story_writing_agents.provider_session_access_records as provider_session_access_records
 import story_writing_agents.provider_session_access_transactions as provider_session_access_transactions
 import story_writing_agents.provider_session_artifacts as provider_session_artifacts
@@ -557,11 +558,14 @@ class _BoundContextProvider:
                                     active_execution_workspace.require_current()
                             except BaseException as validation_failure:
                                 try:
-                                    self._bound_agent.backend._taint_context_thread(
+                                    backend = self._bound_agent.backend
+                                    provider_context_thread_store.taint_context_thread(
+                                        backend.workspace,
                                         storage_scope,
                                         self.provider_id,
                                         definition_fingerprint,
                                         effective_policy_fingerprint,
+                                        require_owned_access=backend._access_transactions.assert_owned_access,
                                     )
                                 except BaseException:
                                     pass
@@ -630,12 +634,15 @@ class _BoundContextProvider:
                 execution_workspace,
             )
         )
-        return self._bound_agent.backend._load_context_thread(
+        backend = self._bound_agent.backend
+        return provider_context_thread_store.load_context_thread(
+            backend.workspace,
             scope if self._continuation_identity is None
             else self._continuation_identity.checkpoint_scope(),
             self.provider_id,
             definition_fingerprint,
             effective_policy_fingerprint,
+            require_ready=backend._assert_provider_work_ready,
         )
 
     def require_current_execution_workspace(
@@ -788,12 +795,15 @@ class _BoundContextProvider:
                 execution_workspace,
             )
         )
-        self._bound_agent.backend._taint_context_thread(
+        backend = self._bound_agent.backend
+        provider_context_thread_store.taint_context_thread(
+            backend.workspace,
             scope if self._continuation_identity is None
             else self._continuation_identity.checkpoint_scope(),
             self.provider_id,
             definition_fingerprint,
             effective_policy_fingerprint,
+            require_owned_access=backend._access_transactions.assert_owned_access,
         )
 
     def _effective_context_fingerprints(
@@ -5169,11 +5179,13 @@ class AgentBackend:
         """Best-effort invalidate one scoped continuation."""
 
         try:
-            self._taint_context_thread(
+            provider_context_thread_store.taint_context_thread(
+                self.workspace,
                 scope,
                 provider_id,
                 definition_fingerprint,
                 policy_fingerprint,
+                require_owned_access=self._access_transactions.assert_owned_access,
             )
         except BaseException:
             pass
@@ -5218,10 +5230,12 @@ class AgentBackend:
                 and bound_agent._adapter_generation is binding_generation
                 and not generation.retired and not generation.closed
                 and bound_agent.execution_profile == profile
-                and self._load_context_thread(
+                and provider_context_thread_store.load_context_thread(
+                    self.workspace,
                     scope, bound_agent.vendor,
                     definition_fingerprint,
                     policy_fingerprint,
+                    require_ready=self._assert_provider_work_ready,
                 ) == expected_thread_id
             )
 
@@ -5297,11 +5311,13 @@ class AgentBackend:
             )
         )
         self._assert_provider_work_ready(session)
-        stored_thread_id = self._load_context_thread(
+        stored_thread_id = provider_context_thread_store.load_context_thread(
+            self.workspace,
             storage_scope,
             bound_agent.vendor,
             definition_fingerprint,
             effective_policy_fingerprint,
+            require_ready=self._assert_provider_work_ready,
         )
         if stored_thread_id != expected_thread_id:
             raise ContextExecutionError(ContextExecutionErrorCode.CONTINUATION_MISMATCH)
@@ -5608,13 +5624,15 @@ class AgentBackend:
             raise failure from result.native_context_cause
         try:
             self._require_postsubmission_workspace(invocation)
-            self._store_context_thread(
+            provider_context_thread_store.store_context_thread(
+                self.workspace,
                 storage_scope,
                 bound_agent.vendor,
                 definition_fingerprint,
                 effective_policy_fingerprint,
                 result.thread_id,
                 tainted=False,
+                require_owned_access=self._access_transactions.assert_owned_access,
             )
             self._require_postsubmission_workspace(invocation)
         except BaseException as failure:
@@ -6284,131 +6302,6 @@ class AgentBackend:
                 raise BackendProtocolError(
                     "Antigravity CLI headless capabilities could not be verified"
                 )
-
-    def _load_context_thread(
-        self,
-        scope: ContextScope,
-        provider_id: str,
-        definition_fingerprint: str,
-        policy_fingerprint: str,
-    ) -> str | None:
-        """Load only one usable exact scoped continuation; otherwise bootstrap."""
-
-        provider_thread_records.validate_context_thread_key(
-            scope,
-            provider_id,
-            definition_fingerprint,
-            policy_fingerprint,
-        )
-        self._assert_provider_work_ready(scope.session_id)
-        relative = provider_thread_records.context_thread_relative(
-            scope,
-            provider_id,
-            definition_fingerprint,
-            policy_fingerprint,
-        )
-        target = self.workspace.path(relative)
-        if not target.exists():
-            return None
-        try:
-            value = self.workspace.read_json(relative)
-        except WorkspaceFormatError:
-            return None
-        return provider_thread_records.context_thread_id(
-            value,
-            scope=scope,
-            provider_id=provider_id,
-            definition_fingerprint=definition_fingerprint,
-            policy_fingerprint=policy_fingerprint,
-        )
-
-    def _store_context_thread(
-        self,
-        scope: ContextScope,
-        provider_id: str,
-        definition_fingerprint: str,
-        policy_fingerprint: str,
-        thread_id: str,
-        *,
-        tainted: bool,
-    ) -> None:
-        """Persist a native continuation in the distinct contextual store."""
-
-        provider_thread_records.validate_context_thread_key(
-            scope,
-            provider_id,
-            definition_fingerprint,
-            policy_fingerprint,
-        )
-        if (
-            type(thread_id) is not str
-            or provider_thread_records.PROVIDER_THREAD_ID_PATTERN.fullmatch(thread_id) is None
-            or type(tainted) is not bool
-        ):
-            raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
-        self._access_transactions.assert_owned_access(self.workspace, scope.session_id)
-        key = provider_thread_records.context_thread_key_payload(
-            scope,
-            provider_id,
-            definition_fingerprint,
-            policy_fingerprint,
-        )
-        self.workspace.write_json(
-            provider_thread_records.context_thread_relative(
-                scope,
-                provider_id,
-                definition_fingerprint,
-                policy_fingerprint,
-            ),
-            provider_thread_records.context_thread_record(
-                key=key,
-                definition_fingerprint=definition_fingerprint,
-                policy_fingerprint=policy_fingerprint,
-                provider_id=provider_id,
-                tainted=tainted,
-                thread_id=thread_id,
-            ),
-        )
-
-    def _taint_context_thread(
-        self,
-        scope: ContextScope,
-        provider_id: str,
-        definition_fingerprint: str,
-        policy_fingerprint: str,
-    ) -> None:
-        """Mark one matching contextual continuation permanently unusable."""
-
-        provider_thread_records.validate_context_thread_key(
-            scope,
-            provider_id,
-            definition_fingerprint,
-            policy_fingerprint,
-        )
-        self._access_transactions.assert_owned_access(self.workspace, scope.session_id)
-        relative = provider_thread_records.context_thread_relative(
-            scope,
-            provider_id,
-            definition_fingerprint,
-            policy_fingerprint,
-        )
-        target = self.workspace.path(relative)
-        if not target.exists():
-            return
-        try:
-            value = self.workspace.read_json(relative)
-        except WorkspaceFormatError:
-            return
-        record = provider_thread_records.tainted_context_thread_record(
-            value,
-            scope=scope,
-            provider_id=provider_id,
-            definition_fingerprint=definition_fingerprint,
-            policy_fingerprint=policy_fingerprint,
-        )
-        if record is None:
-            return
-        self.workspace.write_json(relative, record)
 
     def _load_thread(
         self,
