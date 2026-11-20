@@ -898,7 +898,7 @@ class SessionRecoveryBoundaryTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         modules, edges = _module_graph()
-        self.assertEqual((len(modules), len(edges)), (337, 2004))
+        self.assertEqual((len(modules), len(edges)), (338, 2007))
         self.assertFalse(_has_cycle(modules, edges))
 
 
