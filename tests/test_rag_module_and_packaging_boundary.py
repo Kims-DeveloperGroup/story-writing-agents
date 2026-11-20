@@ -1967,6 +1967,17 @@ class RagModuleBoundaryTests(unittest.TestCase):
         )
         self.assertEqual({source for source, target in edges if target == preflight_owner},
                          {"story_writing_agents.codex_adapter"})
+        exchange_finalization_owner = "story_writing_agents.agent_exchanges.provider_finalization"
+        self.assertEqual(
+            {target for source, target in edges if source == exchange_finalization_owner},
+            {
+                "story_writing_agents.agent_context.invocation.provider",
+                "story_writing_agents.agent_exchanges.capture",
+                "story_writing_agents.provider_adapter",
+            },
+        )
+        self.assertEqual({source for source, target in edges if target == exchange_finalization_owner},
+                         {"story_writing_agents.backend"})
         codex_definition_owner = "story_writing_agents.codex_definition_sources"
         invocation_files_owner = codex_invocation_files.__name__
         self.assertEqual({target for source, target in edges if source == invocation_files_owner},
@@ -3124,6 +3135,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             "story_writing_agents/codex_definition_sources.py",
             "story_writing_agents/codex_stream_observation.py",
             "story_writing_agents/codex_invocation_files.py",
+            "story_writing_agents/agent_exchanges/provider_finalization.py",
             "story_writing_agents/provider_session_access_records.py",
             "story_writing_agents/provider_session_access_transactions.py",
             "story_writing_agents/provider_context_thread_store.py",
