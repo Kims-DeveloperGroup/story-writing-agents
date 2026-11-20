@@ -219,7 +219,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             )
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
-            with mock.patch.object(adapter, "_has_current_finish", return_value=True):
+            with mock.patch("story_writing_agents.antigravity_native_recovery.has_current_finish", return_value=True):
                 result = await self._invoke_antigravity(adapter, binding, invocation)
 
         # Incomplete output attaches response_diagnostic with non-sensitive terminal output
