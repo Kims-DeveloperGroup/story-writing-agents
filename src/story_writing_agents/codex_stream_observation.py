@@ -58,7 +58,7 @@ def make_stream_line_handler(
                     ProviderStreamEvent(
                         ProviderStreamEventKind.STATUS,
                         agent_id,
-                        "Generating response...",
+                        "Generating response..!",
                     )
                 )
             elif event_type in {"item.updated", "item.started", "item.completed"}:
