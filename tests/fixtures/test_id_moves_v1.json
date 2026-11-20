@@ -15486,6 +15486,145 @@
           "expected_method_ast_sha256": "3ec1121ce78671820f74434786ad475bb6220cd6c615a74542eb81ceb15280a6"
         }
       ]
+    },
+    {
+      "schema_version": 1,
+      "issue": 1097,
+      "origin_commit": "cf09d5f110945486245776eb7159b92201e9b5b8",
+      "original_caps_sha256": "1ac2e7bda1efe31a96baadd6eb2cdb1756d74932de542e73397aa70fe78dfd9b",
+      "expected_caps_sha256": "bcd8f54385c89c6d1880ea32348f5d623a6d66d4388877a108aa1800c1148027",
+      "moves": [
+        {
+          "old_id": "tests.test_agent_exchange_capture.AgentExchangeCaptureLifecycleTests.test_all_response_terminal_outcomes_are_exact_and_share_identity",
+          "new_id": "tests.test_agent_exchange_capture_lifecycle.AgentExchangeCaptureLifecycleTests.test_all_response_terminal_outcomes_are_exact_and_share_identity",
+          "subtest_cap": 9,
+          "source": "tests/test_agent_exchange_capture.py",
+          "destination": "tests/test_agent_exchange_capture_lifecycle.py",
+          "original_file_sha256": "5017cb1672e2fe59db4e027af09f741bc2345d11f1730cd9cfa9444a4b821e23",
+          "original_method_ast_sha256": "78b7053b129ce211cf2babf6f7459c52cd102bf963f8cb61c63915dfcbc74dc5",
+          "expected_method_ast_sha256": "ed61997b3ec67a8ddaca2f07f4d452ad92c5f862a843194aa51acf0073c8c041"
+        },
+        {
+          "old_id": "tests.test_agent_exchange_capture.AgentExchangeCaptureLifecycleTests.test_concurrent_begins_generate_unique_safe_exchange_ids",
+          "new_id": "tests.test_agent_exchange_capture_lifecycle.AgentExchangeCaptureLifecycleTests.test_concurrent_begins_generate_unique_safe_exchange_ids",
+          "subtest_cap": 0,
+          "source": "tests/test_agent_exchange_capture.py",
+          "destination": "tests/test_agent_exchange_capture_lifecycle.py",
+          "original_file_sha256": "5017cb1672e2fe59db4e027af09f741bc2345d11f1730cd9cfa9444a4b821e23",
+          "original_method_ast_sha256": "8ded10f4df5384d08741286b672c053b1b9a699d1163200b749eac7d0281d64b",
+          "expected_method_ast_sha256": "8ded10f4df5384d08741286b672c053b1b9a699d1163200b749eac7d0281d64b"
+        },
+        {
+          "old_id": "tests.test_agent_exchange_capture.AgentExchangeCaptureLifecycleTests.test_concurrent_response_and_terminal_calls_close_once",
+          "new_id": "tests.test_agent_exchange_capture_lifecycle.AgentExchangeCaptureLifecycleTests.test_concurrent_response_and_terminal_calls_close_once",
+          "subtest_cap": 0,
+          "source": "tests/test_agent_exchange_capture.py",
+          "destination": "tests/test_agent_exchange_capture_lifecycle.py",
+          "original_file_sha256": "5017cb1672e2fe59db4e027af09f741bc2345d11f1730cd9cfa9444a4b821e23",
+          "original_method_ast_sha256": "d3bae826408ae6f41d1ce299db76432501a2e411423db97ab9dc3a081c6e2da6",
+          "expected_method_ast_sha256": "d3bae826408ae6f41d1ce299db76432501a2e411423db97ab9dc3a081c6e2da6"
+        },
+        {
+          "old_id": "tests.test_agent_exchange_capture.AgentExchangeCaptureLifecycleTests.test_invalid_transitions_are_noops_and_valid_transition_remains_available",
+          "new_id": "tests.test_agent_exchange_capture_lifecycle.AgentExchangeCaptureLifecycleTests.test_invalid_transitions_are_noops_and_valid_transition_remains_available",
+          "subtest_cap": 0,
+          "source": "tests/test_agent_exchange_capture.py",
+          "destination": "tests/test_agent_exchange_capture_lifecycle.py",
+          "original_file_sha256": "5017cb1672e2fe59db4e027af09f741bc2345d11f1730cd9cfa9444a4b821e23",
+          "original_method_ast_sha256": "bf19bb86dc663b95fa4ce2227d422a4d0c31850a481a8ee0475cddc7956b3f2c",
+          "expected_method_ast_sha256": "bf19bb86dc663b95fa4ce2227d422a4d0c31850a481a8ee0475cddc7956b3f2c"
+        },
+        {
+          "old_id": "tests.test_agent_exchange_capture.AgentExchangeCaptureLifecycleTests.test_no_response_failures_and_cancellation_matrix_are_exact",
+          "new_id": "tests.test_agent_exchange_capture_lifecycle.AgentExchangeCaptureLifecycleTests.test_no_response_failures_and_cancellation_matrix_are_exact",
+          "subtest_cap": 6,
+          "source": "tests/test_agent_exchange_capture.py",
+          "destination": "tests/test_agent_exchange_capture_lifecycle.py",
+          "original_file_sha256": "5017cb1672e2fe59db4e027af09f741bc2345d11f1730cd9cfa9444a4b821e23",
+          "original_method_ast_sha256": "2451f64d0d6e7fadb84cbced869c6c0a54fff67b3658896b484441851d98cd62",
+          "expected_method_ast_sha256": "2451f64d0d6e7fadb84cbced869c6c0a54fff67b3658896b484441851d98cd62"
+        },
+        {
+          "old_id": "tests.test_agent_exchange_capture.AgentExchangeCaptureLifecycleTests.test_response_and_terminal_are_attempted_at_most_once_before_append",
+          "new_id": "tests.test_agent_exchange_capture_lifecycle.AgentExchangeCaptureLifecycleTests.test_response_and_terminal_are_attempted_at_most_once_before_append",
+          "subtest_cap": 0,
+          "source": "tests/test_agent_exchange_capture.py",
+          "destination": "tests/test_agent_exchange_capture_lifecycle.py",
+          "original_file_sha256": "5017cb1672e2fe59db4e027af09f741bc2345d11f1730cd9cfa9444a4b821e23",
+          "original_method_ast_sha256": "c23c36ea30eaa859e58ae731abf07c37f81322ff86be1bddb475d7750bd9406d",
+          "expected_method_ast_sha256": "c23c36ea30eaa859e58ae731abf07c37f81322ff86be1bddb475d7750bd9406d"
+        },
+        {
+          "old_id": "tests.test_agent_exchange_capture.ProviderDiagnosticCaptureTests.test_backend_forwards_only_typed_diagnostic_without_replacing_failure",
+          "new_id": "tests.test_agent_exchange_provider_diagnostics.ProviderDiagnosticCaptureTests.test_backend_forwards_only_typed_diagnostic_without_replacing_failure",
+          "subtest_cap": 0,
+          "source": "tests/test_agent_exchange_capture.py",
+          "destination": "tests/test_agent_exchange_provider_diagnostics.py",
+          "original_file_sha256": "5017cb1672e2fe59db4e027af09f741bc2345d11f1730cd9cfa9444a4b821e23",
+          "original_method_ast_sha256": "7942491f16370387af90537e79dea0751d85c4af302d747b94bfd0e201576fad",
+          "expected_method_ast_sha256": "6d383d5d3f9bdbe19d012c969921ef519aa0aae5a906f79e83c38eb3402d5e4f"
+        },
+        {
+          "old_id": "tests.test_agent_exchange_capture.ProviderDiagnosticCaptureTests.test_diagnostic_failures_disabled_logging_and_concurrent_duplicates_are_fail_open",
+          "new_id": "tests.test_agent_exchange_provider_diagnostics.ProviderDiagnosticCaptureTests.test_diagnostic_failures_disabled_logging_and_concurrent_duplicates_are_fail_open",
+          "subtest_cap": 3,
+          "source": "tests/test_agent_exchange_capture.py",
+          "destination": "tests/test_agent_exchange_provider_diagnostics.py",
+          "original_file_sha256": "5017cb1672e2fe59db4e027af09f741bc2345d11f1730cd9cfa9444a4b821e23",
+          "original_method_ast_sha256": "57371756f0bce47b42d67e54b9ee2acef6d95d5097b62e420cc4c3d77b681ae0",
+          "expected_method_ast_sha256": "57371756f0bce47b42d67e54b9ee2acef6d95d5097b62e420cc4c3d77b681ae0"
+        },
+        {
+          "old_id": "tests.test_agent_exchange_capture.ProviderDiagnosticCaptureTests.test_diagnostic_value_is_strict_passive_and_hidden_from_repr",
+          "new_id": "tests.test_agent_exchange_provider_diagnostics.ProviderDiagnosticCaptureTests.test_diagnostic_value_is_strict_passive_and_hidden_from_repr",
+          "subtest_cap": 3,
+          "source": "tests/test_agent_exchange_capture.py",
+          "destination": "tests/test_agent_exchange_provider_diagnostics.py",
+          "original_file_sha256": "5017cb1672e2fe59db4e027af09f741bc2345d11f1730cd9cfa9444a4b821e23",
+          "original_method_ast_sha256": "f0a4e23541c61525a2d939bc42d1e6ac044c27fe222e28f06d15a24925eb85ff",
+          "expected_method_ast_sha256": "f0a4e23541c61525a2d939bc42d1e6ac044c27fe222e28f06d15a24925eb85ff"
+        },
+        {
+          "old_id": "tests.test_agent_exchange_capture.ProviderDiagnosticCaptureTests.test_failure_response_bytes_are_reversible_and_never_accepted",
+          "new_id": "tests.test_agent_exchange_provider_diagnostics.ProviderDiagnosticCaptureTests.test_failure_response_bytes_are_reversible_and_never_accepted",
+          "subtest_cap": 0,
+          "source": "tests/test_agent_exchange_capture.py",
+          "destination": "tests/test_agent_exchange_provider_diagnostics.py",
+          "original_file_sha256": "5017cb1672e2fe59db4e027af09f741bc2345d11f1730cd9cfa9444a4b821e23",
+          "original_method_ast_sha256": "cf37f437cfa77159e37ae9e33f11ebb8a9b674be35c88d58f4921d29bbacb4a7",
+          "expected_method_ast_sha256": "cf37f437cfa77159e37ae9e33f11ebb8a9b674be35c88d58f4921d29bbacb4a7"
+        },
+        {
+          "old_id": "tests.test_agent_exchange_capture.ProviderDiagnosticCaptureTests.test_failure_response_handles_nonfinite_json_and_codex_jsonl",
+          "new_id": "tests.test_agent_exchange_provider_diagnostics.ProviderDiagnosticCaptureTests.test_failure_response_handles_nonfinite_json_and_codex_jsonl",
+          "subtest_cap": 0,
+          "source": "tests/test_agent_exchange_capture.py",
+          "destination": "tests/test_agent_exchange_provider_diagnostics.py",
+          "original_file_sha256": "5017cb1672e2fe59db4e027af09f741bc2345d11f1730cd9cfa9444a4b821e23",
+          "original_method_ast_sha256": "38cb4b246142512f26690cef6689c557139ab137998e710d12a610a8ca955b25",
+          "expected_method_ast_sha256": "38cb4b246142512f26690cef6689c557139ab137998e710d12a610a8ca955b25"
+        },
+        {
+          "old_id": "tests.test_agent_exchange_capture.ProviderDiagnosticCaptureTests.test_failure_response_preserves_only_error_status_exit_code_and_stderr",
+          "new_id": "tests.test_agent_exchange_provider_diagnostics.ProviderDiagnosticCaptureTests.test_failure_response_preserves_only_error_status_exit_code_and_stderr",
+          "subtest_cap": 0,
+          "source": "tests/test_agent_exchange_capture.py",
+          "destination": "tests/test_agent_exchange_provider_diagnostics.py",
+          "original_file_sha256": "5017cb1672e2fe59db4e027af09f741bc2345d11f1730cd9cfa9444a4b821e23",
+          "original_method_ast_sha256": "d5ae2eafefd62aa52e187aab2b5ea6f6a1ea5e9de267c272dc1280fcebe7f452",
+          "expected_method_ast_sha256": "d5ae2eafefd62aa52e187aab2b5ea6f6a1ea5e9de267c272dc1280fcebe7f452"
+        },
+        {
+          "old_id": "tests.test_agent_exchange_capture.ProviderDiagnosticCaptureTests.test_recovered_success_records_diagnostic_and_none_default_is_unchanged",
+          "new_id": "tests.test_agent_exchange_provider_diagnostics.ProviderDiagnosticCaptureTests.test_recovered_success_records_diagnostic_and_none_default_is_unchanged",
+          "subtest_cap": 2,
+          "source": "tests/test_agent_exchange_capture.py",
+          "destination": "tests/test_agent_exchange_provider_diagnostics.py",
+          "original_file_sha256": "5017cb1672e2fe59db4e027af09f741bc2345d11f1730cd9cfa9444a4b821e23",
+          "original_method_ast_sha256": "704f662afb1e4eb945e0b8faf8f631ebf91619784ab1526621a14f89d36ee955",
+          "expected_method_ast_sha256": "704f662afb1e4eb945e0b8faf8f631ebf91619784ab1526621a14f89d36ee955"
+        }
+      ]
     }
   ]
 }
