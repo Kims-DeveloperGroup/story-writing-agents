@@ -30,7 +30,7 @@ def load_manifest_thread(
     manifest = provider_session_artifacts.read_manifest(workspace, session_id, missing_ok=False)
     assert manifest is not None
     return provider_thread_records.select_thread_record(
-        manifest, key, effective_fingerprint,
+        {"provider_threads": {}}, key, effective_fingerprint,
     )
 
 
