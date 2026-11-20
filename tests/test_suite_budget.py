@@ -853,7 +853,7 @@ class SuiteBudgetTests(unittest.TestCase):
             ("src/story_writing_agents/codex_invocation_files.py", invocation_ids, sorted((*invocation_ids, process_peer))),
             ("tests/codex_native_process_fixture.py", shared_fixture_ids, shared_fixture_ids),
         ):
-            selected = definition_impact.plan_impact(paths=(path,))
+            selected = select_impact(real, paths=(path,))
             self.assertEqual(selected["focused_manifest"]["ordered_ids"], focused)
             self.assertEqual(selected["affected_manifest"]["ordered_ids"], affected)
         definitions = (
