@@ -20,7 +20,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from types import CoroutineType, GeneratorType
 from unittest import mock
-from story_writing_agents import AgentBackend, StoryRuntime
+from story_writing_agents import AgentBackend, StoryRuntime, provider_context_thread_store
 from story_writing_agents.agent_context import ProviderCallState, canonical_provider_json
 from story_writing_agents.agent_context.manifest import ContextScope, ContextSubjectKind
 from story_writing_agents.agents import LEAD_ORCHESTRATOR, PLOT_ARCHITECT, CHARACTER_CUSTODIAN
@@ -689,7 +689,9 @@ class ContextRecoveryTests(fixture_execution_fixture.ContextExecutionTestCase):
                         with mock.patch.object(backend, "_assert_provider_work_ready", side_effect=RuntimeError()):
                             self.assertFalse(failure.validate_replay())
                     elif dimension == "thread":
-                        with mock.patch.object(backend, "_load_context_thread", return_value="other-thread"):
+                        with mock.patch.object(
+                            provider_context_thread_store, "load_context_thread", return_value="other-thread"
+                        ):
                             self.assertFalse(failure.validate_replay())
                     else:
                         moved = workspace.root.with_name(workspace.root.name + "-moved")

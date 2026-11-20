@@ -19575,6 +19575,29 @@
         "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_write_failures_compensate_only_newly_acquired_access"
       ],
       "depends_on": []
+    },
+    {
+      "name": "provider.context-thread-store",
+      "boundary": "existing-cases",
+      "paths": [
+        "src/story_writing_agents/provider_context_thread_store.py"
+      ],
+      "focused_ids": [
+        "tests.test_antigravity_parity.AntigravityParityTests.test_contextual_thread_bootstrap_delta_restart_and_scope_isolation_match_codex",
+        "tests.test_codex_backend.CodexBackendTestCase.test_contextual_submitted_failure_taints_only_exact_context_thread",
+        "tests.test_provider_auth_recovery.ContextRecoveryTests.test_backend_route_session_thread_and_workspace_drift_veto_replay"
+      ],
+      "affected_ids": [
+        "tests.test_antigravity_parity.AntigravityParityTests.test_contextual_thread_bootstrap_delta_restart_and_scope_isolation_match_codex",
+        "tests.test_codex_backend.CodexBackendTestCase.test_both_native_backends_preserve_session_continuation_and_legacy_namespaces",
+        "tests.test_codex_backend.CodexBackendTestCase.test_context_sink_records_prepared_submitted_and_cancellation_once",
+        "tests.test_codex_backend.CodexBackendTestCase.test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread",
+        "tests.test_codex_backend.CodexBackendTestCase.test_contextual_submitted_failure_taints_only_exact_context_thread",
+        "tests.test_provider_auth_recovery.ContextRecoveryTests.test_admission_race_abort_keeps_original_accounting_and_exchanges",
+        "tests.test_provider_auth_recovery.ContextRecoveryTests.test_backend_route_session_thread_and_workspace_drift_veto_replay",
+        "tests.test_provider_auth_recovery.ContextRecoveryTests.test_noninteractive_auth_errors_and_restart_never_replay"
+      ],
+      "depends_on": []
     }
   ],
   "ignored_names": [
