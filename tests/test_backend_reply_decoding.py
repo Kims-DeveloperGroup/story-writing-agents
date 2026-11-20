@@ -4,35 +4,14 @@ from __future__ import annotations
 
 import json
 from dataclasses import fields, replace
-from story_writing_agents import AgentBackend, AgentReply, AgentRequest, ConversationRetrievalActionKind, ConversationRetrievalAnswerAction, ConversationRetrievalReadAction, ConversationRetrievalRequest, ConversationRetrievalSearchAction, PLOT_ARCHITECT, Phase
-from story_writing_agents.conversation_retrieval import ConversationRagContext
+from story_writing_agents import AgentReply, AgentRequest, ConversationRetrievalActionKind, ConversationRetrievalAnswerAction, ConversationRetrievalReadAction, ConversationRetrievalRequest, ConversationRetrievalSearchAction, Phase
 from story_writing_agents.models import AgentReplyNextPhase
-from story_writing_agents.conversations import select_bounded_collaboration_context
 from story_writing_agents.structured_output_validation import diagnose_json_text, failure_issues
 from story_writing_agents.errors import BackendProtocolError, ConversationRetrievalSemanticError
+from story_writing_agents import conversation_retrieval_wire, provider_direct_call_wire
+from tests.conversation_retrieval_wire_fixture import readable_context, retrieval_request
 from tests.provider_wire_fixture import direct_reply, direct_response
 import story_writing_agents.backend_reply_decoding as backend_reply_decoding
-
-def readable_context():  # type: ignore[no-untyped-def]
-    """Return the canonical content-free active-v2 retrieval context."""
-
-    return select_bounded_collaboration_context(())
-
-def retrieval_request(*,
-    session_id: str = "story_session",
-    conversation_id: str = "conversation_a",
-    turn_id: str = "turn_current",
-    agent_id: str = PLOT_ARCHITECT, content: str = "visible retrieval request",
-    context: object | None = None, rag_context: ConversationRagContext | None = None,
-) -> ConversationRetrievalRequest:
-    """Build one exact bounded-retrieval provider request."""
-
-    return ConversationRetrievalRequest(session_id=session_id,
-        conversation_id=conversation_id,
-        turn_id=turn_id,
-        agent_id=agent_id,
-        content=content, context=readable_context() if context is None else context,
-        rag_context=rag_context,)
 
 def retrieval_action_json(request: ConversationRetrievalRequest,
     *, kind: ConversationRetrievalActionKind,
@@ -79,7 +58,7 @@ class BackendReplyDecodingDefinitions:
         self.assertEqual(request.expected_reviewed_proposal, identity)
         with self.assertRaises(ValueError):
             replace(request, phase=Phase.DRAFT)
-        schema = AgentBackend._output_schema(Phase.FINALIZE, expected_reviewed_proposal=identity)
+        schema = provider_direct_call_wire.phase_output_schema(Phase.FINALIZE, expected_reviewed_proposal=identity)
         value = {"reviewed_proposal_id": identity[0], "reviewed_proposal_digest": digest}
         self.assertEqual(diagnose_json_text(direct_reply(value, "finalize"), schema), ())
         self.assertEqual(schema["properties"]["reviewed_proposal_id"]["enum"], [identity[0]])
@@ -99,7 +78,7 @@ class BackendReplyDecodingDefinitions:
             with self.assertRaises((TypeError, ValueError)):
                 replace(request, expected_reviewed_proposal=invalid_identity)
         with self.assertRaises(ValueError):
-            AgentBackend._output_schema(Phase.DRAFT, expected_reviewed_proposal=identity)
+            provider_direct_call_wire.phase_output_schema(Phase.DRAFT, expected_reviewed_proposal=identity)
         self.assertEqual(backend_reply_decoding.decode_reply(Phase.DRAFT, direct_reply({"message": " \t"}, "draft"), revision_id="r2").content, " \t")
         invalid_values = ((Phase.AUDIT, '{"verdict":"maybe","message":""}'),
             (Phase.SYNTHESIZE, '{"next":"unknown","message":"ambiguous"}'),
@@ -124,10 +103,10 @@ class BackendReplyDecodingDefinitions:
             issues = failure_issues(caught.exception) or (getattr(caught.exception, "issue", None),)
             self.assertEqual(issues, ("$: expected exact current response_type and schema fields" if ((phase is Phase.AUDIT and value.get("verdict") == "PRIVATE") or (phase is Phase.SYNTHESIZE and value.get("next") == "PRIVATE")) else issue,))
             self.assertNotIn("PRIVATE", repr(issues))
-        review_schema = AgentBackend._output_schema(Phase.SYNTHESIZE, review_only=True)
+        review_schema = provider_direct_call_wire.phase_output_schema(Phase.SYNTHESIZE, review_only=True)
         self.assertEqual(review_schema["properties"]["next_consensus_step"]["enum"], ["complete_review", "report_deadlock"])
         with self.assertRaises(ValueError):
-            AgentBackend._output_schema(Phase.DRAFT, review_only=True)
+            provider_direct_call_wire.phase_output_schema(Phase.DRAFT, review_only=True)
 
     def test_retrieval_decoder_rejects_malformed_duplicate_and_schema_errors(
         self,
@@ -255,7 +234,7 @@ class BackendReplyDecodingDefinitions:
         self.assertIs(type(decoded), ConversationRetrievalReadAction)
         self.assertIsNone(decoded.end_sequence)
         explicit_null = direct_response(json.dumps({"action": {**action, "end_sequence": None}}), {"request_type": "answer_with_conversation_history"})
-        self.assertEqual(diagnose_json_text(explicit_null, AgentBackend._conversation_retrieval_action_schema(
+        self.assertEqual(diagnose_json_text(explicit_null, conversation_retrieval_wire.retrieval_action_schema(
             allowed_actions=(ConversationRetrievalActionKind.READ_HISTORY,))),
             ("$.agent_action.end_sequence_number: expected integer, got null",))
         with self.assertRaises(BackendProtocolError):

@@ -24,13 +24,12 @@ from types import SimpleNamespace
 from typing import Any, get_type_hints
 from unittest import mock
 from story_writing_agents import CONVERSATION_CONTEXT_POLICY, CONVERSATION_EVENT_SCHEMA_VERSION, AgentBackend, AgentReply, AgentRequest, BoundAgent, CHARACTER_CUSTODIAN, ConversationContextWindow, ConversationEvent, ConversationEventKind, ConversationReply, ConversationRequest, ConversationRetrievalAction, ConversationRetrievalActionHandler, ConversationRetrievalActionKind, ConversationRetrievalAnswerAction, ConversationRetrievalObservation, ConversationRetrievalReadAction, ConversationRetrievalReadObservation, ConversationRetrievalReply, ConversationRetrievalRequest, ConversationRetrievalSearchAction, ConversationRetrievalSearchItem, ConversationRetrievalSearchObservation, ConversationRetrievalSource, EXECUTION_SPECIALIST, PLOT_ARCHITECT, Phase, PromptFileReference, ROSTER, ReplyTrace, ReplyTraceOrigin, SessionAccessState, SessionDurableState, SessionLifecycleState, Workspace
-from story_writing_agents import cli as cli_module
+from story_writing_agents import cli as cli_module, conversation_retrieval_wire, provider_direct_call_wire
 from story_writing_agents import backend as backend_module, provider_manifest_thread_store, provider_session_artifacts, provider_thread_records
-from story_writing_agents.conversation_retrieval import CONVERSATION_RETRIEVAL_POLICY, ConversationRagAttemptOutcome, ConversationRagContext, ConversationRagExcerpt, serialize_conversation_retrieval_observation
+from story_writing_agents.conversation_retrieval import CONVERSATION_RETRIEVAL_POLICY, serialize_conversation_retrieval_observation
 from story_writing_agents.models import AgentReplyKind, AgentReplyNextPhase
-from story_writing_agents.conversation_rag import ConversationRagDocumentIdentity, ConversationRagDocumentKey, ConversationRagOutcome, ConversationRagReason, ConversationRagSourceReference
 from story_writing_agents.conversation_search import CollaborationHistoryCitation
-from story_writing_agents.conversations import CollaborationReadableFieldKey, select_bounded_collaboration_context
+from story_writing_agents.conversations import CollaborationReadableFieldKey
 from story_writing_agents.backend import backend_configuration_snapshot
 from story_writing_agents.structured_output_validation import diagnose_json_text, failure_issues
 from story_writing_agents.agent_context import ContextComponentKind, ProviderCallAccounting, ProviderCallKind, ProviderCallState, ProviderUsage, account_provider_payload, canonical_provider_json
@@ -58,6 +57,9 @@ from tests.provider_wire_fixture import assert_guidance, direct_reply, direct_re
 from tests.helpers import SUPPORTED_ARRAY_ITEMS_SCHEMA_VALIDATOR_SOURCE, all_manuscripts, core_snapshot, initialized_workspace, pristine_initialized_workspace
 from story_writing_agents.agent_context.invocation import provider as ctx_provider
 
+from tests.conversation_retrieval_wire_fixture import (
+    provider_rag_context as _provider_rag_context, readable_context as _readable_context, retrieval_request as _retrieval_request,
+)
 from tests.backend_debug_log_fixture import (
     debug_signature as _debug_signature,
     mark_debug_session_attached as _mark_debug_session_attached,
@@ -66,8 +68,6 @@ from tests.backend_debug_log_fixture import (
 
 from tests.test_backend_reply_decoding import (
     BackendReplyDecodingDefinitions,
-    readable_context as _readable_context,
-    retrieval_request as _retrieval_request,
     retrieval_action_json as _retrieval_action_json,
     needle_search as _needle_search,
     read_first_search_hit as _read_first_search_hit,
@@ -363,35 +363,6 @@ def _conversation_request(*,
 
 
 
-
-
-def _provider_rag_context() -> ConversationRagContext:
-    """Build one attempted context whose full reference must reach call one."""
-
-    identity = ConversationRagDocumentIdentity(key=ConversationRagDocumentKey(
-            session_id="story_session",
-            document_id="a" * 64,),
-        conversation_id="source_conversation", start_turn_id="source_turn",
-        end_turn_id="source_turn", start_sequence=1,
-        end_sequence=2,
-        revision_id="sha256:" + "b" * 64,)
-    content = "authoritative excerpt 🙂"
-    excerpt = ConversationRagExcerpt(citation_id="g1",
-        source=ConversationRetrievalSource(citation=CollaborationHistoryCitation(
-                session_id="story_session", conversation_id="source_conversation",
-                event_id="source_event", sequence=2,
-                field_key=CollaborationReadableFieldKey.SPECIALIST_REPLY_CONTENT, start_codepoint=0,
-                end_codepoint=len(content),),
-        ), reference=ConversationRagSourceReference(
-            document=identity, fragment_id="fragment-authorized",
-            start_codepoint=0,
-            end_codepoint=len(content),),
-        content=content,)
-    return ConversationRagContext(outcome=ConversationRagAttemptOutcome(
-            outcome=ConversationRagOutcome.COMPLETE,
-            reason=ConversationRagReason.NONE,),
-        excerpts=(excerpt,), retained_utf8_bytes=len(content.encode("utf-8")),
-        truncated=False,)
 
 
 class _RecordingRetrievalHandler:
@@ -6180,99 +6151,6 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(BackendProtocolError, "closed"):
             await bound.converse(self.conversation_request(session_id="closed_session"))
 
-    def test_retrieval_rag_context_is_first_call_only_and_reference_authoritative(
-        self,
-    ) -> None:
-        contexts = (_provider_rag_context(), ConversationRagContext.disabled())
-        for context in contexts:
-            with self.subTest(outcome=context.outcome):
-                request = _retrieval_request(rag_context=context)
-                initial = AgentBackend._conversation_retrieval_initial_payload(
-                    request,
-                    allowed_actions=(
-                        ConversationRetrievalActionKind.SEARCH_CONVERSATIONS,
-                        ConversationRetrievalActionKind.ANSWER,
-                    ),
-                )
-                self.assertEqual(
-                    tuple(initial),
-                    (
-                        "request_type",
-                        "session_id",
-                        "conversation_id",
-                        "turn_id",
-                        "agent_id",
-                        "user_input_text",
-                        "conversation_history",
-                        "rag_context",
-                        "conversation_retrieval_control",
-                        "protocol_version",
-                    ),
-                )
-                expected_rag = context.to_dict()
-                for excerpt in expected_rag.get("excerpts", []): excerpt["content_text"] = excerpt.pop("content")
-                self.assertEqual(initial["rag_context"], expected_rag)
-                self.assertTrue(
-                    any("rag_context" in rule for rule in initial["conversation_retrieval_control"]["retrieval_instructions"])
-                )
-                continuation = (
-                    AgentBackend._conversation_retrieval_continuation_payload(
-                        request,
-                        action_index=2,
-                        allowed_actions=(ConversationRetrievalActionKind.ANSWER,),
-                        observation=serialize_conversation_retrieval_observation(ConversationRetrievalSearchObservation(
-                    session_id=request.session_id, conversation_id=request.conversation_id,
-                    turn_id=request.turn_id, action_index=1, hits=(), truncated=False)),
-                    )
-                )
-                self.assertNotIn("rag_context", continuation)
-                self.assertNotIn("user_input_text", continuation)
-                self.assertNotIn("conversation_history", continuation)
-                self.assertTrue(
-                    any(
-                        "rag_context" in rule
-                        for rule in continuation["conversation_retrieval_control"]["retrieval_instructions"]
-                    )
-                )
-
-        complete = contexts[0]
-        reference = complete.excerpts[0].reference
-        wire_reference = complete.to_dict()["excerpts"][0]["reference"]
-        self.assertEqual(
-            wire_reference,
-            {
-                "document": {
-                    "key": {
-                        "session_id": reference.document.key.session_id,
-                        "document_id": reference.document.key.document_id,
-                    },
-                    "conversation_id": reference.document.conversation_id,
-                    "start_turn_id": reference.document.start_turn_id,
-                    "end_turn_id": reference.document.end_turn_id,
-                    "start_sequence": reference.document.start_sequence,
-                    "end_sequence": reference.document.end_sequence,
-                    "revision_id": reference.document.revision_id,
-                },
-                "fragment_id": reference.fragment_id,
-                "start_codepoint": reference.start_codepoint,
-                "end_codepoint": reference.end_codepoint,
-            },
-        )
-        serialized = json.dumps(
-            AgentBackend._conversation_retrieval_initial_payload(
-                _retrieval_request(rag_context=complete),
-                allowed_actions=(ConversationRetrievalActionKind.ANSWER,),
-            ),
-            ensure_ascii=False,
-        )
-        for forbidden in (
-            "provider-candidate-secret",
-            "/private/provider/path",
-            "provider-credential",
-            "hidden-handle",
-        ):
-            self.assertNotIn(forbidden, serialized)
-
     def test_retrieval_initial_payload_carries_story_and_rag_context_once(
         self,
     ) -> None:
@@ -6291,7 +6169,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             story_session_context=story_context,
         )
 
-        initial = AgentBackend._conversation_retrieval_initial_payload(
+        initial = conversation_retrieval_wire.initial_payload(
             request,
             allowed_actions=(ConversationRetrievalActionKind.ANSWER,),
         )
@@ -6317,7 +6195,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(initial["rag_context"], expected_rag)
         self.assertNotIn("conversation_history", initial)
 
-        continuation = AgentBackend._conversation_retrieval_continuation_payload(
+        continuation = conversation_retrieval_wire.continuation_payload(
             request,
             action_index=2,
             allowed_actions=(ConversationRetrievalActionKind.ANSWER,),
@@ -6494,7 +6372,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         read_branches = [branch for branch in invocations[-1]["schema"]["properties"]["agent_action"]["anyOf"] if branch["properties"]["action_type"]["enum"] == ["read_conversation_history"]]
         self.assertEqual({frozenset(branch["required"]) for branch in read_branches}, {frozenset({"action_type", "citation_id", "start_sequence_number"}), frozenset({"action_type", "citation_id", "start_sequence_number", "end_sequence_number"})})
         self.assertEqual(
-            AgentBackend._conversation_retrieval_allowed_actions(
+            conversation_retrieval_wire.allowed_actions(
                 action_index=5,
                 has_observation=True,
                 after_read=False,
@@ -6637,59 +6515,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn(private, repr(reply.validation_details))
 
-    def test_retrieval_schema_uses_supported_strict_object_subset(self) -> None:
-        schema = AgentBackend._conversation_retrieval_action_schema()
-        self.assertEqual(schema.get("type"), "object")
-        self.assertNotIn("anyOf", schema)
-        self.assertEqual(set(schema["properties"]), {"agent_action"})
-        action_schema = schema["properties"]["agent_action"]
-        self.assertEqual(len(action_schema["anyOf"]), 4)
-
-        forbidden_keywords = {"oneOf", "minLength", "uniqueItems"}
-
-        def assert_supported(value: object) -> None:
-            if type(value) is dict:
-                self.assertTrue(forbidden_keywords.isdisjoint(value))
-                if value.get("type") == "array":
-                    self.assertIs(type(value.get("minItems")), int)
-                if value.get("type") == "object":
-                    properties = value.get("properties")
-                    self.assertIs(type(properties), dict)
-                    assert type(properties) is dict
-                    self.assertEqual(set(value.get("required", ())), set(properties))
-                    self.assertIs(value.get("additionalProperties"), False)
-                for child in value.values():
-                    assert_supported(child)
-            elif type(value) is list:
-                for child in value:
-                    assert_supported(child)
-
-        assert_supported(schema)
-
     test_retrieval_decoder_rejects_malformed_duplicate_and_schema_errors = BackendReplyDecodingDefinitions.test_retrieval_decoder_rejects_malformed_duplicate_and_schema_errors
 
     test_retrieval_read_explicit_null_is_not_an_omitted_end_sequence = BackendReplyDecodingDefinitions.test_retrieval_read_explicit_null_is_not_an_omitted_end_sequence
-
-    def test_retrieval_non_string_kind_reports_exact_type_and_common_issues(self) -> None:
-        secret = "PRIVATE_NON_STRING_RETRIEVAL_KIND_한🙂"
-        schema = AgentBackend._conversation_retrieval_action_schema(
-            allowed_actions=(ConversationRetrievalActionKind.READ_HISTORY,),
-        )
-        issues = diagnose_json_text(
-            json.dumps({"agent_action": {
-                "action_type": {"private": secret},
-                "citation_id": 5,
-                "start_sequence_number": "invalid",
-            }}),
-            schema,
-        )
-        self.assertEqual(issues, (
-            '$.agent_action.action_type: expected one of ["read_conversation_history"], got object',
-            "$.agent_action.citation_id: expected string, got integer",
-            "$.agent_action.start_sequence_number: expected integer, got string",
-        ))
-        self.assertNotIn(secret, repr(issues))
-        self.assertNotIn("private", repr(issues))
 
     async def test_retrieval_handler_declaration_and_exact_outcome_protocol(self) -> None:
         session_id = "retrieval_handler_session"
@@ -7305,7 +7133,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             calls = self.provider_invocations()[before:]
             self.assertEqual(len(calls), 1)
             substantive = calls[0]
-            expected_payload = AgentBackend._request_payload(request)
+            expected_payload = provider_direct_call_wire.phase_request_payload(request)
             expected_payload["untrusted_attached_references"] = [
                 {
                     "artifact_reference": {
@@ -7377,7 +7205,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reply.content, "generated conversation reply")
         calls = self.provider_invocations()
         self.assertEqual(len(calls), 1)
-        expected = AgentBackend._conversation_request_payload(request)
+        expected = provider_direct_call_wire.conversation_request_payload(request)
         context = calls[0]["payload"].pop("untrusted_attached_references")
         self.assertTrue(calls[0]["payload"].pop("contract_guidance")["input_fields"]["$.untrusted_attached_references"])
         self.assertEqual(calls[0]["payload"], expected)

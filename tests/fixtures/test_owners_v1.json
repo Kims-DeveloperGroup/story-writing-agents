@@ -1932,11 +1932,8 @@
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_handler_control_failures_taint_and_trace_interruption",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_handler_declaration_and_exact_outcome_protocol",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_initial_payload_carries_story_and_rag_context_once",
-        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_non_string_kind_reports_exact_type_and_common_issues",
-        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_rag_context_is_first_call_only_and_reference_authoritative",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_read_explicit_null_is_not_an_omitted_end_sequence",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_repairs_share_five_call_budget_and_close_fifth_to_answer",
-        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_schema_uses_supported_strict_object_subset",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_whole_loop_serializes_with_legacy_converse_and_invoke",
         "tests.test_codex_backend.CodexBackendTestCase.test_separate_bindings_serialize_one_session_agent_thread",
         "tests.test_codex_backend.CodexBackendTestCase.test_sink_control_failures_do_not_mask_provider_failure",
@@ -2030,11 +2027,8 @@
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_handler_control_failures_taint_and_trace_interruption",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_handler_declaration_and_exact_outcome_protocol",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_initial_payload_carries_story_and_rag_context_once",
-        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_non_string_kind_reports_exact_type_and_common_issues",
-        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_rag_context_is_first_call_only_and_reference_authoritative",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_read_explicit_null_is_not_an_omitted_end_sequence",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_repairs_share_five_call_budget_and_close_fifth_to_answer",
-        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_schema_uses_supported_strict_object_subset",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_whole_loop_serializes_with_legacy_converse_and_invoke",
         "tests.test_codex_backend.CodexBackendTestCase.test_separate_bindings_serialize_one_session_agent_thread",
         "tests.test_codex_backend.CodexBackendTestCase.test_sink_control_failures_do_not_mask_provider_failure",
@@ -2060,6 +2054,7 @@
       "depends_on": [
         "backend-debug-log-fixture",
         "context-execution-fixture",
+        "conversation-retrieval-wire-fixture",
         "lead-fixtures.material-values",
         "lead-fixtures.preparation-data",
         "tests.test_agent_context_accounting",
@@ -14941,7 +14936,7 @@
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_decoder_rejects_malformed_duplicate_and_schema_errors",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_exact_initial_continuation_payload_rules_schema_and_frame",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_initial_payload_carries_story_and_rag_context_once",
-        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_non_string_kind_reports_exact_type_and_common_issues",
+        "tests.test_conversation_retrieval_wire.ConversationRetrievalWireTests.test_retrieval_non_string_kind_reports_exact_type_and_common_issues",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_read_explicit_null_is_not_an_omitted_end_sequence",
         "tests.test_codex_backend.CodexBackendTestCase.test_strict_phase_reply_mapping",
         "tests.test_collaboration_events.CollaborationValueContractTests.test_actor_direction_matrix_is_closed_and_exact",
@@ -15090,7 +15085,7 @@
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_decoder_rejects_malformed_duplicate_and_schema_errors",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_exact_initial_continuation_payload_rules_schema_and_frame",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_initial_payload_carries_story_and_rag_context_once",
-        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_non_string_kind_reports_exact_type_and_common_issues",
+        "tests.test_conversation_retrieval_wire.ConversationRetrievalWireTests.test_retrieval_non_string_kind_reports_exact_type_and_common_issues",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_read_explicit_null_is_not_an_omitted_end_sequence",
         "tests.test_codex_backend.CodexBackendTestCase.test_strict_phase_reply_mapping",
         "tests.test_collaboration_events.CollaborationValueContractTests.test_actor_direction_matrix_is_closed_and_exact",
@@ -15242,7 +15237,7 @@
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_decoder_rejects_malformed_duplicate_and_schema_errors",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_exact_initial_continuation_payload_rules_schema_and_frame",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_initial_payload_carries_story_and_rag_context_once",
-        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_non_string_kind_reports_exact_type_and_common_issues",
+        "tests.test_conversation_retrieval_wire.ConversationRetrievalWireTests.test_retrieval_non_string_kind_reports_exact_type_and_common_issues",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_read_explicit_null_is_not_an_omitted_end_sequence",
         "tests.test_codex_backend.CodexBackendTestCase.test_strict_phase_reply_mapping",
         "tests.test_collaboration_events.CollaborationValueContractTests.test_actor_direction_matrix_is_closed_and_exact",
@@ -15394,7 +15389,7 @@
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_decoder_rejects_malformed_duplicate_and_schema_errors",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_exact_initial_continuation_payload_rules_schema_and_frame",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_initial_payload_carries_story_and_rag_context_once",
-        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_non_string_kind_reports_exact_type_and_common_issues",
+        "tests.test_conversation_retrieval_wire.ConversationRetrievalWireTests.test_retrieval_non_string_kind_reports_exact_type_and_common_issues",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_read_explicit_null_is_not_an_omitted_end_sequence",
         "tests.test_codex_backend.CodexBackendTestCase.test_strict_phase_reply_mapping",
         "tests.test_collaboration_events.CollaborationValueContractTests.test_actor_direction_matrix_is_closed_and_exact",
@@ -15547,7 +15542,7 @@
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_decoder_rejects_malformed_duplicate_and_schema_errors",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_exact_initial_continuation_payload_rules_schema_and_frame",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_initial_payload_carries_story_and_rag_context_once",
-        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_non_string_kind_reports_exact_type_and_common_issues",
+        "tests.test_conversation_retrieval_wire.ConversationRetrievalWireTests.test_retrieval_non_string_kind_reports_exact_type_and_common_issues",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_read_explicit_null_is_not_an_omitted_end_sequence",
         "tests.test_codex_backend.CodexBackendTestCase.test_strict_phase_reply_mapping",
         "tests.test_collaboration_events.CollaborationValueContractTests.test_actor_direction_matrix_is_closed_and_exact",
@@ -16316,11 +16311,11 @@
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_handler_control_failures_taint_and_trace_interruption",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_handler_declaration_and_exact_outcome_protocol",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_initial_payload_carries_story_and_rag_context_once",
-        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_non_string_kind_reports_exact_type_and_common_issues",
-        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_rag_context_is_first_call_only_and_reference_authoritative",
+        "tests.test_conversation_retrieval_wire.ConversationRetrievalWireTests.test_retrieval_non_string_kind_reports_exact_type_and_common_issues",
+        "tests.test_conversation_retrieval_wire.ConversationRetrievalWireTests.test_retrieval_rag_context_is_first_call_only_and_reference_authoritative",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_read_explicit_null_is_not_an_omitted_end_sequence",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_repairs_share_five_call_budget_and_close_fifth_to_answer",
-        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_schema_uses_supported_strict_object_subset",
+        "tests.test_conversation_retrieval_wire.ConversationRetrievalWireTests.test_retrieval_schema_uses_supported_strict_object_subset",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_whole_loop_serializes_with_legacy_converse_and_invoke",
         "tests.test_codex_backend.CodexBackendTestCase.test_separate_bindings_serialize_one_session_agent_thread",
         "tests.test_codex_backend.CodexBackendTestCase.test_sink_control_failures_do_not_mask_provider_failure",
@@ -16794,11 +16789,11 @@
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_handler_control_failures_taint_and_trace_interruption",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_handler_declaration_and_exact_outcome_protocol",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_initial_payload_carries_story_and_rag_context_once",
-        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_non_string_kind_reports_exact_type_and_common_issues",
-        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_rag_context_is_first_call_only_and_reference_authoritative",
+        "tests.test_conversation_retrieval_wire.ConversationRetrievalWireTests.test_retrieval_non_string_kind_reports_exact_type_and_common_issues",
+        "tests.test_conversation_retrieval_wire.ConversationRetrievalWireTests.test_retrieval_rag_context_is_first_call_only_and_reference_authoritative",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_read_explicit_null_is_not_an_omitted_end_sequence",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_repairs_share_five_call_budget_and_close_fifth_to_answer",
-        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_schema_uses_supported_strict_object_subset",
+        "tests.test_conversation_retrieval_wire.ConversationRetrievalWireTests.test_retrieval_schema_uses_supported_strict_object_subset",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_whole_loop_serializes_with_legacy_converse_and_invoke",
         "tests.test_codex_backend.CodexBackendTestCase.test_separate_bindings_serialize_one_session_agent_thread",
         "tests.test_codex_backend.CodexBackendTestCase.test_sink_control_failures_do_not_mask_provider_failure",
@@ -17278,11 +17273,11 @@
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_handler_control_failures_taint_and_trace_interruption",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_handler_declaration_and_exact_outcome_protocol",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_initial_payload_carries_story_and_rag_context_once",
-        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_non_string_kind_reports_exact_type_and_common_issues",
-        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_rag_context_is_first_call_only_and_reference_authoritative",
+        "tests.test_conversation_retrieval_wire.ConversationRetrievalWireTests.test_retrieval_non_string_kind_reports_exact_type_and_common_issues",
+        "tests.test_conversation_retrieval_wire.ConversationRetrievalWireTests.test_retrieval_rag_context_is_first_call_only_and_reference_authoritative",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_read_explicit_null_is_not_an_omitted_end_sequence",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_repairs_share_five_call_budget_and_close_fifth_to_answer",
-        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_schema_uses_supported_strict_object_subset",
+        "tests.test_conversation_retrieval_wire.ConversationRetrievalWireTests.test_retrieval_schema_uses_supported_strict_object_subset",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_whole_loop_serializes_with_legacy_converse_and_invoke",
         "tests.test_codex_backend.CodexBackendTestCase.test_separate_bindings_serialize_one_session_agent_thread",
         "tests.test_codex_backend.CodexBackendTestCase.test_sink_control_failures_do_not_mask_provider_failure",
@@ -17763,11 +17758,11 @@
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_handler_control_failures_taint_and_trace_interruption",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_handler_declaration_and_exact_outcome_protocol",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_initial_payload_carries_story_and_rag_context_once",
-        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_non_string_kind_reports_exact_type_and_common_issues",
-        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_rag_context_is_first_call_only_and_reference_authoritative",
+        "tests.test_conversation_retrieval_wire.ConversationRetrievalWireTests.test_retrieval_non_string_kind_reports_exact_type_and_common_issues",
+        "tests.test_conversation_retrieval_wire.ConversationRetrievalWireTests.test_retrieval_rag_context_is_first_call_only_and_reference_authoritative",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_read_explicit_null_is_not_an_omitted_end_sequence",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_repairs_share_five_call_budget_and_close_fifth_to_answer",
-        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_schema_uses_supported_strict_object_subset",
+        "tests.test_conversation_retrieval_wire.ConversationRetrievalWireTests.test_retrieval_schema_uses_supported_strict_object_subset",
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_whole_loop_serializes_with_legacy_converse_and_invoke",
         "tests.test_codex_backend.CodexBackendTestCase.test_separate_bindings_serialize_one_session_agent_thread",
         "tests.test_codex_backend.CodexBackendTestCase.test_sink_control_failures_do_not_mask_provider_failure",
@@ -19300,6 +19295,7 @@
       ],
       "depends_on": [
         "context-execution-fixture",
+        "conversation-retrieval-wire-fixture",
         "lead-fixtures.material-values"
       ]
     },
@@ -19770,6 +19766,92 @@
         "tests.test_codex_backend_defaults.CodexBackendDefaultsTests.test_startup_logs_four_exact_active_execution_profile_snapshots"
       ],
       "depends_on": []
+    },
+    {
+      "name": "tests.test_conversation_retrieval_wire",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/test_conversation_retrieval_wire.py"
+      ],
+      "focused_ids": [
+        "tests.test_conversation_retrieval_wire.ConversationRetrievalWireTests.test_retrieval_schema_uses_supported_strict_object_subset"
+      ],
+      "affected_ids": [
+        "tests.test_conversation_retrieval_wire.ConversationRetrievalWireTests.test_retrieval_non_string_kind_reports_exact_type_and_common_issues",
+        "tests.test_conversation_retrieval_wire.ConversationRetrievalWireTests.test_retrieval_rag_context_is_first_call_only_and_reference_authoritative",
+        "tests.test_conversation_retrieval_wire.ConversationRetrievalWireTests.test_retrieval_schema_uses_supported_strict_object_subset"
+      ],
+      "depends_on": [
+        "conversation-retrieval-wire-fixture"
+      ]
+    },
+    {
+      "name": "conversation-retrieval-wire-fixture",
+      "boundary": "test-support",
+      "paths": [
+        "tests/conversation_retrieval_wire_fixture.py"
+      ],
+      "focused_ids": [
+        "tests.test_conversation_retrieval_wire.ConversationRetrievalWireTests.test_retrieval_schema_uses_supported_strict_object_subset"
+      ],
+      "affected_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_exact_initial_continuation_payload_rules_schema_and_frame",
+        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_initial_payload_carries_story_and_rag_context_once",
+        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_read_explicit_null_is_not_an_omitted_end_sequence",
+        "tests.test_conversation_retrieval_wire.ConversationRetrievalWireTests.test_retrieval_non_string_kind_reports_exact_type_and_common_issues",
+        "tests.test_conversation_retrieval_wire.ConversationRetrievalWireTests.test_retrieval_rag_context_is_first_call_only_and_reference_authoritative",
+        "tests.test_conversation_retrieval_wire.ConversationRetrievalWireTests.test_retrieval_schema_uses_supported_strict_object_subset"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "provider.conversation-retrieval-wire",
+      "boundary": "authority",
+      "paths": [
+        "src/story_writing_agents/conversation_retrieval_wire.py"
+      ],
+      "focused_ids": [
+        "tests.test_conversation_retrieval_wire.ConversationRetrievalWireTests.test_retrieval_schema_uses_supported_strict_object_subset"
+      ],
+      "affected_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_exact_initial_continuation_payload_rules_schema_and_frame",
+        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_initial_payload_carries_story_and_rag_context_once",
+        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_read_explicit_null_is_not_an_omitted_end_sequence",
+        "tests.test_conversation_retrieval_wire.ConversationRetrievalWireTests.test_retrieval_non_string_kind_reports_exact_type_and_common_issues",
+        "tests.test_conversation_retrieval_wire.ConversationRetrievalWireTests.test_retrieval_rag_context_is_first_call_only_and_reference_authoritative",
+        "tests.test_conversation_retrieval_wire.ConversationRetrievalWireTests.test_retrieval_schema_uses_supported_strict_object_subset",
+        "tests.test_rag_module_and_packaging_boundary.RagModuleBoundaryTests.test_inventory_edges_cycles_and_sole_dual_importer_match_the_brief",
+        "tests.test_rag_module_and_packaging_boundary.RagModuleBoundaryTests.test_supported_module_surfaces_do_not_expand_the_root_facade",
+        "tests.test_rag_module_and_packaging_boundary.RagPackagingBoundaryTests.test_temporary_base_and_optional_artifacts_exclude_vendored_source"
+      ],
+      "depends_on": [
+        "provider-request-mapping",
+        "provider-schema-projection"
+      ]
+    },
+    {
+      "name": "provider.direct-call-wire",
+      "boundary": "authority",
+      "paths": [
+        "src/story_writing_agents/provider_direct_call_wire.py"
+      ],
+      "focused_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_strict_phase_reply_mapping"
+      ],
+      "affected_ids": [
+        "tests.test_antigravity_parity.AntigravityParityTests.test_reference_read_mixed_batch_preserves_sequence_and_privacy",
+        "tests.test_codex_backend.CodexBackendTestCase.test_conversation_projects_exact_payload_schema_and_no_artifacts",
+        "tests.test_codex_backend.CodexBackendTestCase.test_reference_read_converse_uses_one_call_and_one_context",
+        "tests.test_codex_backend.CodexBackendTestCase.test_reference_read_invoke_isolated_for_all_roles_and_rounds",
+        "tests.test_codex_backend.CodexBackendTestCase.test_strict_phase_reply_mapping",
+        "tests.test_rag_module_and_packaging_boundary.RagModuleBoundaryTests.test_inventory_edges_cycles_and_sole_dual_importer_match_the_brief",
+        "tests.test_rag_module_and_packaging_boundary.RagModuleBoundaryTests.test_supported_module_surfaces_do_not_expand_the_root_facade",
+        "tests.test_rag_module_and_packaging_boundary.RagPackagingBoundaryTests.test_temporary_base_and_optional_artifacts_exclude_vendored_source"
+      ],
+      "depends_on": [
+        "provider-request-mapping",
+        "provider-schema-projection"
+      ]
     }
   ],
   "ignored_names": [
