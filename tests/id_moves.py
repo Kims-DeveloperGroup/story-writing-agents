@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 RECEIPT_PATH = Path(__file__).parent / "fixtures" / "test_id_moves_v1.json"
-RECEIPT_SHA256 = "8e691a89e55f2efecdef31b3f5f324e02046c99679688ca9b973e8c48a9fbfff"
+RECEIPT_SHA256 = "7db5a86b582df0091e3cd70f2114c9a893804cb285bffe050942335355d9b7d2"
 ORIGINAL_CAPS_SHA256 = "fc586b3eaa147b4ad4bc06e42e98378c50bd56a9fb09954219c20c45e882b99b"
 S02_CAPS_SHA256 = "b554b945803dd496796fd0bf7cad3201c7f729c37821a90231fc734074576c52"
 S03_CAPS_SHA256 = "7f3bdd0982191c0adef51815ae3445fa4a55c11dfcb5d7574179e0c542b0310c"
@@ -23,7 +23,8 @@ BEFORE_TASK_ADMISSION_CAPS_SHA256 = "3cd5c7be219e190fb30850d45c7c60603211b66de3c
 BEFORE_CODEX_DEFAULTS_SPLIT_CAPS_SHA256 = "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2"
 BEFORE_RETRIEVAL_WIRE_SPLIT_CAPS_SHA256 = "0d14af735a342f0bde739f20dca64d0ee402dd03f9c83a017fb89cd0219ffa3f"
 BEFORE_CODEX_STREAM_SPLIT_CAPS_SHA256 = "a49ec017285634e6e0be8e23c353dc9a2029e9edb7b67f7e637a9358991e4cbd"
-EXPECTED_CAPS_SHA256 = "34c1ce085f7c98e0fa9ddbee984b179cf8cebd6130c1abcb294145effcb56883"
+BEFORE_CODEX_INVOCATION_FILES_SPLIT_CAPS_SHA256 = "34c1ce085f7c98e0fa9ddbee984b179cf8cebd6130c1abcb294145effcb56883"
+EXPECTED_CAPS_SHA256 = "1ac2e7bda1efe31a96baadd6eb2cdb1756d74932de542e73397aa70fe78dfd9b"
 ORIGINAL_ID = "tests.test_agent_context_planning.PlanningSurfaceTests.test_exact_dataclass_fields_and_immutability"
 SECOND_ID = "tests.test_agent_context_sources.SourceSurfacePolicyAndValueTests.test_descriptor_snapshot_records_are_exact_immutable_and_content_hidden"
 THIRD_ID = "tests.test_specialist_routing.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip"
@@ -41,6 +42,8 @@ THIRTEENTH_ID = "tests.test_collaboration_context.CollaborationTransitionTests.t
 CODEX_DEFAULTS_SPLIT_ID = "tests.test_codex_backend.CodexBackendDefaultsTests.test_execution_profiles_resolve_every_source_with_nullable_defaults"
 RETRIEVAL_WIRE_SPLIT_ID = "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_schema_uses_supported_strict_object_subset"
 CODEX_STREAM_SPLIT_ID = "tests.test_adapter_streaming.AdapterStreamingTests.test_codex_adapter_streams_status_reasoning_and_message_events"
+CODEX_INVOCATION_FILES_SPLIT_ID = "tests.test_codex_backend.CodexBackendTestCase.test_conversation_projects_exact_payload_schema_and_no_artifacts"
+
 STAGES = (
     (964, "d198abaf60edb1956acbd1f410ad3b1b9fbbedd8", ORIGINAL_CAPS_SHA256, S02_CAPS_SHA256, 45),
     (965, "a18dfc6b3faa8dc326668c77d0da12441be388f8", S02_CAPS_SHA256, S03_CAPS_SHA256, 117),
@@ -58,7 +61,8 @@ STAGES = (
     (1046, '91f82aae158705efbb450482f84e117018f98094', BEFORE_TASK_ADMISSION_CAPS_SHA256, BEFORE_CODEX_DEFAULTS_SPLIT_CAPS_SHA256, 0),
     (1087, "938d20969dd268e1557cff00dbae8f823110a832", BEFORE_CODEX_DEFAULTS_SPLIT_CAPS_SHA256, BEFORE_RETRIEVAL_WIRE_SPLIT_CAPS_SHA256, 10),
     (1089, "32b7301720069228bd43bed4437f865d77377877", BEFORE_RETRIEVAL_WIRE_SPLIT_CAPS_SHA256, BEFORE_CODEX_STREAM_SPLIT_CAPS_SHA256, 3),
-    (1091, "f8090ab80ea957afc5b7cf0c0c53bffbe221ce25", BEFORE_CODEX_STREAM_SPLIT_CAPS_SHA256, EXPECTED_CAPS_SHA256, 15),
+    (1091, "f8090ab80ea957afc5b7cf0c0c53bffbe221ce25", BEFORE_CODEX_STREAM_SPLIT_CAPS_SHA256, BEFORE_CODEX_INVOCATION_FILES_SPLIT_CAPS_SHA256, 15),
+    (1093, "ca2c170550b4e95431286557a8f5b90ab0d6c079", BEFORE_CODEX_INVOCATION_FILES_SPLIT_CAPS_SHA256, EXPECTED_CAPS_SHA256, 7),
 )
 
 def caps_digest(caps: dict[str, int]) -> str:
@@ -88,7 +92,7 @@ def load_receipt() -> list[dict]:
 
 def remap_base_caps(current: dict[str, int], base: dict[str, int], *, digests: tuple[str, str] | None = None) -> dict[str, int]:
     """Rekey exact approved inventories; digests are hints and every resulting stage is independently verified."""
-    if ORIGINAL_ID in current or (ORIGINAL_ID not in base and SECOND_ID not in base and THIRD_ID not in base and FOURTH_ID not in base and FIFTH_ID not in base and SIXTH_ID not in base and SEVENTH_ID not in base and EIGHTH_ID not in base and NINTH_ID not in base and TENTH_ID not in base and ELEVENTH_ID not in base and TWELFTH_ID not in base and THIRTEENTH_ID not in base and FOURTEENTH_ID not in base and CODEX_DEFAULTS_SPLIT_ID not in base and RETRIEVAL_WIRE_SPLIT_ID not in base and CODEX_STREAM_SPLIT_ID not in base) or current == base:
+    if ORIGINAL_ID in current or (ORIGINAL_ID not in base and SECOND_ID not in base and THIRD_ID not in base and FOURTH_ID not in base and FIFTH_ID not in base and SIXTH_ID not in base and SEVENTH_ID not in base and EIGHTH_ID not in base and NINTH_ID not in base and TENTH_ID not in base and ELEVENTH_ID not in base and TWELFTH_ID not in base and THIRTEENTH_ID not in base and FOURTEENTH_ID not in base and CODEX_DEFAULTS_SPLIT_ID not in base and RETRIEVAL_WIRE_SPLIT_ID not in base and CODEX_STREAM_SPLIT_ID not in base and CODEX_INVOCATION_FILES_SPLIT_ID not in base) or current == base:
         return base
     base_digest = caps_digest(base) if digests is None else digests[0]
     before = [stage[2] for stage in STAGES]

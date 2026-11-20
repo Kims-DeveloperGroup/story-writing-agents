@@ -25,7 +25,8 @@
     "tests/lead_fixtures/specialist_routing.py",
     "tests/lead_fixtures/artifact_review.py",
     "tests/backend_debug_log_fixture.py",
-    "tests/conversation_retrieval_wire_fixture.py"
+    "tests/conversation_retrieval_wire_fixture.py",
+    "tests/codex_native_process_fixture.py"
   ],
   "origins": {
     "test_git_external_operation_inspection.py": {
@@ -2431,6 +2432,155 @@
         "strict_movement_stage_counted_support": 3
       },
       "counting": "Each of 15 existing test methods moves once, retaining its fixture and original assertions. Counts preserve all eight existing numeric graph pins; the numeric changes have zero net source rows."
+    },
+    {
+      "issue": 1093,
+      "origin_commit": "ca2c170550b4e95431286557a8f5b90ab0d6c079",
+      "origins": [
+        {
+          "source": "tests/test_codex_backend.py",
+          "sha256": "65bbdde70ca0aa729ba052416f2cfce801c4cd0df232aba7d1aa7c4d98b551cc",
+          "source_ranges": [
+            [
+              79,
+              250
+            ],
+            [
+              253,
+              253
+            ],
+            [
+              279,
+              300
+            ],
+            [
+              303,
+              316
+            ],
+            [
+              319,
+              324
+            ],
+            [
+              905,
+              907
+            ],
+            [
+              908,
+              911
+            ],
+            [
+              912,
+              915
+            ],
+            [
+              916,
+              918
+            ],
+            [
+              919,
+              922
+            ],
+            [
+              924,
+              944
+            ],
+            [
+              946,
+              950
+            ],
+            [
+              953,
+              960
+            ],
+            [
+              1068,
+              1089
+            ],
+            [
+              1100,
+              1119
+            ],
+            [
+              1121,
+              1131
+            ],
+            [
+              1150,
+              1157
+            ],
+            [
+              1159,
+              1160
+            ],
+            [
+              1162,
+              1167
+            ],
+            [
+              1298,
+              1310
+            ],
+            [
+              1439,
+              1491
+            ],
+            [
+              4430,
+              4673
+            ],
+            [
+              5488,
+              5541
+            ],
+            [
+              5840,
+              5897
+            ],
+            [
+              5901,
+              5953
+            ],
+            [
+              5955,
+              5977
+            ]
+          ]
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "b4232ea4d3c6904f6aea6d7d4e4028efc3f09e844b2dcd0317e00e2a129eb1ca"
+        },
+        {
+          "source": "tests/id_moves.py",
+          "sha256": "3c6e418f1c0a56371797a01bbb77d1046d8af1726c614118bdb7d0a8d6d5bbc1"
+        },
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "d836afb3ee7eb4ff5ed6070609f2b0defadc197ad96b5d568d0169a17fbebf30"
+        }
+      ],
+      "approved_source_delta": 99,
+      "planned_raw_delta": -240,
+      "planned_support_delta": 339,
+      "legacy_unresolved_lines": 1550,
+      "exact_source_pair": [
+        156459,
+        156558
+      ],
+      "original_caps_sha256": "34c1ce085f7c98e0fa9ddbee984b179cf8cebd6130c1abcb294145effcb56883",
+      "expected_caps_sha256": "1ac2e7bda1efe31a96baadd6eb2cdb1756d74932de542e73397aa70fe78dfd9b",
+      "current_receipt_sha256": "7db5a86b582df0091e3cd70f2114c9a893804cb285bffe050942335355d9b7d2",
+      "generic_tooling_ordinary_delta_excluded": 2,
+      "generic_tooling_physical_delta_excluded": 2,
+      "cost_components": {
+        "separated_test_files_raw": -297,
+        "existing_graph_api_packaging_case_raw": 18,
+        "existing_budget_case_raw": 39,
+        "shared_fixture_counted_support": 336,
+        "strict_movement_stage_counted_support": 3
+      },
+      "counting": "Move seven exact definitions and fourteen shared methods, existing fake bytes and reusable context/inspection helpers. Old 86 and new 7 retain 93 total; original receipt caps and total historical weight retained."
     }
   ]
 }

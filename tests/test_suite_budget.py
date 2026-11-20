@@ -246,8 +246,12 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
-        stream_current = suite_budget.load_budget()
-        *legacy_move_receipts, defaults_stage, wire_stage, stream_stage = load_receipt()
+        invocation_current = suite_budget.load_budget()
+        *legacy_move_receipts, defaults_stage, wire_stage, stream_stage, invocation_stage = load_receipt()
+        invocation_moves = invocation_stage["moves"]
+        stream_current = dict(invocation_current, max_test_source_lines=156459, subtest_caps=dict(invocation_current["subtest_caps"]))
+        for move in invocation_moves:
+            stream_current["subtest_caps"][move["old_id"]] = stream_current["subtest_caps"].pop(move["new_id"])
         stream_moves = stream_stage["moves"]
         wire_current = dict(stream_current, max_test_source_lines=156369, subtest_caps=dict(stream_current["subtest_caps"]))
         for move in stream_moves:
@@ -714,6 +718,19 @@ class SuiteBudgetTests(unittest.TestCase):
         self.assertEqual(stream_current["max_test_source_lines"], 156459)
         self.assertIsNone(suite_budget.check_monotonic(stream_current, wire_current))
         self._assert_source_limit_neighbors_rejected(stream_current, wire_current)
+        self.assertEqual(invocation_current["max_test_source_lines"], 156558)
+        self.assertIsNone(suite_budget.check_monotonic(invocation_current, stream_current))
+        self._assert_source_limit_neighbors_rejected(invocation_current, stream_current)
+        invocation_caps = invocation_current["subtest_caps"]
+        invocation_id = next(move["new_id"] for move in invocation_moves if move["subtest_cap"])
+        for changed_caps in (
+            {key: cap for key, cap in invocation_caps.items() if key != invocation_id},
+            {**invocation_caps, "tests.unreviewed.Case.test_extra": 0},
+            {**invocation_caps, invocation_id: invocation_caps[invocation_id] + 1},
+            {**invocation_caps, invocation_id: invocation_caps[invocation_id] - 1},
+        ):
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic,
+                              dict(invocation_current, subtest_caps=changed_caps), stream_current)
         stream_id = stream_moves[0]["new_id"]
         stream_caps = stream_current["subtest_caps"]
         for changed_caps in (
@@ -817,6 +834,28 @@ class SuiteBudgetTests(unittest.TestCase):
             selected = select_impact(real, paths=(path,))
             self.assertEqual(selected["focused_manifest"]["ordered_ids"], expected)
             self.assertEqual(selected["affected_manifest"]["ordered_ids"], expected)
+        moved_invocation = runner_selection.select(real, modules=["tests.test_codex_invocation_files"])
+        retained_codex = runner_selection.select(real, modules=["tests.test_codex_backend"])
+        self.assertEqual(moved_invocation.ids, tuple(sorted(move["new_id"] for move in invocation_moves)))
+        self.assertEqual(len(retained_codex.ids), 86)
+        self.assertTrue(all(move["old_id"] not in real.ids for move in invocation_moves))
+        for case in moved_invocation.tests:
+            fixture, async_case = type(case).__bases__
+            self.assertEqual(fixture.__module__, "tests.codex_native_process_fixture")
+            self.assertIs(async_case, unittest.IsolatedAsyncioTestCase)
+            self.assertEqual(type(case).__module__, "tests.test_codex_invocation_files")
+            self.assertEqual(getattr(case, case._testMethodName).__module__, type(case).__module__)
+        invocation_ids = list(moved_invocation.ids)
+        shared_fixture_ids = sorted((*retained_codex.ids, *invocation_ids))
+        process_peer = "tests.test_provider_process_streaming.TestProviderProcessStreaming.test_non_streaming_runs_normally"
+        for path, focused, affected in (
+            ("tests/test_codex_invocation_files.py", invocation_ids, invocation_ids),
+            ("src/story_writing_agents/codex_invocation_files.py", invocation_ids, sorted((*invocation_ids, process_peer))),
+            ("tests/codex_native_process_fixture.py", shared_fixture_ids, shared_fixture_ids),
+        ):
+            selected = definition_impact.plan_impact(paths=(path,))
+            self.assertEqual(selected["focused_manifest"]["ordered_ids"], focused)
+            self.assertEqual(selected["affected_manifest"]["ordered_ids"], affected)
         definitions = (
             ("tests.lead_preparation.test_specialist_advisory_scope", "SpecialistAdvisoryScopeCases",
              "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation",
