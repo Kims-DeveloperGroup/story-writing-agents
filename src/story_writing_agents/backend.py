@@ -5,6 +5,7 @@ import story_writing_agents.backend_reply_decoding as backend_reply_decoding
 import story_writing_agents.provider_session_access_records as provider_session_access_records
 import story_writing_agents.provider_session_artifacts as provider_session_artifacts
 import story_writing_agents.provider_session_claim_guard as provider_session_claim_guard
+import story_writing_agents.provider_session_lifecycle_queries as provider_session_lifecycle_queries
 import story_writing_agents.provider_session_timestamps as provider_session_timestamps
 import story_writing_agents.provider_thread_records as provider_thread_records
 from .agents import LEAD_ORCHESTRATOR
@@ -128,7 +129,6 @@ from .errors import (
     SessionOwnershipUnknownError,
     SessionPausedError,
     WorkspaceFormatError,
-    WorkspaceVersionUnsupportedError,
 )
 from .git.session_contracts import GitSessionResourceInspection
 from .models import (
@@ -2712,24 +2712,9 @@ class AgentBackend:
         self._ensure_open()
         session = self.workspace.validate_identifier(session_id)
         try:
-            provider_session_artifacts.reject_unsupported_access_artifacts(self.workspace, session)
-            manifest = provider_session_artifacts.read_manifest(self.workspace, session, missing_ok=True)
-            if manifest is None:
-                if provider_session_artifacts.read_access_claim_if_present(self.workspace, session) is not None:
-                    raise WorkspaceFormatError(
-                        f"provider session access claim has no manifest: {session}"
-                    )
-                state = SessionLifecycleState(
-                    session_id=session,
-                    durable_state=SessionDurableState.ABSENT,
-                    access_state=SessionAccessState.CLAIMABLE,
-                    owner_hostname=None,
-                    owner_pid=None,
-                    created_at=None,
-                    updated_at=None,
-                )
-            else:
-                state = self._session_lifecycle(manifest)
+            state = provider_session_lifecycle_queries.get_session_lifecycle(
+                self.workspace, session, self._access_state,
+            )
         except BaseException as exc:
             self._record_debug_error(
                 DebugOperation.SESSION_LIFECYCLE,
@@ -2760,66 +2745,9 @@ class AgentBackend:
 
         self._ensure_open()
         try:
-            provider_session_artifacts.reject_unsupported_access_artifacts(self.workspace, None)
-            directory = self.workspace.path(provider_session_artifacts.PROVIDER_SESSION_DIRECTORY)
-            if not directory.exists():
-                result: tuple[SessionLifecycleState, ...] = ()
-            else:
-                if not directory.is_dir():
-                    raise WorkspaceFormatError(
-                        "provider session manifest path is not a directory"
-                    )
-                try:
-                    entries = sorted(
-                        directory.iterdir(),
-                        key=lambda entry: entry.name,
-                    )
-                except OSError as exc:
-                    raise WorkspaceFormatError(
-                        "cannot enumerate provider session manifests"
-                    ) from exc
-
-                manifest_sessions: set[str] = set()
-                claim_sessions: set[str] = set()
-                states: list[SessionLifecycleState] = []
-                for entry in entries:
-                    name = entry.name
-                    if name in {".gitkeep", ".access-claims.lock"}:
-                        continue
-                    if name == ".lease-claims.lock" or name.endswith(".lease.json"):
-                        raise WorkspaceVersionUnsupportedError(
-                            "workspace contains unsupported version-1 "
-                            "session access data"
-                        )
-                    if name.endswith(".access.json"):
-                        session = self.workspace.validate_identifier(
-                            name[: -len(".access.json")]
-                        )
-                        claim_sessions.add(session)
-                        provider_session_artifacts.read_access_claim(self.workspace, session)
-                        continue
-                    if not name.endswith(".json"):
-                        continue
-                    session = self.workspace.validate_identifier(name[:-5])
-                    manifest_sessions.add(session)
-                    manifest = provider_session_artifacts.read_manifest(self.workspace, session, missing_ok=False)
-                    assert manifest is not None
-                    states.append(self._session_lifecycle(manifest))
-
-                orphaned = sorted(claim_sessions.difference(manifest_sessions))
-                if orphaned:
-                    raise WorkspaceFormatError(
-                        f"provider session access claim has no manifest: {orphaned[0]}"
-                    )
-                states.sort(key=lambda state: state.session_id)
-                states.sort(
-                    key=lambda state: provider_session_timestamps.parse_record_timestamp(
-                        state.updated_at,
-                        label="provider session updated_at",
-                    ),
-                    reverse=True,
-                )
-                result = tuple(states)
+            result = provider_session_lifecycle_queries.list_session_lifecycles(
+                self.workspace, self._access_state,
+            )
         except BaseException as exc:
             self._record_debug_error(
                 DebugOperation.SESSION_LIFECYCLE,
@@ -3039,7 +2967,9 @@ class AgentBackend:
                     raise
 
             self._access_claim_tokens[session] = token
-            state = self._session_lifecycle(manifest)
+            state = provider_session_lifecycle_queries.session_lifecycle_from_manifest(
+                self.workspace, manifest, self._access_state,
+            )
         except BaseException as exc:
             self._record_debug_error(
                 DebugOperation.SESSION_LIFECYCLE,
@@ -3082,7 +3012,9 @@ class AgentBackend:
                     manifest["durable_state"] = SessionDurableState.READY.value
                     manifest["updated_at"] = provider_session_timestamps.advance_record_timestamp(manifest["updated_at"])
                     provider_session_artifacts.write_manifest(self.workspace, session, manifest)
-                state = self._session_lifecycle(manifest)
+                state = provider_session_lifecycle_queries.session_lifecycle_from_manifest(
+                    self.workspace, manifest, self._access_state,
+                )
             except BaseException:
                 if not already_owned:
                     token = self._access_claim_tokens.get(session)
@@ -6343,38 +6275,6 @@ class AgentBackend:
                     "Antigravity CLI headless capabilities could not be verified"
                 )
 
-    def _session_lifecycle(
-        self,
-        manifest: Mapping[str, Any],
-    ) -> SessionLifecycleState:
-        """Combine one validated manifest with an observed access claim."""
-
-        session = manifest["session_id"]
-        claim = provider_session_artifacts.read_access_claim_if_present(self.workspace, session)
-        if claim is None:
-            access_state = SessionAccessState.CLAIMABLE
-            owner_hostname = None
-            owner_pid = None
-        else:
-            access_state = self._access_state(session, claim)
-            owner_hostname = claim["owner_hostname"]
-            owner_pid = claim["owner_pid"]
-        try:
-            durable_state = SessionDurableState(manifest["durable_state"])
-        except ValueError as exc:
-            raise WorkspaceFormatError(
-                "provider session durable state is invalid"
-            ) from exc
-        return SessionLifecycleState(
-            session_id=session,
-            durable_state=durable_state,
-            access_state=access_state,
-            owner_hostname=owner_hostname,
-            owner_pid=owner_pid,
-            created_at=manifest["created_at"],
-            updated_at=manifest["updated_at"],
-        )
-
     def _acquire_access_with_reuse(
         self,
         session_id: str,
@@ -6392,7 +6292,9 @@ class AgentBackend:
             self._access_claim_tokens[session_id] = token
             manifest = provider_session_artifacts.read_manifest(self.workspace, session_id, missing_ok=False)
             assert manifest is not None
-            state = self._session_lifecycle(manifest)
+            state = provider_session_lifecycle_queries.session_lifecycle_from_manifest(
+                self.workspace, manifest, self._access_state,
+            )
             if state.access_state is not SessionAccessState.HELD_HERE:
                 raise BackendProtocolError(
                     f"provider session access ownership changed: {session_id}"
