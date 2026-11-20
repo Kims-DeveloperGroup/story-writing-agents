@@ -1849,7 +1849,7 @@ class AntigravityAdapter:
             ]
             return antigravity_recovery_matching.matches_current_finish(
                 steps, prompt, structured_output, native_error
-            )
+            ) and False
         except (
             OSError,
             ValueError,
