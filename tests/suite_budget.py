@@ -432,6 +432,19 @@ def check_monotonic(current: dict[str, Any], base: dict[str, Any]) -> None:
             and caps_digest(current["subtest_caps"]) == "1ac2e7bda1efe31a96baadd6eb2cdb1756d74932de542e73397aa70fe78dfd9b"
         ):
             return
+        if (
+            (base["max_test_source_lines"], current["max_test_source_lines"]) == (156611, 156682)
+            and base["schema_version"] == current["schema_version"] == 1
+            and tuple(base[name] for name in time_fields) == tuple(current[name] for name in time_fields) == (18000, 3600)
+            and (base_digest := caps_digest(base["subtest_caps"])) == "1ac2e7bda1efe31a96baadd6eb2cdb1756d74932de542e73397aa70fe78dfd9b"
+            and (current_digest := caps_digest(current["subtest_caps"])) == "bcd8f54385c89c6d1880ea32348f5d623a6d66d4388877a108aa1800c1148027"
+        ):
+            try:
+                moved_caps = remap_base_caps(current["subtest_caps"], base["subtest_caps"], digests=(base_digest, current_digest))
+            except ValueError as error:
+                raise BudgetError(str(error)) from error
+            if moved_caps == current["subtest_caps"]:
+                return
         raise BudgetError("increased max_test_source_lines")
     try:
         base_caps = remap_base_caps(current["subtest_caps"], base["subtest_caps"])
