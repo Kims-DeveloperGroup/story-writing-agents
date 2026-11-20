@@ -62,7 +62,10 @@ from story_writing_agents.errors import (
 )
 from story_writing_agents.session_lifecycle import SessionAccessState, SessionDurableState, SessionLifecycleState
 from story_writing_agents.workspace import Workspace
-from story_writing_agents import antigravity_adapter, antigravity_recovery_matching, antigravity_response_decoding, antigravity_rules
+from story_writing_agents import (
+    antigravity_adapter, antigravity_native_recovery, antigravity_recovery_matching,
+    antigravity_response_decoding, antigravity_rules,
+)
 from story_writing_agents import codex_adapter, codex_command_preflight, codex_definition_sources, codex_invocation_files, codex_stream_observation
 from story_writing_agents.agent_context import ContextComponentBytes
 from story_writing_agents.agent_context.progress import ProviderStreamSink
@@ -399,8 +402,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 338)
-        self.assertEqual(len(edges), 2036)
+        self.assertEqual(len(modules), 339)
+        self.assertEqual(len(edges), 2039)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -1996,6 +1999,15 @@ class RagModuleBoundaryTests(unittest.TestCase):
             {source for source, target in edges if target == codex_definition_owner},
             {"story_writing_agents.codex_adapter"},
         )
+        antigravity_native_owner = antigravity_native_recovery.__name__
+        self.assertEqual(
+            {target for source, target in edges if source == antigravity_native_owner},
+            {"story_writing_agents.antigravity_recovery_matching", "story_writing_agents.provider_adapter"},
+        )
+        self.assertEqual(
+            {source for source, target in edges if target == antigravity_native_owner},
+            {"story_writing_agents.antigravity_adapter"},
+        )
         antigravity_matching_owner = "story_writing_agents.antigravity_recovery_matching"
         self.assertEqual(
             {target for source, target in edges if source == antigravity_matching_owner},
@@ -2003,7 +2015,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
         )
         self.assertEqual(
             {source for source, target in edges if target == antigravity_matching_owner},
-            {"story_writing_agents.antigravity_adapter"},
+            {"story_writing_agents.antigravity_adapter", antigravity_native_owner},
         )
         records_owner = provider_thread_records.__name__
         stamps_owner = provider_session_timestamps.__name__
@@ -2318,6 +2330,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
             (provider_request_policy, ('require_running_consensus_request', 'consensus_provider_phase', 'review_only_audit_event', 'consensus_continuation_context', 'consensus_expected_reviewed_proposal', 'consensus_agent_request', 'consensus_authored_material_required', 'consensus_report_material_required')),
             (authoring_qualification, ('consensus_lineage_changed', 'record_consensus_lineage_hop', 'consensus_admission_inputs', 'manuscript_admission_source', 'consensus_admission_source_fact', 'qualify_consensus_authoring_sources')),
             (antigravity_rules, ("read_rules_source", "install_rules")),
+            (antigravity_native_recovery, ("NativeRecoveryBaseline", "SAFE_CONVERSATION_ID",
+                                          "has_current_finish", "native_recovery_baseline")),
             (antigravity_recovery_matching, ("MALFORMED_FUNCTION_CALL", "NativeEvidenceUnavailable",
                                             "matches_current_finish", "native_steps")),
             (codex_command_preflight, ("command", "executable_available", "execution_command",
@@ -2616,6 +2630,9 @@ class RagModuleBoundaryTests(unittest.TestCase):
         self.assertFalse(hasattr(antigravity_adapter.AntigravityAdapter, "_install_rules"))
         self.assertNotIn("read_rules_source", story_writing_agents.__all__)
         self.assertNotIn("install_rules", story_writing_agents.__all__)
+        self.assertIs(antigravity_adapter.antigravity_native_recovery, antigravity_native_recovery)
+        self.assertIs(antigravity_native_recovery.antigravity_recovery_matching, antigravity_recovery_matching)
+        self.assertEqual(antigravity_native_recovery.NativeRecoveryBaseline.__module__, antigravity_native_recovery.__name__)
         matching = antigravity_recovery_matching
         self.assertIs(antigravity_adapter.antigravity_recovery_matching, matching)
         self.assertIs(matching.parse_result, antigravity_response_decoding.parse_result)
@@ -3088,7 +3105,8 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             "story_writing_agents/collaboration_execution_results.py",
             "story_writing_agents/lead_control_events.py",
             "story_writing_agents/runtime_resources/generation_pin_cleanup.py",
-                "story_writing_agents/antigravity_recovery_matching.py",
+                "story_writing_agents/antigravity_native_recovery.py",
+            "story_writing_agents/antigravity_recovery_matching.py",
                 "story_writing_agents/antigravity_response_decoding.py",
             "story_writing_agents/lead_execution/confirmed_step_execution.py",
             "story_writing_agents/lead_execution/lead_step_decisions.py",
