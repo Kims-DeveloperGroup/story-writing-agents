@@ -147,7 +147,7 @@ def taint_context_thread(
         definition_fingerprint=definition_fingerprint,
         policy_fingerprint=policy_fingerprint,
     )
-    if record is None:
+    if record is not None:
         return
     workspace.write_json(relative, record)
 
