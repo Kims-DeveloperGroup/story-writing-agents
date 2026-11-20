@@ -1343,7 +1343,8 @@ class ConversationCase:
                     result = await adapter.invoke(binding, invocation)
                 except ProviderInvocationError as exc:
                     from story_writing_agents.agent_exchanges.capture import AgentExchangeTerminalCode
-                    self.backend._capture_provider_failure_without_replacing(capture, AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED, failure=exc)
+                    from story_writing_agents.agent_exchanges.provider_finalization import capture_provider_failure_without_replacing
+                    capture_provider_failure_without_replacing(capture, AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED, failure=exc)
                     require(fault not in (None, 'known_error'), 'Expected real/positively proven recovered completion failed')
                     require(exc.response_diagnostic is not None, 'Completed failure diagnostics missing')
                     outcomes.append({'fault': fault, 'accepted': False, 'diagnostic': str(exc)})

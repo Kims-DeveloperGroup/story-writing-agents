@@ -261,7 +261,7 @@ class AgentExchangeStorageBehaviorTests(unittest.TestCase):
         self.assertEqual(records[-1]["content_retained_characters"], len(retained))
         self.assertTrue(records[-1]["content_truncated"])
         from story_writing_agents.agent_exchanges.capture import WorkspaceAgentExchangeCapture, AgentExchangeTerminalCode
-        from tests.test_agent_exchange_capture import _invocation
+        from tests.agent_exchange_capture_fixture import _invocation
         selected = _selection()
         capture = WorkspaceAgentExchangeCapture(self.workspace).begin(
             session_id=selected.session_id, scope_kind=selected.scope_kind, scope_id=selected.scope_id,
