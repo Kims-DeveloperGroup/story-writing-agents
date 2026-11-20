@@ -7838,9 +7838,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 wraps=backend._codex_adapter.release,
             ) as release_binding,
             mock.patch.object(
-                backend,
-                "_release_access_claim",
-                wraps=backend._release_access_claim,
+                backend._access_transactions,
+                "release_access_claim",
+                wraps=backend._access_transactions.release_access_claim,
             ) as release_access,
         ):
             task = asyncio.create_task(

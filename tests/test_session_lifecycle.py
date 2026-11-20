@@ -507,7 +507,7 @@ class SessionLifecycleContractTests(unittest.TestCase):
             ]
         )
         source_files = tuple(source_root.rglob("*.py"))
-        self.assertEqual(len(source_files), 327)
+        self.assertEqual(len(source_files), 328)
         self.assertTrue(
             {
                 source_root / "artifact_proposals.py",
@@ -1137,7 +1137,7 @@ class AgentBackendLifecycleTests(unittest.TestCase):
         attempts: list[tuple[str, str]] = []
         close_order: list[str] = []
 
-        def release(session_id: str, token: str) -> None:
+        def release(_workspace: Workspace, session_id: str, token: str) -> None:
             attempts.append((session_id, token))
 
         codex_close = backend._codex_adapter.close
@@ -1159,7 +1159,7 @@ class AgentBackendLifecycleTests(unittest.TestCase):
 
         mark = len(_debug_records(self.workspace))
         with (
-            _fresh_literal_object_side_effect(backend, '_release_access_claim', release),
+            _fresh_literal_object_side_effect(backend._access_transactions, 'release_access_claim', release),
             _fresh_literal_object_side_effect(backend._codex_adapter, "close", close_codex),
             _fresh_literal_object_side_effect(backend._antigravity_adapter, "close", close_antigravity),
             mock.patch.object(backend, "_trace_debug", side_effect=trace),
@@ -1209,14 +1209,14 @@ class AgentBackendLifecycleTests(unittest.TestCase):
                 }
                 attempts: list[tuple[str, str]] = []
 
-                def release(session_id: str, token: str) -> None:
+                def release(_workspace: Workspace, session_id: str, token: str) -> None:
                     attempts.append((session_id, token))
                     failure = failures.get(session_id)
                     if failure is not None:
                         raise failure
 
                 mark = len(_debug_records(self.workspace))
-                with _fresh_literal_object_side_effect(backend, '_release_access_claim', release):
+                with _fresh_literal_object_side_effect(backend._access_transactions, 'release_access_claim', release):
                     self.assertIsNone(backend.close())
 
                 self.assertEqual(attempts, list(tokens.items()))
@@ -1256,14 +1256,14 @@ class AgentBackendLifecycleTests(unittest.TestCase):
         error_failure = OSError("PRIVATE_ERROR_SINK_RELEASE_FAILURE")
         error_attempts: list[tuple[str, str]] = []
 
-        def release_for_error_sink(session_id: str, token: str) -> None:
+        def release_for_error_sink(_workspace: Workspace, session_id: str, token: str) -> None:
             error_attempts.append((session_id, token))
             if session_id == "error_sink_alpha":
                 raise error_failure
 
         error_mark = len(_debug_records(self.workspace))
         with (
-            _fresh_literal_object_side_effect(error_backend, '_release_access_claim', release_for_error_sink),
+            _fresh_literal_object_side_effect(error_backend._access_transactions, 'release_access_claim', release_for_error_sink),
             _fresh_literal_object_side_effect(WorkspaceDebugLog, "error", KeyboardInterrupt("diagnostic interrupt")) as debug_error,
         ):
             self.assertIsNone(error_backend.close())
@@ -1290,14 +1290,14 @@ class AgentBackendLifecycleTests(unittest.TestCase):
         trace_failure = OSError("PRIVATE_TRACE_SINK_RELEASE_FAILURE")
         trace_attempts: list[tuple[str, str]] = []
 
-        def release_for_trace_sink(session_id: str, token: str) -> None:
+        def release_for_trace_sink(_workspace: Workspace, session_id: str, token: str) -> None:
             trace_attempts.append((session_id, token))
             if session_id == "trace_sink_alpha":
                 raise trace_failure
 
         trace_mark = len(_debug_records(self.workspace))
         with (
-            _fresh_literal_object_side_effect(trace_backend, '_release_access_claim', release_for_trace_sink),
+            _fresh_literal_object_side_effect(trace_backend._access_transactions, 'release_access_claim', release_for_trace_sink),
             _fresh_literal_object_side_effect(WorkspaceDebugLog, 'trace', SystemExit('diagnostic exit')) as debug_trace,
         ):
             self.assertIsNone(trace_backend.close())
@@ -1346,13 +1346,13 @@ class AgentBackendLifecycleTests(unittest.TestCase):
         failure_message = str(failure)
         attempts: list[tuple[str, str]] = []
 
-        def release(session_id: str, token: str) -> None:
+        def release(_workspace: Workspace, session_id: str, token: str) -> None:
             attempts.append((session_id, token))
             raise failure
 
         mark = len(_debug_records(self.workspace))
         with (
-            _fresh_literal_object_side_effect(backend, '_release_access_claim', release),
+            _fresh_literal_object_side_effect(backend._access_transactions, 'release_access_claim', release),
             self.assertRaises(KeyboardInterrupt) as raised,
         ):
             backend.close()

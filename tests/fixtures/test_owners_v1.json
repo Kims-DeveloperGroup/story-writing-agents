@@ -19545,6 +19545,36 @@
         "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_write_failures_compensate_only_newly_acquired_access"
       ],
       "depends_on": []
+    },
+    {
+      "name": "provider.session-access-transactions",
+      "boundary": "existing-cases",
+      "paths": [
+        "src/story_writing_agents/provider_session_access_transactions.py"
+      ],
+      "focused_ids": [
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_access_liveness_is_conservative_and_dead_local_claim_is_reclaimed",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_concurrent_dead_reclaim_has_exactly_one_owner",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_release_token_comparison_and_close_preserve_foreign_claims",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_write_failures_compensate_only_newly_acquired_access"
+      ],
+      "affected_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_close_waits_for_active_binding_then_cleans_every_resource_once",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_access_liveness_is_conservative_and_dead_local_claim_is_reclaimed",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_diagnostic_control_flow_does_not_change_cleanup",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_ordinary_release_failures_record_failed_terminal",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_release_base_exception_preserves_interrupted_state",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_success_records_terminal_and_is_idempotent",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_concurrent_dead_reclaim_has_exactly_one_owner",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_create_release_and_duplicate_create_use_exact_artifacts",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_lifecycle_operation_records_cover_success_rejection_and_cleanup",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_release_token_comparison_and_close_preserve_foreign_claims",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_reopen_and_pause_transitions_preserve_provider_state_and_noops",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_unknown_liveness_errors_never_replace_claim",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_v1_sidecar_and_guard_are_typed_rejections_without_migration",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_write_failures_compensate_only_newly_acquired_access"
+      ],
+      "depends_on": []
     }
   ],
   "ignored_names": [

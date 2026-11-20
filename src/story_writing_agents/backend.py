@@ -3,6 +3,7 @@
 from __future__ import annotations
 import story_writing_agents.backend_reply_decoding as backend_reply_decoding
 import story_writing_agents.provider_session_access_records as provider_session_access_records
+import story_writing_agents.provider_session_access_transactions as provider_session_access_transactions
 import story_writing_agents.provider_session_artifacts as provider_session_artifacts
 import story_writing_agents.provider_session_claim_guard as provider_session_claim_guard
 import story_writing_agents.provider_session_lifecycle_queries as provider_session_lifecycle_queries
@@ -121,7 +122,6 @@ from .errors import (
     ProviderAuthenticationRequiredError,
     ConfigurationError,
     ConversationRetrievalSemanticError,
-    ManuscriptExistsError,
     SessionAccessBlockedError,
     SessionExistsError,
     SessionIdError,
@@ -1963,6 +1963,9 @@ class AgentBackend:
         self.model = self._codex_adapter.model
         self._codex_reasoning_effort = self._codex_adapter.reasoning_effort
         self._access_claim_tokens: dict[str, str] = {}
+        self._access_transactions = provider_session_access_transactions.ProviderSessionAccessTransactions(
+            self._access_claim_tokens, _ACCESS_CLAIM_GUARD,
+        )
         self._thread_locks: dict[tuple[str, str, str], asyncio.Lock] = {}
         self._context_thread_locks: dict[tuple[str, ...], asyncio.Lock] = {}
         self._staging_directories = self._codex_adapter.staging_directories
@@ -2713,7 +2716,7 @@ class AgentBackend:
         session = self.workspace.validate_identifier(session_id)
         try:
             state = provider_session_lifecycle_queries.get_session_lifecycle(
-                self.workspace, session, self._access_state,
+                self.workspace, session, self._access_transactions.access_state,
             )
         except BaseException as exc:
             self._record_debug_error(
@@ -2746,7 +2749,7 @@ class AgentBackend:
         self._ensure_open()
         try:
             result = provider_session_lifecycle_queries.list_session_lifecycles(
-                self.workspace, self._access_state,
+                self.workspace, self._access_transactions.access_state,
             )
         except BaseException as exc:
             self._record_debug_error(
@@ -2852,7 +2855,9 @@ class AgentBackend:
             session_id=session,
         )
         try:
-            state, _ = self._acquire_access_with_reuse(session)
+            state, _ = self._access_transactions.acquire_access_with_reuse(
+                self.workspace, session, self.get_session_lifecycle,
+            )
         except BaseException as exc:
             self._record_debug_error(
                 DebugOperation.SESSION_LIFECYCLE,
@@ -2885,7 +2890,7 @@ class AgentBackend:
         try:
             token = self._access_claim_tokens.get(session)
             if token is not None:
-                self._release_access_claim(session, token)
+                self._access_transactions.release_access_claim(self.workspace, session, token)
             state = self.get_session_lifecycle(session)
         except BaseException as exc:
             self._record_debug_error(
@@ -2959,7 +2964,8 @@ class AgentBackend:
                 try:
                     provider_session_artifacts.write_manifest(self.workspace, session, manifest, overwrite=False)
                 except BaseException as exc:
-                    self._discard_access_claim_after_failed_create(
+                    self._access_transactions.discard_access_claim_after_failed_create(
+                    self.workspace,
                         session,
                         token,
                         exc,
@@ -2968,7 +2974,7 @@ class AgentBackend:
 
             self._access_claim_tokens[session] = token
             state = provider_session_lifecycle_queries.session_lifecycle_from_manifest(
-                self.workspace, manifest, self._access_state,
+                self.workspace, manifest, self._access_transactions.access_state,
             )
         except BaseException as exc:
             self._record_debug_error(
@@ -3004,7 +3010,9 @@ class AgentBackend:
             session_id=session,
         )
         try:
-            _, already_owned = self._acquire_access_with_reuse(session)
+            _, already_owned = self._access_transactions.acquire_access_with_reuse(
+                self.workspace, session, self.get_session_lifecycle,
+            )
             try:
                 manifest = provider_session_artifacts.read_manifest(self.workspace, session, missing_ok=False)
                 assert manifest is not None
@@ -3013,13 +3021,13 @@ class AgentBackend:
                     manifest["updated_at"] = provider_session_timestamps.advance_record_timestamp(manifest["updated_at"])
                     provider_session_artifacts.write_manifest(self.workspace, session, manifest)
                 state = provider_session_lifecycle_queries.session_lifecycle_from_manifest(
-                    self.workspace, manifest, self._access_state,
+                    self.workspace, manifest, self._access_transactions.access_state,
                 )
             except BaseException:
                 if not already_owned:
                     token = self._access_claim_tokens.get(session)
                     if token is not None:
-                        self._release_access_claim(session, token)
+                        self._access_transactions.release_access_claim(self.workspace, session, token)
                 raise
         except BaseException as exc:
             self._record_debug_error(
@@ -3055,7 +3063,9 @@ class AgentBackend:
             session_id=session,
         )
         try:
-            _, already_owned = self._acquire_access_with_reuse(session)
+            _, already_owned = self._access_transactions.acquire_access_with_reuse(
+                self.workspace, session, self.get_session_lifecycle,
+            )
             try:
                 manifest = provider_session_artifacts.read_manifest(self.workspace, session, missing_ok=False)
                 assert manifest is not None
@@ -3067,11 +3077,11 @@ class AgentBackend:
                 if not already_owned:
                     token = self._access_claim_tokens.get(session)
                     if token is not None:
-                        self._release_access_claim(session, token)
+                        self._access_transactions.release_access_claim(self.workspace, session, token)
                 raise
             token = self._access_claim_tokens.get(session)
             if token is not None:
-                self._release_access_claim(session, token)
+                self._access_transactions.release_access_claim(self.workspace, session, token)
             state = self.get_session_lifecycle(session)
         except BaseException as exc:
             self._record_debug_error(
@@ -3147,7 +3157,7 @@ class AgentBackend:
         release_failed = False
         for session, token in tuple(self._access_claim_tokens.items()):
             try:
-                self._release_access_claim(session, token)
+                self._access_transactions.release_access_claim(self.workspace, session, token)
             except Exception as exc:
                 release_failed = True
                 self._record_debug_error(
@@ -6275,149 +6285,6 @@ class AgentBackend:
                     "Antigravity CLI headless capabilities could not be verified"
                 )
 
-    def _acquire_access_with_reuse(
-        self,
-        session_id: str,
-    ) -> tuple[SessionLifecycleState, bool]:
-        """Acquire or prove access and report whether it was already owned."""
-
-        current = self.get_session_lifecycle(session_id)
-        if current.durable_state is SessionDurableState.ABSENT:
-            raise SessionNotFoundError(
-                f"provider session does not exist: {session_id}; "
-                f"run 'story session create {session_id}'"
-            )
-        token, already_owned = self._access_for_attachment(session_id)
-        try:
-            self._access_claim_tokens[session_id] = token
-            manifest = provider_session_artifacts.read_manifest(self.workspace, session_id, missing_ok=False)
-            assert manifest is not None
-            state = provider_session_lifecycle_queries.session_lifecycle_from_manifest(
-                self.workspace, manifest, self._access_state,
-            )
-            if state.access_state is not SessionAccessState.HELD_HERE:
-                raise BackendProtocolError(
-                    f"provider session access ownership changed: {session_id}"
-                )
-        except BaseException:
-            if not already_owned:
-                self._release_access_claim(session_id, token)
-            raise
-        return state, already_owned
-
-    def _access_for_attachment(self, session_id: str) -> tuple[str, bool]:
-        """Return a proved existing or newly created local access token."""
-
-        token = self._access_claim_tokens.get(session_id)
-        if token is not None:
-            self._assert_owned_access(session_id)
-            return token, True
-        return self._claim_access(session_id), False
-
-    def _claim_access(self, session_id: str) -> str:
-        """Atomically create or safely replace a proved-dead local claim.
-
-        The persistent guard serializes compliant claimers. Live local owners
-        and ownership that cannot be proved fail with distinct public errors;
-        no remote or ambiguous claim is replaced.
-        """
-
-        session = self.workspace.validate_identifier(session_id)
-        provider_session_artifacts.reject_unsupported_access_artifacts(self.workspace, session)
-        relative = provider_session_artifacts.access_claim_relative(session)
-        token = uuid.uuid4().hex
-        value = provider_session_access_records.new_access_claim(session, token)
-        with provider_session_claim_guard.access_claim_guard(
-            self.workspace,
-            provider_session_artifacts.PROVIDER_SESSION_DIRECTORY,
-            _ACCESS_CLAIM_GUARD,
-        ):
-            try:
-                self.workspace.write_json(relative, value, overwrite=False)
-                return token
-            except ManuscriptExistsError:
-                existing = provider_session_artifacts.read_access_claim(self.workspace, session)
-            access_state = provider_session_access_records.unowned_access_state(existing)
-            if access_state is SessionAccessState.BLOCKED_BY_LIVE_LOCAL_OWNER:
-                raise SessionAccessBlockedError(
-                    "provider session access is held by live local process "
-                    f"{existing['owner_pid']} on "
-                    f"{provider_session_access_records.access_hostname_diagnostic(existing['owner_hostname'])}: "
-                    f"{session}"
-                )
-            if access_state is SessionAccessState.OWNERSHIP_UNKNOWN:
-                raise SessionOwnershipUnknownError(
-                    f"provider session access ownership cannot be proved: {session}"
-                )
-            current = provider_session_artifacts.read_access_claim(self.workspace, session)
-            if current != existing:
-                raise SessionOwnershipUnknownError(
-                    f"provider session access changed while claiming: {session}"
-                )
-            self.workspace.write_json(relative, value)
-            return token
-
-    def _release_access_claim(self, session_id: str, token: str) -> None:
-        """Guard, compare, and remove only this backend's exact access claim."""
-
-        session = self.workspace.validate_identifier(session_id)
-        relative = provider_session_artifacts.access_claim_relative(session)
-        with provider_session_claim_guard.access_claim_guard(
-            self.workspace,
-            provider_session_artifacts.PROVIDER_SESSION_DIRECTORY,
-            _ACCESS_CLAIM_GUARD,
-        ):
-            provider_session_artifacts.reject_unsupported_access_artifacts(self.workspace, session)
-            target = self.workspace.path(relative)
-            if not target.exists():
-                self._access_claim_tokens.pop(session, None)
-                return
-            existing = provider_session_artifacts.read_access_claim(self.workspace, session)
-            if existing["claim_token"] != token:
-                raise BackendProtocolError(
-                    f"provider session access ownership changed: {session}"
-                )
-            try:
-                target.unlink()
-            except OSError as exc:
-                raise BackendProtocolError(
-                    "provider session access claim could not be released: "
-                    f"{type(exc).__name__}"
-                ) from None
-        self._access_claim_tokens.pop(session, None)
-
-    def _access_state(
-        self,
-        session_id: str,
-        value: Mapping[str, Any],
-    ) -> SessionAccessState:
-        """Classify a claim as locally held or conservatively unowned."""
-
-        token = self._access_claim_tokens.get(session_id)
-        if token is not None and value["claim_token"] == token:
-            return SessionAccessState.HELD_HERE
-        return provider_session_access_records.unowned_access_state(value)
-
-    def _discard_access_claim_after_failed_create(
-        self,
-        session_id: str,
-        token: str,
-        failure: BaseException,
-    ) -> None:
-        """Best-effort remove this call's claim while preserving its failure."""
-
-        try:
-            existing = provider_session_artifacts.read_access_claim(self.workspace, session_id)
-            if existing["claim_token"] != token:
-                raise BackendProtocolError(
-                    "provider session access changed during failed creation"
-                )
-            self.workspace.path(provider_session_artifacts.access_claim_relative(session_id)).unlink()
-        except BaseException as cleanup_error:
-            failure.add_note(
-                f"failed creation access cleanup: {type(cleanup_error).__name__}"
-            )
-
     def _load_context_thread(
         self,
         scope: ContextScope,
@@ -6479,7 +6346,7 @@ class AgentBackend:
             or type(tainted) is not bool
         ):
             raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
-        self._assert_owned_access(scope.session_id)
+        self._access_transactions.assert_owned_access(self.workspace, scope.session_id)
         key = provider_thread_records.context_thread_key_payload(
             scope,
             provider_id,
@@ -6518,7 +6385,7 @@ class AgentBackend:
             definition_fingerprint,
             policy_fingerprint,
         )
-        self._assert_owned_access(scope.session_id)
+        self._access_transactions.assert_owned_access(self.workspace, scope.session_id)
         relative = provider_thread_records.context_thread_relative(
             scope,
             provider_id,
@@ -6578,7 +6445,7 @@ class AgentBackend:
         ):
             provider_name = "Codex" if definition.backend == "codex" else "Antigravity"
             raise BackendProtocolError(f"{provider_name} thread ID is invalid")
-        self._assert_owned_access(session_id)
+        self._access_transactions.assert_owned_access(self.workspace, session_id)
         effective_fingerprint = (
             definition.fingerprint if fingerprint is None else fingerprint
         )
@@ -6609,15 +6476,6 @@ class AgentBackend:
         ):
             return
         provider_session_artifacts.write_manifest(self.workspace, session_id, manifest)
-
-    def _assert_owned_access(self, session_id: str) -> None:
-        """Require the exact persisted claim tracked by this backend."""
-
-        token = self._access_claim_tokens.get(session_id)
-        if token is None or provider_session_artifacts.read_access_claim(self.workspace, session_id)["claim_token"] != token:
-            raise BackendProtocolError(
-                f"provider session access is not held here: {session_id}"
-            )
 
     def _assert_provider_work_ready(self, session_id: str) -> None:
         """Require ready durable state and access already held by this backend."""
