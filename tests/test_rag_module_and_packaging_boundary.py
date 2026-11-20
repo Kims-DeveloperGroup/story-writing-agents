@@ -56,7 +56,7 @@ from story_writing_agents import backend as backend_module, backend_reply_decodi
 from story_writing_agents import provider_session_claim_guard, provider_session_timestamps, provider_thread_records
 from story_writing_agents import provider_session_access_records, provider_session_access_transactions, provider_session_artifacts
 from story_writing_agents import provider_context_thread_store, provider_manifest_thread_store, provider_session_lifecycle_queries
-from story_writing_agents import provider_execution_profiles, provider_session_transitions
+from story_writing_agents import conversation_retrieval_wire, provider_direct_call_wire, provider_execution_profiles, provider_session_transitions
 from story_writing_agents.errors import (
     BackendProtocolError, SessionNotFoundError, WorkspaceFormatError, WorkspaceSecurityError, WorkspaceVersionUnsupportedError,
 )
@@ -398,8 +398,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 332)
-        self.assertEqual(len(edges), 2012)
+        self.assertEqual(len(modules), 334)
+        self.assertEqual(len(edges), 2020)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -456,6 +456,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
                     'story_writing_agents.agent_context.invocation.group_payload',
                     'story_writing_agents.agent_context.payload.context',
                     'story_writing_agents.backend',
+                    'story_writing_agents.conversation_retrieval_wire',
+                    'story_writing_agents.provider_direct_call_wire',
                 },
             ),
             'story_writing_agents.provider_response_mapping': (
@@ -486,9 +488,22 @@ class RagModuleBoundaryTests(unittest.TestCase):
                     'story_writing_agents.lead_preparation.reply_contract_values',
                     'story_writing_agents.lead_provider_contracts',
                     'story_writing_agents.orchestrator',
+                    'story_writing_agents.conversation_retrieval_wire',
+                    'story_writing_agents.provider_direct_call_wire',
                 },
             ),
         }
+        for owner, model in (
+            (conversation_retrieval_wire, "conversation_retrieval"),
+            (provider_direct_call_wire, "models"),
+        ):
+            self.assertEqual(
+                {target for source, target in edges if source == owner.__name__},
+                {f"story_writing_agents.{model}", "story_writing_agents.provider_request_mapping",
+                 "story_writing_agents.provider_schema_projection"},
+            )
+            self.assertEqual({source for source, target in edges if target == owner.__name__},
+                             {"story_writing_agents.backend"})
         for name, (outgoing, incoming) in provider_dependencies.items():
             self.assertEqual({target for origin, target in edges if origin == name}, outgoing)
             self.assertEqual({origin for origin, target in edges if target == name}, incoming)
@@ -2276,6 +2291,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
             (provider_session_claim_guard, ("access_claim_guard",)),
             (provider_session_access_transactions, ("ProviderSessionAccessTransactions",)),
             (provider_session_transitions, ("ProviderSessionTransitions",)),
+            (conversation_retrieval_wire, ("allowed_actions", "continuation_payload", "initial_payload", "retrieval_action_schema")),
+            (provider_direct_call_wire, ("conversation_output_schema", "conversation_request_payload", "phase_output_schema", "phase_request_payload")),
             (provider_execution_profiles, ("execution_profile_fingerprint", "resolve_execution_profiles")),
             (provider_context_thread_store, ("load_context_thread", "store_context_thread", "taint_context_thread")),
             (provider_manifest_thread_store, ("load_manifest_thread", "store_manifest_thread", "taint_manifest_thread")),
@@ -2407,6 +2424,17 @@ class RagModuleBoundaryTests(unittest.TestCase):
              (), {}, True),
             (provider_session_artifacts, "write_manifest", ("workspace", "session_id", "value", "overwrite"),
              ("overwrite",), {"overwrite": True}, True),
+            (conversation_retrieval_wire, "allowed_actions", ("action_index", "has_observation", "after_read", "final_provider_call"),
+             ("action_index", "has_observation", "after_read", "final_provider_call"), {"final_provider_call": False}, True),
+            (conversation_retrieval_wire, "continuation_payload", ("request", "action_index", "allowed_actions", "observation"),
+             ("action_index", "allowed_actions", "observation"), {}, True),
+            (conversation_retrieval_wire, "initial_payload", ("request", "allowed_actions"), ("allowed_actions",), {}, True),
+            (conversation_retrieval_wire, "retrieval_action_schema", ("allowed_actions",), ("allowed_actions",), {"allowed_actions": None}, True),
+            (provider_direct_call_wire, "conversation_output_schema", (), (), {}, True),
+            (provider_direct_call_wire, "conversation_request_payload", ("request",), (), {}, True),
+            (provider_direct_call_wire, "phase_request_payload", ("request",), (), {}, True),
+            (provider_direct_call_wire, "phase_output_schema", ("phase", "expected_reviewed_proposal", "review_only"),
+             ("expected_reviewed_proposal", "review_only"), {"expected_reviewed_proposal": None, "review_only": False}, True),
             (provider_execution_profiles, "execution_profile_fingerprint", ("profile",), (), {}, True),
             (provider_execution_profiles, "resolve_execution_profiles",
              ("workspace", "configuration", "backend_overrides", "explicit_model",
@@ -2614,6 +2642,28 @@ class RagModuleBoundaryTests(unittest.TestCase):
                               "return": SessionLifecycleState})
         self.assertNotIn("ProviderSessionTransitions", story_writing_agents.__all__)
         self.assertFalse(hasattr(story_writing_agents, "ProviderSessionTransitions"))
+        self.assertIs(backend_module.conversation_retrieval_wire, conversation_retrieval_wire)
+        self.assertIs(backend_module.provider_direct_call_wire, provider_direct_call_wire)
+        action_kinds = tuple[conversation_retrieval.ConversationRetrievalActionKind, ...]
+        payload = dict[str, Any]
+        for function, expected in (
+            (conversation_retrieval_wire.allowed_actions, {"action_index": int, "has_observation": bool,
+             "after_read": bool, "final_provider_call": bool, "return": action_kinds}),
+            (conversation_retrieval_wire.continuation_payload, {"request": conversation_retrieval.ConversationRetrievalRequest,
+             "action_index": int, "allowed_actions": action_kinds, "observation": str, "return": payload}),
+            (conversation_retrieval_wire.initial_payload, {"request": conversation_retrieval.ConversationRetrievalRequest,
+             "allowed_actions": action_kinds, "return": payload}),
+            (conversation_retrieval_wire.retrieval_action_schema, {"allowed_actions": action_kinds | None, "return": payload}),
+            (provider_direct_call_wire.conversation_output_schema, {"return": payload}),
+            (provider_direct_call_wire.conversation_request_payload, {"request": models.ConversationRequest, "return": payload}),
+            (provider_direct_call_wire.phase_request_payload, {"request": models.AgentRequest, "return": payload}),
+            (provider_direct_call_wire.phase_output_schema, {"phase": models.Phase, "expected_reviewed_proposal": tuple[str, str] | None,
+             "review_only": bool, "return": payload}),
+        ):
+            self.assertEqual(get_type_hints(function), expected)
+        for module in (conversation_retrieval_wire, provider_direct_call_wire):
+            self.assertTrue(set(module.__all__).isdisjoint(story_writing_agents.__all__))
+            self.assertTrue(all(not hasattr(story_writing_agents, name) for name in module.__all__))
         profiles = provider_execution_profiles
         self.assertIs(backend_module.provider_execution_profiles, profiles)
         self.assertEqual(get_type_hints(profiles.execution_profile_fingerprint), {"profile": AgentExecutionProfile, "return": str})
@@ -3007,6 +3057,8 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             "story_writing_agents/provider_session_access_records.py",
             "story_writing_agents/provider_session_access_transactions.py",
             "story_writing_agents/provider_context_thread_store.py",
+            "story_writing_agents/conversation_retrieval_wire.py",
+            "story_writing_agents/provider_direct_call_wire.py",
             "story_writing_agents/provider_execution_profiles.py",
             "story_writing_agents/provider_manifest_thread_store.py",
             "story_writing_agents/provider_session_artifacts.py",

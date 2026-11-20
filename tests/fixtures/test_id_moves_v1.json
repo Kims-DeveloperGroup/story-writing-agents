@@ -15196,6 +15196,58 @@
           "destination": "tests/test_codex_backend_defaults.py"
         }
       ]
+    },
+    {
+      "schema_version": 1,
+      "issue": 1089,
+      "origin_commit": "32b7301720069228bd43bed4437f865d77377877",
+      "original_caps_sha256": "0d14af735a342f0bde739f20dca64d0ee402dd03f9c83a017fb89cd0219ffa3f",
+      "expected_caps_sha256": "a49ec017285634e6e0be8e23c353dc9a2029e9edb7b67f7e637a9358991e4cbd",
+      "moves": [
+        {
+          "old_id": "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_non_string_kind_reports_exact_type_and_common_issues",
+          "new_id": "tests.test_conversation_retrieval_wire.ConversationRetrievalWireTests.test_retrieval_non_string_kind_reports_exact_type_and_common_issues",
+          "subtest_cap": 0,
+          "source": "tests/test_codex_backend.py",
+          "destination": "tests/test_conversation_retrieval_wire.py",
+          "original_file_sha256": "dfd6da177ce72881c73f2e9cdb31b51cb9745684a7b7c142c02d599e5cb7089b",
+          "original_method_ast_sha256": "4c8e471732fd1edfe15cf5062aee2318d9a4750251d525bd3afa5f003b923039",
+          "expected_method_ast_sha256": "4fe78bc4723e20974c7e06bac66d250bce21acda72c7ce323c5fd7e87f1ee6ff"
+        },
+        {
+          "old_id": "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_rag_context_is_first_call_only_and_reference_authoritative",
+          "new_id": "tests.test_conversation_retrieval_wire.ConversationRetrievalWireTests.test_retrieval_rag_context_is_first_call_only_and_reference_authoritative",
+          "subtest_cap": 2,
+          "source": "tests/test_codex_backend.py",
+          "destination": "tests/test_conversation_retrieval_wire.py",
+          "original_file_sha256": "dfd6da177ce72881c73f2e9cdb31b51cb9745684a7b7c142c02d599e5cb7089b",
+          "original_method_ast_sha256": "084d7e82360c69e051f2ab7233dd8e3551e22065b7a1dc974ed690b9f2ac9155",
+          "expected_method_ast_sha256": "9e2633a5ea2c110dd83a2cd91bc40911886ca4c9915d31c7eed01af585c4f76d"
+        },
+        {
+          "old_id": "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_schema_uses_supported_strict_object_subset",
+          "new_id": "tests.test_conversation_retrieval_wire.ConversationRetrievalWireTests.test_retrieval_schema_uses_supported_strict_object_subset",
+          "subtest_cap": 0,
+          "source": "tests/test_codex_backend.py",
+          "destination": "tests/test_conversation_retrieval_wire.py",
+          "original_file_sha256": "dfd6da177ce72881c73f2e9cdb31b51cb9745684a7b7c142c02d599e5cb7089b",
+          "original_method_ast_sha256": "aa4198ab465207c55813f14d577de0a697f08661efd052dae8be843cfed1a721",
+          "expected_method_ast_sha256": "35355001f0e48eff98a0f573f0065a4810d88f6289a1ea172fa04b1c233a7409"
+        }
+      ],
+      "class_moves": [
+        {
+          "source": "tests/test_codex_backend.py",
+          "class": "CodexBackendTestCase",
+          "destination": "tests/test_conversation_retrieval_wire.py",
+          "destination_class": "ConversationRetrievalWireTests",
+          "methods": [
+            "test_retrieval_non_string_kind_reports_exact_type_and_common_issues",
+            "test_retrieval_rag_context_is_first_call_only_and_reference_authoritative",
+            "test_retrieval_schema_uses_supported_strict_object_subset"
+          ]
+        }
+      ]
     }
   ]
 }

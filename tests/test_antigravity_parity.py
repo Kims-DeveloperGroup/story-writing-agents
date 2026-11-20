@@ -21,7 +21,7 @@ from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 from story_writing_agents import AgentBackend, AgentReply, AgentRequest, BackendProtocolError, CHARACTER_CUSTODIAN, ConversationContextWindow, ConversationReply, ConversationRequest, ConversationRetrievalAction, ConversationRetrievalAnswerAction, ConversationRetrievalObservation, ConversationRetrievalReply, ConversationRetrievalRequest, ConversationRetrievalSearchAction, ConversationRetrievalSearchObservation, EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR, PLOT_ARCHITECT, Phase, ReplyTrace, ReplyTraceOrigin, SessionAccessState, SessionDurableState, SessionPausedError, Verdict
-from story_writing_agents import provider_manifest_thread_store, provider_session_artifacts
+from story_writing_agents import provider_direct_call_wire, provider_manifest_thread_store, provider_session_artifacts
 from story_writing_agents.config import ConfigManager
 from story_writing_agents.conversations.session_context import MAX_PROVIDER_INPUT_UTF8_BYTES, MAX_PROVIDER_PAYLOAD_UTF8_BYTES
 from story_writing_agents.workspace.session_resources import provision_session_resources
@@ -1405,7 +1405,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(calls), 1)
         substantive = calls[0]
 
-        expected_payload = AgentBackend._request_payload(request)
+        expected_payload = provider_direct_call_wire.phase_request_payload(request)
         expected_payload['untrusted_attached_references'] = [{'artifact_reference': {
             'artifact_path': 'manuscript/part-01/antigravity-reference.md', 'line_range': None},
             'content_text': 'ANTIGRAVITY-WHOLE-MARKER\n'}, {'artifact_reference': {

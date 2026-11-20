@@ -246,9 +246,13 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
-        split_current = suite_budget.load_budget(Path(__file__).with_name("fixtures") / "test_budget_v1.json")
+        wire_current = suite_budget.load_budget(Path(__file__).with_name("fixtures") / "test_budget_v1.json")
+        split_current = dict(wire_current, max_test_source_lines=156274, subtest_caps=dict(wire_current["subtest_caps"]))
+        *legacy_move_receipts, defaults_stage, wire_stage = load_receipt()
+        wire_moves = wire_stage["moves"]
+        for move in wire_moves:
+            split_current["subtest_caps"][move["old_id"]] = split_current["subtest_caps"].pop(move["new_id"])
         migrated = dict(split_current, subtest_caps=dict(split_current["subtest_caps"]))
-        *legacy_move_receipts, defaults_stage = load_receipt()
         defaults_moves = defaults_stage["moves"]
         for move in defaults_moves:
             migrated["subtest_caps"][move["old_id"]] = migrated["subtest_caps"].pop(move["new_id"])
@@ -700,6 +704,18 @@ class SuiteBudgetTests(unittest.TestCase):
         self.assertEqual(split_current["max_test_source_lines"], 156274)
         self.assertIsNone(suite_budget.check_monotonic(split_current, execution_profiles_current))
         self._assert_source_limit_neighbors_rejected(split_current, execution_profiles_current)
+        self.assertEqual(wire_current["max_test_source_lines"], 156369)
+        self.assertIsNone(suite_budget.check_monotonic(wire_current, split_current))
+        self._assert_source_limit_neighbors_rejected(wire_current, split_current)
+        wire_id = next(move["new_id"] for move in wire_moves if move["subtest_cap"])
+        wire_caps = wire_current["subtest_caps"]
+        for changed_caps in (
+            {key: cap for key, cap in wire_caps.items() if key != wire_id},
+            {**wire_caps, "tests.unreviewed.Case.test_extra": 0},
+            {**wire_caps, wire_id: wire_caps[wire_id] + 1},
+            {**wire_caps, wire_id: wire_caps[wire_id] - 1},
+        ):
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(wire_current, subtest_caps=changed_caps), split_current)
         moved_id = next(move["new_id"] for move in defaults_moves if move["subtest_cap"])
         split_caps = split_current["subtest_caps"]
         for changed_caps in (
@@ -712,6 +728,7 @@ class SuiteBudgetTests(unittest.TestCase):
         for field, value in (("schema_version", 2), ("max_sequential_wall_seconds", 18001), ("max_shard_wall_seconds", 3601)):
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(decoder_current, **{field: value}), rules_current)
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(split_current, **{field: value}), execution_profiles_current)
+            self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, dict(wire_current, **{field: value}), split_current)
             self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, decoder_current, dict(rules_current, **{field: value}))
         for caps in (
             {key: value for key, value in decoder_current["subtest_caps"].items() if key != zero_id},
@@ -763,6 +780,13 @@ class SuiteBudgetTests(unittest.TestCase):
         selected_defaults = select_impact(real, paths=("tests/test_codex_backend_defaults.py",))
         self.assertEqual(selected_defaults["focused_manifest"]["ordered_ids"], ["tests.test_codex_backend_defaults.CodexBackendDefaultsTests.test_execution_profiles_resolve_every_source_with_nullable_defaults"])
         self.assertEqual(selected_defaults["affected_manifest"]["ordered_ids"], list(moved_defaults.ids))
+        moved_wire = runner_selection.select(real, modules=["tests.test_conversation_retrieval_wire"])
+        self.assertEqual(moved_wire.ids, tuple(sorted(move["new_id"] for move in wire_moves)))
+        self.assertTrue(all(move["old_id"] not in real.ids for move in wire_moves))
+        self.assertTrue(all(type(case).__bases__ == (unittest.TestCase,) and type(case).__module__ == "tests.test_conversation_retrieval_wire" for case in moved_wire.tests))
+        selected_wire = select_impact(real, paths=("tests/test_conversation_retrieval_wire.py",))
+        self.assertEqual(selected_wire["focused_manifest"]["ordered_ids"], [next(move["new_id"] for move in wire_moves if move["old_id"].endswith(".test_retrieval_schema_uses_supported_strict_object_subset"))])
+        self.assertEqual(selected_wire["affected_manifest"]["ordered_ids"], list(moved_wire.ids))
         definitions = (
             ("tests.lead_preparation.test_specialist_advisory_scope", "SpecialistAdvisoryScopeCases",
              "tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_provider_free_advisory_requires_scope_and_separate_confirmation",
