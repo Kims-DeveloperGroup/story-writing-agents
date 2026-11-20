@@ -19518,6 +19518,33 @@
         "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_write_failures_compensate_only_newly_acquired_access"
       ],
       "depends_on": []
+    },
+    {
+      "name": "provider.session-lifecycle-queries",
+      "boundary": "existing-cases",
+      "paths": [
+        "src/story_writing_agents/provider_session_lifecycle_queries.py"
+      ],
+      "focused_ids": [
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_absence_listing_order_and_configuration_validation_are_read_only",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_access_schema_duplicate_json_and_orphans_fail_closed",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_guard_is_lazy_persistent_secure_and_ignored_by_listing",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_lifecycle_operation_records_cover_success_rejection_and_cleanup"
+      ],
+      "affected_ids": [
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_absence_listing_order_and_configuration_validation_are_read_only",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_access_liveness_is_conservative_and_dead_local_claim_is_reclaimed",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_access_schema_duplicate_json_and_orphans_fail_closed",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_create_release_and_duplicate_create_use_exact_artifacts",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_guard_is_lazy_persistent_secure_and_ignored_by_listing",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_lifecycle_operation_records_cover_success_rejection_and_cleanup",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_manifest_schema_is_strict_and_v1_is_rejected_unchanged",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_reopen_and_pause_transitions_preserve_provider_state_and_noops",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_unknown_liveness_errors_never_replace_claim",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_v1_sidecar_and_guard_are_typed_rejections_without_migration",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_write_failures_compensate_only_newly_acquired_access"
+      ],
+      "depends_on": []
     }
   ],
   "ignored_names": [
