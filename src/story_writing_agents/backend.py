@@ -6524,7 +6524,7 @@ class AgentBackend:
             return result
 
         try:
-            return json.loads(text, object_pairs_hook=reject_duplicate_fields)
+            return json.loads(text, object_pairs_hook=dict)
         except (json.JSONDecodeError, ValueError) as exc:
             raise WorkspaceFormatError(
                 f"lifecycle file is not valid strict JSON: {relative}"
