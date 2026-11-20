@@ -21,6 +21,7 @@ from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 from story_writing_agents import AgentBackend, AgentReply, AgentRequest, BackendProtocolError, CHARACTER_CUSTODIAN, ConversationContextWindow, ConversationReply, ConversationRequest, ConversationRetrievalAction, ConversationRetrievalAnswerAction, ConversationRetrievalObservation, ConversationRetrievalReply, ConversationRetrievalRequest, ConversationRetrievalSearchAction, ConversationRetrievalSearchObservation, EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR, PLOT_ARCHITECT, Phase, ReplyTrace, ReplyTraceOrigin, SessionAccessState, SessionDurableState, SessionPausedError, Verdict
+from story_writing_agents import provider_session_artifacts
 from story_writing_agents.config import ConfigManager
 from story_writing_agents.conversations.session_context import MAX_PROVIDER_INPUT_UTF8_BYTES, MAX_PROVIDER_PAYLOAD_UTF8_BYTES
 from story_writing_agents.workspace.session_resources import provision_session_resources
@@ -1566,7 +1567,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(session_id=session_id):
                 manifest = self.manifest(session_id)
                 self.antigravity_thread(manifest)['thread_id'] = substituted_thread_id
-                backend._write_manifest(session_id, manifest)
+                provider_session_artifacts.write_manifest(backend.workspace, session_id, manifest)
                 with self.assertRaises(BackendProtocolError) as caught:
                     await bound.invoke(self.request(session_id=session_id,
                         debate_id='rejected-resume', phase=Phase.DRAFT))
@@ -1962,8 +1963,10 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                 )
                 seeded = self.antigravity_thread(self.manifest(session_id))
                 with (_wrapped_thread_taint_patch(backend, backend._taint_thread) as taint,
-                    mock.patch.object(backend, '_write_manifest',
-                    wraps=backend._write_manifest) as write_manifest, mock.patch.dict(os.environ,
+                    mock.patch.object(
+                        provider_session_artifacts, 'write_manifest',
+                        wraps=provider_session_artifacts.write_manifest,
+                    ) as write_manifest, mock.patch.dict(os.environ,
                     {'STORY_FAKE_AGY_MODE': mode}),
                     self.assertRaises(BackendProtocolError) as caught):
                     await bound.invoke(self.request(session_id=session_id, debate_id='failure',

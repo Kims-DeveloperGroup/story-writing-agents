@@ -19489,6 +19489,35 @@
         "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_write_failures_compensate_only_newly_acquired_access"
       ],
       "depends_on": []
+    },
+    {
+      "name": "provider.session-artifacts",
+      "boundary": "existing-cases",
+      "paths": [
+        "src/story_writing_agents/provider_session_artifacts.py"
+      ],
+      "focused_ids": [
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_absence_listing_order_and_configuration_validation_are_read_only",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_access_schema_duplicate_json_and_orphans_fail_closed",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_create_release_and_duplicate_create_use_exact_artifacts",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_v1_sidecar_and_guard_are_typed_rejections_without_migration"
+      ],
+      "affected_ids": [
+        "tests.test_antigravity_parity.AntigravityParityTests.test_only_provider_known_same_state_conversations_can_resume",
+        "tests.test_antigravity_parity.AntigravityParityTests.test_protocol_failures_are_fixed_taint_once_and_restart_fresh",
+        "tests.test_codex_backend.CodexBackendTestCase.test_provider_invocation_error_preserves_adapter_cause_and_taint",
+        "tests.test_codex_backend.CodexBackendTestCase.test_structured_decode_failures_taint_existing_thread_once",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_absence_listing_order_and_configuration_validation_are_read_only",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_access_schema_duplicate_json_and_orphans_fail_closed",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_concurrent_dead_reclaim_has_exactly_one_owner",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_create_release_and_duplicate_create_use_exact_artifacts",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_guard_is_lazy_persistent_secure_and_ignored_by_listing",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_release_token_comparison_and_close_preserve_foreign_claims",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_v1_sidecar_and_guard_are_typed_rejections_without_migration",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_windows_guard_branch_initializes_retries_and_unlocks",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_write_failures_compensate_only_newly_acquired_access"
+      ],
+      "depends_on": []
     }
   ],
   "ignored_names": [

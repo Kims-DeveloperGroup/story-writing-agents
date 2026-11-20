@@ -3,6 +3,7 @@
 from __future__ import annotations
 import story_writing_agents.backend_reply_decoding as backend_reply_decoding
 import story_writing_agents.provider_session_access_records as provider_session_access_records
+import story_writing_agents.provider_session_artifacts as provider_session_artifacts
 import story_writing_agents.provider_session_claim_guard as provider_session_claim_guard
 import story_writing_agents.provider_session_timestamps as provider_session_timestamps
 import story_writing_agents.provider_thread_records as provider_thread_records
@@ -206,10 +207,10 @@ from .workspace.session_resources import (
 )
 
 
-_SESSION_DIRECTORY = "agent_states/orchestrator_state/provider_sessions"
 _CONTEXT_REFERENCE_TERMINATED_ATTRIBUTE = "_context_reference_terminated"
-_ACCESS_CLAIM_GUARD = f"{_SESSION_DIRECTORY}/.access-claims.lock"
-_UNSUPPORTED_V1_ACCESS_CLAIM_GUARD = f"{_SESSION_DIRECTORY}/.lease-claims.lock"
+_ACCESS_CLAIM_GUARD = (
+    f"{provider_session_artifacts.PROVIDER_SESSION_DIRECTORY}/.access-claims.lock"
+)
 
 
 async def _timed_provider_invoke(
@@ -1906,7 +1907,7 @@ class AgentBackend:
                 timeout_seconds=float(timeout_seconds),
                 state_root=(
                     self._control_workspace_root
-                    / _SESSION_DIRECTORY
+                    / provider_session_artifacts.PROVIDER_SESSION_DIRECTORY
                     / ".antigravity"
                 ),
                 explicit_model=explicit_antigravity_model,
@@ -2485,7 +2486,7 @@ class AgentBackend:
             timeout_seconds=self.timeout_seconds,
             state_root=(
                 self._control_workspace_root
-                / _SESSION_DIRECTORY
+                / provider_session_artifacts.PROVIDER_SESSION_DIRECTORY
                 / ".antigravity"
             ),
             explicit_model=self._explicit_antigravity_model,
@@ -2711,10 +2712,10 @@ class AgentBackend:
         self._ensure_open()
         session = self.workspace.validate_identifier(session_id)
         try:
-            self._reject_unsupported_access_artifacts(session)
-            manifest = self._read_manifest(session, missing_ok=True)
+            provider_session_artifacts.reject_unsupported_access_artifacts(self.workspace, session)
+            manifest = provider_session_artifacts.read_manifest(self.workspace, session, missing_ok=True)
             if manifest is None:
-                if self._read_access_claim_if_present(session) is not None:
+                if provider_session_artifacts.read_access_claim_if_present(self.workspace, session) is not None:
                     raise WorkspaceFormatError(
                         f"provider session access claim has no manifest: {session}"
                     )
@@ -2759,8 +2760,8 @@ class AgentBackend:
 
         self._ensure_open()
         try:
-            self._reject_unsupported_access_artifacts(None)
-            directory = self.workspace.path(_SESSION_DIRECTORY)
+            provider_session_artifacts.reject_unsupported_access_artifacts(self.workspace, None)
+            directory = self.workspace.path(provider_session_artifacts.PROVIDER_SESSION_DIRECTORY)
             if not directory.exists():
                 result: tuple[SessionLifecycleState, ...] = ()
             else:
@@ -2795,13 +2796,13 @@ class AgentBackend:
                             name[: -len(".access.json")]
                         )
                         claim_sessions.add(session)
-                        self._read_access_claim(session)
+                        provider_session_artifacts.read_access_claim(self.workspace, session)
                         continue
                     if not name.endswith(".json"):
                         continue
                     session = self.workspace.validate_identifier(name[:-5])
                     manifest_sessions.add(session)
-                    manifest = self._read_manifest(session, missing_ok=False)
+                    manifest = provider_session_artifacts.read_manifest(self.workspace, session, missing_ok=False)
                     assert manifest is not None
                     states.append(self._session_lifecycle(manifest))
 
@@ -3008,25 +3009,27 @@ class AgentBackend:
                 "provider_threads": {},
             }
             with provider_session_claim_guard.access_claim_guard(
-                self.workspace, _SESSION_DIRECTORY, _ACCESS_CLAIM_GUARD,
+                self.workspace,
+                provider_session_artifacts.PROVIDER_SESSION_DIRECTORY,
+                _ACCESS_CLAIM_GUARD,
             ):
-                self._reject_unsupported_access_artifacts(session)
-                if self._manifest_exists(session):
-                    self._read_manifest(session, missing_ok=False)
+                provider_session_artifacts.reject_unsupported_access_artifacts(self.workspace, session)
+                if provider_session_artifacts.manifest_exists(self.workspace, session):
+                    provider_session_artifacts.read_manifest(self.workspace, session, missing_ok=False)
                     raise SessionExistsError(
                         f"provider session already exists: {session}"
                     )
-                if self._read_access_claim_if_present(session) is not None:
+                if provider_session_artifacts.read_access_claim_if_present(self.workspace, session) is not None:
                     raise WorkspaceFormatError(
                         f"provider session access claim has no manifest: {session}"
                     )
                 self.workspace.write_json(
-                    self._access_claim_relative(session),
+                    provider_session_artifacts.access_claim_relative(session),
                     claim,
                     overwrite=False,
                 )
                 try:
-                    self._write_manifest(session, manifest, overwrite=False)
+                    provider_session_artifacts.write_manifest(self.workspace, session, manifest, overwrite=False)
                 except BaseException as exc:
                     self._discard_access_claim_after_failed_create(
                         session,
@@ -3073,12 +3076,12 @@ class AgentBackend:
         try:
             _, already_owned = self._acquire_access_with_reuse(session)
             try:
-                manifest = self._read_manifest(session, missing_ok=False)
+                manifest = provider_session_artifacts.read_manifest(self.workspace, session, missing_ok=False)
                 assert manifest is not None
                 if manifest["durable_state"] != SessionDurableState.READY.value:
                     manifest["durable_state"] = SessionDurableState.READY.value
                     manifest["updated_at"] = provider_session_timestamps.advance_record_timestamp(manifest["updated_at"])
-                    self._write_manifest(session, manifest)
+                    provider_session_artifacts.write_manifest(self.workspace, session, manifest)
                 state = self._session_lifecycle(manifest)
             except BaseException:
                 if not already_owned:
@@ -3122,12 +3125,12 @@ class AgentBackend:
         try:
             _, already_owned = self._acquire_access_with_reuse(session)
             try:
-                manifest = self._read_manifest(session, missing_ok=False)
+                manifest = provider_session_artifacts.read_manifest(self.workspace, session, missing_ok=False)
                 assert manifest is not None
                 if manifest["durable_state"] != SessionDurableState.PAUSED.value:
                     manifest["durable_state"] = SessionDurableState.PAUSED.value
                     manifest["updated_at"] = provider_session_timestamps.advance_record_timestamp(manifest["updated_at"])
-                    self._write_manifest(session, manifest)
+                    provider_session_artifacts.write_manifest(self.workspace, session, manifest)
             except BaseException:
                 if not already_owned:
                     token = self._access_claim_tokens.get(session)
@@ -6347,7 +6350,7 @@ class AgentBackend:
         """Combine one validated manifest with an observed access claim."""
 
         session = manifest["session_id"]
-        claim = self._read_access_claim_if_present(session)
+        claim = provider_session_artifacts.read_access_claim_if_present(self.workspace, session)
         if claim is None:
             access_state = SessionAccessState.CLAIMABLE
             owner_hostname = None
@@ -6387,7 +6390,7 @@ class AgentBackend:
         token, already_owned = self._access_for_attachment(session_id)
         try:
             self._access_claim_tokens[session_id] = token
-            manifest = self._read_manifest(session_id, missing_ok=False)
+            manifest = provider_session_artifacts.read_manifest(self.workspace, session_id, missing_ok=False)
             assert manifest is not None
             state = self._session_lifecycle(manifest)
             if state.access_state is not SessionAccessState.HELD_HERE:
@@ -6418,18 +6421,20 @@ class AgentBackend:
         """
 
         session = self.workspace.validate_identifier(session_id)
-        self._reject_unsupported_access_artifacts(session)
-        relative = self._access_claim_relative(session)
+        provider_session_artifacts.reject_unsupported_access_artifacts(self.workspace, session)
+        relative = provider_session_artifacts.access_claim_relative(session)
         token = uuid.uuid4().hex
         value = provider_session_access_records.new_access_claim(session, token)
         with provider_session_claim_guard.access_claim_guard(
-            self.workspace, _SESSION_DIRECTORY, _ACCESS_CLAIM_GUARD,
+            self.workspace,
+            provider_session_artifacts.PROVIDER_SESSION_DIRECTORY,
+            _ACCESS_CLAIM_GUARD,
         ):
             try:
                 self.workspace.write_json(relative, value, overwrite=False)
                 return token
             except ManuscriptExistsError:
-                existing = self._read_access_claim(session)
+                existing = provider_session_artifacts.read_access_claim(self.workspace, session)
             access_state = provider_session_access_records.unowned_access_state(existing)
             if access_state is SessionAccessState.BLOCKED_BY_LIVE_LOCAL_OWNER:
                 raise SessionAccessBlockedError(
@@ -6442,7 +6447,7 @@ class AgentBackend:
                 raise SessionOwnershipUnknownError(
                     f"provider session access ownership cannot be proved: {session}"
                 )
-            current = self._read_access_claim(session)
+            current = provider_session_artifacts.read_access_claim(self.workspace, session)
             if current != existing:
                 raise SessionOwnershipUnknownError(
                     f"provider session access changed while claiming: {session}"
@@ -6454,16 +6459,18 @@ class AgentBackend:
         """Guard, compare, and remove only this backend's exact access claim."""
 
         session = self.workspace.validate_identifier(session_id)
-        relative = self._access_claim_relative(session)
+        relative = provider_session_artifacts.access_claim_relative(session)
         with provider_session_claim_guard.access_claim_guard(
-            self.workspace, _SESSION_DIRECTORY, _ACCESS_CLAIM_GUARD,
+            self.workspace,
+            provider_session_artifacts.PROVIDER_SESSION_DIRECTORY,
+            _ACCESS_CLAIM_GUARD,
         ):
-            self._reject_unsupported_access_artifacts(session)
+            provider_session_artifacts.reject_unsupported_access_artifacts(self.workspace, session)
             target = self.workspace.path(relative)
             if not target.exists():
                 self._access_claim_tokens.pop(session, None)
                 return
-            existing = self._read_access_claim(session)
+            existing = provider_session_artifacts.read_access_claim(self.workspace, session)
             if existing["claim_token"] != token:
                 raise BackendProtocolError(
                     f"provider session access ownership changed: {session}"
@@ -6489,86 +6496,6 @@ class AgentBackend:
             return SessionAccessState.HELD_HERE
         return provider_session_access_records.unowned_access_state(value)
 
-    def _read_access_claim_if_present(
-        self,
-        session_id: str,
-    ) -> dict[str, Any] | None:
-        """Return a validated claim or ``None`` without storage mutation."""
-
-        relative = self._access_claim_relative(session_id)
-        if not self.workspace.path(relative).exists():
-            return None
-        return self._read_access_claim(session_id)
-
-    def _read_access_claim(self, session_id: str) -> dict[str, Any]:
-        """Read and strictly validate one identity-bound V2 access claim."""
-
-        value = self._read_lifecycle_json(self._access_claim_relative(session_id))
-        return provider_session_access_records.validate_access_claim(value, session_id)
-
-    def _read_lifecycle_json(self, relative: str) -> Any:
-        """Read lifecycle JSON while rejecting duplicate object fields."""
-
-        text = self.workspace.read_text(relative)
-
-        def reject_duplicate_fields(
-            pairs: list[tuple[str, Any]],
-        ) -> dict[str, Any]:
-            """Build one object or reject a repeated persisted field name."""
-
-            result: dict[str, Any] = {}
-            for key, value in pairs:
-                if key in result:
-                    raise ValueError(f"duplicate field: {key}")
-                result[key] = value
-            return result
-
-        try:
-            return json.loads(text, object_pairs_hook=reject_duplicate_fields)
-        except (json.JSONDecodeError, ValueError) as exc:
-            raise WorkspaceFormatError(
-                f"lifecycle file is not valid strict JSON: {relative}"
-            ) from exc
-
-    def _reject_unsupported_access_artifacts(
-        self,
-        session_id: str | None,
-    ) -> None:
-        """Reject version-1 access sidecars or guards without changing them."""
-
-        directory = self.workspace.path(_SESSION_DIRECTORY)
-        if not directory.exists():
-            return
-        if not directory.is_dir():
-            raise WorkspaceFormatError(
-                "provider session manifest path is not a directory"
-            )
-        if self.workspace.path(_UNSUPPORTED_V1_ACCESS_CLAIM_GUARD).exists():
-            raise WorkspaceVersionUnsupportedError(
-                "workspace contains an unsupported version-1 access guard"
-            )
-        if session_id is not None:
-            unsupported = self.workspace.path(
-                f"{_SESSION_DIRECTORY}/{session_id}.lease.json"
-            )
-            if unsupported.exists():
-                raise WorkspaceVersionUnsupportedError(
-                    "workspace contains an unsupported version-1 access sidecar"
-                )
-            return
-        try:
-            has_unsupported_sidecar = any(
-                entry.name.endswith(".lease.json") for entry in directory.iterdir()
-            )
-        except OSError as exc:
-            raise WorkspaceFormatError(
-                "cannot enumerate provider session manifests"
-            ) from exc
-        if has_unsupported_sidecar:
-            raise WorkspaceVersionUnsupportedError(
-                "workspace contains an unsupported version-1 access sidecar"
-            )
-
     def _discard_access_claim_after_failed_create(
         self,
         session_id: str,
@@ -6578,12 +6505,12 @@ class AgentBackend:
         """Best-effort remove this call's claim while preserving its failure."""
 
         try:
-            existing = self._read_access_claim(session_id)
+            existing = provider_session_artifacts.read_access_claim(self.workspace, session_id)
             if existing["claim_token"] != token:
                 raise BackendProtocolError(
                     "provider session access changed during failed creation"
                 )
-            self.workspace.path(self._access_claim_relative(session_id)).unlink()
+            self.workspace.path(provider_session_artifacts.access_claim_relative(session_id)).unlink()
         except BaseException as cleanup_error:
             failure.add_note(
                 f"failed creation access cleanup: {type(cleanup_error).__name__}"
@@ -6728,7 +6655,7 @@ class AgentBackend:
             definition,
             fingerprint=effective_fingerprint,
         )
-        manifest = self._read_manifest(session_id, missing_ok=False)
+        manifest = provider_session_artifacts.read_manifest(self.workspace, session_id, missing_ok=False)
         assert manifest is not None
         return provider_thread_records.select_thread_record(
             manifest, key, effective_fingerprint,
@@ -6755,7 +6682,7 @@ class AgentBackend:
         )
         if provider_thread_records.PROVIDER_FINGERPRINT_PATTERN.fullmatch(effective_fingerprint) is None:
             raise BackendProtocolError("provider thread fingerprint is invalid")
-        manifest = self._read_manifest(session_id, missing_ok=False)
+        manifest = provider_session_artifacts.read_manifest(self.workspace, session_id, missing_ok=False)
         assert manifest is not None
         provider_thread_records.store_thread_record(
             manifest,
@@ -6764,7 +6691,7 @@ class AgentBackend:
             tainted=tainted,
             effective_fingerprint=effective_fingerprint,
         )
-        self._write_manifest(session_id, manifest)
+        provider_session_artifacts.write_manifest(self.workspace, session_id, manifest)
 
     def _taint_thread(
         self,
@@ -6773,19 +6700,19 @@ class AgentBackend:
         *,
         fingerprint: str | None = None,
     ) -> None:
-        manifest = self._read_manifest(session_id, missing_ok=False)
+        manifest = provider_session_artifacts.read_manifest(self.workspace, session_id, missing_ok=False)
         assert manifest is not None
         if not provider_thread_records.taint_thread_record(
             manifest, definition, fingerprint=fingerprint,
         ):
             return
-        self._write_manifest(session_id, manifest)
+        provider_session_artifacts.write_manifest(self.workspace, session_id, manifest)
 
     def _assert_owned_access(self, session_id: str) -> None:
         """Require the exact persisted claim tracked by this backend."""
 
         token = self._access_claim_tokens.get(session_id)
-        if token is None or self._read_access_claim(session_id)["claim_token"] != token:
+        if token is None or provider_session_artifacts.read_access_claim(self.workspace, session_id)["claim_token"] != token:
             raise BackendProtocolError(
                 f"provider session access is not held here: {session_id}"
             )
@@ -6819,63 +6746,6 @@ class AgentBackend:
             raise BackendProtocolError(
                 f"provider session access is not held here: {session_id}"
             )
-
-    def _read_manifest(
-        self,
-        session_id: str,
-        *,
-        missing_ok: bool,
-    ) -> dict[str, Any] | None:
-        """Read and strictly validate an identity-bound session manifest.
-
-        ``None`` is returned only for an absent path when ``missing_ok`` is
-        true. Exact schema, timestamp ordering, and every thread entry are
-        validated without mutation before copied mappings are returned.
-        """
-
-        relative = self._manifest_relative(session_id)
-        target = self.workspace.path(relative)
-        if not target.exists():
-            if missing_ok:
-                return None
-            raise SessionNotFoundError(
-                f"provider session does not exist: {session_id}; "
-                f"run 'story session create {session_id}'"
-            )
-        value = self._read_lifecycle_json(relative)
-        return provider_thread_records.validate_session_manifest(value, session_id)
-
-    def _manifest_exists(self, session_id: str) -> bool:
-        """Report whether the canonical manifest path exists without reading it."""
-
-        return self.workspace.path(self._manifest_relative(session_id)).exists()
-
-    def _write_manifest(
-        self,
-        session_id: str,
-        value: Mapping[str, Any],
-        *,
-        overwrite: bool = True,
-    ) -> None:
-        """Write one complete manifest through the workspace boundary."""
-
-        self.workspace.write_json(
-            self._manifest_relative(session_id),
-            dict(value),
-            overwrite=overwrite,
-        )
-
-    @staticmethod
-    def _manifest_relative(session_id: str) -> str:
-        """Return the manifest path for a previously validated session ID."""
-
-        return f"{_SESSION_DIRECTORY}/{session_id}.json"
-
-    @staticmethod
-    def _access_claim_relative(session_id: str) -> str:
-        """Return the access-claim path for a validated session ID."""
-
-        return f"{_SESSION_DIRECTORY}/{session_id}.access.json"
 
 
 @contextmanager
