@@ -19645,6 +19645,29 @@
         "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_write_failures_compensate_only_newly_acquired_access"
       ],
       "depends_on": []
+    },
+    {
+      "name": "provider.execution-profiles",
+      "boundary": "existing-cases",
+      "paths": [
+        "src/story_writing_agents/provider_execution_profiles.py"
+      ],
+      "focused_ids": [
+        "tests.test_codex_backend.CodexBackendDefaultsTests.test_execution_profiles_resolve_every_source_with_nullable_defaults",
+        "tests.test_codex_backend.CodexBackendDefaultsTests.test_model_precedence_and_explicit_none_are_exact",
+        "tests.test_codex_backend.CodexBackendDefaultsTests.test_startup_logs_four_exact_active_execution_profile_snapshots"
+      ],
+      "affected_ids": [
+        "tests.test_codex_backend.CodexBackendDefaultsTests.test_agent_model_and_reasoning_precedence_uses_immutable_snapshot",
+        "tests.test_codex_backend.CodexBackendDefaultsTests.test_execution_profiles_resolve_every_source_with_nullable_defaults",
+        "tests.test_codex_backend.CodexBackendDefaultsTests.test_explicit_model_validation_retains_exact_value_error",
+        "tests.test_codex_backend.CodexBackendDefaultsTests.test_full_persisted_schema_precedes_explicit_model_validation",
+        "tests.test_codex_backend.CodexBackendDefaultsTests.test_model_precedence_and_explicit_none_are_exact",
+        "tests.test_codex_backend.CodexBackendDefaultsTests.test_startup_logs_four_exact_active_execution_profile_snapshots",
+        "tests.test_codex_backend.CodexBackendTestCase.test_a_to_b_to_a_route_generation_never_resumes_old_a_threads_after_restart",
+        "tests.test_codex_backend.CodexBackendTestCase.test_hot_same_provider_profile_applies_now_and_reuses_thread"
+      ],
+      "depends_on": []
     }
   ],
   "ignored_names": [

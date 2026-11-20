@@ -25,7 +25,7 @@ from typing import Any, get_type_hints
 from unittest import mock
 from story_writing_agents import CONVERSATION_CONTEXT_POLICY, CONVERSATION_EVENT_SCHEMA_VERSION, AgentBackend, AgentReply, AgentRequest, BoundAgent, CHARACTER_CUSTODIAN, ConversationContextWindow, ConversationEvent, ConversationEventKind, ConversationReply, ConversationRequest, ConversationRetrievalAction, ConversationRetrievalActionHandler, ConversationRetrievalActionKind, ConversationRetrievalAnswerAction, ConversationRetrievalObservation, ConversationRetrievalReadAction, ConversationRetrievalReadObservation, ConversationRetrievalReply, ConversationRetrievalRequest, ConversationRetrievalSearchAction, ConversationRetrievalSearchItem, ConversationRetrievalSearchObservation, ConversationRetrievalSource, EXECUTION_SPECIALIST, PLOT_ARCHITECT, Phase, PromptFileReference, ROSTER, ReplyTrace, ReplyTraceOrigin, SessionAccessState, SessionDurableState, SessionLifecycleState, Workspace
 from story_writing_agents import cli as cli_module
-from story_writing_agents import backend as backend_module, provider_manifest_thread_store, provider_session_artifacts, provider_thread_records
+from story_writing_agents import backend as backend_module, provider_execution_profiles, provider_manifest_thread_store, provider_session_artifacts, provider_thread_records
 from story_writing_agents.conversation_retrieval import CONVERSATION_RETRIEVAL_POLICY, ConversationRagAttemptOutcome, ConversationRagContext, ConversationRagExcerpt, serialize_conversation_retrieval_observation
 from story_writing_agents.models import AgentReplyKind, AgentReplyNextPhase
 from story_writing_agents.conversation_rag import ConversationRagDocumentIdentity, ConversationRagDocumentKey, ConversationRagOutcome, ConversationRagReason, ConversationRagSourceReference
@@ -1136,15 +1136,15 @@ class CodexBackendDefaultsTests(unittest.TestCase):
             )
             self.assertEqual(
                 fingerprint,
-                AgentBackend._execution_profile_fingerprint(profile),
+                provider_execution_profiles.execution_profile_fingerprint(profile),
             )
         changed = replace(expected[0], effort="changed-effort")
         self.assertNotEqual(
-            AgentBackend._execution_profile_fingerprint(expected[0]),
-            AgentBackend._execution_profile_fingerprint(changed),
+            provider_execution_profiles.execution_profile_fingerprint(expected[0]),
+            provider_execution_profiles.execution_profile_fingerprint(changed),
         )
         with self.assertRaisesRegex(TypeError, "execution profile"):
-            AgentBackend._execution_profile_fingerprint(object())  # type: ignore[arg-type]
+            provider_execution_profiles.execution_profile_fingerprint(object())  # type: ignore[arg-type]
 
         explicit = AgentBackend(
             self.workspace,

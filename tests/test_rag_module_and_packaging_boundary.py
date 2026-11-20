@@ -56,7 +56,7 @@ from story_writing_agents import backend as backend_module, backend_reply_decodi
 from story_writing_agents import provider_session_claim_guard, provider_session_timestamps, provider_thread_records
 from story_writing_agents import provider_session_access_records, provider_session_access_transactions, provider_session_artifacts
 from story_writing_agents import provider_context_thread_store, provider_manifest_thread_store, provider_session_lifecycle_queries
-from story_writing_agents import provider_session_transitions
+from story_writing_agents import provider_execution_profiles, provider_session_transitions
 from story_writing_agents.errors import (
     BackendProtocolError, SessionNotFoundError, WorkspaceFormatError, WorkspaceSecurityError, WorkspaceVersionUnsupportedError,
 )
@@ -66,6 +66,8 @@ from story_writing_agents import antigravity_adapter, antigravity_recovery_match
 from story_writing_agents import codex_adapter, codex_definition_sources
 from story_writing_agents.agent_context import ContextComponentBytes
 from story_writing_agents.agent_context.manifest import ContextScope
+from story_writing_agents.config import ConfigurationSnapshot
+from story_writing_agents.provider_adapter import AgentExecutionProfile
 from story_writing_agents.lead_preparation import recommendation_preparation, recommendation_requests
 from story_writing_agents.lead_preparation import recommendation_decisions
 from story_writing_agents.lead_task_transitions import LeadTaskRef
@@ -396,8 +398,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 331)
-        self.assertEqual(len(edges), 2007)
+        self.assertEqual(len(modules), 332)
+        self.assertEqual(len(edges), 2012)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -1957,6 +1959,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
         context_store_owner = provider_context_thread_store.__name__
         manifest_store_owner = provider_manifest_thread_store.__name__
         transitions_owner = provider_session_transitions.__name__
+        execution_profiles_owner = provider_execution_profiles.__name__
         self.assertEqual(
             {target for source, target in edges if source == records_owner},
             {
@@ -2030,6 +2033,13 @@ class RagModuleBoundaryTests(unittest.TestCase):
              "story_writing_agents.workspace"},
         )
         self.assertEqual({source for source, target in edges if target == transitions_owner},
+                         {"story_writing_agents.backend"})
+        self.assertEqual(
+            {target for source, target in edges if source == execution_profiles_owner},
+            {"story_writing_agents.agents", "story_writing_agents.config",
+             "story_writing_agents.provider_adapter", "story_writing_agents.workspace"},
+        )
+        self.assertEqual({source for source, target in edges if target == execution_profiles_owner},
                          {"story_writing_agents.backend"})
 
 
@@ -2266,6 +2276,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             (provider_session_claim_guard, ("access_claim_guard",)),
             (provider_session_access_transactions, ("ProviderSessionAccessTransactions",)),
             (provider_session_transitions, ("ProviderSessionTransitions",)),
+            (provider_execution_profiles, ("execution_profile_fingerprint", "resolve_execution_profiles")),
             (provider_context_thread_store, ("load_context_thread", "store_context_thread", "taint_context_thread")),
             (provider_manifest_thread_store, ("load_manifest_thread", "store_manifest_thread", "taint_manifest_thread")),
             (provider_session_lifecycle_queries,
@@ -2396,6 +2407,11 @@ class RagModuleBoundaryTests(unittest.TestCase):
              (), {}, True),
             (provider_session_artifacts, "write_manifest", ("workspace", "session_id", "value", "overwrite"),
              ("overwrite",), {"overwrite": True}, True),
+            (provider_execution_profiles, "execution_profile_fingerprint", ("profile",), (), {}, True),
+            (provider_execution_profiles, "resolve_execution_profiles",
+             ("workspace", "configuration", "backend_overrides", "explicit_model",
+              "explicit_antigravity_model", "explicit_antigravity_effort"),
+             ("backend_overrides", "explicit_model", "explicit_antigravity_model", "explicit_antigravity_effort"), {}, True),
             (provider_context_thread_store, "load_context_thread",
              ("workspace", "scope", "provider_id", "definition_fingerprint", "policy_fingerprint", "require_ready"),
              ("require_ready",), {}, True),
@@ -2598,6 +2614,18 @@ class RagModuleBoundaryTests(unittest.TestCase):
                               "return": SessionLifecycleState})
         self.assertNotIn("ProviderSessionTransitions", story_writing_agents.__all__)
         self.assertFalse(hasattr(story_writing_agents, "ProviderSessionTransitions"))
+        profiles = provider_execution_profiles
+        self.assertIs(backend_module.provider_execution_profiles, profiles)
+        self.assertEqual(get_type_hints(profiles.execution_profile_fingerprint), {"profile": AgentExecutionProfile, "return": str})
+        self.assertEqual(
+            get_type_hints(profiles.resolve_execution_profiles),
+            {"workspace": Workspace, "configuration": ConfigurationSnapshot, "backend_overrides": Mapping[str, str],
+             "explicit_model": str | None, "explicit_antigravity_model": str | None,
+             "explicit_antigravity_effort": str | None, "return": Mapping[str, AgentExecutionProfile]},
+        )
+        for name in profiles.__all__:
+            self.assertNotIn(name, story_writing_agents.__all__)
+            self.assertFalse(hasattr(story_writing_agents, name))
         context_store = provider_context_thread_store
         self.assertIs(backend_module.provider_context_thread_store, context_store)
         manifest_store = provider_manifest_thread_store
@@ -2979,6 +3007,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             "story_writing_agents/provider_session_access_records.py",
             "story_writing_agents/provider_session_access_transactions.py",
             "story_writing_agents/provider_context_thread_store.py",
+            "story_writing_agents/provider_execution_profiles.py",
             "story_writing_agents/provider_manifest_thread_store.py",
             "story_writing_agents/provider_session_artifacts.py",
             "story_writing_agents/provider_session_claim_guard.py",
