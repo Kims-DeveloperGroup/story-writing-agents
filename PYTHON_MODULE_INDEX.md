@@ -123,10 +123,10 @@ Stable trusted schema/decoder implementations are not re-attested for each respo
 
 Responsibility: model, capture, locate, and persist provider exchange records. The package
 facade is public; capture owns once-only physical terminal records and capture-only call
-identity. Context finalizers attach validated task diagnostics only on accepted publication;
-storage owns persistence. Diagnostic failures never change provider or workflow authority.
+identity. `provider_finalization` owns terminal reporting and context finalizers, which
+attach validated task diagnostics only on accepted publication. Storage owns persistence. Diagnostic failures never change provider or workflow authority.
 
-- `agent_exchanges`, `agent_exchanges.contracts`, `agent_exchanges.capture`
+- `agent_exchanges`, `agent_exchanges.contracts`, `agent_exchanges.capture`, `agent_exchanges.provider_finalization`
 - `agent_exchanges.storage`, `agent_exchange_paths`
 
 ### Conversations and retrieval
