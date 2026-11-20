@@ -525,7 +525,7 @@ class CodexAdapter:
             "--sandbox",
             "read-only",
             "--cd",
-            ".",
+            "./",
             "exec",
         ]
         model, reasoning_effort = self.invocation_settings(agent_id)
