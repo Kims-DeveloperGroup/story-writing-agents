@@ -25,7 +25,7 @@ from typing import Any, get_type_hints
 from unittest import mock
 from story_writing_agents import CONVERSATION_CONTEXT_POLICY, CONVERSATION_EVENT_SCHEMA_VERSION, AgentBackend, AgentReply, AgentRequest, BoundAgent, CHARACTER_CUSTODIAN, ConversationContextWindow, ConversationEvent, ConversationEventKind, ConversationReply, ConversationRequest, ConversationRetrievalAction, ConversationRetrievalActionHandler, ConversationRetrievalActionKind, ConversationRetrievalAnswerAction, ConversationRetrievalObservation, ConversationRetrievalReadAction, ConversationRetrievalReadObservation, ConversationRetrievalReply, ConversationRetrievalRequest, ConversationRetrievalSearchAction, ConversationRetrievalSearchItem, ConversationRetrievalSearchObservation, ConversationRetrievalSource, EXECUTION_SPECIALIST, PLOT_ARCHITECT, Phase, PromptFileReference, ROSTER, ReplyTrace, ReplyTraceOrigin, SessionAccessState, SessionDurableState, SessionLifecycleState, Workspace
 from story_writing_agents import cli as cli_module
-from story_writing_agents import backend as backend_module, provider_thread_records
+from story_writing_agents import backend as backend_module, provider_session_artifacts, provider_thread_records
 from story_writing_agents.conversation_retrieval import CONVERSATION_RETRIEVAL_POLICY, ConversationRagAttemptOutcome, ConversationRagContext, ConversationRagExcerpt, serialize_conversation_retrieval_observation
 from story_writing_agents.models import AgentReplyKind, AgentReplyNextPhase
 from story_writing_agents.conversation_rag import ConversationRagDocumentIdentity, ConversationRagDocumentKey, ConversationRagOutcome, ConversationRagReason, ConversationRagSourceReference
@@ -6107,9 +6107,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     mock.patch.object(backend._codex_adapter, "invoke", invoke),
                     _wrapped_thread_taint_patch(backend, backend._taint_thread) as taint,
                     mock.patch.object(
-                        backend,
-                        "_write_manifest",
-                        wraps=backend._write_manifest,
+                        provider_session_artifacts,
+                        "write_manifest",
+                        wraps=provider_session_artifacts.write_manifest,
                     ) as write_manifest,
                     _wrapped_thread_store_patch(backend, backend._store_thread) as store_thread,
                 ):
@@ -6186,9 +6186,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     mock.patch.object(backend._codex_adapter, "invoke", invoke),
                     _wrapped_thread_taint_patch(backend, backend._taint_thread) as taint,
                     mock.patch.object(
-                        backend,
-                        "_write_manifest",
-                        wraps=backend._write_manifest,
+                        provider_session_artifacts,
+                        "write_manifest",
+                        wraps=provider_session_artifacts.write_manifest,
                     ) as write_manifest,
                     _wrapped_thread_store_patch(backend, backend._store_thread) as store_thread,
                 ):

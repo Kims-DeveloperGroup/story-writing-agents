@@ -54,9 +54,9 @@ from story_writing_agents.consensus import (
 from story_writing_agents import authoring_admission
 from story_writing_agents import backend as backend_module, backend_reply_decoding, conversation_retrieval, models
 from story_writing_agents import provider_session_claim_guard, provider_session_timestamps, provider_thread_records
-from story_writing_agents import provider_session_access_records
+from story_writing_agents import provider_session_access_records, provider_session_artifacts
 from story_writing_agents.errors import (
-    BackendProtocolError, WorkspaceFormatError, WorkspaceSecurityError, WorkspaceVersionUnsupportedError,
+    BackendProtocolError, SessionNotFoundError, WorkspaceFormatError, WorkspaceSecurityError, WorkspaceVersionUnsupportedError,
 )
 from story_writing_agents.session_lifecycle import SessionAccessState
 from story_writing_agents.workspace import Workspace
@@ -393,8 +393,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 325)
-        self.assertEqual(len(edges), 1968)
+        self.assertEqual(len(modules), 326)
+        self.assertEqual(len(edges), 1973)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -1948,6 +1948,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
         records_owner = provider_thread_records.__name__
         stamps_owner = provider_session_timestamps.__name__
         access_records_owner = provider_session_access_records.__name__
+        artifacts_owner = provider_session_artifacts.__name__
         self.assertEqual(
             {target for source, target in edges if source == records_owner},
             {
@@ -1961,7 +1962,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             },
         )
         self.assertEqual({source for source, target in edges if target == records_owner},
-                         {"story_writing_agents.backend"})
+                         {"story_writing_agents.backend", artifacts_owner})
         self.assertEqual({target for source, target in edges if source == stamps_owner},
                          {"story_writing_agents.errors"})
         self.assertEqual({source for source, target in edges if target == stamps_owner},
@@ -1978,8 +1979,14 @@ class RagModuleBoundaryTests(unittest.TestCase):
         )
         self.assertEqual(
             {source for source, target in edges if target == access_records_owner},
-            {"story_writing_agents.backend"},
+            {"story_writing_agents.backend", artifacts_owner},
         )
+        self.assertEqual(
+            {target for source, target in edges if source == artifacts_owner},
+            {"story_writing_agents.errors", access_records_owner, records_owner, "story_writing_agents.workspace"},
+        )
+        self.assertEqual({source for source, target in edges if target == artifacts_owner},
+                         {"story_writing_agents.backend"})
 
 
     def test_supported_module_surfaces_do_not_expand_the_root_facade(self) -> None:
@@ -2213,6 +2220,11 @@ class RagModuleBoundaryTests(unittest.TestCase):
             )),
             (provider_session_timestamps, ("advance_record_timestamp", "parse_record_timestamp", "record_timestamp")),
             (provider_session_claim_guard, ("access_claim_guard",)),
+            (provider_session_artifacts, (
+                "PROVIDER_SESSION_DIRECTORY", "access_claim_relative", "manifest_exists", "manifest_relative",
+                "read_access_claim", "read_access_claim_if_present", "read_manifest",
+                "reject_unsupported_access_artifacts", "write_manifest",
+            )),
             (provider_session_access_records,
              ("access_hostname_diagnostic", "new_access_claim", "unowned_access_state", "validate_access_claim")),
             (backend_reply_decoding, ("decode_conversation_retrieval_action", "decode_conversation_reply", "decode_reply", "PhaseReplyConstraintError")),
@@ -2323,6 +2335,17 @@ class RagModuleBoundaryTests(unittest.TestCase):
             (provider_session_access_records, "unowned_access_state", ("value",), (), {}, True),
             (provider_session_access_records, "access_hostname_diagnostic", ("hostname",), (), {}, True),
             (provider_session_access_records, "validate_access_claim", ("value", "session_id"), (), {}, True),
+            (provider_session_artifacts, "access_claim_relative", ("session_id",), (), {}, True),
+            (provider_session_artifacts, "manifest_exists", ("workspace", "session_id"), (), {}, True),
+            (provider_session_artifacts, "manifest_relative", ("session_id",), (), {}, True),
+            (provider_session_artifacts, "read_access_claim", ("workspace", "session_id"), (), {}, True),
+            (provider_session_artifacts, "read_access_claim_if_present", ("workspace", "session_id"), (), {}, True),
+            (provider_session_artifacts, "read_manifest", ("workspace", "session_id", "missing_ok"),
+             ("missing_ok",), {}, True),
+            (provider_session_artifacts, "reject_unsupported_access_artifacts", ("workspace", "session_id"),
+             (), {}, True),
+            (provider_session_artifacts, "write_manifest", ("workspace", "session_id", "value", "overwrite"),
+             ("overwrite",), {"overwrite": True}, True),
             (provider_session_timestamps, "parse_record_timestamp", ("value", "label"), ("label",), {}, True),
             (provider_session_timestamps, "advance_record_timestamp", ("previous", "candidate"),
              ("candidate",), {"candidate": None}, True),
@@ -2450,6 +2473,20 @@ class RagModuleBoundaryTests(unittest.TestCase):
         self.assertFalse(hasattr(story_writing_agents, "access_claim_guard"))
         access_records = provider_session_access_records
         self.assertIs(backend_module.provider_session_access_records, access_records)
+        artifacts = provider_session_artifacts
+        self.assertIs(backend_module.provider_session_artifacts, artifacts)
+        self.assertIs(artifacts.Workspace, Workspace)
+        self.assertIs(artifacts.SessionNotFoundError, SessionNotFoundError)
+        self.assertIs(artifacts.WorkspaceFormatError, WorkspaceFormatError)
+        self.assertIs(artifacts.WorkspaceVersionUnsupportedError, WorkspaceVersionUnsupportedError)
+        self.assertIs(artifacts.validate_access_claim, access_records.validate_access_claim)
+        self.assertIs(artifacts.validate_session_manifest, provider_thread_records.validate_session_manifest)
+        self.assertEqual(get_type_hints(artifacts.write_manifest),
+                         {"workspace": Workspace, "session_id": str, "value": Mapping[str, Any],
+                          "overwrite": bool, "return": type(None)})
+        for name in artifacts.__all__:
+            self.assertNotIn(name, story_writing_agents.__all__)
+            self.assertFalse(hasattr(story_writing_agents, name))
         self.assertIs(access_records.os, os)
         self.assertIs(access_records.socket, socket)
         self.assertIs(access_records.WorkspaceFormatError, WorkspaceFormatError)
@@ -2765,6 +2802,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             "story_writing_agents/backend_reply_decoding.py",
             "story_writing_agents/codex_definition_sources.py",
             "story_writing_agents/provider_session_access_records.py",
+            "story_writing_agents/provider_session_artifacts.py",
             "story_writing_agents/provider_session_claim_guard.py",
             "story_writing_agents/provider_session_timestamps.py",
             "story_writing_agents/provider_thread_records.py",

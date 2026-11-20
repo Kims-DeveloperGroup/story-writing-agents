@@ -36,7 +36,7 @@ from story_writing_agents import (
     WorkspaceVersionUnsupportedError,
     provider_work_is_ready,
 )
-from story_writing_agents import backend as backend_module, provider_session_access_records, provider_session_claim_guard
+from story_writing_agents import backend as backend_module, provider_session_access_records, provider_session_artifacts, provider_session_claim_guard
 from story_writing_agents import errors as errors_module
 from story_writing_agents import models as models_module
 from story_writing_agents import session_lifecycle as lifecycle_module
@@ -507,7 +507,7 @@ class SessionLifecycleContractTests(unittest.TestCase):
             ]
         )
         source_files = tuple(source_root.rglob("*.py"))
-        self.assertEqual(len(source_files), 325)
+        self.assertEqual(len(source_files), 326)
         self.assertTrue(
             {
                 source_root / "artifact_proposals.py",
@@ -688,7 +688,7 @@ class AgentBackendLifecycleTests(unittest.TestCase):
         self.assertEqual(backend.list_session_lifecycles(), ())
         with (
             _fresh_literal_object_side_effect(backend, 'acquire_session_access', AssertionError),
-            mock.patch.object(backend, "_write_manifest", side_effect=AssertionError),
+            mock.patch.object(provider_session_artifacts, "write_manifest", side_effect=AssertionError),
         ):
             self.assertIs(backend.validate_provider_configuration("missing"), True)
         self.assertEqual(_tree_snapshot(self.workspace.root), before)
@@ -1389,7 +1389,7 @@ class AgentBackendLifecycleTests(unittest.TestCase):
 
     def test_write_failures_compensate_only_newly_acquired_access(self) -> None:
         backend = self.backend()
-        with _fresh_literal_object_side_effect(backend, '_write_manifest', OSError('create write')):
+        with _fresh_literal_object_side_effect(provider_session_artifacts, 'write_manifest', OSError('create write')):
             with self.assertRaisesRegex(OSError, "create write"):
                 backend.create_session_with_access("create_failure")
         self.assertFalse(
@@ -1400,7 +1400,7 @@ class AgentBackendLifecycleTests(unittest.TestCase):
         )
 
         self.write_manifest("new_claim", durable_state="paused")
-        with _fresh_literal_object_side_effect(backend, '_write_manifest', OSError('reopen write')):
+        with _fresh_literal_object_side_effect(provider_session_artifacts, 'write_manifest', OSError('reopen write')):
             with self.assertRaisesRegex(OSError, "reopen write"):
                 backend.reopen_session_with_access("new_claim")
         self.assertFalse(self.workspace.path(_access_relative("new_claim")).exists())
@@ -1410,7 +1410,7 @@ class AgentBackendLifecycleTests(unittest.TestCase):
         claim_before = _artifact_snapshot(
             self.workspace.path(_access_relative("preowned"))
         )
-        with _fresh_literal_object_side_effect(backend, '_write_manifest', OSError('owned write')):
+        with _fresh_literal_object_side_effect(provider_session_artifacts, 'write_manifest', OSError('owned write')):
             with self.assertRaisesRegex(OSError, "owned write"):
                 backend.reopen_session_with_access("preowned")
         self.assertEqual(
@@ -1457,7 +1457,8 @@ class AgentBackendLifecycleTests(unittest.TestCase):
             mock.patch.object(provider_session_claim_guard, "_msvcrt", fake_msvcrt),
             mock.patch.object(provider_session_claim_guard.time, "sleep") as sleep,
             provider_session_claim_guard.access_claim_guard(
-                backend.workspace, backend_module._SESSION_DIRECTORY, backend_module._ACCESS_CLAIM_GUARD
+                backend.workspace, provider_session_artifacts.PROVIDER_SESSION_DIRECTORY,
+                backend_module._ACCESS_CLAIM_GUARD,
             ),
         ):
             pass
