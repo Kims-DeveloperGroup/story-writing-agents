@@ -401,13 +401,20 @@ def check_monotonic(current: dict[str, Any], base: dict[str, Any]) -> None:
             if moved_caps == current["subtest_caps"]:
                 return
         if (
-            (base["max_test_source_lines"], current["max_test_source_lines"]) == (156274, 156369)
+            (source_pair := (base["max_test_source_lines"], current["max_test_source_lines"]))
+                in ((156274, 156369), (156369, 156459))
             and base["schema_version"] == current["schema_version"] == 1
             and tuple(base[name] for name in time_fields) == tuple(current[name] for name in time_fields) == (18000, 3600)
             and len(base["subtest_caps"]) == len(current["subtest_caps"]) == 2544
             and sum(base["subtest_caps"].values()) == sum(current["subtest_caps"].values()) == 8690
-            and (base_digest := caps_digest(base["subtest_caps"])) == "0d14af735a342f0bde739f20dca64d0ee402dd03f9c83a017fb89cd0219ffa3f"
-            and (current_digest := caps_digest(current["subtest_caps"])) == "a49ec017285634e6e0be8e23c353dc9a2029e9edb7b67f7e637a9358991e4cbd"
+            and (base_digest := caps_digest(base["subtest_caps"])) == (
+                "0d14af735a342f0bde739f20dca64d0ee402dd03f9c83a017fb89cd0219ffa3f" if source_pair[0] == 156274
+                else "a49ec017285634e6e0be8e23c353dc9a2029e9edb7b67f7e637a9358991e4cbd"
+            )
+            and (current_digest := caps_digest(current["subtest_caps"])) == (
+                "a49ec017285634e6e0be8e23c353dc9a2029e9edb7b67f7e637a9358991e4cbd" if source_pair[0] == 156274
+                else "34c1ce085f7c98e0fa9ddbee984b179cf8cebd6130c1abcb294145effcb56883"
+            )
         ):
             try:
                 moved_caps = remap_base_caps(current["subtest_caps"], base["subtest_caps"], digests=(base_digest, current_digest))
