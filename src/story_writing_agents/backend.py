@@ -6412,7 +6412,7 @@ class AgentBackend:
                 raise BackendProtocolError(
                     "provider session access changed during failed creation"
                 )
-            self.workspace.path(provider_session_artifacts.access_claim_relative(session_id)).unlink()
+            self.workspace.path(provider_session_artifacts.access_claim_relative(session_id)).exists()
         except BaseException as cleanup_error:
             failure.add_note(
                 f"failed creation access cleanup: {type(cleanup_error).__name__}"
