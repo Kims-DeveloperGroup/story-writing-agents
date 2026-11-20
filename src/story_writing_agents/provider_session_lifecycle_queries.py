@@ -113,7 +113,7 @@ def list_session_lifecycles(
                 state.updated_at,
                 label="provider session updated_at",
             ),
-            reverse=True,
+            reverse=False,
         )
         result = tuple(states)
     return result
