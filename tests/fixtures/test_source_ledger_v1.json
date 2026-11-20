@@ -1885,6 +1885,41 @@
     "existing_BudgetCase_strict_source_pair": 4
   },
   "counting": "raw 149603\u2192149630, support 4689, legacy 1550. Existing Case/subTest/time/worker unchanged."
+},
+
+{
+  "issue": 1071,
+  "origin_commit": "ae58f93f3fa3903207d15da478afe6b05a02d199",
+  "origins": [
+    {
+      "source": "tests/test_session_lifecycle.py",
+      "sha256": "9279e734194caca8c04bcbd2c8e09c4ec0533357c337363ac3817dc5cd03fb20"
+    },
+    {
+      "source": "tests/test_rag_module_and_packaging_boundary.py",
+      "sha256": "dee3ba38a262a0d64d01d3fd9d2d5a230b51eefb6cdf6af584505f236000aa36"
+    },
+    {
+      "source": "tests/test_suite_budget.py",
+      "sha256": "988a5e827fb4f08bb2950d87b6c975bf862588ed11c36d6776298be87e8c8c1e"
+    }
+  ],
+  "approved_source_delta": 45,
+  "planned_raw_delta": 45,
+  "planned_support_delta": 0,
+  "legacy_unresolved_lines": 1550,
+  "exact_source_pair": [
+    155869,
+    155914
+  ],
+  "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
+  "generic_tooling_ordinary_delta_excluded": 0,
+  "generic_tooling_physical_delta_excluded": 0,
+  "cost_components": {
+    "existing_selected_API_graph_packaging_and_liveness_rebinding": 41,
+    "existing_BudgetCase_strict_source_pair": 4
+  },
+  "counting": "raw 149630\u2192149675, support 4689, legacy 1550. Existing Case/subTest/time/worker unchanged."
 }
 
   ]

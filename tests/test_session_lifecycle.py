@@ -36,7 +36,7 @@ from story_writing_agents import (
     WorkspaceVersionUnsupportedError,
     provider_work_is_ready,
 )
-from story_writing_agents import backend as backend_module, provider_session_claim_guard
+from story_writing_agents import backend as backend_module, provider_session_access_records, provider_session_claim_guard
 from story_writing_agents import errors as errors_module
 from story_writing_agents import models as models_module
 from story_writing_agents import session_lifecycle as lifecycle_module
@@ -507,7 +507,7 @@ class SessionLifecycleContractTests(unittest.TestCase):
             ]
         )
         source_files = tuple(source_root.rglob("*.py"))
-        self.assertEqual(len(source_files), 324)
+        self.assertEqual(len(source_files), 325)
         self.assertTrue(
             {
                 source_root / "artifact_proposals.py",
@@ -1079,7 +1079,7 @@ class AgentBackendLifecycleTests(unittest.TestCase):
         )
         dead_path = self.workspace.path(_access_relative("dead"))
         before = _artifact_snapshot(dead_path)
-        with _fresh_literal_object_side_effect(backend_module.os, "kill", ProcessLookupError):
+        with _fresh_literal_object_side_effect(provider_session_access_records.os, "kill", ProcessLookupError):
             observed = backend.get_session_lifecycle("dead")
             self.assertEqual(observed.access_state, SessionAccessState.CLAIMABLE)
             self.assertEqual(
@@ -1103,7 +1103,7 @@ class AgentBackendLifecycleTests(unittest.TestCase):
             self.write_access(session, owner_pid=999)
             path = self.workspace.path(_access_relative(session))
             before = _artifact_snapshot(path)
-            with mock.patch.object(backend_module.os, "kill", side_effect=error):
+            with mock.patch.object(provider_session_access_records.os, "kill", side_effect=error):
                 self.assertEqual(
                     backend.get_session_lifecycle(session).access_state,
                     SessionAccessState.OWNERSHIP_UNKNOWN,

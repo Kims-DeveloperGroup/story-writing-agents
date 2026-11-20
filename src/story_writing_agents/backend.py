@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import story_writing_agents.backend_reply_decoding as backend_reply_decoding
+import story_writing_agents.provider_session_access_records as provider_session_access_records
 import story_writing_agents.provider_session_claim_guard as provider_session_claim_guard
 import story_writing_agents.provider_session_timestamps as provider_session_timestamps
 import story_writing_agents.provider_thread_records as provider_thread_records
@@ -23,9 +24,7 @@ import hashlib
 import inspect
 import json
 import os
-import re
 import shutil
-import socket
 import tempfile
 import threading
 import time
@@ -207,12 +206,10 @@ from .workspace.session_resources import (
 )
 
 
-_ACCESS_CLAIM_SCHEMA_VERSION = 2
 _SESSION_DIRECTORY = "agent_states/orchestrator_state/provider_sessions"
 _CONTEXT_REFERENCE_TERMINATED_ATTRIBUTE = "_context_reference_terminated"
 _ACCESS_CLAIM_GUARD = f"{_SESSION_DIRECTORY}/.access-claims.lock"
 _UNSUPPORTED_V1_ACCESS_CLAIM_GUARD = f"{_SESSION_DIRECTORY}/.lease-claims.lock"
-_ACCESS_DIAGNOSTIC_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
 
 
 async def _timed_provider_invoke(
@@ -2999,7 +2996,7 @@ class AgentBackend:
                 raise SessionExistsError(f"provider session already exists: {session}")
 
             token = uuid.uuid4().hex
-            claim = self._new_access_claim(session, token)
+            claim = provider_session_access_records.new_access_claim(session, token)
             now = provider_session_timestamps.record_timestamp()
             provider_session_timestamps.parse_record_timestamp(now, label="provider session timestamp")
             manifest: dict[str, Any] = {
@@ -6424,7 +6421,7 @@ class AgentBackend:
         self._reject_unsupported_access_artifacts(session)
         relative = self._access_claim_relative(session)
         token = uuid.uuid4().hex
-        value = self._new_access_claim(session, token)
+        value = provider_session_access_records.new_access_claim(session, token)
         with provider_session_claim_guard.access_claim_guard(
             self.workspace, _SESSION_DIRECTORY, _ACCESS_CLAIM_GUARD,
         ):
@@ -6433,12 +6430,12 @@ class AgentBackend:
                 return token
             except ManuscriptExistsError:
                 existing = self._read_access_claim(session)
-            access_state = self._unowned_access_state(existing)
+            access_state = provider_session_access_records.unowned_access_state(existing)
             if access_state is SessionAccessState.BLOCKED_BY_LIVE_LOCAL_OWNER:
                 raise SessionAccessBlockedError(
                     "provider session access is held by live local process "
                     f"{existing['owner_pid']} on "
-                    f"{self._access_hostname_diagnostic(existing['owner_hostname'])}: "
+                    f"{provider_session_access_records.access_hostname_diagnostic(existing['owner_hostname'])}: "
                     f"{session}"
                 )
             if access_state is SessionAccessState.OWNERSHIP_UNKNOWN:
@@ -6490,39 +6487,7 @@ class AgentBackend:
         token = self._access_claim_tokens.get(session_id)
         if token is not None and value["claim_token"] == token:
             return SessionAccessState.HELD_HERE
-        return self._unowned_access_state(value)
-
-    @staticmethod
-    def _unowned_access_state(value: Mapping[str, Any]) -> SessionAccessState:
-        """Classify unowned access using only safe local process liveness.
-
-        A missing local POSIX process is claimable. Remote hosts, unsupported
-        platforms, inaccessible processes, and ambiguous probes remain unknown.
-        """
-
-        if value["owner_hostname"] != socket.gethostname():
-            return SessionAccessState.OWNERSHIP_UNKNOWN
-        if os.name != "posix":
-            return SessionAccessState.OWNERSHIP_UNKNOWN
-        pid = value["owner_pid"]
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return SessionAccessState.CLAIMABLE
-        except PermissionError:
-            return SessionAccessState.OWNERSHIP_UNKNOWN
-        except (OSError, OverflowError, ValueError):
-            return SessionAccessState.OWNERSHIP_UNKNOWN
-        return SessionAccessState.BLOCKED_BY_LIVE_LOCAL_OWNER
-
-    @staticmethod
-    def _access_hostname_diagnostic(hostname: str) -> str:
-        """Return a control-sanitized hostname diagnostic of at most 255 chars."""
-
-        sanitized = _ACCESS_DIAGNOSTIC_CHARACTERS.sub("?", hostname)
-        if len(sanitized) > 255:
-            sanitized = sanitized[:243] + " [truncated]"
-        return sanitized
+        return provider_session_access_records.unowned_access_state(value)
 
     def _read_access_claim_if_present(
         self,
@@ -6539,65 +6504,7 @@ class AgentBackend:
         """Read and strictly validate one identity-bound V2 access claim."""
 
         value = self._read_lifecycle_json(self._access_claim_relative(session_id))
-        expected = {
-            "schema_version",
-            "session_id",
-            "owner_hostname",
-            "owner_pid",
-            "claim_token",
-            "claimed_at",
-        }
-        if not isinstance(value, dict) or set(value) != expected:
-            raise WorkspaceFormatError(
-                "provider session access claim has an invalid schema"
-            )
-        schema_version = value["schema_version"]
-        if isinstance(schema_version, bool) or not isinstance(schema_version, int):
-            raise WorkspaceFormatError(
-                "provider session access claim has an invalid schema version"
-            )
-        if schema_version != _ACCESS_CLAIM_SCHEMA_VERSION:
-            raise WorkspaceVersionUnsupportedError(
-                "unsupported provider session access claim schema version"
-            )
-        if value["session_id"] != session_id:
-            raise WorkspaceFormatError("provider session access claim path mismatch")
-        for field in (
-            "session_id",
-            "owner_hostname",
-            "claim_token",
-            "claimed_at",
-        ):
-            if not isinstance(value[field], str) or not value[field]:
-                raise WorkspaceFormatError(
-                    "provider session access claim has an invalid string field"
-                )
-        provider_session_timestamps.parse_record_timestamp(
-            value["claimed_at"],
-            label="provider session access claimed_at",
-        )
-        if (
-            isinstance(value["owner_pid"], bool)
-            or not isinstance(value["owner_pid"], int)
-            or value["owner_pid"] <= 0
-        ):
-            raise WorkspaceFormatError(
-                "provider session access claim has an invalid owner PID"
-            )
-        return dict(value)
-
-    @staticmethod
-    def _new_access_claim(session_id: str, token: str) -> dict[str, Any]:
-        """Build one exact V2 claim for the current host and process."""
-
-        return {
-            "schema_version": _ACCESS_CLAIM_SCHEMA_VERSION,
-            "session_id": session_id,
-            "owner_hostname": socket.gethostname(),
-            "owner_pid": os.getpid(),
-            "claim_token": token,
-            "claimed_at": provider_session_timestamps.record_timestamp(),
-        }
+        return provider_session_access_records.validate_access_claim(value, session_id)
 
     def _read_lifecycle_json(self, relative: str) -> Any:
         """Read lifecycle JSON while rejecting duplicate object fields."""
