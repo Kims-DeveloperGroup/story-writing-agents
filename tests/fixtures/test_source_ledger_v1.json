@@ -2746,6 +2746,56 @@
         "optional_live_harness_ordinary_delta_excluded": 1
       },
       "counting": "Move 13 existing scenarios to two test files. Keep all 2,544 logical cases, 8,690 subtest caps, the original group weights, and worker and wall-time limits. Update the optional live harness import outside the charged set."
+    },
+    {
+      "issue": 1099,
+      "origin_commit": "897bad9d24a48a4910223dea1bbb402ca91bd21f",
+      "origins": [
+        {
+          "source": "tests/test_antigravity_recovery_evidence.py",
+          "sha256": "e6d8f2d235a1a2a39f0f14c8a9c66220a122f174fdbb7d7987a826fb1fb64d05"
+        },
+        {
+          "source": "tests/test_antigravity_adapter.py",
+          "sha256": "5b98e454d349bac1c2733e9ecd7872f992a96b73066d5a9229e7d6dfbf10267c"
+        },
+        {
+          "source": "tests/test_adapter_streaming.py",
+          "sha256": "de599f7d4f5996588b5cea0c2a860a9b9c5c0cd201631c3a31f2b5641c45446e"
+        },
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "1fe271cbb3daaf03f032e9174a7f4dd27937a6d33261b16660bb3de035ee12b0"
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "b04b880b702069b91e72c79b9da4c25e7ef4bdc3429ac0d6c0668d3c9f8778e9"
+        },
+        {
+          "source": "tests/id_moves.py",
+          "sha256": "a53c4fa0a8eeda3254a1cd7ee4fe39a97d8e518917bf46bffcd74eef5448325e"
+        }
+      ],
+      "approved_source_delta": 33,
+      "planned_raw_delta": 30,
+      "planned_support_delta": 3,
+      "legacy_unresolved_lines": 1550,
+      "exact_source_pair": [
+        156682,
+        156715
+      ],
+      "original_caps_sha256": "bcd8f54385c89c6d1880ea32348f5d623a6d66d4388877a108aa1800c1148027",
+      "expected_caps_sha256": "b8d9d16e6370b15259cd1cb208c41bb39b8b69229bbc75dfc459b2d4ed9c7545",
+      "generic_tooling_ordinary_delta_excluded": 13,
+      "generic_tooling_physical_delta_excluded": 13,
+      "cost_components": {
+        "source_layout_owned_by_runtime_test": 4,
+        "existing_streaming_mock": 0,
+        "existing_module_and_packaging_assertions": 18,
+        "existing_budget_and_selector_policy": 8,
+        "id_receipt_registered_support": 3
+      },
+      "counting": "Seven existing tests move to the concrete recovery module; one existing streaming mock follows the moved supplier. Canonical inventory, subtest caps, timing weights and worker limits remain fixed."
     }
   ]
 }

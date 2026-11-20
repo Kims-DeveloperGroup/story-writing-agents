@@ -246,8 +246,13 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
-        exchange_finalization_current = suite_budget.load_budget()
-        *legacy_move_receipts, defaults_stage, wire_stage, stream_stage, invocation_stage, exchange_finalization_stage = load_receipt()
+        native_recovery_current = suite_budget.load_budget()
+        *legacy_move_receipts, defaults_stage, wire_stage, stream_stage, invocation_stage, exchange_finalization_stage, native_recovery_stage = load_receipt()
+        native_recovery_moves = native_recovery_stage["moves"]
+        exchange_finalization_current = dict(native_recovery_current, max_test_source_lines=156682,
+                                            subtest_caps=dict(native_recovery_current["subtest_caps"]))
+        for move in native_recovery_moves:
+            exchange_finalization_current["subtest_caps"][move["old_id"]] = exchange_finalization_current["subtest_caps"].pop(move["new_id"])
         exchange_finalization_moves = exchange_finalization_stage["moves"]
         command_preflight_current = dict(exchange_finalization_current, max_test_source_lines=156611,
                                          subtest_caps=dict(exchange_finalization_current["subtest_caps"]))
@@ -731,6 +736,8 @@ class SuiteBudgetTests(unittest.TestCase):
         self._assert_source_limit_neighbors_rejected(command_preflight_current, invocation_current)
         self.assertIsNone(suite_budget.check_monotonic(exchange_finalization_current, command_preflight_current))
         self._assert_source_limit_neighbors_rejected(exchange_finalization_current, command_preflight_current)
+        self.assertIsNone(suite_budget.check_monotonic(native_recovery_current, exchange_finalization_current))
+        self._assert_source_limit_neighbors_rejected(native_recovery_current, exchange_finalization_current)
         invocation_caps = invocation_current["subtest_caps"]
         invocation_id = next(move["new_id"] for move in invocation_moves if move["subtest_cap"])
         for changed_caps in (
@@ -974,16 +981,6 @@ class SuiteBudgetTests(unittest.TestCase):
 
         from tests.runner import impact as definition_impact
         artifact_class = "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests."
-        recovery_case = "tests.test_antigravity_adapter.AntigravityRecoveryEvidenceTests."
-        recovery_method_names = (
-            "test_captured_shape_and_clean_current_finish_recover",
-            "test_incomplete_ambiguous_nonmonotonic_and_forged_native_steps_reject",
-            "test_missing_preexisting_wrong_request_or_replaced_directory_reject",
-            "test_reordered_finish_arguments_match_but_scalar_types_do_not",
-            "test_resume_requires_unchanged_prefix_and_new_matching_request",
-            "test_status_identity_schema_and_diagnostic_requirements_remain_strict",
-            "test_unsafe_native_paths_and_bounded_trace_reject",
-        )
         definition_groups_1047 = {
             "tests.lead_preparation.test_artifact_candidate_creation": (
                 artifact_class + 'test_incomplete_core_workflow_is_reviewed_only_after_confirmation',
@@ -1012,7 +1009,6 @@ class SuiteBudgetTests(unittest.TestCase):
                 'tests.test_antigravity_adapter.AntigravityAdapterTests.test_command_stdin_paths_and_fresh_resume_results_are_exact',
                 'tests.test_antigravity_adapter.AntigravityAdapterTests.test_mode_failures_are_best_effort_but_controls_propagate',
             ),
-            "tests.test_antigravity_recovery_evidence": tuple(recovery_case + name for name in recovery_method_names),
             "tests.test_backend_reply_decoding": (
                 'tests.test_codex_backend.CodexBackendTestCase.test_strict_phase_reply_mapping',
                 'tests.test_codex_backend.CodexBackendTestCase.test_retrieval_decoder_rejects_malformed_duplicate_and_schema_errors',
@@ -1025,10 +1021,22 @@ class SuiteBudgetTests(unittest.TestCase):
             self.assertEqual(selected.ids, tuple(value for value in real.ids if value in expected_ids))
             definition_selections[module] = selected
         runner_selection.validate_definition_modules(real, tuple(definition_groups_1047))
-        from tests.test_antigravity_adapter import AntigravityRecoveryEvidenceTests
-        from tests.test_antigravity_recovery_evidence import AntigravityRecoveryEvidenceDefinitions
-        for method in recovery_method_names:
-            self.assertIs(AntigravityRecoveryEvidenceTests.__dict__[method], AntigravityRecoveryEvidenceDefinitions.__dict__[method])
+        recovery_module = "tests.test_antigravity_recovery_evidence"
+        recovery_selection = runner_selection.select(real, modules=[recovery_module])
+        recovery_ids = sorted(move["new_id"] for move in native_recovery_moves)
+        self.assertEqual(recovery_selection.ids, tuple(recovery_ids))
+        self.assertTrue(all(move["old_id"] not in real.ids for move in native_recovery_moves))
+        self.assertTrue(all(type(case).__module__ == recovery_module
+                            and getattr(case, case._testMethodName).__module__ == recovery_module
+                            for case in recovery_selection.tests))
+        recovery_paths = select_impact(real, paths=("src/story_writing_agents/antigravity_native_recovery.py",))
+        self.assertEqual(recovery_paths["focused_manifest"]["ordered_ids"], recovery_ids)
+        recovery_caller = "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_sanitizes_stdout_in_streamed_response_diagnostic"
+        self.assertEqual(recovery_paths["affected_manifest"]["count"], 12)
+        self.assertIn(recovery_caller, recovery_paths["affected_manifest"]["ordered_ids"])
+        recovery_fixture = select_impact(real, paths=("tests/fixtures/antigravity_recovered_finish/terminal.json",))
+        self.assertEqual(recovery_fixture["focused_manifest"]["count"], 10)
+        self.assertTrue(set(recovery_ids) <= set(recovery_fixture["affected_manifest"]["ordered_ids"]))
         from tests.lead_preparation.test_specialist_response_semantics import SpecialistResponseSemanticsDefinitions
         from tests.test_specialist_orchestration_execution import SpecialistExecutionAcceptanceTests, ExecutionInputFixture
         from tests.lead_fixtures.runtime_setup import LeadOrchestrationTestCase

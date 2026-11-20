@@ -1749,8 +1749,8 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 338)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 1899)
+        self.assertEqual(len(modules), 339)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 1902)
         self.assertTrue(
             {
                 "story_writing_agents.artifact_proposals",
