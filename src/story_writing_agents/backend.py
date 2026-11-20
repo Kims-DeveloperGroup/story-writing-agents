@@ -2817,7 +2817,7 @@ class AgentBackend:
                         state.updated_at,
                         label="provider session updated_at",
                     ),
-                    reverse=True,
+                    reverse=False,
                 )
                 result = tuple(states)
         except BaseException as exc:
