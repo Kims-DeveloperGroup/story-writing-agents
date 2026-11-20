@@ -5913,7 +5913,7 @@ class AgentBackend:
         """Return the strict semantic-only provider envelope for retrieval."""
 
         selected_actions = (
-            tuple(ConversationRetrievalActionKind)
+            tuple(action for action in ConversationRetrievalActionKind if action is not ConversationRetrievalActionKind.READ_HISTORY)
             if allowed_actions is None
             else allowed_actions
         )
