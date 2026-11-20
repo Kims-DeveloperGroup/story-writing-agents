@@ -846,7 +846,7 @@ class SuiteBudgetTests(unittest.TestCase):
             self.assertEqual(type(case).__module__, "tests.test_codex_invocation_files")
             self.assertEqual(getattr(case, case._testMethodName).__module__, type(case).__module__)
         invocation_ids = list(moved_invocation.ids)
-        shared_fixture_ids = sorted((*retained_codex.ids, *invocation_ids))
+        shared_fixture_ids = sorted((*retained_codex.ids, *invocation_ids, *runner_selection.selected_ids(real, modules=["tests.test_suite_budget"])))
         process_peer = "tests.test_provider_process_streaming.TestProviderProcessStreaming.test_non_streaming_runs_normally"
         for path, focused, affected in (
             ("tests/test_codex_invocation_files.py", invocation_ids, invocation_ids),
