@@ -60,7 +60,6 @@ from story_writing_agents.workspace.session_resources import provision_session_r
 from tests.helpers import initialized_workspace, live_provider_execution_workspace, pristine_initialized_workspace
 from story_writing_agents.agent_context.request_compaction import compact_context_payload
 from tests.test_agent_context_accounting import _shared_context_payload
-from tests.test_antigravity_recovery_evidence import AntigravityRecoveryEvidenceDefinitions
 
 
 _UNSET = object()
@@ -1997,39 +1996,6 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                 await adapter.invoke(binding, invocation)
             self.assertIsNone(getattr(caught.exception, 'response_diagnostic', None))
 
-
-class AntigravityRecoveryEvidenceTests(unittest.TestCase):
-    """Exercise real no-follow native evidence reads with synthetic public facts."""
-
-    def setUp(self) -> None:
-        self.temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
-        self.adapter = AntigravityAdapter(executable='unused', timeout_seconds=1, state_root=self.root, explicit_model=None, explicit_effort=None)
-        self.provider = self.root / 'provider'
-        self.provider.mkdir()
-        fixtures = Path(__file__).parent / 'fixtures/antigravity_recovered_finish'
-        self.terminal = json.loads((fixtures / 'terminal.json').read_text())
-        self.prompt = (fixtures / 'request.json').read_text()
-        self.steps = [json.loads(line) for line in (fixtures / 'transcript.jsonl').read_text().splitlines()]
-        self.trace = self.provider / 'antigravity-cli/brain/synthetic-thread/.system_generated/logs/transcript_full.jsonl'
-
-    def write_trace(self, steps=None, *, content=None) -> None:
-        self.trace.parent.mkdir(parents=True, exist_ok=True)
-        self.trace.write_bytes(content if content is not None else b''.join((canonical_provider_json(step) + b'\n' for step in (self.steps if steps is None else steps))))
-
-    def accepts(self, baseline, *, terminal=None):
-        value = self.terminal if terminal is None else terminal
-        diagnostic = ProviderResponseDiagnostic(canonical_provider_json(value), b'diagnostic', 0)
-        return self.adapter._provider_result(diagnostic.stdout, expected_thread_id=baseline.thread_id if baseline else None, expected_schema=self.terminal['json_schema'], response_diagnostic=diagnostic, completion_check=lambda thread, output, error: self.adapter._has_current_finish(self.provider, baseline, thread, self.prompt, output, error))
-
-    test_captured_shape_and_clean_current_finish_recover = AntigravityRecoveryEvidenceDefinitions.test_captured_shape_and_clean_current_finish_recover
-    test_reordered_finish_arguments_match_but_scalar_types_do_not = AntigravityRecoveryEvidenceDefinitions.test_reordered_finish_arguments_match_but_scalar_types_do_not
-    test_resume_requires_unchanged_prefix_and_new_matching_request = AntigravityRecoveryEvidenceDefinitions.test_resume_requires_unchanged_prefix_and_new_matching_request
-    test_missing_preexisting_wrong_request_or_replaced_directory_reject = AntigravityRecoveryEvidenceDefinitions.test_missing_preexisting_wrong_request_or_replaced_directory_reject
-    test_unsafe_native_paths_and_bounded_trace_reject = AntigravityRecoveryEvidenceDefinitions.test_unsafe_native_paths_and_bounded_trace_reject
-    test_incomplete_ambiguous_nonmonotonic_and_forged_native_steps_reject = AntigravityRecoveryEvidenceDefinitions.test_incomplete_ambiguous_nonmonotonic_and_forged_native_steps_reject
-    test_status_identity_schema_and_diagnostic_requirements_remain_strict = AntigravityRecoveryEvidenceDefinitions.test_status_identity_schema_and_diagnostic_requirements_remain_strict
 
 if __name__ == "__main__":
     unittest.main()
