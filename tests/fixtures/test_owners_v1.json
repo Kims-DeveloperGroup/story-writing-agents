@@ -277,7 +277,9 @@
         "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_stream_extracts_validated_string_message_and_avoids_dict_leak",
         "tests.test_adapter_streaming.AdapterStreamingTests.test_provider_invocation_rejects_async_stream_sink"
       ],
-      "depends_on": []
+      "depends_on": [
+        "adapter-streaming-fixture"
+      ]
     },
     {
       "name": "tests.test_advisory_progress_streaming",
@@ -19863,7 +19865,9 @@
         "tests.test_codex_adapter_streaming.CodexAdapterStreamingTests.test_codex_adapter_streams_item_delta_and_avoids_completed_replay",
         "tests.test_codex_adapter_streaming.CodexAdapterStreamingTests.test_codex_adapter_streams_status_reasoning_and_message_events"
       ],
-      "depends_on": []
+      "depends_on": [
+        "adapter-streaming-fixture"
+      ]
     },
     {
       "name": "adapter-streaming-fixture",
