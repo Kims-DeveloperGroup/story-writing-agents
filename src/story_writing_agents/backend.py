@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import story_writing_agents.backend_reply_decoding as backend_reply_decoding
+import story_writing_agents.agent_exchanges.provider_finalization as provider_finalization
 import story_writing_agents.conversation_retrieval_wire as conversation_retrieval_wire
 import story_writing_agents.provider_context_thread_store as provider_context_thread_store
 import story_writing_agents.provider_direct_call_wire as provider_direct_call_wire
@@ -285,100 +286,6 @@ class BackendRuntimeConfigurationCandidate:
     correlation_id: str
     previous_profiles: Mapping[str, AgentExecutionProfile]
     generation: _AdapterGeneration
-
-
-_CONTEXT_REJECTION_CODES = {
-    ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE: (
-        AgentExchangeTerminalCode.MALFORMED_STRUCTURED_RESPONSE
-    ),
-    ContextProviderTerminalCode.RESPONSE_CORRELATION_MISMATCH: (
-        AgentExchangeTerminalCode.RESPONSE_CORRELATION_MISMATCH
-    ),
-    ContextProviderTerminalCode.RESPONSE_SEMANTIC_REJECTED: (
-        AgentExchangeTerminalCode.RESPONSE_SEMANTIC_REJECTED
-    ),
-    ContextProviderTerminalCode.ACTION_EXHAUSTED: (
-        AgentExchangeTerminalCode.ACTION_EXHAUSTED
-    ),
-    ContextProviderTerminalCode.ANSWER_VALIDATION_FAILED: (
-        AgentExchangeTerminalCode.ANSWER_VALIDATION_FAILED
-    ),
-}
-
-_CONTEXT_RUNTIME_FAILURE_CODES = {
-    ContextProviderTerminalCode.REFERENCE_RUNTIME_FAILED: (
-        AgentExchangeTerminalCode.REFERENCE_RUNTIME_FAILED
-    ),
-    ContextProviderTerminalCode.CONTEXT_RUNTIME_FAILED: (
-        AgentExchangeTerminalCode.CONTEXT_RUNTIME_FAILED
-    ),
-}
-
-
-class _ContextExchangeFinalizer:
-    """Adapt one capture lifecycle to the provider-neutral context protocol."""
-
-    __slots__ = ("_lifecycle", "_validation_details", "_diagnostic_task")
-
-    def __init__(
-        self,
-        lifecycle: AgentExchangeCaptureLifecycle | None,
-    ) -> None:
-        self._lifecycle = lifecycle
-        self._validation_details: tuple[str, ...] = ()
-        self._diagnostic_task: tuple[str, int] | None = None
-
-    def set_host_task_diagnostic(self, task_id: str, task_revision: int) -> None:
-        """Retain a validated host binding without changing provider input."""
-        if type(task_id) is str and task_id and type(task_revision) is int and task_revision > 0:
-            self._diagnostic_task = (task_id, task_revision)
-
-    def set_validation_details(self, details: tuple[str, ...]) -> None:
-        """Retain trusted findings for this rejected response."""
-        self._validation_details = details
-
-    def accepted(self) -> None:
-        """Best-effort record one accepted contextual response."""
-
-        try:
-            if self._lifecycle is not None:
-                self._lifecycle.accepted(diagnostic_task=self._diagnostic_task)
-        except BaseException:
-            pass
-
-    def rejected(self, code: ContextProviderTerminalCode) -> None:
-        """Best-effort map one provider-neutral semantic rejection."""
-
-        try:
-            mapped = _CONTEXT_REJECTION_CODES.get(code)
-            if self._lifecycle is not None and mapped is not None:
-                self._lifecycle.rejected(
-                    mapped, validation_details=self._validation_details,
-                )
-        except BaseException:
-            pass
-
-    def cancelled(self) -> None:
-        """Best-effort record contextual cancellation."""
-
-        try:
-            if self._lifecycle is not None:
-                self._lifecycle.cancelled()
-        except BaseException:
-            pass
-
-    def post_response_runtime_failure(
-        self,
-        code: ContextProviderTerminalCode,
-    ) -> None:
-        """Best-effort map one provider-neutral runtime failure."""
-
-        try:
-            mapped = _CONTEXT_RUNTIME_FAILURE_CODES.get(code)
-            if self._lifecycle is not None and mapped is not None:
-                self._lifecycle.post_response_runtime_failure(mapped)
-        except BaseException:
-            pass
 
 
 class _BoundContextProvider:
@@ -4222,115 +4129,6 @@ class AgentBackend:
         )
 
     @staticmethod
-    def _capture_provider_return_without_replacing(
-        lifecycle: AgentExchangeCaptureLifecycle | None,
-        result: object,
-    ) -> bool:
-        """Record the first valid provider response action, or no-response failure."""
-
-        try:
-            if type(result) is ProviderResult:
-                if lifecycle is not None:
-                    lifecycle.record_response(result)
-                return True
-            if lifecycle is not None:
-                lifecycle.provider_failure(
-                    AgentExchangeTerminalCode.PROVIDER_CONTRACT_INVALID
-                )
-        except BaseException:
-            pass
-        return False
-
-    @staticmethod
-    def _capture_provider_failure_without_replacing(
-        lifecycle: AgentExchangeCaptureLifecycle | None,
-        code: AgentExchangeTerminalCode,
-        *,
-        failure: ProviderInvocationError | None = None,
-    ) -> None:
-        """Best-effort record one closed pre-response provider failure."""
-
-        try:
-            if lifecycle is not None:
-                diagnostic = (
-                    failure.response_diagnostic
-                    if isinstance(failure, ProviderInvocationError)
-                    else None
-                )
-                if diagnostic is None:
-                    lifecycle.provider_failure(code)
-                else:
-                    lifecycle.provider_failure(code, response_diagnostic=diagnostic)
-        except BaseException:
-            pass
-
-    @staticmethod
-    def _capture_cancelled_without_replacing(
-        lifecycle: AgentExchangeCaptureLifecycle | None,
-    ) -> None:
-        """Best-effort record cancellation without changing propagation."""
-
-        try:
-            if lifecycle is not None:
-                lifecycle.cancelled()
-        except BaseException:
-            pass
-
-    @staticmethod
-    def _capture_rejected_without_replacing(
-        lifecycle: AgentExchangeCaptureLifecycle | None,
-        code: AgentExchangeTerminalCode,
-        *,
-        validation_details: tuple[str, ...] = (),
-    ) -> None:
-        """Best-effort record one closed response rejection with its findings."""
-        try:
-            if lifecycle is not None:
-                lifecycle.rejected(code, validation_details=validation_details)
-        except BaseException:
-            pass
-
-    @staticmethod
-    def _capture_runtime_failure_without_replacing(
-        lifecycle: AgentExchangeCaptureLifecycle | None,
-        code: AgentExchangeTerminalCode,
-    ) -> None:
-        """Best-effort record one post-response runtime failure."""
-
-        try:
-            if lifecycle is not None:
-                lifecycle.post_response_runtime_failure(code)
-        except BaseException:
-            pass
-
-    @staticmethod
-    def _capture_accepted_without_replacing(
-        lifecycle: AgentExchangeCaptureLifecycle | None,
-    ) -> None:
-        """Best-effort record one accepted response."""
-
-        try:
-            if lifecycle is not None:
-                lifecycle.accepted()
-        except BaseException:
-            pass
-
-    @staticmethod
-    def _structured_rejection_code(
-        failure: BaseException,
-    ) -> AgentExchangeTerminalCode:
-        """Classify only typed malformed causes; never inspect error text."""
-
-        current: BaseException | None = failure
-        seen: set[int] = set()
-        while current is not None and id(current) not in seen:
-            if isinstance(current, (json.JSONDecodeError, UnicodeError)):
-                return AgentExchangeTerminalCode.MALFORMED_STRUCTURED_RESPONSE
-            seen.add(id(current))
-            current = current.__cause__
-        return AgentExchangeTerminalCode.RESPONSE_SEMANTIC_REJECTED
-
-    @staticmethod
     def _accept_context_finalizer_without_replacing(
         finalizer: ContextProviderCallFinalizer,
     ) -> None:
@@ -4726,7 +4524,7 @@ class AgentBackend:
                     invocation,
                 )
                 self._require_postsubmission_workspace(invocation)
-            self._capture_provider_return_without_replacing(exchange, result)
+            provider_finalization.capture_provider_return_without_replacing(exchange, result)
         except ProviderInvocationError as exc:
             timed_out = self._context_failure_timed_out(exc)
             try:
@@ -4734,7 +4532,7 @@ class AgentBackend:
                 if stored is not None and (exc.taint_existing_thread or timed_out):
                     taint_thread()
             finally:
-                self._capture_provider_failure_without_replacing(
+                provider_finalization.capture_provider_failure_without_replacing(
                     exchange,
                     (
                         AgentExchangeTerminalCode.PROVIDER_AUTHENTICATION_REQUIRED
@@ -4756,7 +4554,7 @@ class AgentBackend:
                 if stored is not None:
                     taint_thread()
             finally:
-                self._capture_cancelled_without_replacing(exchange)
+                provider_finalization.capture_cancelled_without_replacing(exchange)
             raise
         except BaseException as exc:
             try:
@@ -4768,7 +4566,7 @@ class AgentBackend:
                 ):
                     taint_thread()
             finally:
-                self._capture_provider_failure_without_replacing(
+                provider_finalization.capture_provider_failure_without_replacing(
                     exchange,
                     (
                         AgentExchangeTerminalCode.PROVIDER_TIMED_OUT
@@ -4858,7 +4656,12 @@ class AgentBackend:
                         schema_issues or failure_issues(failure) or
                         ("$: provider result decoder failed without a property diagnostic",)
                     )), prefix="Structured response")
-                    self._capture_rejected_without_replacing(exchange, AgentExchangeTerminalCode.MALFORMED_STRUCTURED_RESPONSE if malformed_precheck else self._structured_rejection_code(failure), validation_details=details)
+                    provider_finalization.capture_rejected_without_replacing(
+                        exchange,
+                        AgentExchangeTerminalCode.MALFORMED_STRUCTURED_RESPONSE
+                        if malformed_precheck else provider_finalization.structured_rejection_code(failure),
+                        validation_details=details,
+                    )
                 raise _StructuredOutputRejected(str(failure), details) from failure
             except (json.JSONDecodeError, UnicodeError):
                 self._record_rejected_provider_response_without_replacing_failure(
@@ -4870,10 +4673,14 @@ class AgentBackend:
                 )
                 raise
             except (ConversationRetrievalSemanticError, ReferenceAuthorizationError) as semantic_failure:
-                self._capture_rejected_without_replacing(exchange, AgentExchangeTerminalCode.RESPONSE_SEMANTIC_REJECTED, validation_details=bounded_chunks(failure_issues(semantic_failure)))
+                provider_finalization.capture_rejected_without_replacing(
+                exchange,
+                AgentExchangeTerminalCode.RESPONSE_SEMANTIC_REJECTED,
+                validation_details=bounded_chunks(failure_issues(semantic_failure)),
+            )
                 raise
             except asyncio.CancelledError:
-                self._capture_cancelled_without_replacing(exchange)
+                provider_finalization.capture_cancelled_without_replacing(exchange)
                 raise
             except BaseException as failure:
                 try:
@@ -4884,7 +4691,7 @@ class AgentBackend:
                     ):
                         taint_thread()
                 finally:
-                    self._capture_runtime_failure_without_replacing(
+                    provider_finalization.capture_runtime_failure_without_replacing(
                         exchange,
                         AgentExchangeTerminalCode.CONTEXT_RUNTIME_FAILED,
                     )
@@ -4902,33 +4709,33 @@ class AgentBackend:
                 )
                 self._require_postsubmission_workspace(invocation)
             except asyncio.CancelledError:
-                self._capture_cancelled_without_replacing(exchange)
+                provider_finalization.capture_cancelled_without_replacing(exchange)
                 raise
             except BaseException:
                 try:
                     taint_thread()
                 finally:
-                    self._capture_runtime_failure_without_replacing(
+                    provider_finalization.capture_runtime_failure_without_replacing(
                         exchange,
                         AgentExchangeTerminalCode.THREAD_PERSISTENCE_FAILED,
                     )
                 raise
             deferred = _DEFERRED_DIRECT_CODEX_ACCEPTANCES.get()
             if deferred is None:
-                self._capture_accepted_without_replacing(exchange)
+                provider_finalization.capture_accepted_without_replacing(exchange)
             else:
                 def reject_deferred_acceptance() -> None:
                     try:
                         taint_thread()
                     finally:
-                        self._capture_runtime_failure_without_replacing(
+                        provider_finalization.capture_runtime_failure_without_replacing(
                             exchange,
                             AgentExchangeTerminalCode.THREAD_PERSISTENCE_FAILED,
                         )
 
                 deferred.append(
                     _DeferredDirectCodexAcceptance(
-                        accept=lambda: self._capture_accepted_without_replacing(
+                        accept=lambda: provider_finalization.capture_accepted_without_replacing(
                             exchange
                         ),
                         reject=reject_deferred_acceptance,
@@ -4940,7 +4747,14 @@ class AgentBackend:
                 if stored is not None:
                     taint_thread()
             finally:
-                self._capture_rejected_without_replacing(exchange, AgentExchangeTerminalCode.MALFORMED_STRUCTURED_RESPONSE, validation_details=bounded_chunks((diagnose_json_text(result.response_text, schema) if schema else ()) or ('$: malformed JSON',), prefix='Structured response'))
+                provider_finalization.capture_rejected_without_replacing(
+                    exchange,
+                    AgentExchangeTerminalCode.MALFORMED_STRUCTURED_RESPONSE,
+                    validation_details=bounded_chunks(
+                        (diagnose_json_text(result.response_text, schema) if schema else ()) or ('$: malformed JSON',),
+                        prefix='Structured response',
+                    ),
+                )
             diagnostic = (
                 "Codex CLI returned malformed structured output"
                 if bound_agent.vendor == "codex"
@@ -5226,7 +5040,7 @@ class AgentBackend:
                     )
                 result = await _timed_provider_invoke(adapter, bound_agent._provider_binding, invocation)
                 self._require_postsubmission_workspace(invocation)
-            self._capture_provider_return_without_replacing(exchange, result)
+            provider_finalization.capture_provider_return_without_replacing(exchange, result)
         except ProviderInvocationError as failure:
             accounting = self._context_failure_accounting(invocation, failure)
             self._observe_context_accounting(accounting)
@@ -5274,7 +5088,7 @@ class AgentBackend:
                     native_context_check=failure.native_context_check,
                 ),
             )
-            self._capture_provider_failure_without_replacing(
+            provider_finalization.capture_provider_failure_without_replacing(
                 exchange,
                 (
                     AgentExchangeTerminalCode.PROVIDER_AUTHENTICATION_REQUIRED
@@ -5310,7 +5124,7 @@ class AgentBackend:
                     taint_existing_thread=submitted,
                 ),
             )
-            self._capture_cancelled_without_replacing(exchange)
+            provider_finalization.capture_cancelled_without_replacing(exchange)
             raise
         except BaseException as failure:
             accounting = self._context_failure_accounting(invocation, failure)
@@ -5334,7 +5148,7 @@ class AgentBackend:
                     taint_existing_thread=submitted,
                 ),
             )
-            self._capture_provider_failure_without_replacing(
+            provider_finalization.capture_provider_failure_without_replacing(
                 exchange,
                 (
                     AgentExchangeTerminalCode.PROVIDER_TIMED_OUT
@@ -5375,7 +5189,7 @@ class AgentBackend:
                 effective_policy_fingerprint,
             )
             if type(result) is ProviderResult:
-                self._capture_rejected_without_replacing(
+                provider_finalization.capture_rejected_without_replacing(
                     exchange,
                     AgentExchangeTerminalCode.MALFORMED_STRUCTURED_RESPONSE,
                 )
@@ -5398,7 +5212,7 @@ class AgentBackend:
                 definition_fingerprint,
                 effective_policy_fingerprint,
             )
-            self._capture_rejected_without_replacing(
+            provider_finalization.capture_rejected_without_replacing(
                 exchange,
                 AgentExchangeTerminalCode.RESPONSE_CORRELATION_MISMATCH,
             )
@@ -5420,7 +5234,7 @@ class AgentBackend:
                 definition_fingerprint,
                 effective_policy_fingerprint,
             )
-            self._capture_rejected_without_replacing(
+            provider_finalization.capture_rejected_without_replacing(
                 exchange,
                 AgentExchangeTerminalCode.RESPONSE_CORRELATION_MISMATCH,
             )
@@ -5445,7 +5259,9 @@ class AgentBackend:
                 native_context_check=result.native_context_check))
             self._taint_context_thread_without_replacing(
                 storage_scope, bound_agent.vendor, definition_fingerprint, effective_policy_fingerprint)
-            self._capture_rejected_without_replacing(exchange, AgentExchangeTerminalCode.CONTEXT_RUNTIME_FAILED)
+            provider_finalization.capture_rejected_without_replacing(
+                exchange, AgentExchangeTerminalCode.CONTEXT_RUNTIME_FAILED,
+            )
             raise failure from result.native_context_cause
         try:
             self._require_postsubmission_workspace(invocation)
@@ -5477,9 +5293,9 @@ class AgentBackend:
                 )
             finally:
                 if isinstance(failure, asyncio.CancelledError):
-                    self._capture_cancelled_without_replacing(exchange)
+                    provider_finalization.capture_cancelled_without_replacing(exchange)
                 else:
-                    self._capture_runtime_failure_without_replacing(
+                    provider_finalization.capture_runtime_failure_without_replacing(
                         exchange,
                         AgentExchangeTerminalCode.THREAD_PERSISTENCE_FAILED,
                     )
@@ -5490,10 +5306,11 @@ class AgentBackend:
                 result.response_text,
                 result.thread_id,
                 accounting,
-            _ContextExchangeFinalizer(exchange), context_witness=result.context_witness,
+            provider_finalization.ContextExchangeFinalizer(exchange),
+            context_witness=result.context_witness,
             native_context_check=result.native_context_check)
         except asyncio.CancelledError:
-            self._capture_cancelled_without_replacing(exchange)
+            provider_finalization.capture_cancelled_without_replacing(exchange)
             raise
         except BaseException as failure:
             try:
@@ -5511,7 +5328,7 @@ class AgentBackend:
                     effective_policy_fingerprint,
                 )
             finally:
-                self._capture_runtime_failure_without_replacing(
+                provider_finalization.capture_runtime_failure_without_replacing(
                     exchange,
                     AgentExchangeTerminalCode.CONTEXT_RUNTIME_FAILED,
                 )
