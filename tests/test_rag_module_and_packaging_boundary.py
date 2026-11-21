@@ -403,8 +403,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 346)
-        self.assertEqual(len(edges), 2063)
+        self.assertEqual(len(modules), 347)
+        self.assertEqual(len(edges), 2066)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -1968,6 +1968,15 @@ class RagModuleBoundaryTests(unittest.TestCase):
             "story_writing_agents.config",
             "story_writing_agents.provider_adapter",
         })
+        accounting_owner = "story_writing_agents.provider_invocation_accounting"
+        self.assertEqual(
+            {source for source, target in edges if target == accounting_owner},
+            {"story_writing_agents.backend"},
+        )
+        self.assertEqual(
+            {target for source, target in edges if source == accounting_owner},
+            {"story_writing_agents.agent_context", "story_writing_agents.provider_adapter"},
+        )
         retrieval_owner = "story_writing_agents.provider_retrieval_handler_outcomes"
         self.assertEqual({source for source, target in edges if target == retrieval_owner}, {"story_writing_agents.backend"})
         self.assertEqual({target for source, target in edges if source == retrieval_owner}, {"story_writing_agents.conversation_retrieval"})
@@ -3149,6 +3158,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             "story_writing_agents/antigravity_invocation_options.py",
             "story_writing_agents/antigravity_stream_observation.py",
             "story_writing_agents/provider_generation_adapters.py",
+            "story_writing_agents/provider_invocation_accounting.py",
             "story_writing_agents/provider_retrieval_handler_outcomes.py",
             "story_writing_agents/antigravity_native_recovery.py",
             "story_writing_agents/antigravity_state_directories.py",
