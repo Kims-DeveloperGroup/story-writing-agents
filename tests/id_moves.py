@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 RECEIPT_PATH = Path(__file__).parent / "fixtures" / "test_id_moves_v1.json"
-RECEIPT_SHA256 = "6316c36960b247b4c1722ce210ffefc2f6471602c805a4888344dd7eaffa5715"
+RECEIPT_SHA256 = "cb67ef3da5388f70c1dfed0a13149995f1d65557bfe09431a3c972d6d2a4caa1"
 ORIGINAL_CAPS_SHA256 = "fc586b3eaa147b4ad4bc06e42e98378c50bd56a9fb09954219c20c45e882b99b"
 S02_CAPS_SHA256 = "b554b945803dd496796fd0bf7cad3201c7f729c37821a90231fc734074576c52"
 S03_CAPS_SHA256 = "7f3bdd0982191c0adef51815ae3445fa4a55c11dfcb5d7574179e0c542b0310c"
@@ -26,7 +26,8 @@ BEFORE_CODEX_STREAM_SPLIT_CAPS_SHA256 = "a49ec017285634e6e0be8e23c353dc9a2029e9e
 BEFORE_CODEX_INVOCATION_FILES_SPLIT_CAPS_SHA256 = "34c1ce085f7c98e0fa9ddbee984b179cf8cebd6130c1abcb294145effcb56883"
 BEFORE_PROVIDER_EXCHANGE_FINALIZATION_CAPS_SHA256 = "1ac2e7bda1efe31a96baadd6eb2cdb1756d74932de542e73397aa70fe78dfd9b"
 BEFORE_ANTIGRAVITY_NATIVE_RECOVERY_CAPS_SHA256 = "bcd8f54385c89c6d1880ea32348f5d623a6d66d4388877a108aa1800c1148027"
-EXPECTED_CAPS_SHA256 = "b8d9d16e6370b15259cd1cb208c41bb39b8b69229bbc75dfc459b2d4ed9c7545"
+BEFORE_ANTIGRAVITY_DEFINITION_STAGING_CAPS_SHA256 = "b8d9d16e6370b15259cd1cb208c41bb39b8b69229bbc75dfc459b2d4ed9c7545"
+EXPECTED_CAPS_SHA256 = "06626b9b86b0ef18ee928c69df2100be891efdb03c65162bc474f517c439f992"
 ORIGINAL_ID = "tests.test_agent_context_planning.PlanningSurfaceTests.test_exact_dataclass_fields_and_immutability"
 SECOND_ID = "tests.test_agent_context_sources.SourceSurfacePolicyAndValueTests.test_descriptor_snapshot_records_are_exact_immutable_and_content_hidden"
 THIRD_ID = "tests.test_specialist_routing.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip"
@@ -50,6 +51,8 @@ PROVIDER_EXCHANGE_FINALIZATION_SPLIT_ID = "tests.test_agent_exchange_capture.Age
 
 ANTIGRAVITY_NATIVE_RECOVERY_SPLIT_ID = "tests.test_antigravity_adapter.AntigravityRecoveryEvidenceTests.test_captured_shape_and_clean_current_finish_recover"
 
+ANTIGRAVITY_DEFINITION_STAGING_SPLIT_ID = "tests.test_antigravity_adapter.AntigravityAdapterTests.test_binding_is_stable_isolated_and_uses_private_custom_agent"
+
 STAGES = (
     (964, "d198abaf60edb1956acbd1f410ad3b1b9fbbedd8", ORIGINAL_CAPS_SHA256, S02_CAPS_SHA256, 45),
     (965, "a18dfc6b3faa8dc326668c77d0da12441be388f8", S02_CAPS_SHA256, S03_CAPS_SHA256, 117),
@@ -70,7 +73,8 @@ STAGES = (
     (1091, "f8090ab80ea957afc5b7cf0c0c53bffbe221ce25", BEFORE_CODEX_STREAM_SPLIT_CAPS_SHA256, BEFORE_CODEX_INVOCATION_FILES_SPLIT_CAPS_SHA256, 15),
     (1093, "ca2c170550b4e95431286557a8f5b90ab0d6c079", BEFORE_CODEX_INVOCATION_FILES_SPLIT_CAPS_SHA256, BEFORE_PROVIDER_EXCHANGE_FINALIZATION_CAPS_SHA256, 7),
     (1097, "cf09d5f110945486245776eb7159b92201e9b5b8", BEFORE_PROVIDER_EXCHANGE_FINALIZATION_CAPS_SHA256, BEFORE_ANTIGRAVITY_NATIVE_RECOVERY_CAPS_SHA256, 13),
-    (1099, "897bad9d24a48a4910223dea1bbb402ca91bd21f", BEFORE_ANTIGRAVITY_NATIVE_RECOVERY_CAPS_SHA256, EXPECTED_CAPS_SHA256, 7),
+    (1099, "897bad9d24a48a4910223dea1bbb402ca91bd21f", BEFORE_ANTIGRAVITY_NATIVE_RECOVERY_CAPS_SHA256, BEFORE_ANTIGRAVITY_DEFINITION_STAGING_CAPS_SHA256, 7),
+    (1101, "4e2dd9296201af887a16693b569365cac0042033", BEFORE_ANTIGRAVITY_DEFINITION_STAGING_CAPS_SHA256, EXPECTED_CAPS_SHA256, 4),
 )
 
 def caps_digest(caps: dict[str, int]) -> str:
@@ -100,7 +104,7 @@ def load_receipt() -> list[dict]:
 
 def remap_base_caps(current: dict[str, int], base: dict[str, int], *, digests: tuple[str, str] | None = None) -> dict[str, int]:
     """Rekey exact approved inventories; digests are hints and every resulting stage is independently verified."""
-    if ORIGINAL_ID in current or (ORIGINAL_ID not in base and SECOND_ID not in base and THIRD_ID not in base and FOURTH_ID not in base and FIFTH_ID not in base and SIXTH_ID not in base and SEVENTH_ID not in base and EIGHTH_ID not in base and NINTH_ID not in base and TENTH_ID not in base and ELEVENTH_ID not in base and TWELFTH_ID not in base and THIRTEENTH_ID not in base and FOURTEENTH_ID not in base and CODEX_DEFAULTS_SPLIT_ID not in base and RETRIEVAL_WIRE_SPLIT_ID not in base and CODEX_STREAM_SPLIT_ID not in base and CODEX_INVOCATION_FILES_SPLIT_ID not in base and PROVIDER_EXCHANGE_FINALIZATION_SPLIT_ID not in base and ANTIGRAVITY_NATIVE_RECOVERY_SPLIT_ID not in base) or current == base:
+    if ORIGINAL_ID in current or (ORIGINAL_ID not in base and SECOND_ID not in base and THIRD_ID not in base and FOURTH_ID not in base and FIFTH_ID not in base and SIXTH_ID not in base and SEVENTH_ID not in base and EIGHTH_ID not in base and NINTH_ID not in base and TENTH_ID not in base and ELEVENTH_ID not in base and TWELFTH_ID not in base and THIRTEENTH_ID not in base and FOURTEENTH_ID not in base and CODEX_DEFAULTS_SPLIT_ID not in base and RETRIEVAL_WIRE_SPLIT_ID not in base and CODEX_STREAM_SPLIT_ID not in base and CODEX_INVOCATION_FILES_SPLIT_ID not in base and PROVIDER_EXCHANGE_FINALIZATION_SPLIT_ID not in base and ANTIGRAVITY_NATIVE_RECOVERY_SPLIT_ID not in base and ANTIGRAVITY_DEFINITION_STAGING_SPLIT_ID not in base) or current == base:
         return base
     base_digest = caps_digest(base) if digests is None else digests[0]
     before = [stage[2] for stage in STAGES]
