@@ -246,7 +246,8 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
-        antigravity_stream_current = suite_budget.load_budget()
+        provider_generation_current = suite_budget.load_budget()
+        antigravity_stream_current = dict(provider_generation_current, max_test_source_lines=156925)
         *legacy_move_receipts, defaults_stage, wire_stage, stream_stage, invocation_stage, exchange_finalization_stage, native_recovery_stage, staging_stage, antigravity_command_stage, antigravity_stream_stage = load_receipt()
         antigravity_stream_moves = antigravity_stream_stage["moves"]
         antigravity_command_current = dict(antigravity_stream_current, max_test_source_lines=156851, subtest_caps=dict(antigravity_stream_current["subtest_caps"]))
@@ -761,6 +762,8 @@ class SuiteBudgetTests(unittest.TestCase):
         self._assert_source_limit_neighbors_rejected(antigravity_command_current, staging_current)
         self.assertIsNone(suite_budget.check_monotonic(antigravity_stream_current, antigravity_command_current))
         self._assert_source_limit_neighbors_rejected(antigravity_stream_current, antigravity_command_current)
+        self.assertIsNone(suite_budget.check_monotonic(provider_generation_current, antigravity_stream_current))
+        self._assert_source_limit_neighbors_rejected(provider_generation_current, antigravity_stream_current)
         invocation_caps = invocation_current["subtest_caps"]
         invocation_id = next(move["new_id"] for move in invocation_moves if move["subtest_cap"])
         for changed_caps in (
@@ -878,6 +881,10 @@ class SuiteBudgetTests(unittest.TestCase):
         stream_selection = select_impact(real, paths=("src/story_writing_agents/antigravity_stream_observation.py",))
         self.assertEqual(stream_selection["focused_manifest"]["ordered_ids"], antigravity_stream_ids)
         self.assertEqual(stream_selection["affected_manifest"]["ordered_ids"], antigravity_affected_ids)
+        generation = select_impact(real, paths=("src/story_writing_agents/provider_generation_adapters.py",))
+        self.assertEqual(generation["focused_manifest"]["count"], 3)
+        self.assertEqual(generation["affected_manifest"]["count"], 9)
+        self.assertEqual(sum(provider_generation_current["subtest_caps"][cid] for cid in generation["affected_manifest"]["ordered_ids"]), 9)
         self.assertTrue(all(move["old_id"] not in real.ids for move in stream_moves))
         self.assertTrue(all(type(case).__bases__ == (unittest.IsolatedAsyncioTestCase,) and type(case).__module__ == "tests.test_codex_adapter_streaming" for case in moved_streaming.tests))
         for path, expected in (
