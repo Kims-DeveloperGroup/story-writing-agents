@@ -20878,7 +20878,30 @@
         "tests.test_codex_invocation_files.CodexInvocationFilesTests.test_timeout_terminates_the_codex_process",
         "tests.test_interactive_controller.ControllerSettingsTests.test_antigravity_settings_edit_active_fields_and_preserve_codex"
       ]
+    },
+
+    {
+      "name": "provider.retrieval-handler-outcomes",
+      "boundary": "provider-retrieval-handler-outcomes",
+      "paths": [
+        "src/story_writing_agents/provider_retrieval_handler_outcomes.py"
+      ],
+      "focused_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_exact_initial_continuation_payload_rules_schema_and_frame"
+      ],
+      "affected_ids": [
+        "tests.test_antigravity_parity.AntigravityParityTests.test_all_phases_direct_and_retrieval_conversation_are_correlated",
+        "tests.test_antigravity_parity.AntigravityParityTests.test_retrieval_failure_after_observation_taints_and_restarts",
+        "tests.test_codex_backend.CodexBackendTestCase.test_reference_read_retrieval_preserves_action_indices_and_budgets",
+        "tests.test_codex_backend.CodexBackendTestCase.test_repaired_search_and_read_diagnostics_reach_clean_final_answer",
+        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_and_substantive_rejections_fall_back_with_correlation",
+        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_exact_initial_continuation_payload_rules_schema_and_frame",
+        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_handler_control_failures_taint_and_trace_interruption",
+        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_handler_declaration_and_exact_outcome_protocol"
+      ],
+      "depends_on": []
     }
+
   ],
   "ignored_names": [
     ".DS_Store"
