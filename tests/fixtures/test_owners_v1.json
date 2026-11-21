@@ -21005,6 +21005,23 @@
       "depends_on": [
         "backend-debug-log-fixture"
       ]
+    },
+    {
+      "name": "provider.execution-profile-observations",
+      "boundary": "provider-execution-profile-observations",
+      "paths": [
+        "src/story_writing_agents/provider_execution_profile_observations.py"
+      ],
+      "focused_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_hot_same_provider_profile_applies_now_and_reuses_thread"
+      ],
+      "affected_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_a_to_b_to_a_route_generation_never_resumes_old_a_threads_after_restart",
+        "tests.test_codex_backend.CodexBackendTestCase.test_hot_same_provider_profile_applies_now_and_reuses_thread",
+        "tests.test_interactive_controller.ControllerSettingsTests.test_hot_save_preflight_quiescence_restore_and_recovery_are_truthful",
+        "tests.test_interactive_controller.ControllerSettingsTests.test_message_details_only_save_is_confirmed_and_transaction_only"
+      ],
+      "depends_on": []
     }
   ],
   "ignored_names": [
