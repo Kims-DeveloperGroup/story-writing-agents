@@ -3835,7 +3835,7 @@ class AgentBackend:
                         source=cls._canonical_conversation_retrieval_source(
                             item.source
                         ),
-                        snippet=item.snippet,
+                        snippet="DIAGNOSTIC_CHANGED_RETRIEVAL_SNIPPET",
                     )
                 )
             return ConversationRetrievalSearchObservation(
