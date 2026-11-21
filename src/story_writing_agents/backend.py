@@ -4,6 +4,7 @@ from __future__ import annotations
 import story_writing_agents.backend_reply_decoding as backend_reply_decoding
 import story_writing_agents.agent_exchanges.provider_finalization as provider_finalization
 import story_writing_agents.conversation_retrieval_wire as conversation_retrieval_wire
+import story_writing_agents.provider_binding_call_lifetime as provider_binding_call_lifetime
 import story_writing_agents.provider_context_thread_store as provider_context_thread_store
 import story_writing_agents.provider_direct_call_wire as provider_direct_call_wire
 import story_writing_agents.provider_execution_profiles as provider_execution_profiles
@@ -713,32 +714,7 @@ class BoundAgent:
                 raise BackendProtocolError(
                     "bound agent execution profile is inconsistent"
                 )
-        self._call_state_lock = threading.Lock()
-        self._active_calls = 0
-        self._retired = False
-        self._released = False
-
-    @contextmanager
-    def _call_use(self) -> Iterator[None]:
-        """Retain this binding's resources for one already-entered call."""
-
-        with self._call_state_lock:
-            if self.backend._closed:
-                raise BackendProtocolError("agent backend is closed")
-            if self._retired:
-                raise BackendProtocolError("bound agent is retired")
-            self._active_calls += 1
-        try:
-            yield
-        finally:
-            finalize = False
-            with self._call_state_lock:
-                self._active_calls -= 1
-                if self._retired and self._active_calls == 0 and not self._released:
-                    self._released = True
-                    finalize = True
-            if finalize:
-                self.backend._finalize_bound_agent(self)
+        self.call_lifetime = provider_binding_call_lifetime.ProviderBindingCallLifetime()
 
     @contextmanager
     def _reference_call_use(
@@ -749,7 +725,10 @@ class BoundAgent:
 
         entered = False
         try:
-            with self._call_use():
+            with self.call_lifetime.use(
+                is_backend_closed=lambda: self.backend._closed,
+                finalize=lambda: self.backend._finalize_bound_agent(self),
+            ):
                 entered = True
                 yield
         except BaseException as exc:
@@ -776,15 +755,8 @@ class BoundAgent:
             raise
 
     def _retire(self) -> None:
-        """Reject later calls and release after every entered call exits."""
-
-        finalize = False
-        with self._call_state_lock:
-            self._retired = True
-            if self._active_calls == 0 and not self._released:
-                self._released = True
-                finalize = True
-        if finalize:
+        """Reject later calls and release after the last entered call exits."""
+        if self.call_lifetime.retire():
             self.backend._finalize_bound_agent(self)
 
     def context_provider(
