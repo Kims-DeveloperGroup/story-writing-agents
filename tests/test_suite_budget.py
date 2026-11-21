@@ -246,7 +246,8 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
-        binding_lifetime_current = suite_budget.load_budget()
+        adapter_generations_current = suite_budget.load_budget()
+        binding_lifetime_current = dict(adapter_generations_current, max_test_source_lines=157025)
         accounting_current = dict(binding_lifetime_current, max_test_source_lines=156976)
         retrieval_outcomes_current = dict(accounting_current, max_test_source_lines=156953)
         provider_generation_current = dict(retrieval_outcomes_current, max_test_source_lines=156942)
@@ -771,6 +772,8 @@ class SuiteBudgetTests(unittest.TestCase):
         self._assert_source_limit_neighbors_rejected(retrieval_outcomes_current, provider_generation_current)
         self.assertIsNone(suite_budget.check_monotonic(accounting_current, retrieval_outcomes_current))
         self._assert_source_limit_neighbors_rejected(accounting_current, retrieval_outcomes_current)
+        self.assertIsNone(suite_budget.check_monotonic(adapter_generations_current, binding_lifetime_current))
+        self._assert_source_limit_neighbors_rejected(adapter_generations_current, binding_lifetime_current)
         self.assertIsNone(suite_budget.check_monotonic(binding_lifetime_current, accounting_current))
         self._assert_source_limit_neighbors_rejected(binding_lifetime_current, accounting_current)
         invocation_caps = invocation_current["subtest_caps"]
@@ -921,6 +924,20 @@ class SuiteBudgetTests(unittest.TestCase):
         binding_test_definitions = select_impact(real, paths=("tests/test_provider_binding_call_lifetime.py",))
         self.assertEqual(binding_test_definitions["focused_manifest"]["count"], 4)
         self.assertEqual(binding_test_definitions["affected_manifest"]["count"], 90)
+
+        adapter_generations = select_impact(real, paths=("src/story_writing_agents/provider_adapter_generations.py",))
+        self.assertEqual(
+            adapter_generations["focused_manifest"]["ordered_ids"],
+            ["tests.test_codex_backend.CodexBackendTestCase.test_hot_same_provider_profile_applies_now_and_reuses_thread"],
+        )
+        self.assertEqual(adapter_generations["affected_manifest"]["count"], 7)
+        self.assertEqual(
+            sum(binding_lifetime_current["subtest_caps"][cid] for cid in adapter_generations["affected_manifest"]["ordered_ids"]),
+            9,
+        )
+        generation_test_definitions = select_impact(real, paths=("tests/test_provider_adapter_generations.py",))
+        self.assertEqual(generation_test_definitions["focused_manifest"]["count"], 2)
+        self.assertEqual(generation_test_definitions["affected_manifest"]["count"], 90)
         self.assertTrue(all(move["old_id"] not in real.ids for move in stream_moves))
         self.assertTrue(all(type(case).__bases__ == (unittest.IsolatedAsyncioTestCase,) and type(case).__module__ == "tests.test_codex_adapter_streaming" for case in moved_streaming.tests))
         for path, expected in (
