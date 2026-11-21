@@ -8,6 +8,7 @@ import story_writing_agents.provider_context_thread_store as provider_context_th
 import story_writing_agents.provider_direct_call_wire as provider_direct_call_wire
 import story_writing_agents.provider_execution_profiles as provider_execution_profiles
 import story_writing_agents.provider_manifest_thread_store as provider_manifest_thread_store
+import story_writing_agents.provider_retrieval_handler_outcomes as provider_retrieval_handler_outcomes
 import story_writing_agents.provider_session_access_transactions as provider_session_access_transactions
 import story_writing_agents.provider_session_artifacts as provider_session_artifacts
 import story_writing_agents.provider_session_lifecycle_queries as provider_session_lifecycle_queries
@@ -98,16 +99,13 @@ from .conversation_retrieval import (
     ConversationRetrievalActionHandler,
     ConversationRetrievalActionKind,
     ConversationRetrievalAnswerAction,
-    ConversationRetrievalHistoryRecord,
     ConversationRetrievalObservation,
     ConversationRetrievalReadAction,
     ConversationRetrievalReadObservation,
     ConversationRetrievalReply,
     ConversationRetrievalRequest,
     ConversationRetrievalSearchAction,
-    ConversationRetrievalSearchItem,
     ConversationRetrievalSearchObservation,
-    ConversationRetrievalSource,
     serialize_conversation_retrieval_observation,
 )
 from .debug_log import (
@@ -3702,17 +3700,8 @@ class AgentBackend:
                             "invalid reply"
                         )
                     try:
-                        outcome = ConversationRetrievalReply(
-                            session_id=outcome.session_id,
-                            conversation_id=outcome.conversation_id,
-                            turn_id=outcome.turn_id,
-                            content=outcome.content,
-                            sources=tuple(
-                                self._canonical_conversation_retrieval_source(source)
-                                for source in outcome.sources
-                            ),
-                            trace=action.trace,
-                            validation_details=tuple(diagnostic_chunks),
+                        outcome = provider_retrieval_handler_outcomes.canonicalize_reply(
+                            outcome, action, diagnostic_chunks
                         )
                     except Exception as exc:
                         raise BackendProtocolError(
@@ -3748,7 +3737,7 @@ class AgentBackend:
                         "conversation retrieval handler returned an invalid observation"
                     )
                 try:
-                    outcome = self._canonical_conversation_retrieval_observation(
+                    outcome = provider_retrieval_handler_outcomes.canonicalize_observation(
                         outcome
                     )
                 except Exception as exc:
@@ -3790,88 +3779,6 @@ class AgentBackend:
                     continuation_fingerprint=continuation_fingerprint,
                 )
             raise
-
-    @staticmethod
-    def _canonical_conversation_retrieval_source(
-        source: ConversationRetrievalSource,
-    ) -> ConversationRetrievalSource:
-        """Deep-copy one exact handler source without I/O or authorization.
-
-        The retrieval contracts revalidate the exact event-field citation. A
-        subclass, tampered value, or malformed nested citation raises and is
-        converted by the owning handler-result boundary to
-        ``BackendProtocolError``.
-        """
-
-        if type(source) is not ConversationRetrievalSource:
-            raise TypeError("conversation retrieval handler source is invalid")
-        return ConversationRetrievalSource(citation=source.citation)
-
-    @classmethod
-    def _canonical_conversation_retrieval_observation(
-        cls,
-        observation: ConversationRetrievalObservation,
-    ) -> ConversationRetrievalObservation:
-        """Deep-copy one exact handler observation without owning semantics.
-
-        Search items, history records, sources, citations, correlation, IDs,
-        and limits are reconstructed through public retrieval contracts. No
-        provider, storage, or runtime state changes; invalid shapes raise for
-        conversion to ``BackendProtocolError`` by the caller.
-        """
-
-        if type(observation) is ConversationRetrievalSearchObservation:
-            if type(observation.hits) is not tuple:
-                raise TypeError("conversation retrieval handler hits are invalid")
-            hits: list[ConversationRetrievalSearchItem] = []
-            for item in observation.hits:
-                if type(item) is not ConversationRetrievalSearchItem:
-                    raise TypeError(
-                        "conversation retrieval handler search item is invalid"
-                    )
-                hits.append(
-                    ConversationRetrievalSearchItem(
-                        citation_id=item.citation_id,
-                        source=cls._canonical_conversation_retrieval_source(
-                            item.source
-                        ),
-                        snippet=item.snippet,
-                    )
-                )
-            return ConversationRetrievalSearchObservation(
-                session_id=observation.session_id,
-                conversation_id=observation.conversation_id,
-                turn_id=observation.turn_id,
-                action_index=observation.action_index,
-                hits=tuple(hits),
-                truncated=observation.truncated,
-            )
-        if type(observation) is not ConversationRetrievalReadObservation:
-            raise TypeError("conversation retrieval handler observation is invalid")
-        if type(observation.records) is not tuple:
-            raise TypeError("conversation retrieval handler records are invalid")
-        records: list[ConversationRetrievalHistoryRecord] = []
-        for item in observation.records:
-            if type(item) is not ConversationRetrievalHistoryRecord:
-                raise TypeError(
-                    "conversation retrieval handler history record is invalid"
-                )
-            records.append(
-                ConversationRetrievalHistoryRecord(
-                    record=item.record,
-                    field_citation_ids=tuple(item.field_citation_ids),
-                )
-            )
-        return ConversationRetrievalReadObservation(
-            session_id=observation.session_id,
-            conversation_id=observation.conversation_id,
-            turn_id=observation.turn_id,
-            action_index=observation.action_index,
-            source_citation_id=observation.source_citation_id,
-            source=cls._canonical_conversation_retrieval_source(observation.source),
-            records=tuple(records),
-            truncated=observation.truncated,
-        )
 
     def _taint_retrieval_thread_without_replacing_failure(
         self,
