@@ -21022,6 +21022,47 @@
         "tests.test_interactive_controller.ControllerSettingsTests.test_message_details_only_save_is_confirmed_and_transaction_only"
       ],
       "depends_on": []
+    },
+
+    {
+      "name": "provider.bound-context",
+      "boundary": "provider-bound-context",
+      "paths": [
+        "src/story_writing_agents/provider_bound_context.py"
+      ],
+      "focused_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_contextual_submitted_failure_taints_only_exact_context_thread"
+      ],
+      "affected_ids": [
+        "tests.test_antigravity_parity.AntigravityParityTests.test_contextual_invocation_captures_and_accounts_rendered_schema_only_for_antigravity",
+        "tests.test_antigravity_parity.AntigravityParityTests.test_contextual_thread_bootstrap_delta_restart_and_scope_isolation_match_codex",
+        "tests.test_antigravity_parity.AntigravityParityTests.test_lead_json_object_context_payload_uses_provider_neutral_wire",
+        "tests.test_antigravity_parity.AntigravityParityTests.test_standard_invocation_captures_and_accounts_rendered_schema_only_for_antigravity",
+        "tests.test_codex_backend.CodexBackendTestCase.test_both_native_backends_preserve_session_continuation_and_legacy_namespaces",
+        "tests.test_codex_backend.CodexBackendTestCase.test_completed_rejections_report_each_attempt_and_repaired_success",
+        "tests.test_codex_backend.CodexBackendTestCase.test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread",
+        "tests.test_codex_backend.CodexBackendTestCase.test_contextual_submitted_failure_taints_only_exact_context_thread",
+        "tests.test_codex_backend.CodexBackendTestCase.test_diagnostic_failure_does_not_replace_provider_failure_or_taint",
+        "tests.test_codex_invocation_files.CodexInvocationFilesTests.test_conversation_projects_exact_payload_schema_and_no_artifacts",
+        "tests.test_provider_auth_recovery.ContextRecoveryTests.test_admission_race_abort_keeps_original_accounting_and_exchanges",
+        "tests.test_provider_auth_recovery.ContextRecoveryTests.test_backend_route_session_thread_and_workspace_drift_veto_replay"
+      ],
+      "depends_on": []
+    },
+
+    {
+      "name": "tests.bound_context_provider_cases",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/bound_context_provider_cases.py"
+      ],
+      "focused_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_contextual_submitted_failure_taints_only_exact_context_thread"
+      ],
+      "affected_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_contextual_submitted_failure_taints_only_exact_context_thread"
+      ],
+      "depends_on": []
     }
   ],
   "ignored_names": [

@@ -246,7 +246,8 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
-        profile_observations_current = suite_budget.load_budget()
+        bound_context_current = suite_budget.load_budget()
+        profile_observations_current = dict(bound_context_current, max_test_source_lines=157102)
         adapter_generations_current = dict(profile_observations_current, max_test_source_lines=157080)
         binding_lifetime_current = dict(adapter_generations_current, max_test_source_lines=157025)
         accounting_current = dict(binding_lifetime_current, max_test_source_lines=156976)
@@ -773,6 +774,7 @@ class SuiteBudgetTests(unittest.TestCase):
         self._assert_source_limit_neighbors_rejected(retrieval_outcomes_current, provider_generation_current)
         self.assertIsNone(suite_budget.check_monotonic(accounting_current, retrieval_outcomes_current))
         self._assert_source_limit_neighbors_rejected(accounting_current, retrieval_outcomes_current)
+        self.assertIsNone(suite_budget.check_monotonic(bound_context_current, profile_observations_current))
         self.assertIsNone(suite_budget.check_monotonic(profile_observations_current, adapter_generations_current))
         self._assert_source_limit_neighbors_rejected(profile_observations_current, adapter_generations_current)
         self.assertIsNone(suite_budget.check_monotonic(adapter_generations_current, binding_lifetime_current))
@@ -952,6 +954,29 @@ class SuiteBudgetTests(unittest.TestCase):
             sum(binding_lifetime_current["subtest_caps"][cid] for cid in profile_observations["affected_manifest"]["ordered_ids"]),
             0,
         )
+        from tests.bound_context_provider_cases import BoundContextProviderCaseDefinitions
+        bound_context_module = "tests.bound_context_provider_cases"
+        bound_context_id = (
+            "tests.test_codex_backend.CodexBackendTestCase."
+            "test_contextual_submitted_failure_taints_only_exact_context_thread"
+        )
+        definition_cases = runner_selection.select(real, modules=[bound_context_module])
+        self.assertEqual(definition_cases.ids, (bound_context_id,))
+        self.assertFalse(issubclass(BoundContextProviderCaseDefinitions, unittest.TestCase))
+        case = definition_cases.tests[0]
+        self.assertIs(
+            getattr(case, case._testMethodName).__func__,
+            BoundContextProviderCaseDefinitions.test_contextual_submitted_failure_taints_only_exact_context_thread,
+        )
+        bound_definition_impact = select_impact(real, paths=("tests/bound_context_provider_cases.py",))
+        self.assertEqual(bound_definition_impact["focused_manifest"]["ordered_ids"], [bound_context_id])
+        self.assertEqual(bound_definition_impact["affected_manifest"]["ordered_ids"], [bound_context_id])
+        bound_context_impact = select_impact(real, paths=("src/story_writing_agents/provider_bound_context.py",))
+        self.assertEqual(bound_context_impact["focused_manifest"]["ordered_ids"], [bound_context_id])
+        bound_context_affected = bound_context_impact["affected_manifest"]["ordered_ids"]
+        self.assertEqual(len(bound_context_affected), 12)
+        self.assertEqual(sum(profile_observations_current["subtest_caps"][cid] for cid in bound_context_affected), 10)
+
         self.assertTrue(all(move["old_id"] not in real.ids for move in stream_moves))
         self.assertTrue(all(type(case).__bases__ == (unittest.IsolatedAsyncioTestCase,) and type(case).__module__ == "tests.test_codex_adapter_streaming" for case in moved_streaming.tests))
         for path, expected in (
