@@ -1993,6 +1993,7 @@
         "conversation-retrieval-wire-fixture",
         "lead-fixtures.material-values",
         "lead-fixtures.preparation-data",
+        "tests.adapter-generation-definitions",
         "tests.binding-call-lifetime-definitions",
         "tests.test_agent_context_accounting",
         "tests.test_agent_exchange_viewer",
@@ -20966,7 +20967,45 @@
       ],
       "depends_on": []
     }
-
+,
+    {
+      "name": "provider.adapter-generations",
+      "boundary": "provider-adapter-generations",
+      "paths": [
+        "src/story_writing_agents/provider_adapter_generations.py"
+      ],
+      "focused_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_hot_same_provider_profile_applies_now_and_reuses_thread"
+      ],
+      "affected_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_a_to_b_to_a_route_generation_never_resumes_old_a_threads_after_restart",
+        "tests.test_codex_backend.CodexBackendTestCase.test_close_waits_for_active_binding_then_cleans_every_resource_once",
+        "tests.test_codex_backend.CodexBackendTestCase.test_failure_and_cancellation_release_retired_staging_once",
+        "tests.test_codex_backend.CodexBackendTestCase.test_hot_same_provider_profile_applies_now_and_reuses_thread",
+        "tests.test_codex_backend.CodexBackendTestCase.test_retirement_defers_exact_cleanup_for_each_bound_operation",
+        "tests.test_codex_backend.CodexBackendTestCase.test_terminal_backend_rejects_call_before_binding_retirement",
+        "tests.test_interactive_controller.ControllerSettingsTests.test_hot_save_preflight_quiescence_restore_and_recovery_are_truthful"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "tests.adapter-generation-definitions",
+      "boundary": "adapter-generation-test-definitions",
+      "paths": [
+        "tests/test_provider_adapter_generations.py"
+      ],
+      "focused_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_hot_same_provider_profile_applies_now_and_reuses_thread",
+        "tests.test_codex_backend.CodexBackendTestCase.test_a_to_b_to_a_route_generation_never_resumes_old_a_threads_after_restart"
+      ],
+      "affected_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_hot_same_provider_profile_applies_now_and_reuses_thread",
+        "tests.test_codex_backend.CodexBackendTestCase.test_a_to_b_to_a_route_generation_never_resumes_old_a_threads_after_restart"
+      ],
+      "depends_on": [
+        "backend-debug-log-fixture"
+      ]
+    }
   ],
   "ignored_names": [
     ".DS_Store"
