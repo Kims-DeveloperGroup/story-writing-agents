@@ -154,7 +154,7 @@ class CodexInvocationFilesTests(CodexNativeProcessFixture, unittest.IsolatedAsyn
         output_directory.mkdir()
 
         with mock.patch(
-            "story_writing_agents.backend.tempfile.mkdtemp",
+            "story_writing_agents.provider_generation_adapters.tempfile.mkdtemp",
             return_value=str(output_directory),
         ):
             with mock.patch.dict(
@@ -377,7 +377,7 @@ class CodexInvocationFilesTests(CodexNativeProcessFixture, unittest.IsolatedAsyn
                 if mode == "missing_output":
                     output_directory.mkdir()
                     temporary = mock.patch(
-                        "story_writing_agents.backend.tempfile.mkdtemp",
+                        "story_writing_agents.provider_generation_adapters.tempfile.mkdtemp",
                         return_value=str(output_directory),
                     )
                 with temporary:
