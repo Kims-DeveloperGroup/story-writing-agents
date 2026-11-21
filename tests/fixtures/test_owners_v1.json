@@ -1993,6 +1993,7 @@
         "conversation-retrieval-wire-fixture",
         "lead-fixtures.material-values",
         "lead-fixtures.preparation-data",
+        "tests.binding-call-lifetime-definitions",
         "tests.test_agent_context_accounting",
         "tests.test_agent_exchange_viewer",
         "tests.test_backend_reply_decoding",
@@ -20923,6 +20924,45 @@
         "tests.test_codex_invocation_files.CodexInvocationFilesTests.test_cancellation_terminates_the_codex_process",
         "tests.test_codex_invocation_files.CodexInvocationFilesTests.test_missing_executable_nonzero_and_malformed_output_fail_cleanly",
         "tests.test_codex_invocation_files.CodexInvocationFilesTests.test_timeout_terminates_the_codex_process"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "provider.binding-call-lifetime",
+      "boundary": "provider-binding-call-lifetime",
+      "paths": [
+        "src/story_writing_agents/provider_binding_call_lifetime.py"
+      ],
+      "focused_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_retirement_defers_exact_cleanup_for_each_bound_operation"
+      ],
+      "affected_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_close_waits_for_active_binding_then_cleans_every_resource_once",
+        "tests.test_codex_backend.CodexBackendTestCase.test_failure_and_cancellation_release_retired_staging_once",
+        "tests.test_codex_backend.CodexBackendTestCase.test_hot_same_provider_profile_applies_now_and_reuses_thread",
+        "tests.test_codex_backend.CodexBackendTestCase.test_reference_read_pre_provider_resource_failures_terminate_exactly",
+        "tests.test_codex_backend.CodexBackendTestCase.test_retirement_defers_exact_cleanup_for_each_bound_operation",
+        "tests.test_codex_backend.CodexBackendTestCase.test_terminal_backend_rejects_call_before_binding_retirement"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "tests.binding-call-lifetime-definitions",
+      "boundary": "binding-call-lifetime-test-definitions",
+      "paths": [
+        "tests/test_provider_binding_call_lifetime.py"
+      ],
+      "focused_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_retirement_defers_exact_cleanup_for_each_bound_operation",
+        "tests.test_codex_backend.CodexBackendTestCase.test_failure_and_cancellation_release_retired_staging_once",
+        "tests.test_codex_backend.CodexBackendTestCase.test_close_waits_for_active_binding_then_cleans_every_resource_once",
+        "tests.test_codex_backend.CodexBackendTestCase.test_terminal_backend_rejects_call_before_binding_retirement"
+      ],
+      "affected_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_retirement_defers_exact_cleanup_for_each_bound_operation",
+        "tests.test_codex_backend.CodexBackendTestCase.test_failure_and_cancellation_release_retired_staging_once",
+        "tests.test_codex_backend.CodexBackendTestCase.test_close_waits_for_active_binding_then_cleans_every_resource_once",
+        "tests.test_codex_backend.CodexBackendTestCase.test_terminal_backend_rejects_call_before_binding_retirement"
       ],
       "depends_on": []
     }
