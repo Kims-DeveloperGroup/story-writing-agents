@@ -3159,6 +3159,44 @@
         "tests/test_suite_budget.py": 13
       },
       "counting": "ordinary tests + unchanged registered support + 1550 legacy"
+    },
+
+    {
+      "issue": 1113,
+      "origin_commit": "8195f07c5beb89574055907c8d8433a18f89990d",
+      "origins": [
+        {
+          "source": "tests/test_codex_backend.py",
+          "sha256": "21985c9e66a1d05ca216c1645a4588f8e555439d9385742b11800b8a93f40aa6"
+        },
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "087dc125520e9b4ea47019721ff9477c617423e845470148481788689b46b4cf"
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "a8d30b2f8c888d40ead2a6fb92ac80e05062ca55f399d99e0d327cd0d1c8b268"
+        }
+      ],
+      "approved_source_delta": 47,
+      "planned_raw_delta": 47,
+      "planned_support_delta": 0,
+      "legacy_unresolved_lines": 1550,
+      "exact_source_pair": [
+        156976,
+        157023
+      ],
+      "original_caps_sha256": "0fc8c5e140b56200643f090106395259da9ca23d1e90a0e64738c3bd3f5c5fbe",
+      "expected_caps_sha256": "0fc8c5e140b56200643f090106395259da9ca23d1e90a0e64738c3bd3f5c5fbe",
+      "excluded_monotonic_rule_ordinary": 0,
+      "excluded_monotonic_rule_physical": 1,
+      "cost_components": {
+        "tests/test_codex_backend.py": -252,
+        "tests/test_rag_module_and_packaging_boundary.py": 10,
+        "tests/test_suite_budget.py": 14,
+        "tests/test_provider_binding_call_lifetime.py": 275
+      },
+      "counting": "ordinary tests + unchanged registered support + 1550 legacy"
     }
 
   ]
