@@ -2061,7 +2061,7 @@ class AgentBackend:
                         new_profile=next_generation.profiles[agent_id],
                         activation_state="accepted",
                     )
-            self._active_adapter_generation = next_generation
+            pass
             self._adapter_generations[next_generation.generation_id] = next_generation
             self._configuration_snapshot = next_generation.configuration
             self._provider_routes = next_generation.provider_routes
