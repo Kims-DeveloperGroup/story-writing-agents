@@ -2657,10 +2657,6 @@ class AgentBackend:
             outcome = ReferenceAuthorizationErrorCode.PROVIDER_FAILURE
         else:
             outcome = ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE
-        self._terminate_reference_read_without_replacing(
-            reference_read,
-            outcome,
-        )
         if taint:
             self._taint_reference_thread_without_replacing(
                 reference_read,
