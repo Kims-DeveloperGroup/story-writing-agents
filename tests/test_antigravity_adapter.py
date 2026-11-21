@@ -19,6 +19,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import story_writing_agents
+from story_writing_agents import antigravity_agent_definition
 from story_writing_agents import (
     AgentBackend,
     AgentReply,
@@ -27,12 +28,10 @@ from story_writing_agents import (
     CHARACTER_CUSTODIAN,
     PLOT_ARCHITECT,
     Phase,
-    PromptFileReference,
     ReplyTrace,
     ReplyTraceOrigin,
 )
 from story_writing_agents.antigravity_adapter import AntigravityAdapter
-from story_writing_agents.codex_definition_sources import read_definition_source
 from story_writing_agents.agent_context import (
     ContextComponentKind,
     ProviderCallKind,
@@ -40,7 +39,6 @@ from story_writing_agents.agent_context import (
     ProviderUsage,
     canonical_provider_json,
 )
-from story_writing_agents.prompts import PromptAssembler
 from story_writing_agents.provider_adapter import (
     ProviderBinding,
     ProviderInvocation,
@@ -57,13 +55,18 @@ from story_writing_agents.workspace.session_artifact_binding import (
 )
 from story_writing_agents.workspace.session_resources import provision_session_resources
 
-from tests.helpers import initialized_workspace, live_provider_execution_workspace, pristine_initialized_workspace
+from tests.antigravity_adapter_fixture import (
+    AntigravityAdapterFixture,
+    _DEFAULT_RESULT_SCHEMA,
+    _UNSET,
+    _json_result,
+    _mode,
+)
+from tests.helpers import live_provider_execution_workspace, pristine_initialized_workspace
 from story_writing_agents.agent_context.request_compaction import compact_context_payload
 from tests.test_agent_context_accounting import _shared_context_payload
 
 
-_UNSET = object()
-_DEFAULT_RESULT_SCHEMA = {"type": "object"}
 _REQUIRED_HEADLESS_FLAGS = (
     "--agent",
     "--conversation",
@@ -78,49 +81,6 @@ _REQUIRED_HEADLESS_FLAGS = (
     "--print",
     "--print-timeout",
     "--sandbox",)
-
-
-def _json_result(
-    conversation_id: str,
-    *,
-    result_conversation_id: str | None = None,
-    status: str = "SUCCESS",
-    structured_output: object = _UNSET,
-    json_schema: object = _DEFAULT_RESULT_SCHEMA,
-    response: object = _UNSET,
-    usage: object = _UNSET,
-) -> bytes:
-    """Build one native JSON result without provider access."""
-
-    terminal: dict[str, object] = {
-        "conversation_id": conversation_id if result_conversation_id is None else result_conversation_id,
-        "status": status,}
-    for field, value in (("structured_output", structured_output), ("json_schema", json_schema), ("response", response), ("usage", usage)):
-        if value is not _UNSET:
-            terminal[field] = value
-    return (json.dumps(terminal, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
-
-
-def _mode(path: Path) -> int:
-    """Return only one path's no-follow permission bits."""
-
-    return stat.S_IMODE(os.lstat(path).st_mode)
-
-
-def _directory_snapshot(root: Path) -> tuple[int, tuple[tuple[object, ...], ...]]:
-    """Capture one outside directory's mode, namespace, modes, and bytes."""
-
-    entries = []
-    for path in sorted(root.rglob("*")):
-        value = os.lstat(path)
-        entries.append(
-            (
-                path.relative_to(root).as_posix(),
-                stat.S_IFMT(value.st_mode),
-                stat.S_IMODE(value.st_mode),
-                path.read_bytes() if stat.S_ISREG(value.st_mode) else None,)
-        )
-    return _mode(root), tuple(entries)
 
 
 _NO_FOLLOW_DIRECTORY_HARDENING = "chmod" in {
@@ -237,58 +197,8 @@ class AntigravitySchemaRenderingTests(unittest.TestCase):
 from tests.test_antigravity_rules import AntigravityRulesDefinitions
 
 
-class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
+class AntigravityAdapterTests(AntigravityAdapterFixture, unittest.IsolatedAsyncioTestCase):
     """Verify binding, protocol, transport, and backend integration offline."""
-
-    def setUp(self) -> None:
-        self.workspace = (
-            pristine_initialized_workspace(self)
-            if self._testMethodName == "test_shared_default_and_explicit_timeouts_keep_native_and_outer_deadlines_distinct"
-            else initialized_workspace(self)
-        )
-        codex_definition = PromptAssembler(self.workspace).build_definition(
-            session_id="definition_session",
-            agent_id=PLOT_ARCHITECT,)
-        self.definition = replace(
-            codex_definition,
-            backend="antigravity",)
-
-    def adapter(
-        self,
-        state_name: str,
-        *,
-        executable: str = sys.executable,
-        timeout_seconds: float = 7,
-        model: str | None = None,
-        effort: str | None = None,
-        system_model: str | None = None,
-        system_effort: str | None = None,
-        agent_settings=None,
-        create_process=None,
-        wait_for=None,
-        which=None,
-        capability_run=None,
-    ) -> AntigravityAdapter:
-        """Build one adapter with only the requested deterministic seams."""
-
-        arguments: dict[str, object] = {
-            "executable": executable,
-            "timeout_seconds": timeout_seconds,
-            "state_root": self.workspace.path(state_name),
-            "explicit_model": model,
-            "explicit_effort": effort,
-            "system_model": system_model,
-            "system_effort": system_effort,
-            "agent_settings": agent_settings,}
-        if create_process is not None:
-            arguments["create_process"] = lambda: create_process
-        if wait_for is not None:
-            arguments["wait_for"] = lambda: wait_for
-        if which is not None:
-            arguments["which"] = lambda: which
-        if capability_run is not None:
-            arguments["capability_run"] = lambda: capability_run
-        return AntigravityAdapter(**arguments)  # type: ignore[arg-type]
 
     @staticmethod
     def request(
@@ -307,66 +217,6 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             revision_id="r0",
             task="Perform the requested phase.",
             user_payload="PRIVATE_STORY_PAYLOAD",)
-
-    def execution_workspace(self, session_id: str, *, install_role: bool = True):
-        """Keep a real owner-issued call capability live for this test."""
-
-        if not hasattr(self, "_execution_workspaces"):
-            self._execution_control = pristine_initialized_workspace(self)
-            self._execution_stack = contextlib.ExitStack()
-            self.addCleanup(self._execution_stack.close)
-            self._execution_workspaces = {}
-        if session_id not in self._execution_workspaces:
-            if install_role:
-                provision_session_resources(self._execution_control.root, session_id)
-                owner = compose_session_artifact_binding(self._execution_control.root, session_id)
-                role = AntigravityAdapter._custom_agent_projection(self.definition)[0]
-                with owner.open_ready_resources() as access:
-                    access.install_provider_role(role)
-            self._execution_workspaces[session_id] = self._execution_stack.enter_context(
-                live_provider_execution_workspace(self._execution_control.root, session_id))
-        return self._execution_workspaces[session_id]
-
-    def provider_invocation(self, session_id: str) -> ProviderInvocation:
-        """Build one minimal valid adapter invocation."""
-
-        return ProviderInvocation(
-            session_id=session_id,
-            schema={"type": "object"},
-            payload={"story": "PRIVATE_STORY_PAYLOAD"},
-            thread_id=None,
-            execution_workspace=self.execution_workspace(session_id),
-        )
-
-    def directory_symlink(self, link: Path, target: Path) -> None:
-        """Create one directory symlink or precisely skip unsupported hosts."""
-
-        self.file_symlink(link, target, target_is_directory=True)
-
-    def file_symlink(
-        self,
-        link: Path,
-        target: Path,
-        *,
-        target_is_directory: bool = False,
-    ) -> None:
-        """Create one symlink or precisely skip unsupported hosts."""
-
-        try:
-            link.symlink_to(target, target_is_directory=target_is_directory)
-        except NotImplementedError as exc:
-            self.skipTest(f"symlinks are unsupported: {exc}")
-        except OSError as exc:
-            unsupported = {
-                errno.EACCES,
-                errno.EPERM,
-                errno.ENOSYS,
-                getattr(errno, "ENOTSUP", errno.EINVAL),
-                getattr(errno, "EOPNOTSUPP", errno.EINVAL),
-            }
-            if exc.errno in unsupported:
-                self.skipTest(f"symlinks are unsupported: {exc}")
-            raise
 
     def hard_link(self, source: Path, link: Path) -> None:
         """Create one hard link or precisely skip unsupported filesystems."""
@@ -472,7 +322,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
     ) -> Path:
         """Return the only installed custom-agent file for one invocation."""
 
-        native_agent_id = AntigravityAdapter._custom_agent_projection(
+        native_agent_id = antigravity_agent_definition.custom_agent_projection(
             self.definition
         )[0].native_agent_id
         return (
@@ -481,31 +331,6 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             / "agents"
             / native_agent_id
             / "agent.md"
-        )
-
-    def result_bytes(
-        self,
-        adapter: AntigravityAdapter,
-        session_id: str,
-        conversation_id: str,
-        **values: object,
-    ) -> bytes:
-        """Build one valid native result for a prepared invocation."""
-
-        return _json_result(conversation_id, **values)
-
-    def assert_agent_installation(self, target: Path, expected: bytes, *, mode: int = 0o600) -> None:
-        """Assert one exact private custom-agent file and no temporary residue."""
-
-        self.assertEqual(target.read_bytes(), expected)
-        if os.name == "posix" and hasattr(os, "fchmod"):
-            self.assertEqual(_mode(target), mode)
-        self.assertEqual(
-            [
-                entry.name
-                for entry in target.parent.iterdir()
-                if entry.name.startswith(f".{target.name}.")],
-            [],
         )
 
     async def assert_workspace_preparation_failure(
@@ -536,36 +361,6 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         forbidden_process.assert_not_awaited()
         return error
 
-    test_binding_is_stable_isolated_and_uses_private_custom_agent = AntigravityRulesDefinitions.test_binding_is_stable_isolated_and_uses_private_custom_agent
-
-    def test_contextual_binding_shared_semantics_and_vendor_constraints_are_exact(self):
-        specialist = PromptAssembler(self.workspace, backend_overrides={PLOT_ARCHITECT: "antigravity"}).build_contextual_definition(session_id="definition_session", agent_id=PLOT_ARCHITECT)
-        lead = replace(specialist, fingerprint="0" * 64, system_prompt_file=PromptFileReference.from_path(Path(__file__).resolve().parents[1] / "config/agents/lead_orchestrator/AGENTS.md"), behavior_policy_components=(), runtime_behavior_policy=b"")
-        for definition in (specialist, lead):
-            self.assertIs(definition.provider_managed_context, True)
-            self.assertEqual(definition.context_document_files, ())
-            codex_bytes, codex_components = read_definition_source(definition)
-            agy_bytes, agy_components = AntigravityAdapter._definition_file(definition)
-            role = definition.system_prompt_file.content
-            prefix = role + b"\n" + definition.persona_file.content + b"\n" + f"Output:{definition.language}.\n".encode()
-            self.assertTrue(codex_bytes.startswith(prefix))
-            self.assertTrue(agy_bytes.startswith(prefix))
-            self.assertEqual(tuple(item.kind for item in codex_components), tuple(item.kind for item in agy_components))
-            for body, components in ((codex_bytes, codex_components), (agy_bytes, agy_components)):
-                self.assertEqual(len(body), sum(item.serialized_utf8_bytes for item in components))
-                self.assertEqual(next(item.serialized_utf8_bytes for item in components if item.kind is ContextComponentKind.ROLE_SYSTEM_PROMPT), len(role))
-                for token in (b"agent-provider-wire-v11", b"contract_guidance.input_fields", b"contract_guidance.response_rules", b"agent_action", b"action_type", b"task_result", b"response_type", b"Select only an offered agent_action"):
-                    self.assertIn(token, body[len(prefix):])
-            self.assertIn(b"Use finish only for structured delivery of the exact schema-selected object; do not use other tools, subagents, or hidden reasoning.", agy_bytes[len(prefix):])
-            self.assertNotIn(b"Do not invoke tools, other agents", agy_bytes)
-            if definition is specialist:
-                self.assertIn(b"Do not invoke tools except the bound provider's required structured-result\ndelivery mechanism", role)
-            self.assertNotIn(b"Use finish only", codex_bytes[len(prefix):])
-            self.assertEqual(read_definition_source(definition), (codex_bytes, codex_components))
-            self.assertEqual(AntigravityAdapter._definition_file(definition), (agy_bytes, agy_components))
-            self.assertEqual(definition.system_prompt_file.content, role)
-        self.assertEqual(lead.fingerprint, "0" * 64)
-
     @unittest.skipUnless(
         os.name == "posix" and hasattr(os, "umask") and _NO_FOLLOW_DIRECTORY_HARDENING,
         "requires supported POSIX no-follow directory hardening",
@@ -586,72 +381,6 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assert_agent_installation(target, plan.content, mode=0o400)
         self.assertEqual(_mode(parent), original_mode)
         self.assertEqual(sentinel.read_bytes(), b"PRIVATE_PARENT_BYTES")
-
-    test_mode_failures_are_best_effort_but_controls_propagate = AntigravityRulesDefinitions.test_mode_failures_are_best_effort_but_controls_propagate
-
-    def test_definition_chain_rejects_links_and_non_directories(self) -> None:
-        for component_kind in ("state root link", "fingerprint link", "file"):
-            with (
-                self.subTest(component=component_kind),
-                tempfile.TemporaryDirectory(
-                    dir=self.workspace.root.parent
-                ) as temporary,
-            ):
-                label = component_kind.replace(" ", "-")
-                parent = self.workspace.path(f"definition-{label}-parent")
-                parent.mkdir()
-                parent.chmod(0o751)
-                parent_mode_before = _mode(parent)
-                parent_sentinel = parent / "PARENT_SENTINEL.bin"
-                parent_sentinel.write_bytes(b"PRIVATE_PARENT_BYTES")
-                adapter = self.adapter(f"definition-{label}-parent/state")
-                outside = Path(temporary) / "outside"
-                outside.mkdir()
-                outside.chmod(0o751)
-                (outside / "agent.md").write_bytes(b"PRIVATE_OUTSIDE_AGENT")
-                (outside / "sentinel.bin").write_bytes(b"PRIVATE_OUTSIDE_BYTES")
-                outside_before = _directory_snapshot(outside)
-                unsafe = (
-                    adapter.state_root
-                    if component_kind == "state root link"
-                    else adapter.state_root
-                    / "definitions"
-                    / self.definition.agent_id
-                    / self.definition.fingerprint
-                )
-                unsafe.parent.mkdir(parents=True, exist_ok=True)
-                if component_kind == "file":
-                    unsafe.write_bytes(b"PRIVATE_UNSAFE_FILE")
-                    unsafe.chmod(0o640)
-                    unsafe_before = (_mode(unsafe), unsafe.read_bytes())
-                else:
-                    self.directory_symlink(unsafe, outside)
-                    unsafe_before = None
-                forbidden_process = mock.AsyncMock(
-                    side_effect=AssertionError("provider process invoked")
-                )
-
-                with (
-                    mock.patch(
-                        "story_writing_agents.antigravity_adapter.run_process",
-                        forbidden_process,),
-                    self.assertRaises(NotADirectoryError) as caught,
-                ):
-                    adapter.bind(self.definition)
-
-                self.assertEqual(
-                    str(caught.exception),
-                    "Antigravity state directory is unsafe",)
-                self.assertEqual(_directory_snapshot(outside), outside_before)
-                self.assertEqual(_mode(parent), parent_mode_before)
-                self.assertEqual(
-                    parent_sentinel.read_bytes(),
-                    b"PRIVATE_PARENT_BYTES",)
-                if unsafe_before is not None:
-                    self.assertEqual(
-                        (_mode(unsafe), unsafe.read_bytes()),
-                        unsafe_before,)
-                forbidden_process.assert_not_awaited()
 
     async def test_runtime_chain_rejects_links_and_files_before_launch(self) -> None:
         for component, kind in ((".agents", "link"), (".agents", "file"), ("agents", "link"), ("agents", "file")):
@@ -967,7 +696,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             adapter.invocation_settings(CHARACTER_CUSTODIAN),
             ("system-model", "low"),
         )
-        native_agent_id = AntigravityAdapter._custom_agent_projection(
+        native_agent_id = antigravity_agent_definition.custom_agent_projection(
             self.definition
         )[0].native_agent_id
         command = adapter.command(
