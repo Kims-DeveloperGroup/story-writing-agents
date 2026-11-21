@@ -61,6 +61,7 @@ from tests.backend_debug_log_fixture import (
     workspace_debug_records as _workspace_debug_records,
 )
 
+from tests.bound_context_provider_cases import BoundContextProviderCaseDefinitions
 from tests.test_backend_reply_decoding import (
     BackendReplyDecodingDefinitions,
     retrieval_action_json as _retrieval_action_json,
@@ -2748,67 +2749,9 @@ class CodexBackendTestCase(CodexNativeProcessFixture, unittest.IsolatedAsyncioTe
             await self._assert_grouped_reader_transport(restarted, session_id, execution_workspace)
         await self._exercise_preliminary_capture(seed=True)
 
-    async def test_contextual_submitted_failure_taints_only_exact_context_thread(
-        self,
-    ) -> None:
-        session_id = "contextual_failure"
-        backend, bound = await self._provisioned_bound(session_id)
-        provider = bound._context_provider()
-        scope = ContextScope(
-            "workspace-context",
-            session_id,
-            ContextSubjectKind.DEBATE,
-            "debate-context",
-            PLOT_ARCHITECT,
-        )
-        policy = "sha256:" + "8" * 64
-        schema = {"type": "object"}
-        payload = {"content": "PRIVATE_CONTEXT_FAILURE"}
-        success = ProviderResult("context-before-failure", "{}")
-        submitted = ProviderInvocationError(
-            "fixed contextual failure",
-            taint_existing_thread=True,
-        )
-        record_provider_failure_accounting(
-            submitted,
-            state=ProviderCallState.SUBMITTED,
-            actual_transport_utf8_bytes=13,
-        )
-        adapter = mock.AsyncMock(side_effect=(success, submitted))
-        with mock.patch.object(backend._codex_adapter, "invoke", new=adapter):
-            async with provider.invocation(scope, policy):
-                first = await provider.invoke_context(
-                    ctx_provider.ContextProviderCallRequest(
-                        scope,
-                        policy,
-                        "context-success",
-                        ProviderCallKind.DEBATE,
-                        schema,
-                        payload,
-                    )
-                )
-                with self.assertRaises(BackendProtocolError) as caught:
-                    await provider.invoke_context(
-                        ctx_provider.ContextProviderCallRequest(
-                            scope,
-                            policy,
-                            "context-failure",
-                            ProviderCallKind.DEBATE,
-                            schema,
-                            payload,
-                            expected_thread_id=first.thread_id,
-                        )
-                    )
-                facts = ctx_provider.context_provider_failure_facts(caught.exception)
-                self.assertIs(facts.accounting.state, ProviderCallState.SUBMITTED)
-                self.assertIs(facts.taint_existing_thread, True)
-                self.assertIsNone(provider.inspect_context_thread(scope, policy))
-        self.assertEqual(
-            self.workspace.read_json(
-                f"agent_states/orchestrator_state/provider_sessions/{session_id}.json"
-            )["provider_threads"],
-            {},
-        )
+    test_contextual_submitted_failure_taints_only_exact_context_thread = (
+        BoundContextProviderCaseDefinitions.test_contextual_submitted_failure_taints_only_exact_context_thread
+    )
 
     async def test_every_sink_control_failure_is_observational_only(self) -> None:
         session_id = "context_sink_isolation"
