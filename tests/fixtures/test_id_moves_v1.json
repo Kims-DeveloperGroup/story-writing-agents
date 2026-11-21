@@ -15753,6 +15753,65 @@
           "expected_method_ast_sha256": "1307a21d77ab05ef1d9dbfd1d2c214a86f40aaed6b0fe12c936223a4f6fcbfc9"
         }
       ]
+    },
+    {
+      "schema_version": 1,
+      "issue": 1103,
+      "origin_commit": "67850903cfacc9d19385571a11f0cc9d6e643e67",
+      "original_caps_sha256": "06626b9b86b0ef18ee928c69df2100be891efdb03c65162bc474f517c439f992",
+      "expected_caps_sha256": "5d41f52db46a9e63e39130a631a6a3fda04a1486b7749fcc7c12a26b27157c28",
+      "moves": [
+        {
+          "old_id": "tests.test_antigravity_adapter.AntigravityAdapterTests.test_capability_cleanup_failure_preserves_result_and_active_exception",
+          "new_id": "tests.test_antigravity_command.AntigravityCommandTests.test_capability_cleanup_failure_preserves_result_and_active_exception",
+          "subtest_cap": 5,
+          "source": "tests/test_antigravity_adapter.py",
+          "destination": "tests/test_antigravity_command.py",
+          "original_file_sha256": "39e040e08599b420206e169b9b08389bed69af05425926cabe600c9fb2f9ca26",
+          "original_method_ast_sha256": "ce605c66ba3fcf73d02a73c3f2cb6c34259b690abf58706a4c4a347c91323da9",
+          "expected_method_ast_sha256": "ce605c66ba3fcf73d02a73c3f2cb6c34259b690abf58706a4c4a347c91323da9"
+        },
+        {
+          "old_id": "tests.test_antigravity_adapter.AntigravityAdapterTests.test_capability_cleanup_process_control_propagates_exactly",
+          "new_id": "tests.test_antigravity_command.AntigravityCommandTests.test_capability_cleanup_process_control_propagates_exactly",
+          "subtest_cap": 3,
+          "source": "tests/test_antigravity_adapter.py",
+          "destination": "tests/test_antigravity_command.py",
+          "original_file_sha256": "39e040e08599b420206e169b9b08389bed69af05425926cabe600c9fb2f9ca26",
+          "original_method_ast_sha256": "196b3ae3175711b1b5be81ede7f4e60ca6c9c3d2ed55430f00973775ded93be0",
+          "expected_method_ast_sha256": "196b3ae3175711b1b5be81ede7f4e60ca6c9c3d2ed55430f00973775ded93be0"
+        },
+        {
+          "old_id": "tests.test_antigravity_adapter.AntigravityAdapterTests.test_capability_probe_is_bounded_isolated_and_requires_public_flags",
+          "new_id": "tests.test_antigravity_command.AntigravityCommandTests.test_capability_probe_is_bounded_isolated_and_requires_public_flags",
+          "subtest_cap": 21,
+          "source": "tests/test_antigravity_adapter.py",
+          "destination": "tests/test_antigravity_command.py",
+          "original_file_sha256": "39e040e08599b420206e169b9b08389bed69af05425926cabe600c9fb2f9ca26",
+          "original_method_ast_sha256": "0368dba4587793737a1ed0312194b43f7790a49407c8f76ef279fa96a338a8d1",
+          "expected_method_ast_sha256": "0368dba4587793737a1ed0312194b43f7790a49407c8f76ef279fa96a338a8d1"
+        },
+        {
+          "old_id": "tests.test_antigravity_adapter.AntigravityAdapterTests.test_command_stdin_paths_and_fresh_resume_results_are_exact",
+          "new_id": "tests.test_antigravity_command.AntigravityCommandTests.test_command_stdin_paths_and_fresh_resume_results_are_exact",
+          "subtest_cap": 0,
+          "source": "tests/test_antigravity_rules.py",
+          "destination": "tests/test_antigravity_command.py",
+          "original_file_sha256": "3b0eb87a88a305f3984838af43eb7c711034b0a49040fe3dfb122a59cc48aacc",
+          "original_method_ast_sha256": "472da8273f9169f9c2e0f608725a58e1f079f4c5bfc1eee974493a08127a2fde",
+          "expected_method_ast_sha256": "472da8273f9169f9c2e0f608725a58e1f079f4c5bfc1eee974493a08127a2fde"
+        },
+        {
+          "old_id": "tests.test_antigravity_adapter.AntigravityAdapterTests.test_model_effort_precedence_and_backend_projection_are_immutable",
+          "new_id": "tests.test_antigravity_invocation_options.AntigravityInvocationOptionsTests.test_model_effort_precedence_and_backend_projection_are_immutable",
+          "subtest_cap": 0,
+          "source": "tests/test_antigravity_adapter.py",
+          "destination": "tests/test_antigravity_invocation_options.py",
+          "original_file_sha256": "39e040e08599b420206e169b9b08389bed69af05425926cabe600c9fb2f9ca26",
+          "original_method_ast_sha256": "f353c9a7341a3622476d5e2b9b07e4a28002bf5016f74cae3d57612344e7a79a",
+          "expected_method_ast_sha256": "f353c9a7341a3622476d5e2b9b07e4a28002bf5016f74cae3d57612344e7a79a"
+        }
+      ]
     }
   ]
 }
