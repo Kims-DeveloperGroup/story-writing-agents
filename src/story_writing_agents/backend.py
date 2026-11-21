@@ -3908,7 +3908,7 @@ class AgentBackend:
                 accounting,
                 state=failure_accounting.state,
                 actual_transport_utf8_bytes=(
-                    failure_accounting.actual_transport_utf8_bytes
+                    None
                 ),
                 usage=failure_accounting.usage,
                 usage_observation=failure_accounting.usage_observation,
