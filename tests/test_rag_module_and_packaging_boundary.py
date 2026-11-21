@@ -403,8 +403,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 343)
-        self.assertEqual(len(edges), 2052)
+        self.assertEqual(len(modules), 344)
+        self.assertEqual(len(edges), 2055)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -1943,6 +1943,10 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.provider_execution_workspace",
             }),
             ("story_writing_agents.antigravity_invocation_options", {"story_writing_agents.provider_adapter"}),
+            ("story_writing_agents.antigravity_stream_observation", {
+                "story_writing_agents.agent_context.progress",
+                "story_writing_agents.antigravity_response_decoding",
+            }),
         ):
             self.assertEqual({target for source, target in edges if source == owner}, dependencies)
             self.assertEqual({source for source, target in edges if target == owner}, {adapter_owner})
@@ -3131,6 +3135,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 "story_writing_agents/antigravity_agent_definition.py",
             "story_writing_agents/antigravity_command.py",
             "story_writing_agents/antigravity_invocation_options.py",
+            "story_writing_agents/antigravity_stream_observation.py",
             "story_writing_agents/antigravity_native_recovery.py",
             "story_writing_agents/antigravity_state_directories.py",
             "story_writing_agents/antigravity_recovery_matching.py",
