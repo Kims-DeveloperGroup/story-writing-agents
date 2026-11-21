@@ -3127,7 +3127,39 @@
       "counting": "ordinary tests + unchanged registered support + 1550 legacy"
     },
 
-    {"issue":1109,"origin_commit":"35231181388143262d665ab9e57523ad7490d275","origins":[{"source":"tests/test_rag_module_and_packaging_boundary.py","sha256":"d7106d3540f332d6d2eafb1a8156f89d87dea6e49565327fb40f67965a24aa24"},{"source":"tests/test_suite_budget.py","sha256":"aa47e0d50a703f52f511645dfdb33acf29b09786f0a54894167bf31155d14a6d"}],"approved_source_delta":11,"planned_raw_delta":11,"planned_support_delta":0,"legacy_unresolved_lines":1550,"exact_source_pair":[156942,156953],"original_caps_sha256":"0fc8c5e140b56200643f090106395259da9ca23d1e90a0e64738c3bd3f5c5fbe","expected_caps_sha256":"0fc8c5e140b56200643f090106395259da9ca23d1e90a0e64738c3bd3f5c5fbe","excluded_monotonic_rule_ordinary":0,"excluded_monotonic_rule_physical":0,"cost_components":{"tests/test_rag_module_and_packaging_boundary.py":4,"tests/test_suite_budget.py":7},"counting":"ordinary tests + unchanged registered support + 1550 legacy"}
+    {"issue":1109,"origin_commit":"35231181388143262d665ab9e57523ad7490d275","origins":[{"source":"tests/test_rag_module_and_packaging_boundary.py","sha256":"d7106d3540f332d6d2eafb1a8156f89d87dea6e49565327fb40f67965a24aa24"},{"source":"tests/test_suite_budget.py","sha256":"aa47e0d50a703f52f511645dfdb33acf29b09786f0a54894167bf31155d14a6d"}],"approved_source_delta":11,"planned_raw_delta":11,"planned_support_delta":0,"legacy_unresolved_lines":1550,"exact_source_pair":[156942,156953],"original_caps_sha256":"0fc8c5e140b56200643f090106395259da9ca23d1e90a0e64738c3bd3f5c5fbe","expected_caps_sha256":"0fc8c5e140b56200643f090106395259da9ca23d1e90a0e64738c3bd3f5c5fbe","excluded_monotonic_rule_ordinary":0,"excluded_monotonic_rule_physical":0,"cost_components":{"tests/test_rag_module_and_packaging_boundary.py":4,"tests/test_suite_budget.py":7},"counting":"ordinary tests + unchanged registered support + 1550 legacy"},
+
+    {
+      "issue": 1111,
+      "origin_commit": "8c4b422d545ec0f3b84da3b5a2bd31261a4a49cc",
+      "origins": [
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "4129ce0aa39ab3d4a0d8b9ec8a5b74056845b78e29e7f23f589a9373a086da28"
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "1921309c7e3825525af67f4a98d97bc0bfc73fbeb6e7f182f63a88cac94c5a82"
+        }
+      ],
+      "approved_source_delta": 23,
+      "planned_raw_delta": 23,
+      "planned_support_delta": 0,
+      "legacy_unresolved_lines": 1550,
+      "exact_source_pair": [
+        156953,
+        156976
+      ],
+      "original_caps_sha256": "0fc8c5e140b56200643f090106395259da9ca23d1e90a0e64738c3bd3f5c5fbe",
+      "expected_caps_sha256": "0fc8c5e140b56200643f090106395259da9ca23d1e90a0e64738c3bd3f5c5fbe",
+      "excluded_monotonic_rule_ordinary": 0,
+      "excluded_monotonic_rule_physical": 2,
+      "cost_components": {
+        "tests/test_rag_module_and_packaging_boundary.py": 10,
+        "tests/test_suite_budget.py": 13
+      },
+      "counting": "ordinary tests + unchanged registered support + 1550 legacy"
+    }
 
   ]
 }
