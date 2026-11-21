@@ -403,8 +403,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 344)
-        self.assertEqual(len(edges), 2055)
+        self.assertEqual(len(modules), 345)
+        self.assertEqual(len(edges), 2061)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -1959,6 +1959,15 @@ class RagModuleBoundaryTests(unittest.TestCase):
         })
         self.assertEqual({target for source, target in edges if source == directory_owner}, set())
         self.assertEqual({source for source, target in edges if target == directory_owner}, {adapter_owner, definition_owner})
+        generation_owner = "story_writing_agents.provider_generation_adapters"
+        self.assertEqual({source for source, target in edges if target == generation_owner}, {"story_writing_agents.backend"})
+        self.assertEqual({target for source, target in edges if source == generation_owner}, {
+            "story_writing_agents.agents",
+            "story_writing_agents.antigravity_adapter",
+            "story_writing_agents.codex_adapter",
+            "story_writing_agents.config",
+            "story_writing_agents.provider_adapter",
+        })
         backend_reply_owner = "story_writing_agents.backend_reply_decoding"
         self.assertEqual(
             {target for source, target in edges if source == backend_reply_owner},
@@ -3136,6 +3145,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             "story_writing_agents/antigravity_command.py",
             "story_writing_agents/antigravity_invocation_options.py",
             "story_writing_agents/antigravity_stream_observation.py",
+            "story_writing_agents/provider_generation_adapters.py",
             "story_writing_agents/antigravity_native_recovery.py",
             "story_writing_agents/antigravity_state_directories.py",
             "story_writing_agents/antigravity_recovery_matching.py",
