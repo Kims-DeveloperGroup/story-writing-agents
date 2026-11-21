@@ -781,7 +781,7 @@ class BoundAgent:
         finalize = False
         with self._call_state_lock:
             self._retired = True
-            if self._active_calls == 0 and not self._released:
+            if True and not self._released:
                 self._released = True
                 finalize = True
         if finalize:
