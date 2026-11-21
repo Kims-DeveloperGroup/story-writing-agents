@@ -403,8 +403,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 341)
-        self.assertEqual(len(edges), 2046)
+        self.assertEqual(len(modules), 343)
+        self.assertEqual(len(edges), 2052)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -1936,6 +1936,16 @@ class RagModuleBoundaryTests(unittest.TestCase):
         definition_owner = antigravity_agent_definition.__name__
         directory_owner = antigravity_state_directories.__name__
         adapter_owner = antigravity_adapter.__name__
+        for owner, dependencies in (
+            ("story_writing_agents.antigravity_command", {
+                "story_writing_agents.agent_context",
+                "story_writing_agents.provider_adapter",
+                "story_writing_agents.provider_execution_workspace",
+            }),
+            ("story_writing_agents.antigravity_invocation_options", {"story_writing_agents.provider_adapter"}),
+        ):
+            self.assertEqual({target for source, target in edges if source == owner}, dependencies)
+            self.assertEqual({source for source, target in edges if target == owner}, {adapter_owner})
         self.assertEqual({source for source, target in edges if target == antigravity_rules_owner}, {definition_owner})
         self.assertEqual({source for source, target in edges if target == definition_owner}, {adapter_owner})
         self.assertEqual({target for source, target in edges if source == definition_owner}, {
@@ -3119,6 +3129,8 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             "story_writing_agents/lead_control_events.py",
             "story_writing_agents/runtime_resources/generation_pin_cleanup.py",
                 "story_writing_agents/antigravity_agent_definition.py",
+            "story_writing_agents/antigravity_command.py",
+            "story_writing_agents/antigravity_invocation_options.py",
             "story_writing_agents/antigravity_native_recovery.py",
             "story_writing_agents/antigravity_state_directories.py",
             "story_writing_agents/antigravity_recovery_matching.py",
