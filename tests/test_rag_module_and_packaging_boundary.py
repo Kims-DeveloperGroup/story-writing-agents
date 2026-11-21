@@ -403,14 +403,29 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 350)
-        self.assertEqual(len(edges), 2075)
+        self.assertEqual(len(modules), 351)
+        self.assertEqual(len(edges), 2086)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._core', 'story_writing_agents.agent_context.contracts.events'), edges)
         self.assertIsNone(_cycle_witness(modules, edges))
         provider_dependencies = {
+            "story_writing_agents.provider_bound_context": (
+                {
+                    "story_writing_agents.agent_context.contracts.errors",
+                    "story_writing_agents.agent_context.invocation.provider",
+                    "story_writing_agents.agent_context.manifest",
+                    "story_writing_agents.errors",
+                    "story_writing_agents.models",
+                    "story_writing_agents.provider_context_thread_store",
+                    "story_writing_agents.provider_execution_workspace",
+                    "story_writing_agents.workspace",
+                    "story_writing_agents.workspace.session_artifact_binding",
+                    "story_writing_agents.writing_artifacts.read_actions",
+                },
+                {"story_writing_agents.backend"},
+            ),
             'story_writing_agents.provider_contract_guidance': (
                 {
                     'story_writing_agents.provider_message_catalog',
@@ -2163,7 +2178,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
              "story_writing_agents.errors", records_owner, "story_writing_agents.workspace"},
         )
         self.assertEqual({source for source, target in edges if target == context_store_owner},
-                         {"story_writing_agents.backend"})
+                         {"story_writing_agents.backend", "story_writing_agents.provider_bound_context"})
         self.assertEqual(
             {target for source, target in edges if source == manifest_store_owner},
             {"story_writing_agents.errors", "story_writing_agents.models", artifacts_owner, records_owner,
@@ -2850,6 +2865,10 @@ class RagModuleBoundaryTests(unittest.TestCase):
         for name in profiles.__all__:
             self.assertNotIn(name, story_writing_agents.__all__)
             self.assertFalse(hasattr(story_writing_agents, name))
+        from story_writing_agents.provider_bound_context import BoundContextProvider
+        self.assertIs(backend_module._BoundContextProvider, BoundContextProvider)
+        self.assertFalse(hasattr(story_writing_agents, "BoundContextProvider"))
+        self.assertFalse(hasattr(story_writing_agents, "_BoundContextProvider"))
         context_store = provider_context_thread_store
         self.assertIs(backend_module.provider_context_thread_store, context_store)
         manifest_store = provider_manifest_thread_store
@@ -3191,6 +3210,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             "story_writing_agents/provider_generation_adapters.py",
             "story_writing_agents/provider_invocation_accounting.py",
             "story_writing_agents/provider_binding_call_lifetime.py",
+            "story_writing_agents/provider_bound_context.py",
             "story_writing_agents/provider_retrieval_handler_outcomes.py",
             "story_writing_agents/antigravity_native_recovery.py",
             "story_writing_agents/antigravity_state_directories.py",
