@@ -3433,6 +3433,48 @@
         157207,
         157235
       ]
+    },
+    {
+      "issue": 1125,
+      "base": "4d35c49182a6d77e59a45951b24ff86aa0e0aad6",
+      "origin_commit": "4d35c49182a6d77e59a45951b24ff86aa0e0aad6",
+      "origins": [
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "bd9cba224b70652c2ba365e3203287945c75616e0d19a6afb55455950cd17b29"
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "dde1badf60dfd4d2ed28ca3c8b64b6b66fe586b8d35d353b515e614d85de8ef5"
+        }
+      ],
+      "prior_sources": [
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "bd9cba224b70652c2ba365e3203287945c75616e0d19a6afb55455950cd17b29"
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "dde1badf60dfd4d2ed28ca3c8b64b6b66fe586b8d35d353b515e614d85de8ef5"
+        }
+      ],
+      "counting": "ordinary tests + unchanged registered support + 1550 legacy",
+      "legacy_unresolved_lines": 1550,
+      "approved_source_delta": 49,
+      "planned_raw_delta": 49,
+      "planned_support_delta": 0,
+      "excluded_monotonic_rule_ordinary": 1,
+      "excluded_monotonic_rule_physical": 1,
+      "original_caps_sha256": "0fc8c5e140b56200643f090106395259da9ca23d1e90a0e64738c3bd3f5c5fbe",
+      "expected_caps_sha256": "0fc8c5e140b56200643f090106395259da9ca23d1e90a0e64738c3bd3f5c5fbe",
+      "cost_components": {
+        "tests/test_rag_module_and_packaging_boundary.py": 39,
+        "tests/test_suite_budget.py": 10
+      },
+      "exact_source_pair": [
+        157235,
+        157284
+      ]
     }
   ]
 }
