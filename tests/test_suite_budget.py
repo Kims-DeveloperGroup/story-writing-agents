@@ -246,7 +246,8 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
-        accounting_current = suite_budget.load_budget()
+        binding_lifetime_current = suite_budget.load_budget()
+        accounting_current = dict(binding_lifetime_current, max_test_source_lines=156976)
         retrieval_outcomes_current = dict(accounting_current, max_test_source_lines=156953)
         provider_generation_current = dict(retrieval_outcomes_current, max_test_source_lines=156942)
         antigravity_stream_current = dict(provider_generation_current, max_test_source_lines=156925)
@@ -770,6 +771,8 @@ class SuiteBudgetTests(unittest.TestCase):
         self._assert_source_limit_neighbors_rejected(retrieval_outcomes_current, provider_generation_current)
         self.assertIsNone(suite_budget.check_monotonic(accounting_current, retrieval_outcomes_current))
         self._assert_source_limit_neighbors_rejected(accounting_current, retrieval_outcomes_current)
+        self.assertIsNone(suite_budget.check_monotonic(binding_lifetime_current, accounting_current))
+        self._assert_source_limit_neighbors_rejected(binding_lifetime_current, accounting_current)
         invocation_caps = invocation_current["subtest_caps"]
         invocation_id = next(move["new_id"] for move in invocation_moves if move["subtest_cap"])
         for changed_caps in (
@@ -905,6 +908,19 @@ class SuiteBudgetTests(unittest.TestCase):
             sum(accounting_current["subtest_caps"][cid] for cid in accounting["affected_manifest"]["ordered_ids"]),
             8,
         )
+        binding_lifetime = select_impact(real, paths=("src/story_writing_agents/provider_binding_call_lifetime.py",))
+        self.assertEqual(
+            binding_lifetime["focused_manifest"]["ordered_ids"],
+            ["tests.test_codex_backend.CodexBackendTestCase.test_retirement_defers_exact_cleanup_for_each_bound_operation"],
+        )
+        self.assertEqual(binding_lifetime["affected_manifest"]["count"], 6)
+        self.assertEqual(
+            sum(binding_lifetime_current["subtest_caps"][cid] for cid in binding_lifetime["affected_manifest"]["ordered_ids"]),
+            14,
+        )
+        binding_test_definitions = select_impact(real, paths=("tests/test_provider_binding_call_lifetime.py",))
+        self.assertEqual(binding_test_definitions["focused_manifest"]["count"], 4)
+        self.assertEqual(binding_test_definitions["affected_manifest"]["count"], 90)
         self.assertTrue(all(move["old_id"] not in real.ids for move in stream_moves))
         self.assertTrue(all(type(case).__bases__ == (unittest.IsolatedAsyncioTestCase,) and type(case).__module__ == "tests.test_codex_adapter_streaming" for case in moved_streaming.tests))
         for path, expected in (
