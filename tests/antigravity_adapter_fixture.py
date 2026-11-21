@@ -11,7 +11,7 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 
-from story_writing_agents import PLOT_ARCHITECT, antigravity_agent_definition
+from story_writing_agents import AgentRequest, PLOT_ARCHITECT, Phase, antigravity_agent_definition
 from story_writing_agents.antigravity_adapter import AntigravityAdapter
 from story_writing_agents.prompts import PromptAssembler
 from story_writing_agents.provider_adapter import ProviderInvocation
@@ -187,4 +187,38 @@ class AntigravityAdapterFixture:
                 for entry in target.parent.iterdir()
                 if entry.name.startswith(f".{target.name}.")],
             [],
+        )
+
+    @staticmethod
+    def request(
+        session_id: str,
+        *,
+        debate_id: str,
+    ) -> AgentRequest:
+        """Build one exact provider-neutral debate request."""
+
+        return AgentRequest(
+            session_id=session_id,
+            debate_id=debate_id,
+            agent_id=PLOT_ARCHITECT,
+            phase=Phase.DRAFT,
+            round_number=0,
+            revision_id="r0",
+            task="Perform the requested phase.",
+            user_payload="PRIVATE_STORY_PAYLOAD",)
+
+    def runtime_root(
+        self,
+        adapter: AntigravityAdapter,
+        session_id: str,
+    ) -> Path:
+        """Return the isolated runtime root for this test definition."""
+
+        return (
+            adapter.state_root
+            / "sessions"
+            / session_id
+            / self.execution_workspace(session_id).generation_provenance.removeprefix("sha256:")
+            / self.definition.agent_id
+            / self.definition.fingerprint
         )
