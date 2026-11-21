@@ -28,7 +28,8 @@
     "tests/conversation_retrieval_wire_fixture.py",
     "tests/codex_native_process_fixture.py",
     "tests/agent_exchange_capture_fixture.py",
-    "tests/antigravity_adapter_fixture.py"
+    "tests/antigravity_adapter_fixture.py",
+    "tests/antigravity_streaming_fixture.py"
   ],
   "origins": {
     "test_git_external_operation_inspection.py": {
@@ -2963,6 +2964,51 @@
         "id_receipt_registered_support": 4
       },
       "counting": "Five existing cases move 1:1. Existing shared fixture and receipt support paths are counted exactly once."
+    },
+    {
+      "issue": 1105,
+      "origin_commit": "21bff609409f68b84e92e80cc501f8accd33eacc",
+      "origins": [
+        {
+          "source": "tests/id_moves.py",
+          "sha256": "70d810e9744c0eb2dc7e28648f014011bc8910db74733ae05f17e79c32c6042d"
+        },
+        {
+          "source": "tests/test_adapter_streaming.py",
+          "sha256": "36bab48c98c1176c24ddf437400b5b3a8b36cb1000745670b52c99743a9cf062"
+        },
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "a0ede90ad93f703fe7d060fb37eff052f4c3d555eec60e6876d4ad12c82349df"
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "2e32a43ed039762c6697bfa9fb970190fcc83910833568f82390c43000f3510c"
+        }
+      ],
+      "approved_source_delta": 64,
+      "planned_raw_delta": 24,
+      "planned_support_delta": 40,
+      "legacy_unresolved_lines": 1550,
+      "exact_source_pair": [
+        156851,
+        156915
+      ],
+      "original_caps_sha256": "5d41f52db46a9e63e39130a631a6a3fda04a1486b7749fcc7c12a26b27157c28",
+      "expected_caps_sha256": "0fc8c5e140b56200643f090106395259da9ca23d1e90a0e64738c3bd3f5c5fbe",
+      "counted_support_path": "tests/antigravity_streaming_fixture.py",
+      "excluded_monotonic_rule_ordinary": 13,
+      "excluded_monotonic_rule_physical": 13,
+      "cost_components": {
+        "tests/antigravity_streaming_fixture.py": 36,
+        "tests/id_moves.py": 4,
+        "tests/test_adapter_streaming.py": -976,
+        "tests/test_antigravity_stream_delivery.py": 558,
+        "tests/test_antigravity_stream_validation.py": 416,
+        "tests/test_rag_module_and_packaging_boundary.py": 5,
+        "tests/test_suite_budget.py": 21
+      },
+      "counting": "ordinary tests + registered support + 1550 legacy"
     }
   ]
 }
