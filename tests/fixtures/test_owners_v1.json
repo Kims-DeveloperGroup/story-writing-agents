@@ -893,19 +893,15 @@
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_agent_writes_are_complete_bounded_and_failure_safe",
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_backend_preflight_reports_unverified_headless_capabilities",
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_backend_routes_and_persists_antigravity_conversation_id",
-        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_binding_is_stable_isolated_and_uses_private_custom_agent",
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_capability_cleanup_failure_preserves_result_and_active_exception",
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_capability_cleanup_process_control_propagates_exactly",
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_capability_probe_is_bounded_isolated_and_requires_public_flags",
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_command_stdin_paths_and_fresh_resume_results_are_exact",
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_completed_failures_retain_exact_native_diagnostic_and_accounting",
-        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_contextual_binding_shared_semantics_and_vendor_constraints_are_exact",
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_contextual_unicode_print_argument_and_transport_accounting_match_payload",
-        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_definition_chain_rejects_links_and_non_directories",
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_direct_invocation_preserves_prepared_payload_and_failure_facts",
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_identifier_and_json_failures_are_fixed_and_confidential",
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_malformed_usage_never_invalidates_a_valid_provider_response",
-        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_mode_failures_are_best_effort_but_controls_propagate",
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_model_effort_precedence_and_backend_projection_are_immutable",
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_nonregular_and_multiply_linked_agent_files_are_rejected",
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_nonzero_timeout_and_cancellation_use_bounded_cleanup",
@@ -933,19 +929,15 @@
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_agent_writes_are_complete_bounded_and_failure_safe",
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_backend_preflight_reports_unverified_headless_capabilities",
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_backend_routes_and_persists_antigravity_conversation_id",
-        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_binding_is_stable_isolated_and_uses_private_custom_agent",
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_capability_cleanup_failure_preserves_result_and_active_exception",
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_capability_cleanup_process_control_propagates_exactly",
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_capability_probe_is_bounded_isolated_and_requires_public_flags",
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_command_stdin_paths_and_fresh_resume_results_are_exact",
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_completed_failures_retain_exact_native_diagnostic_and_accounting",
-        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_contextual_binding_shared_semantics_and_vendor_constraints_are_exact",
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_contextual_unicode_print_argument_and_transport_accounting_match_payload",
-        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_definition_chain_rejects_links_and_non_directories",
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_direct_invocation_preserves_prepared_payload_and_failure_facts",
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_identifier_and_json_failures_are_fixed_and_confidential",
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_malformed_usage_never_invalidates_a_valid_provider_response",
-        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_mode_failures_are_best_effort_but_controls_propagate",
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_model_effort_precedence_and_backend_projection_are_immutable",
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_nonregular_and_multiply_linked_agent_files_are_rejected",
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_nonzero_timeout_and_cancellation_use_bounded_cleanup",
@@ -967,6 +959,7 @@
         "tests.test_antigravity_adapter.AntigravitySchemaRenderingTests.test_safe_integer_edges_and_original_constraint_equivalence"
       ],
       "depends_on": [
+        "tests.antigravity_adapter_fixture",
         "tests.test_agent_context_accounting",
         "tests.test_antigravity_rules"
       ]
@@ -6956,7 +6949,8 @@
         "tests.test_antigravity_rules",
         "tests.test_backend_reply_decoding",
         "tests.test_codex_backend",
-        "tests.test_specialist_orchestration_execution"
+        "tests.test_specialist_orchestration_execution",
+        "tests.test_antigravity_definition_staging"
       ]
     },
     {
@@ -19475,18 +19469,18 @@
         "src/story_writing_agents/antigravity_rules.py"
       ],
       "focused_ids": [
-        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_binding_is_stable_isolated_and_uses_private_custom_agent",
+        "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_binding_is_stable_isolated_and_uses_private_custom_agent",
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_command_stdin_paths_and_fresh_resume_results_are_exact",
-        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_mode_failures_are_best_effort_but_controls_propagate"
+        "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_mode_failures_are_best_effort_but_controls_propagate"
       ],
       "affected_ids": [
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_agent_cleanup_exception_precedence_is_exact",
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_agent_writes_are_complete_bounded_and_failure_safe",
-        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_binding_is_stable_isolated_and_uses_private_custom_agent",
+        "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_binding_is_stable_isolated_and_uses_private_custom_agent",
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_command_stdin_paths_and_fresh_resume_results_are_exact",
-        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_contextual_binding_shared_semantics_and_vendor_constraints_are_exact",
-        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_definition_chain_rejects_links_and_non_directories",
-        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_mode_failures_are_best_effort_but_controls_propagate",
+        "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_contextual_binding_shared_semantics_and_vendor_constraints_are_exact",
+        "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_definition_chain_rejects_links_and_non_directories",
+        "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_mode_failures_are_best_effort_but_controls_propagate",
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_nonzero_timeout_and_cancellation_use_bounded_cleanup"
       ],
       "depends_on": []
@@ -19498,14 +19492,10 @@
         "tests/test_antigravity_rules.py"
       ],
       "focused_ids": [
-        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_binding_is_stable_isolated_and_uses_private_custom_agent",
-        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_command_stdin_paths_and_fresh_resume_results_are_exact",
-        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_mode_failures_are_best_effort_but_controls_propagate"
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_command_stdin_paths_and_fresh_resume_results_are_exact"
       ],
       "affected_ids": [
-        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_binding_is_stable_isolated_and_uses_private_custom_agent",
-        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_command_stdin_paths_and_fresh_resume_results_are_exact",
-        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_mode_failures_are_best_effort_but_controls_propagate"
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_command_stdin_paths_and_fresh_resume_results_are_exact"
       ],
       "depends_on": []
     },
@@ -19567,7 +19557,7 @@
       ],
       "affected_ids": [
         "tests.test_agent_policy_composition.AgentPolicyCompositionTests.test_provider_bindings_use_captured_composed_bytes_after_source_mutation",
-        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_contextual_binding_shared_semantics_and_vendor_constraints_are_exact",
+        "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_contextual_binding_shared_semantics_and_vendor_constraints_are_exact",
         "tests.test_codex_backend.CodexBackendTestCase.test_binding_stages_immutable_bytes_after_all_source_paths_become_unsafe",
         "tests.test_codex_backend.CodexBackendTestCase.test_post_staging_validation_failure_discards_provisional_bytes",
         "tests.test_codex_backend.CodexBackendTestCase.test_reference_read_invoke_isolated_for_all_roles_and_rounds",
@@ -20482,6 +20472,156 @@
         "tests.test_antigravity_recovery_evidence.AntigravityRecoveryEvidenceTests.test_unsafe_native_paths_and_bounded_trace_reject"
       ],
       "depends_on": []
+    },
+    {
+      "name": "antigravity.agent-definition",
+      "paths": [
+        "src/story_writing_agents/antigravity_agent_definition.py"
+      ],
+      "focused_ids": [
+        "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_binding_is_stable_isolated_and_uses_private_custom_agent",
+        "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_contextual_binding_shared_semantics_and_vendor_constraints_are_exact",
+        "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_definition_chain_rejects_links_and_non_directories",
+        "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_mode_failures_are_best_effort_but_controls_propagate"
+      ],
+      "affected_ids": [
+        "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_streams_events_and_parses_stream_json",
+        "tests.test_agent_policy_composition.AgentPolicyCompositionTests.test_provider_bindings_use_captured_composed_bytes_after_source_mutation",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_backend_routes_and_persists_antigravity_conversation_id",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_command_stdin_paths_and_fresh_resume_results_are_exact",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_owned_directory_chains_are_private_without_changing_parent",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_runtime_chain_rejects_links_and_files_before_launch",
+        "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_binding_is_stable_isolated_and_uses_private_custom_agent",
+        "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_contextual_binding_shared_semantics_and_vendor_constraints_are_exact",
+        "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_definition_chain_rejects_links_and_non_directories",
+        "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_mode_failures_are_best_effort_but_controls_propagate"
+      ],
+      "depends_on": [],
+      "boundary": "provider-definition-installation"
+    },
+    {
+      "name": "antigravity.state-directories",
+      "paths": [
+        "src/story_writing_agents/antigravity_state_directories.py"
+      ],
+      "focused_ids": [
+        "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_binding_is_stable_isolated_and_uses_private_custom_agent",
+        "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_definition_chain_rejects_links_and_non_directories",
+        "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_mode_failures_are_best_effort_but_controls_propagate"
+      ],
+      "affected_ids": [
+        "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_streams_events_and_parses_stream_json",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_backend_routes_and_persists_antigravity_conversation_id",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_command_stdin_paths_and_fresh_resume_results_are_exact",
+        "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_binding_is_stable_isolated_and_uses_private_custom_agent",
+        "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_contextual_binding_shared_semantics_and_vendor_constraints_are_exact",
+        "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_definition_chain_rejects_links_and_non_directories",
+        "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_mode_failures_are_best_effort_but_controls_propagate"
+      ],
+      "depends_on": [],
+      "boundary": "provider-state-directories"
+    },
+    {
+      "name": "tests.test_antigravity_definition_staging",
+      "paths": [
+        "tests/test_antigravity_definition_staging.py"
+      ],
+      "focused_ids": [
+        "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_binding_is_stable_isolated_and_uses_private_custom_agent",
+        "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_contextual_binding_shared_semantics_and_vendor_constraints_are_exact",
+        "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_definition_chain_rejects_links_and_non_directories",
+        "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_mode_failures_are_best_effort_but_controls_propagate"
+      ],
+      "affected_ids": [
+        "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_binding_is_stable_isolated_and_uses_private_custom_agent",
+        "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_contextual_binding_shared_semantics_and_vendor_constraints_are_exact",
+        "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_definition_chain_rejects_links_and_non_directories",
+        "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_mode_failures_are_best_effort_but_controls_propagate"
+      ],
+      "depends_on": [
+        "tests.antigravity_adapter_fixture"
+      ],
+      "boundary": "existing-cases"
+    },
+    {
+      "name": "tests.antigravity_adapter_fixture",
+      "paths": [
+        "tests/antigravity_adapter_fixture.py"
+      ],
+      "focused_ids": [
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_agent_cleanup_exception_precedence_is_exact",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_agent_identity_mismatches_and_leaf_swap_are_contained",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_agent_target_symlinks_preserve_outside_and_never_launch",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_agent_writes_are_complete_bounded_and_failure_safe",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_backend_preflight_reports_unverified_headless_capabilities",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_backend_routes_and_persists_antigravity_conversation_id",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_capability_cleanup_failure_preserves_result_and_active_exception",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_capability_cleanup_process_control_propagates_exactly",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_capability_probe_is_bounded_isolated_and_requires_public_flags",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_command_stdin_paths_and_fresh_resume_results_are_exact",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_completed_failures_retain_exact_native_diagnostic_and_accounting",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_contextual_unicode_print_argument_and_transport_accounting_match_payload",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_direct_invocation_preserves_prepared_payload_and_failure_facts",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_identifier_and_json_failures_are_fixed_and_confidential",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_malformed_usage_never_invalidates_a_valid_provider_response",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_model_effort_precedence_and_backend_projection_are_immutable",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_nonregular_and_multiply_linked_agent_files_are_rejected",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_nonzero_timeout_and_cancellation_use_bounded_cleanup",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_owned_directory_chains_are_private_without_changing_parent",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_partial_exit_zero_requires_independent_current_finish_for_fresh_and_resumed_calls",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_partial_timeout_rejects_incomplete_envelopes_and_preserves_failure_facts",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_private_import_has_no_filesystem_or_public_surface_effect",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_provider_usage_accepts_only_recognized_exact_snapshot_counters",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_recovered_invoke_uses_actual_current_trace_and_retains_error_envelope",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_rendered_schema_echo_is_exact_for_success_and_recovered_error",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_request_encoding_failures_are_fixed_private_and_prelaunch",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_runtime_chain_rejects_links_and_files_before_launch",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_shared_default_and_explicit_timeouts_keep_native_and_outer_deadlines_distinct",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_unavailable_process_output_is_not_invented",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_unrendered_or_mismatched_echo_retains_completed_failure_bytes",
+        "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_binding_is_stable_isolated_and_uses_private_custom_agent",
+        "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_contextual_binding_shared_semantics_and_vendor_constraints_are_exact",
+        "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_definition_chain_rejects_links_and_non_directories",
+        "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_mode_failures_are_best_effort_but_controls_propagate"
+      ],
+      "affected_ids": [
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_agent_cleanup_exception_precedence_is_exact",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_agent_identity_mismatches_and_leaf_swap_are_contained",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_agent_target_symlinks_preserve_outside_and_never_launch",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_agent_writes_are_complete_bounded_and_failure_safe",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_backend_preflight_reports_unverified_headless_capabilities",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_backend_routes_and_persists_antigravity_conversation_id",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_capability_cleanup_failure_preserves_result_and_active_exception",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_capability_cleanup_process_control_propagates_exactly",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_capability_probe_is_bounded_isolated_and_requires_public_flags",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_command_stdin_paths_and_fresh_resume_results_are_exact",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_completed_failures_retain_exact_native_diagnostic_and_accounting",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_contextual_unicode_print_argument_and_transport_accounting_match_payload",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_direct_invocation_preserves_prepared_payload_and_failure_facts",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_identifier_and_json_failures_are_fixed_and_confidential",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_malformed_usage_never_invalidates_a_valid_provider_response",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_model_effort_precedence_and_backend_projection_are_immutable",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_nonregular_and_multiply_linked_agent_files_are_rejected",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_nonzero_timeout_and_cancellation_use_bounded_cleanup",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_owned_directory_chains_are_private_without_changing_parent",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_partial_exit_zero_requires_independent_current_finish_for_fresh_and_resumed_calls",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_partial_timeout_rejects_incomplete_envelopes_and_preserves_failure_facts",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_private_import_has_no_filesystem_or_public_surface_effect",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_provider_usage_accepts_only_recognized_exact_snapshot_counters",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_recovered_invoke_uses_actual_current_trace_and_retains_error_envelope",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_rendered_schema_echo_is_exact_for_success_and_recovered_error",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_request_encoding_failures_are_fixed_private_and_prelaunch",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_runtime_chain_rejects_links_and_files_before_launch",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_shared_default_and_explicit_timeouts_keep_native_and_outer_deadlines_distinct",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_unavailable_process_output_is_not_invented",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_unrendered_or_mismatched_echo_retains_completed_failure_bytes",
+        "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_binding_is_stable_isolated_and_uses_private_custom_agent",
+        "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_contextual_binding_shared_semantics_and_vendor_constraints_are_exact",
+        "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_definition_chain_rejects_links_and_non_directories",
+        "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_mode_failures_are_best_effort_but_controls_propagate"
+      ],
+      "depends_on": [],
+      "boundary": "existing-cases"
     }
   ],
   "ignored_names": [
