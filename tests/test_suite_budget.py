@@ -246,7 +246,8 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
-        adapter_generations_current = suite_budget.load_budget()
+        profile_observations_current = suite_budget.load_budget()
+        adapter_generations_current = dict(profile_observations_current, max_test_source_lines=157080)
         binding_lifetime_current = dict(adapter_generations_current, max_test_source_lines=157025)
         accounting_current = dict(binding_lifetime_current, max_test_source_lines=156976)
         retrieval_outcomes_current = dict(accounting_current, max_test_source_lines=156953)
@@ -772,6 +773,8 @@ class SuiteBudgetTests(unittest.TestCase):
         self._assert_source_limit_neighbors_rejected(retrieval_outcomes_current, provider_generation_current)
         self.assertIsNone(suite_budget.check_monotonic(accounting_current, retrieval_outcomes_current))
         self._assert_source_limit_neighbors_rejected(accounting_current, retrieval_outcomes_current)
+        self.assertIsNone(suite_budget.check_monotonic(profile_observations_current, adapter_generations_current))
+        self._assert_source_limit_neighbors_rejected(profile_observations_current, adapter_generations_current)
         self.assertIsNone(suite_budget.check_monotonic(adapter_generations_current, binding_lifetime_current))
         self._assert_source_limit_neighbors_rejected(adapter_generations_current, binding_lifetime_current)
         self.assertIsNone(suite_budget.check_monotonic(binding_lifetime_current, accounting_current))
@@ -938,6 +941,17 @@ class SuiteBudgetTests(unittest.TestCase):
         generation_test_definitions = select_impact(real, paths=("tests/test_provider_adapter_generations.py",))
         self.assertEqual(generation_test_definitions["focused_manifest"]["count"], 2)
         self.assertEqual(generation_test_definitions["affected_manifest"]["count"], 90)
+
+        profile_observations = select_impact(real, paths=("src/story_writing_agents/provider_execution_profile_observations.py",))
+        self.assertEqual(
+            profile_observations["focused_manifest"]["ordered_ids"],
+            ["tests.test_codex_backend.CodexBackendTestCase.test_hot_same_provider_profile_applies_now_and_reuses_thread"],
+        )
+        self.assertEqual(profile_observations["affected_manifest"]["count"], 4)
+        self.assertEqual(
+            sum(binding_lifetime_current["subtest_caps"][cid] for cid in profile_observations["affected_manifest"]["ordered_ids"]),
+            0,
+        )
         self.assertTrue(all(move["old_id"] not in real.ids for move in stream_moves))
         self.assertTrue(all(type(case).__bases__ == (unittest.IsolatedAsyncioTestCase,) and type(case).__module__ == "tests.test_codex_adapter_streaming" for case in moved_streaming.tests))
         for path, expected in (
