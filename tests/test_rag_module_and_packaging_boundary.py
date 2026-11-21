@@ -55,6 +55,7 @@ from story_writing_agents import authoring_admission
 from story_writing_agents import backend as backend_module, backend_reply_decoding, conversation_retrieval, models
 from story_writing_agents import provider_session_claim_guard, provider_session_timestamps, provider_thread_records
 from story_writing_agents import provider_session_access_records, provider_session_access_transactions, provider_session_artifacts
+from story_writing_agents import provider_context_invocation
 from story_writing_agents import provider_context_thread_store, provider_manifest_thread_store, provider_session_lifecycle_queries
 from story_writing_agents import conversation_retrieval_wire, provider_direct_call_wire, provider_execution_profiles, provider_session_transitions
 from story_writing_agents.errors import (
@@ -403,14 +404,43 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 351)
-        self.assertEqual(len(edges), 2086)
+        self.assertEqual(len(modules), 352)
+        self.assertEqual(len(edges), 2110)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._core', 'story_writing_agents.agent_context.contracts.events'), edges)
         self.assertIsNone(_cycle_witness(modules, edges))
         provider_dependencies = {
+            "story_writing_agents.provider_context_invocation": (
+                {
+                    "story_writing_agents.agent_context",
+                    "story_writing_agents.agent_context.contracts.errors",
+                    "story_writing_agents.agent_context.invocation.provider",
+                    "story_writing_agents.agent_context.manifest",
+                    "story_writing_agents.agent_exchanges",
+                    "story_writing_agents.agent_exchanges.capture",
+                    "story_writing_agents.agent_exchanges.provider_finalization",
+                    "story_writing_agents.agents",
+                    "story_writing_agents.antigravity_adapter",
+                    "story_writing_agents.config",
+                    "story_writing_agents.conversations.session_context",
+                    "story_writing_agents.errors",
+                    "story_writing_agents.interactive_settings",
+                    "story_writing_agents.models",
+                    "story_writing_agents.provider_adapter",
+                    "story_writing_agents.provider_adapter_generations",
+                    "story_writing_agents.provider_auth_recovery",
+                    "story_writing_agents.provider_context_thread_store",
+                    "story_writing_agents.provider_execution_workspace",
+                    "story_writing_agents.provider_invocation_accounting",
+                    "story_writing_agents.provider_message_catalog",
+                    "story_writing_agents.provider_schema_projection",
+                    "story_writing_agents.provider_thread_records",
+                    "story_writing_agents.workspace",
+                },
+                {"story_writing_agents.backend"},
+            ),
             "story_writing_agents.provider_bound_context": (
                 {
                     "story_writing_agents.agent_context.contracts.errors",
@@ -455,6 +485,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                     'story_writing_agents.agent_context.invocation.context_execution',
                     'story_writing_agents.agent_context.payload.actions',
                     'story_writing_agents.backend',
+                    'story_writing_agents.provider_context_invocation',
                     'story_writing_agents.lead_provider_contracts',
                     'story_writing_agents.prompts',
                     'story_writing_agents.provider_contract_guidance',
@@ -505,6 +536,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                     'story_writing_agents.agent_context.contracts.bound_call',
                     'story_writing_agents.agent_context.invocation.context_execution',
                     'story_writing_agents.backend',
+                    'story_writing_agents.provider_context_invocation',
                     'story_writing_agents.lead_preparation.reply_contract_values',
                     'story_writing_agents.lead_provider_contracts',
                     'story_writing_agents.orchestrator',
@@ -1995,7 +2027,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
         adapter_generations = "story_writing_agents.provider_adapter_generations"
         self.assertEqual(
             {source for source, target in edges if target == adapter_generations},
-            {"story_writing_agents.backend"},
+            {"story_writing_agents.backend", "story_writing_agents.provider_context_invocation"},
         )
         self.assertEqual(
             {target for source, target in edges if source == adapter_generations},
@@ -2017,7 +2049,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
         accounting_owner = "story_writing_agents.provider_invocation_accounting"
         self.assertEqual(
             {source for source, target in edges if target == accounting_owner},
-            {"story_writing_agents.backend"},
+            {"story_writing_agents.backend", "story_writing_agents.provider_context_invocation"},
         )
         self.assertEqual(
             {target for source, target in edges if source == accounting_owner},
@@ -2073,7 +2105,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             },
         )
         self.assertEqual({source for source, target in edges if target == exchange_finalization_owner},
-                         {"story_writing_agents.backend"})
+                         {"story_writing_agents.backend", "story_writing_agents.provider_context_invocation"})
         codex_definition_owner = "story_writing_agents.codex_definition_sources"
         invocation_files_owner = codex_invocation_files.__name__
         self.assertEqual({target for source, target in edges if source == invocation_files_owner},
@@ -2133,7 +2165,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
             },
         )
         self.assertEqual({source for source, target in edges if target == records_owner},
-                         {"story_writing_agents.backend", artifacts_owner, context_store_owner, manifest_store_owner, transitions_owner})
+                         {"story_writing_agents.backend", "story_writing_agents.provider_context_invocation",
+                          artifacts_owner, context_store_owner, manifest_store_owner, transitions_owner})
         self.assertEqual({target for source, target in edges if source == stamps_owner},
                          {"story_writing_agents.errors"})
         self.assertEqual({source for source, target in edges if target == stamps_owner},
@@ -2178,7 +2211,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
              "story_writing_agents.errors", records_owner, "story_writing_agents.workspace"},
         )
         self.assertEqual({source for source, target in edges if target == context_store_owner},
-                         {"story_writing_agents.backend", "story_writing_agents.provider_bound_context"})
+                         {"story_writing_agents.provider_bound_context", "story_writing_agents.provider_context_invocation"})
         self.assertEqual(
             {target for source, target in edges if source == manifest_store_owner},
             {"story_writing_agents.errors", "story_writing_agents.models", artifacts_owner, records_owner,
@@ -2870,7 +2903,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
         self.assertFalse(hasattr(story_writing_agents, "BoundContextProvider"))
         self.assertFalse(hasattr(story_writing_agents, "_BoundContextProvider"))
         context_store = provider_context_thread_store
-        self.assertIs(backend_module.provider_context_thread_store, context_store)
+        self.assertIs(provider_context_invocation.provider_context_thread_store, context_store)
         manifest_store = provider_manifest_thread_store
         self.assertIs(backend_module.provider_manifest_thread_store, manifest_store)
         self.assertIs(manifest_store.provider_session_artifacts, artifacts)
@@ -3211,6 +3244,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             "story_writing_agents/provider_invocation_accounting.py",
             "story_writing_agents/provider_binding_call_lifetime.py",
             "story_writing_agents/provider_bound_context.py",
+            "story_writing_agents/provider_context_invocation.py",
             "story_writing_agents/provider_retrieval_handler_outcomes.py",
             "story_writing_agents/antigravity_native_recovery.py",
             "story_writing_agents/antigravity_state_directories.py",

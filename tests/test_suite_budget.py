@@ -246,7 +246,8 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
-        bound_context_current = suite_budget.load_budget()
+        context_invocation_current = suite_budget.load_budget()
+        bound_context_current = dict(context_invocation_current, max_test_source_lines=157164)
         profile_observations_current = dict(bound_context_current, max_test_source_lines=157102)
         adapter_generations_current = dict(profile_observations_current, max_test_source_lines=157080)
         binding_lifetime_current = dict(adapter_generations_current, max_test_source_lines=157025)
@@ -774,6 +775,7 @@ class SuiteBudgetTests(unittest.TestCase):
         self._assert_source_limit_neighbors_rejected(retrieval_outcomes_current, provider_generation_current)
         self.assertIsNone(suite_budget.check_monotonic(accounting_current, retrieval_outcomes_current))
         self._assert_source_limit_neighbors_rejected(accounting_current, retrieval_outcomes_current)
+        self.assertIsNone(suite_budget.check_monotonic(context_invocation_current, bound_context_current))
         self.assertIsNone(suite_budget.check_monotonic(bound_context_current, profile_observations_current))
         self.assertIsNone(suite_budget.check_monotonic(profile_observations_current, adapter_generations_current))
         self._assert_source_limit_neighbors_rejected(profile_observations_current, adapter_generations_current)
@@ -976,6 +978,13 @@ class SuiteBudgetTests(unittest.TestCase):
         bound_context_affected = bound_context_impact["affected_manifest"]["ordered_ids"]
         self.assertEqual(len(bound_context_affected), 12)
         self.assertEqual(sum(profile_observations_current["subtest_caps"][cid] for cid in bound_context_affected), 10)
+        physical_context = select_impact(real, paths=("src/story_writing_agents/provider_context_invocation.py",))
+        self.assertEqual(physical_context["focused_manifest"]["ordered_ids"], [
+            "tests.test_codex_invocation_files.CodexInvocationFilesTests.test_conversation_projects_exact_payload_schema_and_no_artifacts",
+        ])
+        physical_affected = physical_context["affected_manifest"]["ordered_ids"]
+        self.assertEqual(physical_affected, bound_context_affected)
+        self.assertEqual(sum(context_invocation_current["subtest_caps"][cid] for cid in physical_affected), 10)
 
         self.assertTrue(all(move["old_id"] not in real.ids for move in stream_moves))
         self.assertTrue(all(type(case).__bases__ == (unittest.IsolatedAsyncioTestCase,) and type(case).__module__ == "tests.test_codex_adapter_streaming" for case in moved_streaming.tests))
