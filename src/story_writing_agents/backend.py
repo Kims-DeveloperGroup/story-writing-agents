@@ -9,6 +9,10 @@ from .provider_adapter_generations import (
     AdapterGeneration as _AdapterGeneration,
     ProviderAdapterGenerations,
 )
+from .provider_bound_context import (
+    BoundContextProvider as _BoundContextProvider,
+    ContextProviderThreadStoreAccess as _ContextProviderThreadStoreAccess,
+)
 import story_writing_agents.provider_context_thread_store as provider_context_thread_store
 import story_writing_agents.provider_direct_call_wire as provider_direct_call_wire
 import story_writing_agents.provider_execution_profiles as provider_execution_profiles
@@ -46,8 +50,8 @@ from .structured_output_validation import (
     remap_validation,
     prefix_validation,
 )
-from collections.abc import AsyncIterator, Callable, Iterator
-from contextlib import ExitStack, asynccontextmanager, contextmanager
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from contextlib import AbstractAsyncContextManager, AbstractContextManager, asynccontextmanager, contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 from types import MappingProxyType
@@ -255,407 +259,77 @@ class BackendRuntimeConfigurationCandidate:
     generation: _AdapterGeneration
 
 
-class _BoundContextProvider:
-    """Bind the service-owned contextual protocol to one backend binding."""
+@dataclass(frozen=True, slots=True)
+class _BoundContextBinding:
+    """Expose this binding's current backend operations to the contextual provider."""
 
-    def __init__(
-        self,
-        bound_agent: BoundAgent,
-        reference_read: ReferenceReadInvocation | None,
-    ) -> None:
-        self._bound_agent = bound_agent
-        self._reference_read = reference_read
-        self._reference_prepared = False
-        self._reference_terminal = False
-        self._active_scope: ContextScope | None = None
-        self._continuation_identity: ContextContinuationIdentity | None = None
-        self._active_policy_fingerprint: str | None = None
-        self._active_execution_workspace: ProviderExecutionWorkspace | None = None
-        if reference_read is None:
-            self.reference_operation_id = None
-        else:
-            request = getattr(reference_read, "request", None)
-            methods = (
-                "handle_reference_read_action",
-                "record_result_received",
-                "accept",
-                "terminate",
-            )
-            if type(request) is not ReferenceReadRequest or any(
-                not callable(getattr(reference_read, name, None)) for name in methods
-            ):
-                raise TypeError(
-                    "reference_read must provide a synchronous ReferenceReadInvocation"
-                )
-            for name in methods:
-                method = getattr(reference_read, name)
-                method_call = getattr(method, "__call__", None)
-                if (
-                    inspect.iscoroutinefunction(method)
-                    or inspect.isasyncgenfunction(method)
-                    or inspect.iscoroutinefunction(method_call)
-                    or inspect.isasyncgenfunction(method_call)
-                ):
-                    raise TypeError(
-                        "reference_read must provide synchronous lifecycle methods"
-                    )
-            if request.correlation.agent_id != bound_agent.definition.agent_id:
-                raise ReferenceAuthorizationError(
-                    ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH
-                )
-            self.reference_operation_id = request.correlation.operation_id
+    agent: BoundAgent
 
     @property
-    def provider_id(self) -> str:
-        return self._bound_agent.vendor
+    def thread_store_access(self) -> _ContextProviderThreadStoreAccess:
+        return self.agent.backend
 
     @property
-    def definition_fingerprint(self) -> str:
-        return f"sha256:{self._bound_agent.definition.fingerprint}"
+    def compose_session_artifact_binding(self) -> Callable[[Path, str], SessionArtifactBinding]:
+        return _compose_session_artifact_binding
 
-    @asynccontextmanager
-    async def invocation(
+    def open_provider_execution_workspace(
+        self, binding: SessionArtifactBinding,
+    ) -> AbstractContextManager[ProviderExecutionWorkspace]:
+        return provider_execution_workspace_manager(self.agent, binding)
+
+    @property
+    def reference_call_use(
         self,
-        scope: ContextScope,
-        policy_fingerprint: str,
-        *,
-        continuation_identity: ContextContinuationIdentity | None = None,
-        execution_workspace: ProviderExecutionWorkspace | None = None,
-    ) -> AsyncIterator[None]:
-        if (
-            type(scope) is not ContextScope
-            or scope.agent_id != self._bound_agent.definition.agent_id
-            or type(policy_fingerprint) is not str
-            or self._active_scope is not None
-        ):
-            raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
-        entered = False
-        try:
-            with ExitStack() as workspace_stack:
-                active_execution_workspace = execution_workspace
-                if (
-                    self.provider_id in {"codex", "antigravity"}
-                    and active_execution_workspace is None
-                ):
-                    binding = _compose_session_artifact_binding(
-                        self._bound_agent.backend.workspace.root,
-                        scope.session_id,
-                    )
-                    active_execution_workspace = workspace_stack.enter_context(
-                        provider_execution_workspace_manager(
-                            self._bound_agent,
-                            binding,
-                        )
-                    )
-                definition_fingerprint, effective_policy_fingerprint = (
-                    self._effective_context_fingerprints(
-                        policy_fingerprint,
-                        active_execution_workspace,
-                    )
-                )
-                with self._bound_agent._reference_call_use(self._reference_read):
-                    if continuation_identity is not None and (
-                        type(continuation_identity)
-                        is not ContextContinuationIdentity
-                        or not continuation_identity.accepts(scope)
-                    ):
-                        raise ContextExecutionError(
-                            ContextExecutionErrorCode.PROVIDER_CONTRACT
-                        )
-                    storage_scope = (
-                        scope
-                        if continuation_identity is None
-                        else continuation_identity.checkpoint_scope()
-                    )
-                    lock = self._bound_agent.backend._context_thread_lock(
-                        storage_scope,
-                        self.provider_id,
-                        definition_fingerprint,
-                        effective_policy_fingerprint,
-                    )
-                    async with self._bound_agent._reference_thread_lock(
-                        lock,
-                        self._reference_read,
-                    ):
-                        self._active_scope = scope
-                        self._continuation_identity = continuation_identity
-                        self._active_policy_fingerprint = policy_fingerprint
-                        self._active_execution_workspace = (
-                            active_execution_workspace
-                        )
-                        entered = True
-                        body_failure: BaseException | None = None
-                        try:
-                            try:
-                                yield
-                            except BaseException as failure:
-                                body_failure = failure
-                                raise
-                        finally:
-                            try:
-                                if active_execution_workspace is not None:
-                                    active_execution_workspace.require_current()
-                            except BaseException as validation_failure:
-                                try:
-                                    backend = self._bound_agent.backend
-                                    provider_context_thread_store.taint_context_thread(
-                                        backend.workspace,
-                                        storage_scope,
-                                        self.provider_id,
-                                        definition_fingerprint,
-                                        effective_policy_fingerprint,
-                                        require_owned_access=backend._access_transactions.assert_owned_access,
-                                    )
-                                except BaseException:
-                                    pass
-                                if body_failure is None:
-                                    raise
-                                try:
-                                    body_failure.add_note(
-                                        "provider execution workspace exit validation "
-                                        "failed: "
-                                        f"{type(validation_failure).__name__}"
-                                    )
-                                except BaseException:
-                                    pass
-                            finally:
-                                self._active_scope = None
-                                self._continuation_identity = None
-                                self._active_policy_fingerprint = None
-                                self._active_execution_workspace = None
-        except BaseException as failure:
-            if not entered:
-                self._bound_agent._terminate_reference_before_provider(
-                    self._reference_read,
-                    failure,
-                )
-            raise
+    ) -> Callable[[ReferenceReadInvocation | None], AbstractContextManager[None]]:
+        return self.agent._reference_call_use
 
-    def _require_active(
+    @property
+    def context_thread_lock(self) -> Callable[[ContextScope, str, str, str], asyncio.Lock]:
+        return self.agent.backend._context_thread_lock
+
+    @property
+    def reference_thread_lock(
         self,
-        scope: ContextScope,
-        policy_fingerprint: str,
-    ) -> None:
-        if (
-            scope != self._active_scope
-            or policy_fingerprint != self._active_policy_fingerprint
-        ):
-            raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
+    ) -> Callable[[asyncio.Lock, ReferenceReadInvocation | None], AbstractAsyncContextManager[None]]:
+        return self.agent._reference_thread_lock
 
-    def _active_workspace(
+    @property
+    def terminate_reference_before_provider(
         self,
-        supplied: ProviderExecutionWorkspace | None,
-    ) -> ProviderExecutionWorkspace | None:
-        """Resolve only the capability owned by this active invocation."""
+    ) -> Callable[[ReferenceReadInvocation | None, BaseException], None]:
+        return self.agent._terminate_reference_before_provider
 
-        active = self._active_execution_workspace
-        if self.provider_id not in {"codex", "antigravity"}:
-            return supplied
-        if type(active) is not ProviderExecutionWorkspace or (
-            supplied is not None and supplied is not active
-        ):
-            raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
-        active.require_current()
-        return active
+    def prepare_context_references(
+        self, reference_read: ReferenceReadInvocation, request: ContextReferencePreludeRequest,
+    ) -> Awaitable[ContextReferencePreludeResult]:
+        return self.agent.backend._prepare_context_references(self.agent, reference_read, request)
 
-    def inspect_context_thread(
-        self,
-        scope: ContextScope,
-        policy_fingerprint: str,
-        *,
-        execution_workspace: ProviderExecutionWorkspace | None = None,
-    ) -> str | None:
-        self._require_active(scope, policy_fingerprint)
-        execution_workspace = self._active_workspace(execution_workspace)
-        definition_fingerprint, effective_policy_fingerprint = (
-            self._effective_context_fingerprints(
-                policy_fingerprint,
-                execution_workspace,
-            )
-        )
-        backend = self._bound_agent.backend
-        return provider_context_thread_store.load_context_thread(
-            backend.workspace,
-            scope if self._continuation_identity is None
-            else self._continuation_identity.checkpoint_scope(),
-            self.provider_id,
-            definition_fingerprint,
-            effective_policy_fingerprint,
-            require_ready=backend._assert_provider_work_ready,
-        )
+    @property
+    def reference_terminated_attribute(self) -> str:
+        return _CONTEXT_REFERENCE_TERMINATED_ATTRIBUTE
 
-    def require_current_execution_workspace(
-        self,
-        scope: ContextScope,
-        policy_fingerprint: str,
-    ) -> None:
-        """Revalidate the capability retained by this active invocation."""
-
-        self._require_active(scope, policy_fingerprint)
-        self._active_workspace(None)
-
-    async def prepare_references(
-        self,
-        request: ContextReferencePreludeRequest,
-    ) -> ContextReferencePreludeResult:
-        self._require_active(request.scope, request.policy_fingerprint)
-        if request.continuation_identity != self._continuation_identity:
-            raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
-        execution_workspace = self._active_workspace(request.execution_workspace)
-        if execution_workspace is not request.execution_workspace:
-            request = replace(
-                request,
-                execution_workspace=execution_workspace,
-            )
-        if (
-            self._reference_read is None
-            or self._reference_prepared
-            or self._reference_terminal
-            or request.reference_operation_id != self.reference_operation_id
-        ):
-            raise ReferenceAuthorizationError(
-                ReferenceAuthorizationErrorCode.INVALID_TRANSITION
-            )
-        try:
-            result = await self._bound_agent.backend._prepare_context_references(
-                self._bound_agent,
-                self._reference_read,
-                request,
-            )
-        except BaseException as failure:
-            if (
-                getattr(
-                    failure,
-                    _CONTEXT_REFERENCE_TERMINATED_ATTRIBUTE,
-                    False,
-                )
-                is True
-            ):
-                self._reference_terminal = True
-            raise
-        self._active_workspace(execution_workspace)
-        self._reference_prepared = True
-        return result
-
-    async def invoke_context(
+    def invoke_context(
         self,
         request: ContextProviderCallRequest | BoundContextProviderCallRequest,
-    ) -> ContextProviderCallResult:
-        if type(request) not in {ContextProviderCallRequest, BoundContextProviderCallRequest}:
-            raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
-        self._require_active(request.scope, request.policy_fingerprint)
-        if request.continuation_identity != self._continuation_identity:
-            raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
-        execution_workspace = self._active_workspace(request.execution_workspace)
-        result = await self._bound_agent.backend._invoke_context_physical(self._bound_agent, request=request, execution_workspace=execution_workspace)
-        self._active_workspace(execution_workspace)
-        return result
-
-    def complete_references(
-        self,
-        scope: ContextScope,
-        policy_fingerprint: str,
-    ) -> None:
-        self._require_active(scope, policy_fingerprint)
-        execution_workspace = self._active_workspace(None)
-        if self._reference_read is None:
-            return
-        if not self._reference_prepared or self._reference_terminal:
-            raise ReferenceAuthorizationError(
-                ReferenceAuthorizationErrorCode.INVALID_TRANSITION
-            )
-        try:
-            for name in ("record_result_received", "accept"):
-                if execution_workspace is not None:
-                    execution_workspace.require_current()
-                outcome = getattr(self._reference_read, name)()
-                if inspect.isawaitable(outcome):
-                    if inspect.iscoroutine(outcome):
-                        outcome.close()
-                    raise BackendProtocolError(
-                        f"reference read {name}() returned an awaitable"
-                    )
-                if inspect.isasyncgen(outcome):
-                    raise BackendProtocolError(
-                        f"reference read {name}() returned an async generator"
-                    )
-                if outcome is not None:
-                    raise BackendProtocolError(
-                        f"reference read {name}() returned a value"
-                    )
-        except BaseException:
-            self._terminate_reference(ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE)
-            raise
-        self._reference_terminal = True
-
-    def abort_references(
-        self,
-        scope: ContextScope,
-        policy_fingerprint: str,
         *,
-        cancelled: bool,
-        provider_failure: bool,
-    ) -> None:
-        self._require_active(scope, policy_fingerprint)
-        self._active_workspace(None)
-        if self._reference_read is None or self._reference_terminal:
-            return
-        if cancelled:
-            outcome = ReferenceAuthorizationErrorCode.CANCELLED
-        elif provider_failure:
-            outcome = ReferenceAuthorizationErrorCode.PROVIDER_FAILURE
-        else:
-            outcome = ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE
-        self._terminate_reference(outcome)
-
-    def _terminate_reference(
-        self,
-        outcome: ReferenceAuthorizationErrorCode,
-    ) -> None:
-        assert self._reference_read is not None
-        self._reference_terminal = True
-        AgentBackend._terminate_reference_read_without_replacing(
-            self._reference_read,
-            outcome,
-        )
-
-    def taint_context_thread(
-        self,
-        scope: ContextScope,
-        policy_fingerprint: str,
-        *,
-        execution_workspace: ProviderExecutionWorkspace | None = None,
-    ) -> None:
-        self._require_active(scope, policy_fingerprint)
-        execution_workspace = self._active_workspace(execution_workspace)
-        definition_fingerprint, effective_policy_fingerprint = (
-            self._effective_context_fingerprints(
-                policy_fingerprint,
-                execution_workspace,
-            )
-        )
-        backend = self._bound_agent.backend
-        provider_context_thread_store.taint_context_thread(
-            backend.workspace,
-            scope if self._continuation_identity is None
-            else self._continuation_identity.checkpoint_scope(),
-            self.provider_id,
-            definition_fingerprint,
-            effective_policy_fingerprint,
-            require_owned_access=backend._access_transactions.assert_owned_access,
-        )
-
-    def _effective_context_fingerprints(
-        self,
-        policy_fingerprint: str,
         execution_workspace: ProviderExecutionWorkspace | None,
-    ) -> tuple[str, str]:
-        """Bind Codex continuation compatibility to one session generation."""
+    ) -> Awaitable[ContextProviderCallResult]:
+        return self.agent.backend._invoke_context_physical(
+            self.agent, request=request, execution_workspace=execution_workspace,
+        )
 
+    @property
+    def terminate_reference(
+        self,
+    ) -> Callable[[ReferenceReadInvocation, ReferenceAuthorizationErrorCode], None]:
+        return AgentBackend._terminate_reference_read_without_replacing
+
+    def effective_context_fingerprints(
+        self, policy_fingerprint: str, execution_workspace: ProviderExecutionWorkspace | None,
+    ) -> tuple[str, str]:
         return AgentBackend._effective_context_continuation_fingerprints(
-            self._bound_agent,
-            policy_fingerprint,
-            execution_workspace,
+            self.agent, policy_fingerprint, execution_workspace,
         )
 
 
@@ -755,7 +429,7 @@ class BoundAgent:
     ) -> ContextProvider:
         """Return the package-internal physical seam for contextual execution."""
 
-        return _BoundContextProvider(self, reference_read)
+        return _BoundContextProvider(_BoundContextBinding(self), reference_read)
 
     @asynccontextmanager
     async def _direct_execution_workspace(
@@ -5192,6 +4866,14 @@ class AgentBackend:
                 raise BackendProtocolError(
                     "Antigravity CLI headless capabilities could not be verified"
                 )
+
+    @property
+    def context_provider_ready_check(self) -> Callable[[str], None]:
+        return self._assert_provider_work_ready
+
+    @property
+    def context_provider_owned_access_check(self) -> Callable[[Workspace, str], None]:
+        return self._access_transactions.assert_owned_access
 
     def _assert_provider_work_ready(self, session_id: str) -> None:
         """Require ready durable state and access already held by this backend."""
