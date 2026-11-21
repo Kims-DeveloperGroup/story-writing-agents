@@ -3049,6 +3049,82 @@
         "tests/test_workspace_session_history.py": 0
       },
       "counting": "ordinary tests + registered support + 1550 legacy"
+    },
+    {
+      "issue": 1107,
+      "origin_commit": "83b0d83b1a0c2ac2503de2d2e677e7d9d31ca002",
+      "origins": [
+        {
+          "source": "tests/test_artifact_application_contracts.py",
+          "sha256": "6e130100017a260a6d5d858f05b1e7a509842157156c78a25c22fc4fee9e3e2f"
+        },
+        {
+          "source": "tests/test_artifact_application_store_recovery.py",
+          "sha256": "42a1b1553b6ea79ed2478cb3272a9cac7ac1c3bdd0ae43ee9d47f1fdc694311c"
+        },
+        {
+          "source": "tests/test_artifact_relationship_policy.py",
+          "sha256": "aeb07bc9861af62e9ee8d47ec54f9704b68c388995cbbd7ba98793bc072e290d"
+        },
+        {
+          "source": "tests/test_codex_invocation_files.py",
+          "sha256": "89d953dff987d56845aa89725754f5a62f6d38f0b81e681ae2cf2e7d880690f9"
+        },
+        {
+          "source": "tests/test_git_external_operation_inspection.py",
+          "sha256": "c169b371d759f14ec24cd23c12a1bcdcbfc469d63b7a53a50e5d2d3b8b24c66b"
+        },
+        {
+          "source": "tests/test_interactive_controller.py",
+          "sha256": "df5c2e90c0c5f5600d46730e7634adeb2a31ba227cbfd37319e324ca8195975b"
+        },
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "a9c17d0f636e6ada15097ecd8b35b0625c064af96351d4f2b0591674791ecd78"
+        },
+        {
+          "source": "tests/test_session_lifecycle.py",
+          "sha256": "931b401bbdd96b13ba0362d7f399a49697d22957c894bc09671086fd222ab5b6"
+        },
+        {
+          "source": "tests/test_session_recovery_contracts.py",
+          "sha256": "164307906d2d27334a5361db25587bd823a26c8df23942958fc9611ca36b02ee"
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "1e3ec5f22e24c7e20af8a3fa929ddc893d5bf7d453e4f7cbed767b6921e33cd7"
+        },
+        {
+          "source": "tests/test_workspace_session_history.py",
+          "sha256": "787e164053c2cad92873124a5242904f256f530638b0e202547d8733f8ca2cb0"
+        }
+      ],
+      "approved_source_delta": 17,
+      "planned_raw_delta": 17,
+      "planned_support_delta": 0,
+      "legacy_unresolved_lines": 1550,
+      "exact_source_pair": [
+        156925,
+        156942
+      ],
+      "original_caps_sha256": "0fc8c5e140b56200643f090106395259da9ca23d1e90a0e64738c3bd3f5c5fbe",
+      "expected_caps_sha256": "0fc8c5e140b56200643f090106395259da9ca23d1e90a0e64738c3bd3f5c5fbe",
+      "excluded_monotonic_rule_ordinary": 8,
+      "excluded_monotonic_rule_physical": 8,
+      "cost_components": {
+        "tests/test_artifact_application_contracts.py": 0,
+        "tests/test_artifact_application_store_recovery.py": 0,
+        "tests/test_artifact_relationship_policy.py": 0,
+        "tests/test_codex_invocation_files.py": 0,
+        "tests/test_git_external_operation_inspection.py": 0,
+        "tests/test_interactive_controller.py": 0,
+        "tests/test_rag_module_and_packaging_boundary.py": 10,
+        "tests/test_session_lifecycle.py": 0,
+        "tests/test_session_recovery_contracts.py": 0,
+        "tests/test_suite_budget.py": 7,
+        "tests/test_workspace_session_history.py": 0
+      },
+      "counting": "ordinary tests + unchanged registered support + 1550 legacy"
     }
   ]
 }
