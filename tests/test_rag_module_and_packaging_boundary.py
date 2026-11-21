@@ -1968,6 +1968,9 @@ class RagModuleBoundaryTests(unittest.TestCase):
             "story_writing_agents.config",
             "story_writing_agents.provider_adapter",
         })
+        retrieval_owner = "story_writing_agents.provider_retrieval_handler_outcomes"
+        self.assertEqual({source for source, target in edges if target == retrieval_owner}, {"story_writing_agents.backend"})
+        self.assertEqual({target for source, target in edges if source == retrieval_owner}, {"story_writing_agents.conversation_retrieval"})
         backend_reply_owner = "story_writing_agents.backend_reply_decoding"
         self.assertEqual(
             {target for source, target in edges if source == backend_reply_owner},
@@ -3146,6 +3149,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             "story_writing_agents/antigravity_invocation_options.py",
             "story_writing_agents/antigravity_stream_observation.py",
             "story_writing_agents/provider_generation_adapters.py",
+            "story_writing_agents/provider_retrieval_handler_outcomes.py",
             "story_writing_agents/antigravity_native_recovery.py",
             "story_writing_agents/antigravity_state_directories.py",
             "story_writing_agents/antigravity_recovery_matching.py",
