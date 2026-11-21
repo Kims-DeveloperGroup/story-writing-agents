@@ -7,6 +7,7 @@ import story_writing_agents.conversation_retrieval_wire as conversation_retrieva
 import story_writing_agents.provider_context_thread_store as provider_context_thread_store
 import story_writing_agents.provider_direct_call_wire as provider_direct_call_wire
 import story_writing_agents.provider_execution_profiles as provider_execution_profiles
+import story_writing_agents.provider_invocation_accounting as provider_invocation_accounting
 import story_writing_agents.provider_manifest_thread_store as provider_manifest_thread_store
 import story_writing_agents.provider_retrieval_handler_outcomes as provider_retrieval_handler_outcomes
 import story_writing_agents.provider_session_access_transactions as provider_session_access_transactions
@@ -32,7 +33,6 @@ import inspect
 import json
 import os
 import threading
-import time
 from .structured_output_validation import (
     validation_failure,
     carry_validation,
@@ -52,8 +52,6 @@ from .structured_output_validation import (
     SchemaRules, bounded_chunks, diagnose_json_text, strict_json_value,
 )
 from .agent_context import (
-    ContextComponentKind,
-    JsonPath,
     ProviderCallAccounting,
     ProviderCallKind,
     ProviderCallState,
@@ -155,7 +153,6 @@ from .provider_adapter import (
     ProviderInvocationError,
     ProviderResult,
     provider_failure_accounting,
-    record_provider_failure_accounting,
 )
 from .provider_error_artifacts import (
     PROVIDER_ERROR_ARTIFACT_FAILURE_CATEGORY,
@@ -209,27 +206,6 @@ _CONTEXT_REFERENCE_TERMINATED_ATTRIBUTE = "_context_reference_terminated"
 _ACCESS_CLAIM_GUARD = (
     f"{provider_session_artifacts.PROVIDER_SESSION_DIRECTORY}/.access-claims.lock"
 )
-
-
-async def _timed_provider_invoke(
-    adapter: ProviderAdapter, binding: ProviderBinding, invocation: ProviderInvocation,
-) -> ProviderResult:
-    """Observe actual adapter latency without changing its result or failure."""
-
-    started = time.monotonic_ns()
-    try:
-        result = await adapter.invoke(binding, invocation)
-    except BaseException as failure:
-        facts = provider_failure_accounting(failure)
-        if facts.state is ProviderCallState.SUBMITTED:
-            record_provider_failure_accounting(
-                failure, state=facts.state,
-                actual_transport_utf8_bytes=facts.actual_transport_utf8_bytes,
-                usage=facts.usage, usage_observation=facts.usage_observation,
-                elapsed_ns=time.monotonic_ns() - started,
-            )
-        raise
-    return replace(result, elapsed_ns=time.monotonic_ns() - started) if type(result) is ProviderResult else result
 
 
 @dataclass(frozen=True, slots=True)
@@ -3823,75 +3799,6 @@ class AgentBackend:
         except BaseException:
             pass
 
-    @staticmethod
-    def _provider_component_paths(
-        payload: Mapping[str, Any],
-        *,
-        call_kind: ProviderCallKind,
-    ) -> tuple[dict[JsonPath, ContextComponentKind], tuple[JsonPath, ...]]:
-        """Attribute known payload values without changing their wire shape."""
-
-        paths: dict[JsonPath, ContextComponentKind] = {}
-        top_level = {
-            "user_input_text": ContextComponentKind.CURRENT_INPUT,
-            "candidate_text": ContextComponentKind.CANDIDATE,
-            "debate_history": ContextComponentKind.DEBATE_MESSAGES,
-            "prior_agent_outcomes": ContextComponentKind.AGENT_STATE,
-            "conversation_history": ContextComponentKind.CONVERSATION_CONTEXT,
-            "rag_context": ContextComponentKind.RAG_CONTEXT,
-            "conversation_retrieval_observation": ContextComponentKind.RETRIEVED_OBSERVATION,
-        }
-        for key, kind in top_level.items():
-            if key in payload:
-                paths[(key,)] = kind
-
-        story_context = payload.get("story_session_context")
-        if isinstance(story_context, Mapping):
-            for key, kind in (
-                ("owner_outcomes", ContextComponentKind.AGENT_STATE),
-                ("focused_context", ContextComponentKind.CONVERSATION_CONTEXT),
-            ):
-                if key in story_context:
-                    paths[("story_session_context", key)] = kind
-
-        if (
-            call_kind is ProviderCallKind.WRITING_ARTIFACT_REFERENCE_READ
-            and "references" in payload
-        ):
-            paths[("references",)] = ContextComponentKind.MANDATORY_REFERENCE_DESCRIPTOR
-
-        reference_root = "untrusted_attached_references"
-        reference_context = payload.get(reference_root)
-        mandatory_paths: list[JsonPath] = []
-        if type(reference_context) is list:
-            paths[(reference_root,)] = (
-                ContextComponentKind.MANDATORY_REFERENCE_DESCRIPTOR
-            )
-            for index, item in enumerate(reference_context):
-                if isinstance(item, Mapping) and "content_text" in item:
-                    content_path = (reference_root, index, "content_text")
-                    paths[content_path] = (
-                        ContextComponentKind.MANDATORY_REFERENCE_CONTENT
-                    )
-                    mandatory_paths.append(content_path)
-        return paths, tuple(mandatory_paths)
-
-    def _observe_context_accounting(
-        self,
-        accounting: ProviderCallAccounting | None,
-    ) -> None:
-        """Offer one content-free call record without changing provider behavior."""
-
-        sink = self._context_accounting_sink
-        if accounting is None or sink is None:
-            return
-        try:
-            outcome = sink(accounting)
-            if inspect.iscoroutine(outcome):
-                outcome.close()
-        except BaseException:
-            pass
-
     def _observe_provider_failure(
         self,
         invocation: ProviderInvocation,
@@ -3899,21 +3806,13 @@ class AgentBackend:
     ) -> None:
         """Complete one prepared record from validated adapter failure facts."""
 
-        accounting = invocation.call_accounting
+        accounting = provider_invocation_accounting.complete_failure_accounting(
+            invocation, failure,
+        )
         if accounting is None:
             return
-        failure_accounting = provider_failure_accounting(failure)
-        self._observe_context_accounting(
-            replace(
-                accounting,
-                state=failure_accounting.state,
-                actual_transport_utf8_bytes=(
-                    failure_accounting.actual_transport_utf8_bytes
-                ),
-                usage=failure_accounting.usage,
-                usage_observation=failure_accounting.usage_observation,
-                elapsed_ns=failure_accounting.elapsed_ns,
-            )
+        provider_invocation_accounting.observe_accounting(
+            accounting, self._context_accounting_sink,
         )
 
     def _begin_agent_exchange(
@@ -4335,7 +4234,7 @@ class AgentBackend:
         )
         if payload.get("protocol_version") == WIRE_VERSION:
             payload = add_contract_guidance(payload, schema)
-        component_paths, mandatory_reference_paths = self._provider_component_paths(
+        component_paths, mandatory_reference_paths = provider_invocation_accounting.provider_component_paths(
             payload,
             call_kind=call_kind,
         )
@@ -4382,7 +4281,8 @@ class AgentBackend:
         )
         try:
             async with provider_activity(bound_agent.vendor) as auth_generation:
-                result = await _timed_provider_invoke(adapter,
+                result = await provider_invocation_accounting.timed_provider_invoke(
+                    adapter,
                     bound_agent._provider_binding,
                     invocation,
                 )
@@ -4440,7 +4340,7 @@ class AgentBackend:
             raise
         else:
             accounting = invocation.call_accounting
-            self._observe_context_accounting(
+            provider_invocation_accounting.observe_accounting(
                 (
                     None
                     if accounting is None
@@ -4454,7 +4354,8 @@ class AgentBackend:
                         usage_observation=result.usage_observation,
                         elapsed_ns=result.elapsed_ns,
                     )
-                )
+                ),
+                self._context_accounting_sink,
             )
         if provider_diagnostic is not None:
             translated = BackendProtocolError(provider_diagnostic)
@@ -4633,28 +4534,6 @@ class AgentBackend:
                 prefix="Structured response",
             )
             raise _StructuredOutputRejected(diagnostic, details) from exc
-
-    @staticmethod
-    def _context_failure_accounting(
-        invocation: ProviderInvocation,
-        failure: BaseException,
-    ) -> ProviderCallAccounting | None:
-        """Complete prepared accounting from validated adapter failure facts."""
-
-        accounting = invocation.call_accounting
-        if accounting is None:
-            return None
-        failure_accounting = provider_failure_accounting(failure)
-        return replace(
-            accounting,
-            state=failure_accounting.state,
-            actual_transport_utf8_bytes=(
-                failure_accounting.actual_transport_utf8_bytes
-            ),
-            usage=failure_accounting.usage,
-            usage_observation=failure_accounting.usage_observation,
-            elapsed_ns=failure_accounting.elapsed_ns,
-        )
 
     @staticmethod
     def _context_failure_timed_out(failure: BaseException) -> bool:
@@ -4901,12 +4780,18 @@ class AgentBackend:
                             else "identity"
                         ),
                     )
-                result = await _timed_provider_invoke(adapter, bound_agent._provider_binding, invocation)
+                result = await provider_invocation_accounting.timed_provider_invoke(
+                    adapter, bound_agent._provider_binding, invocation,
+                )
                 self._require_postsubmission_workspace(invocation)
             provider_finalization.capture_provider_return_without_replacing(exchange, result)
         except ProviderInvocationError as failure:
-            accounting = self._context_failure_accounting(invocation, failure)
-            self._observe_context_accounting(accounting)
+            accounting = provider_invocation_accounting.complete_failure_accounting(
+                invocation, failure,
+            )
+            provider_invocation_accounting.observe_accounting(
+                accounting, self._context_accounting_sink,
+            )
             submitted = (
                 accounting is not None
                 and accounting.state is ProviderCallState.SUBMITTED
@@ -4967,8 +4852,12 @@ class AgentBackend:
             # A replay veto carries the already-recorded original physical facts.
             raise
         except asyncio.CancelledError as failure:
-            accounting = self._context_failure_accounting(invocation, failure)
-            self._observe_context_accounting(accounting)
+            accounting = provider_invocation_accounting.complete_failure_accounting(
+                invocation, failure,
+            )
+            provider_invocation_accounting.observe_accounting(
+                accounting, self._context_accounting_sink,
+            )
             submitted = (
                 accounting is not None
                 and accounting.state is ProviderCallState.SUBMITTED
@@ -4990,8 +4879,12 @@ class AgentBackend:
             provider_finalization.capture_cancelled_without_replacing(exchange)
             raise
         except BaseException as failure:
-            accounting = self._context_failure_accounting(invocation, failure)
-            self._observe_context_accounting(accounting)
+            accounting = provider_invocation_accounting.complete_failure_accounting(
+                invocation, failure,
+            )
+            provider_invocation_accounting.observe_accounting(
+                accounting, self._context_accounting_sink,
+            )
             submitted = (
                 accounting is not None
                 and accounting.state is ProviderCallState.SUBMITTED
@@ -5035,7 +4928,9 @@ class AgentBackend:
             usage_observation=result.usage_observation if type(result) is ProviderResult else None,
             elapsed_ns=result.elapsed_ns if type(result) is ProviderResult else None,
         )
-        self._observe_context_accounting(accounting)
+        provider_invocation_accounting.observe_accounting(
+            accounting, self._context_accounting_sink,
+        )
         if type(result) is not ProviderResult or type(result.response_text) is not str:
             failure = ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
             record_context_provider_failure(
