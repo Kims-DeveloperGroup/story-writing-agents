@@ -20855,6 +20855,29 @@
       ],
       "depends_on": [],
       "boundary": "provider-stream-observation"
+    },
+    {
+      "name": "provider.generation-adapters",
+      "boundary": "provider-generation-adapter-construction",
+      "paths": [
+        "src/story_writing_agents/provider_generation_adapters.py"
+      ],
+      "focused_ids": [
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_backend_routes_and_persists_antigravity_conversation_id",
+        "tests.test_codex_backend.CodexBackendTestCase.test_hot_same_provider_profile_applies_now_and_reuses_thread",
+        "tests.test_interactive_controller.ControllerSettingsTests.test_antigravity_settings_edit_active_fields_and_preserve_codex"
+      ],
+      "affected_ids": [
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_backend_routes_and_persists_antigravity_conversation_id",
+        "tests.test_codex_backend.CodexBackendTestCase.test_close_waits_for_active_binding_then_cleans_every_resource_once",
+        "tests.test_codex_backend.CodexBackendTestCase.test_hot_same_provider_profile_applies_now_and_reuses_thread",
+        "tests.test_codex_backend.CodexBackendTestCase.test_pre_result_stream_stderr_timeout_and_cancellation_do_not_capture",
+        "tests.test_codex_backend.CodexBackendTestCase.test_retirement_defers_exact_cleanup_for_each_bound_operation",
+        "tests.test_codex_invocation_files.CodexInvocationFilesTests.test_conversation_projects_exact_payload_schema_and_no_artifacts",
+        "tests.test_codex_invocation_files.CodexInvocationFilesTests.test_conversation_provider_failures_taint_without_story_mutation",
+        "tests.test_codex_invocation_files.CodexInvocationFilesTests.test_timeout_terminates_the_codex_process",
+        "tests.test_interactive_controller.ControllerSettingsTests.test_antigravity_settings_edit_active_fields_and_preserve_codex"
+      ]
     }
   ],
   "ignored_names": [
