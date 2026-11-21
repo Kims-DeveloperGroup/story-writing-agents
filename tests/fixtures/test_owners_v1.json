@@ -21090,6 +21090,34 @@
         "tests.test_provider_auth_recovery.ContextRecoveryTests.test_backend_route_session_thread_and_workspace_drift_veto_replay"
       ],
       "depends_on": []
+    },
+
+    {
+      "name": "provider.reference-read-lifecycle",
+      "boundary": "provider-reference-read-lifecycle",
+      "paths": [
+        "src/story_writing_agents/provider_reference_read_lifecycle.py"
+      ],
+      "focused_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_local_reference_handler_failures_are_durable"
+      ],
+      "affected_ids": [
+        "tests.test_antigravity_parity.AntigravityParityTests.test_reference_read_mixed_batch_preserves_sequence_and_privacy",
+        "tests.test_codex_backend.CodexBackendTestCase.test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread",
+        "tests.test_codex_backend.CodexBackendTestCase.test_local_reference_drift_stops_before_provider",
+        "tests.test_codex_backend.CodexBackendTestCase.test_local_reference_handler_failures_are_durable",
+        "tests.test_codex_backend.CodexBackendTestCase.test_reference_read_adapter_resolution_failures_terminate_once",
+        "tests.test_codex_backend.CodexBackendTestCase.test_reference_read_converse_uses_one_call_and_one_context",
+        "tests.test_codex_backend.CodexBackendTestCase.test_reference_read_invoke_isolated_for_all_roles_and_rounds",
+        "tests.test_codex_backend.CodexBackendTestCase.test_reference_read_pre_provider_resource_failures_terminate_exactly",
+        "tests.test_codex_backend.CodexBackendTestCase.test_reference_read_retrieval_preserves_action_indices_and_budgets",
+        "tests.test_codex_backend.CodexBackendTestCase.test_reference_read_substantive_failure_and_cancellation_terminate",
+        "tests.test_codex_backend.CodexBackendTestCase.test_reference_read_wrong_correlation_and_no_reference_are_pre_provider",
+        "tests.test_codex_backend.CodexBackendTestCase.test_reference_runtime_fallback_terminates_and_repair_accepts",
+        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_and_substantive_rejections_fall_back_with_correlation",
+        "tests.test_provider_auth_recovery.ContextRecoveryTests.test_local_reference_load_does_not_consume_provider_capacity"
+      ],
+      "depends_on": []
     }
   ],
   "ignored_names": [
