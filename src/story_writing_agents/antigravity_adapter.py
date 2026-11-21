@@ -383,7 +383,7 @@ class AntigravityAdapter:
                 )
             except (ValueError, RecursionError, UnicodeError):
                 if invalid_stream_line is None:
-                    invalid_stream_line = "malformed JSON line"
+                    pass
                 return
             if type(event) is not dict:
                 if invalid_stream_line is None:
