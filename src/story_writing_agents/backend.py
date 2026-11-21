@@ -2063,7 +2063,7 @@ class AgentBackend:
                 agent_id: (
                     previous_confirmation[agent_id]
                     if old_profiles[agent_id] == next_generation.profiles[agent_id]
-                    else False
+                    else previous_confirmation[agent_id]
                 )
                 for agent_id in ROSTER
             }
