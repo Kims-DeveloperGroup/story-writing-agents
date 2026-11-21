@@ -12,6 +12,7 @@ from .provider_adapter_generations import (
 import story_writing_agents.provider_context_thread_store as provider_context_thread_store
 import story_writing_agents.provider_direct_call_wire as provider_direct_call_wire
 import story_writing_agents.provider_execution_profiles as provider_execution_profiles
+from .provider_execution_profile_observations import ProviderExecutionProfileObservations
 import story_writing_agents.provider_invocation_accounting as provider_invocation_accounting
 import story_writing_agents.provider_manifest_thread_store as provider_manifest_thread_store
 import story_writing_agents.provider_retrieval_handler_outcomes as provider_retrieval_handler_outcomes
@@ -1750,16 +1751,9 @@ class AgentBackend:
         self._adapter_generations = ProviderAdapterGenerations(
             initial_generation, self._generation_lock
         )
-        self._profile_confirmed = {agent_id: False for agent_id in ROSTER}
-        self._active_profile_correlation = {agent_id: "startup" for agent_id in ROSTER}
-        self._profile_thread_status = {
-            agent_id: (
-                "fresh_pending"
-                if agent_id in startup_switched_agents
-                else "not_observed"
-            )
-            for agent_id in ROSTER
-        }
+        self._profile_observations = ProviderExecutionProfileObservations(
+            startup_switched_agents
+        )
         self.antigravity_model = self._antigravity_adapter.model
         self.antigravity_effort = self._antigravity_adapter.effort
         self.model = self._codex_adapter.model
@@ -1827,7 +1821,7 @@ class AgentBackend:
         if agent_id not in ROSTER:
             raise ConfigurationError(f"unknown agent: {agent_id}")
         with self._generation_lock:
-            return "confirmed" if self._profile_confirmed[agent_id] else "pending"
+            return self._profile_observations.confirmation_locked(agent_id)
 
     def execution_profile_thread_status(self, agent_id: str) -> str:
         """Return the active generation's observed or pending thread status."""
@@ -1835,7 +1829,7 @@ class AgentBackend:
         if agent_id not in ROSTER:
             raise ConfigurationError(f"unknown agent: {agent_id}")
         with self._generation_lock:
-            return self._profile_thread_status[agent_id]
+            return self._profile_observations.thread_status_locked(agent_id)
 
     def preview_execution_profile(
         self,
@@ -1870,14 +1864,12 @@ class AgentBackend:
         generation = bound_agent._adapter_generation
         if profile is None or generation is None:
             return
-        emit_confirmation = False
         with self._generation_lock:
             if generation is not self._adapter_generations.active:
                 return
-            self._profile_thread_status[profile.agent_id] = thread_disposition
-            if not self._profile_confirmed[profile.agent_id]:
-                self._profile_confirmed[profile.agent_id] = True
-                emit_confirmation = True
+            emit_confirmation = self._profile_observations.confirm_locked(
+                profile.agent_id, thread_disposition
+            )
         if not emit_confirmation:
             return
         self._log_execution_profile_confirmed(
@@ -2033,9 +2025,7 @@ class AgentBackend:
                 )
             next_generation = candidate.generation
             old_profiles = current.profiles
-            previous_confirmation = dict(self._profile_confirmed)
-            previous_correlation = dict(self._active_profile_correlation)
-            previous_thread_status = dict(self._profile_thread_status)
+            previous_observations = self._profile_observations.snapshot_locked()
             for agent_id in ROSTER:
                 if old_profiles[agent_id] != next_generation.profiles[agent_id]:
                     self._log_execution_profile_event(
@@ -2059,32 +2049,13 @@ class AgentBackend:
             self._codex_reasoning_effort = self._codex_adapter.reasoning_effort
             self.antigravity_model = self._antigravity_adapter.model
             self.antigravity_effort = self._antigravity_adapter.effort
-            self._profile_confirmed = {
-                agent_id: (
-                    previous_confirmation[agent_id]
-                    if old_profiles[agent_id] == next_generation.profiles[agent_id]
-                    else False
-                )
-                for agent_id in ROSTER
-            }
-            self._active_profile_correlation = {
-                agent_id: (
-                    previous_correlation[agent_id]
-                    if old_profiles[agent_id] == next_generation.profiles[agent_id]
-                    else candidate.correlation_id
-                )
-                for agent_id in ROSTER
-            }
-            self._profile_thread_status = {
-                agent_id: (
-                    previous_thread_status[agent_id]
-                    if old_profiles[agent_id] == next_generation.profiles[agent_id]
-                    else "fresh_pending"
-                    if agent_id in next_generation.switched_agents
-                    else "reusable_pending"
-                )
-                for agent_id in ROSTER
-            }
+            self._profile_observations.install_locked(
+                previous_observations,
+                old_profiles=old_profiles,
+                new_profiles=next_generation.profiles,
+                switched_agents=next_generation.switched_agents,
+                correlation_id=candidate.correlation_id,
+            )
             current.retired = True
             if current.binding_count == 0:
                 close_generation = current
@@ -2305,7 +2276,7 @@ class AgentBackend:
         """Record first successful use of one active profile generation."""
 
         with self._generation_lock:
-            correlation_id = self._active_profile_correlation[profile.agent_id]
+            correlation_id = self._profile_observations.correlation_locked(profile.agent_id)
             route_generation = self._provider_routes[profile.agent_id].generation
         self._log_execution_profile_event(
             DebugOperation.EXECUTION_PROFILE_CONFIRMED,
