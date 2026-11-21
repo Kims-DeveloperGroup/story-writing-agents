@@ -2880,6 +2880,89 @@
         "id_receipt_registered_support": 3
       },
       "counting": "Four existing cases move 1:1, and the existing shared test fixture is counted exactly once."
+    },
+    {
+      "issue": 1103,
+      "origin_commit": "67850903cfacc9d19385571a11f0cc9d6e643e67",
+      "origins": [
+        {
+          "source": "tests/antigravity_adapter_fixture.py",
+          "sha256": "1ffb699742146ea534dae2b56e914f726ce4a0dcad29a6f9a0fb297423edd406"
+        },
+        {
+          "source": "tests/id_moves.py",
+          "sha256": "8846b1777c8595dbef8cd5d10951226ca0d1aa047b5cc54e8a1a864bbeb39eab"
+        },
+        {
+          "source": "tests/test_antigravity_adapter.py",
+          "sha256": "39e040e08599b420206e169b9b08389bed69af05425926cabe600c9fb2f9ca26"
+        },
+        {
+          "source": "tests/test_antigravity_rules.py",
+          "sha256": "3b0eb87a88a305f3984838af43eb7c711034b0a49040fe3dfb122a59cc48aacc"
+        },
+        {
+          "source": "tests/test_artifact_application_contracts.py",
+          "sha256": "01bbd24a685acd9f8c9483f87f57888365a54b23e6b6eb3d5284bba7adc5fb7d"
+        },
+        {
+          "source": "tests/test_artifact_application_store_recovery.py",
+          "sha256": "9ff514667dfb20e698ceaac1df1f5e465485323f5761a290914a315ac0531c1c"
+        },
+        {
+          "source": "tests/test_artifact_relationship_policy.py",
+          "sha256": "962395d707d53fbe2796c36b7cfe338642dce3a7b6e86c47d5995da48e61cacc"
+        },
+        {
+          "source": "tests/test_git_external_operation_inspection.py",
+          "sha256": "25d75127595554076455214d2cf218ad0d5b7766baa7221e7a2403a8cfc919cc"
+        },
+        {
+          "source": "tests/test_interactive_controller.py",
+          "sha256": "4f7445be7fe97e93a67c1f177be4d1ec547d5a8f4d46b5183c5508037f368d28"
+        },
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "1b34023f08c086e7ef197b0c8209414440bdc85d18eec7d19b736a33ac737089"
+        },
+        {
+          "source": "tests/test_session_lifecycle.py",
+          "sha256": "9c7f0e8a0302f42a9a606c9cd2c701151cc9071ac024a9bff1eaf29416375b0b"
+        },
+        {
+          "source": "tests/test_session_recovery_contracts.py",
+          "sha256": "797c8f0055cb82ac27285aeb04d8d70dde0ededcc9606ce8bc7092b4d49f2756"
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "f2dd6bb2dc1b35e31f84c4dcce76664c5ca614a3064dbb7f2f7f62a7069b0298"
+        },
+        {
+          "source": "tests/test_workspace_session_history.py",
+          "sha256": "83cff1def5b8f4c92542992a3c409308a8b8aafb0e175120957a77a1182e562f"
+        }
+      ],
+      "approved_source_delta": 45,
+      "planned_raw_delta": 11,
+      "planned_support_delta": 34,
+      "legacy_unresolved_lines": 1550,
+      "exact_source_pair": [
+        156806,
+        156851
+      ],
+      "original_caps_sha256": "06626b9b86b0ef18ee928c69df2100be891efdb03c65162bc474f517c439f992",
+      "expected_caps_sha256": "5d41f52db46a9e63e39130a631a6a3fda04a1486b7749fcc7c12a26b27157c28",
+      "counted_support_path": "tests/antigravity_adapter_fixture.py",
+      "excluded_monotonic_rule_ordinary": 13,
+      "excluded_monotonic_rule_physical": 13,
+      "cost_components": {
+        "existing_case_source_moves": -24,
+        "shared_antigravity_adapter_fixture_helpers": 30,
+        "existing_module_and_packaging_assertions": 12,
+        "existing_budget_and_selector_policy_cases": 23,
+        "id_receipt_registered_support": 4
+      },
+      "counting": "Five existing cases move 1:1. Existing shared fixture and receipt support paths are counted exactly once."
     }
   ]
 }
