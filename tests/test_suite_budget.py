@@ -246,7 +246,8 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
-        retrieval_outcomes_current = suite_budget.load_budget()
+        accounting_current = suite_budget.load_budget()
+        retrieval_outcomes_current = dict(accounting_current, max_test_source_lines=156953)
         provider_generation_current = dict(retrieval_outcomes_current, max_test_source_lines=156942)
         antigravity_stream_current = dict(provider_generation_current, max_test_source_lines=156925)
         *legacy_move_receipts, defaults_stage, wire_stage, stream_stage, invocation_stage, exchange_finalization_stage, native_recovery_stage, staging_stage, antigravity_command_stage, antigravity_stream_stage = load_receipt()
@@ -767,6 +768,8 @@ class SuiteBudgetTests(unittest.TestCase):
         self._assert_source_limit_neighbors_rejected(provider_generation_current, antigravity_stream_current)
         self.assertIsNone(suite_budget.check_monotonic(retrieval_outcomes_current, provider_generation_current))
         self._assert_source_limit_neighbors_rejected(retrieval_outcomes_current, provider_generation_current)
+        self.assertIsNone(suite_budget.check_monotonic(accounting_current, retrieval_outcomes_current))
+        self._assert_source_limit_neighbors_rejected(accounting_current, retrieval_outcomes_current)
         invocation_caps = invocation_current["subtest_caps"]
         invocation_id = next(move["new_id"] for move in invocation_moves if move["subtest_cap"])
         for changed_caps in (
@@ -892,6 +895,16 @@ class SuiteBudgetTests(unittest.TestCase):
         self.assertEqual(retrieval["focused_manifest"]["ordered_ids"], ["tests.test_codex_backend.CodexBackendTestCase.test_retrieval_exact_initial_continuation_payload_rules_schema_and_frame"])
         self.assertEqual(retrieval["affected_manifest"]["count"], 8)
         self.assertEqual(sum(retrieval_outcomes_current["subtest_caps"][cid] for cid in retrieval["affected_manifest"]["ordered_ids"]), 9)
+        accounting = select_impact(real, paths=("src/story_writing_agents/provider_invocation_accounting.py",))
+        self.assertEqual(
+            accounting["focused_manifest"]["ordered_ids"],
+            ["tests.test_codex_backend.CodexBackendTestCase.test_context_sink_records_prepared_submitted_and_cancellation_once"],
+        )
+        self.assertEqual(accounting["affected_manifest"]["count"], 12)
+        self.assertEqual(
+            sum(accounting_current["subtest_caps"][cid] for cid in accounting["affected_manifest"]["ordered_ids"]),
+            8,
+        )
         self.assertTrue(all(move["old_id"] not in real.ids for move in stream_moves))
         self.assertTrue(all(type(case).__bases__ == (unittest.IsolatedAsyncioTestCase,) and type(case).__module__ == "tests.test_codex_adapter_streaming" for case in moved_streaming.tests))
         for path, expected in (
