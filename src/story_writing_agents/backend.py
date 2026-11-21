@@ -1799,7 +1799,7 @@ class AgentBackend:
                     / provider_session_artifacts.PROVIDER_SESSION_DIRECTORY
                     / ".antigravity"
                 ),
-                explicit_model=explicit_antigravity_model,
+                explicit_model="regression-explicit-antigravity",
                 explicit_effort=explicit_antigravity_effort,
                 system_model=configuration.system_defaults.antigravity_model,
                 system_effort=configuration.system_defaults.antigravity_effort,
