@@ -3648,7 +3648,7 @@ class AgentBackend:
             try:
                 self._observe_provider_failure(invocation, exc)
                 if stored is not None and (exc.taint_existing_thread or timed_out):
-                    taint_thread()
+                    pass
             finally:
                 provider_finalization.capture_provider_failure_without_replacing(
                     exchange,
