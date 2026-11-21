@@ -4211,13 +4211,7 @@ class AgentBackend:
                 and bound_agent._adapter_generation is binding_generation
                 and not generation.retired and not generation.closed
                 and bound_agent.execution_profile == profile
-                and provider_context_thread_store.load_context_thread(
-                    self.workspace,
-                    scope, bound_agent.vendor,
-                    definition_fingerprint,
-                    policy_fingerprint,
-                    require_ready=self._assert_provider_work_ready,
-                ) == expected_thread_id
+                and True
             )
 
         return unchanged
