@@ -30,8 +30,6 @@ import hashlib
 import inspect
 import json
 import os
-import shutil
-import tempfile
 import threading
 import time
 from .structured_output_validation import (
@@ -164,6 +162,10 @@ from .provider_adapter import (
 from .provider_error_artifacts import (
     PROVIDER_ERROR_ARTIFACT_FAILURE_CATEGORY,
     WorkspaceProviderErrorArtifacts,
+)
+from .provider_generation_adapters import (
+    create_antigravity_adapter as _create_antigravity_adapter,
+    create_codex_adapter as _create_codex_adapter,
 )
 from .provider_process import ProcessTimedOut, stop_process
 from .reply_trace import ReplyTrace, ReplyTraceOrigin
@@ -1775,23 +1777,15 @@ class AgentBackend:
         ):
             raise SettingsError(SettingsErrorKind.RECOVERY_REQUIRED)
         try:
-            self._codex_adapter = CodexAdapter(
+            self._codex_adapter = _create_codex_adapter(
                 executable=executable,
                 timeout_seconds=float(timeout_seconds),
                 configuration=configuration,
                 explicit_model=explicit_model,
                 control_root=self._control_workspace_root,
-                execution_profiles={
-                    agent_id: profile
-                    for agent_id, profile in profiles.items()
-                    if profile.provider == "codex"
-                },
-                create_process=lambda: asyncio.create_subprocess_exec,
-                wait_for=lambda: asyncio.wait_for,
-                make_temporary_directory=lambda: tempfile.mkdtemp,
-                which=lambda: shutil.which,
+                profiles=profiles,
             )
-            self._antigravity_adapter = AntigravityAdapter(
+            self._antigravity_adapter = _create_antigravity_adapter(
                 executable=antigravity_executable,
                 timeout_seconds=float(timeout_seconds),
                 state_root=(
@@ -1801,23 +1795,8 @@ class AgentBackend:
                 ),
                 explicit_model=explicit_antigravity_model,
                 explicit_effort=explicit_antigravity_effort,
-                system_model=configuration.system_defaults.antigravity_model,
-                system_effort=configuration.system_defaults.antigravity_effort,
-                agent_settings={
-                    agent_id: (
-                        configuration.agent_configs[agent_id].antigravity_model,
-                        configuration.agent_configs[agent_id].antigravity_effort,
-                    )
-                    for agent_id in ROSTER
-                },
-                execution_profiles={
-                    agent_id: profile
-                    for agent_id, profile in profiles.items()
-                    if profile.provider == "antigravity"
-                },
-                create_process=lambda: asyncio.create_subprocess_exec,
-                wait_for=lambda: asyncio.wait_for,
-                which=lambda: shutil.which,
+                configuration=configuration,
+                profiles=profiles,
             )
         except BaseException as exc:
             self._record_debug_error(DebugOperation.CONFIGURATION, exc)
@@ -2284,23 +2263,15 @@ class AgentBackend:
     ) -> dict[str, ProviderAdapter]:
         """Construct isolated provider adapters from exact resolved profiles."""
 
-        codex = CodexAdapter(
+        codex = _create_codex_adapter(
             executable=self.executable,
             timeout_seconds=self.timeout_seconds,
             configuration=configuration,
             explicit_model=self._explicit_model,
             control_root=self._control_workspace_root,
-            execution_profiles={
-                agent_id: profile
-                for agent_id, profile in profiles.items()
-                if profile.provider == "codex"
-            },
-            create_process=lambda: asyncio.create_subprocess_exec,
-            wait_for=lambda: asyncio.wait_for,
-            make_temporary_directory=lambda: tempfile.mkdtemp,
-            which=lambda: shutil.which,
+            profiles=profiles,
         )
-        antigravity = AntigravityAdapter(
+        antigravity = _create_antigravity_adapter(
             executable=self.antigravity_executable,
             timeout_seconds=self.timeout_seconds,
             state_root=(
@@ -2310,23 +2281,8 @@ class AgentBackend:
             ),
             explicit_model=self._explicit_antigravity_model,
             explicit_effort=self._explicit_antigravity_effort,
-            system_model=configuration.system_defaults.antigravity_model,
-            system_effort=configuration.system_defaults.antigravity_effort,
-            agent_settings={
-                agent_id: (
-                    configuration.agent_configs[agent_id].antigravity_model,
-                    configuration.agent_configs[agent_id].antigravity_effort,
-                )
-                for agent_id in ROSTER
-            },
-            execution_profiles={
-                agent_id: profile
-                for agent_id, profile in profiles.items()
-                if profile.provider == "antigravity"
-            },
-            create_process=lambda: asyncio.create_subprocess_exec,
-            wait_for=lambda: asyncio.wait_for,
-            which=lambda: shutil.which,
+            configuration=configuration,
+            profiles=profiles,
         )
         return {codex.vendor: codex, antigravity.vendor: antigravity}
 
