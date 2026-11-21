@@ -20900,6 +20900,31 @@
         "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_handler_declaration_and_exact_outcome_protocol"
       ],
       "depends_on": []
+    },
+    {
+      "name": "provider.invocation-accounting",
+      "boundary": "provider-invocation-accounting",
+      "paths": [
+        "src/story_writing_agents/provider_invocation_accounting.py"
+      ],
+      "focused_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_context_sink_records_prepared_submitted_and_cancellation_once"
+      ],
+      "affected_ids": [
+        "tests.test_antigravity_parity.AntigravityParityTests.test_contextual_invocation_captures_and_accounts_rendered_schema_only_for_antigravity",
+        "tests.test_codex_backend.CodexBackendTestCase.test_context_sink_records_prepared_submitted_and_cancellation_once",
+        "tests.test_codex_backend.CodexBackendTestCase.test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread",
+        "tests.test_codex_backend.CodexBackendTestCase.test_contextual_submitted_failure_taints_only_exact_context_thread",
+        "tests.test_codex_backend.CodexBackendTestCase.test_every_sink_control_failure_is_observational_only",
+        "tests.test_codex_backend.CodexBackendTestCase.test_malformed_usage_never_invalidates_a_valid_provider_reply",
+        "tests.test_codex_backend.CodexBackendTestCase.test_reference_read_retrieval_preserves_action_indices_and_budgets",
+        "tests.test_codex_backend.CodexBackendTestCase.test_response_capture_precedes_accounting_decode_artifact_and_thread",
+        "tests.test_codex_backend.CodexBackendTestCase.test_sink_control_failures_do_not_mask_provider_failure",
+        "tests.test_codex_invocation_files.CodexInvocationFilesTests.test_cancellation_terminates_the_codex_process",
+        "tests.test_codex_invocation_files.CodexInvocationFilesTests.test_missing_executable_nonzero_and_malformed_output_fail_cleanly",
+        "tests.test_codex_invocation_files.CodexInvocationFilesTests.test_timeout_terminates_the_codex_process"
+      ],
+      "depends_on": []
     }
 
   ],
