@@ -15812,6 +15812,305 @@
           "expected_method_ast_sha256": "f353c9a7341a3622476d5e2b9b07e4a28002bf5016f74cae3d57612344e7a79a"
         }
       ]
+    },
+    {
+      "schema_version": 1,
+      "issue": 1105,
+      "origin_commit": "21bff609409f68b84e92e80cc501f8accd33eacc",
+      "original_caps_sha256": "5d41f52db46a9e63e39130a631a6a3fda04a1486b7749fcc7c12a26b27157c28",
+      "expected_caps_sha256": "0fc8c5e140b56200643f090106395259da9ca23d1e90a0e64738c3bd3f5c5fbe",
+      "moves": [
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_extracts_status_and_error_from_legacy_terminal_shape",
+          "new_id": "tests.test_antigravity_stream_delivery.AntigravityStreamDeliveryTests.test_antigravity_adapter_extracts_status_and_error_from_legacy_terminal_shape",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_antigravity_stream_delivery.py",
+          "original_file_sha256": "36bab48c98c1176c24ddf437400b5b3a8b36cb1000745670b52c99743a9cf062",
+          "original_method_ast_sha256": "28e254aae258e5a3edc28db5a03f7580402aa9eecf6c5f8ca2160b139a102faf",
+          "expected_method_ast_sha256": "28e254aae258e5a3edc28db5a03f7580402aa9eecf6c5f8ca2160b139a102faf"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_fails_closed_when_stream_contains_invalid_line_before_auth_terminal",
+          "new_id": "tests.test_antigravity_stream_validation.AntigravityStreamValidationTests.test_antigravity_adapter_fails_closed_when_stream_contains_invalid_line_before_auth_terminal",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_antigravity_stream_validation.py",
+          "original_file_sha256": "36bab48c98c1176c24ddf437400b5b3a8b36cb1000745670b52c99743a9cf062",
+          "original_method_ast_sha256": "c2efeb7ae6c9b8e13a71b4ae2c41abdd07e7664f70baa2bd0c2db1e9fb459497",
+          "expected_method_ast_sha256": "c2efeb7ae6c9b8e13a71b4ae2c41abdd07e7664f70baa2bd0c2db1e9fb459497"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_generic_untyped_text_delta_ignored_without_agent_response_shape",
+          "new_id": "tests.test_antigravity_stream_delivery.AntigravityStreamDeliveryTests.test_antigravity_adapter_generic_untyped_text_delta_ignored_without_agent_response_shape",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_antigravity_stream_delivery.py",
+          "original_file_sha256": "36bab48c98c1176c24ddf437400b5b3a8b36cb1000745670b52c99743a9cf062",
+          "original_method_ast_sha256": "9be3c23a4d2fbee5c0cc00be6ebf95cce2dff44b4a0cdfff27e363ce4654e6a7",
+          "expected_method_ast_sha256": "9be3c23a4d2fbee5c0cc00be6ebf95cce2dff44b4a0cdfff27e363ce4654e6a7"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_legacy_text_delta_fails_closed_on_non_string_payload",
+          "new_id": "tests.test_antigravity_stream_delivery.AntigravityStreamDeliveryTests.test_antigravity_adapter_legacy_text_delta_fails_closed_on_non_string_payload",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_antigravity_stream_delivery.py",
+          "original_file_sha256": "36bab48c98c1176c24ddf437400b5b3a8b36cb1000745670b52c99743a9cf062",
+          "original_method_ast_sha256": "1ed4b812d78a31ccbabd26cb6304ac291f59d7d6c7bcc5ea1133be157a33086d",
+          "expected_method_ast_sha256": "1ed4b812d78a31ccbabd26cb6304ac291f59d7d6c7bcc5ea1133be157a33086d"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_recognizes_authentication_failure_with_streaming_preamble",
+          "new_id": "tests.test_antigravity_stream_delivery.AntigravityStreamDeliveryTests.test_antigravity_adapter_recognizes_authentication_failure_with_streaming_preamble",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_antigravity_stream_delivery.py",
+          "original_file_sha256": "36bab48c98c1176c24ddf437400b5b3a8b36cb1000745670b52c99743a9cf062",
+          "original_method_ast_sha256": "e8c9be80344ee85185f9e3c690d175675f156bd7724f5d28fcc39b06d8d3ec86",
+          "expected_method_ast_sha256": "e8c9be80344ee85185f9e3c690d175675f156bd7724f5d28fcc39b06d8d3ec86"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_recognizes_wrapped_authentication_error",
+          "new_id": "tests.test_antigravity_stream_delivery.AntigravityStreamDeliveryTests.test_antigravity_adapter_recognizes_wrapped_authentication_error",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_antigravity_stream_delivery.py",
+          "original_file_sha256": "36bab48c98c1176c24ddf437400b5b3a8b36cb1000745670b52c99743a9cf062",
+          "original_method_ast_sha256": "9cba75fd7155c8387da35009d070506a44bc634da657e741276a7a82d1cc841d",
+          "expected_method_ast_sha256": "9cba75fd7155c8387da35009d070506a44bc634da657e741276a7a82d1cc841d"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_rejects_conflicting_event_discriminators",
+          "new_id": "tests.test_antigravity_stream_validation.AntigravityStreamValidationTests.test_antigravity_adapter_rejects_conflicting_event_discriminators",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_antigravity_stream_validation.py",
+          "original_file_sha256": "36bab48c98c1176c24ddf437400b5b3a8b36cb1000745670b52c99743a9cf062",
+          "original_method_ast_sha256": "549da492a266e4ceaca03986ebce9e86a652f77be128f201f27de7af63de821d",
+          "expected_method_ast_sha256": "549da492a266e4ceaca03986ebce9e86a652f77be128f201f27de7af63de821d"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_rejects_duplicate_field_in_stream_line",
+          "new_id": "tests.test_antigravity_stream_validation.AntigravityStreamValidationTests.test_antigravity_adapter_rejects_duplicate_field_in_stream_line",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_antigravity_stream_validation.py",
+          "original_file_sha256": "36bab48c98c1176c24ddf437400b5b3a8b36cb1000745670b52c99743a9cf062",
+          "original_method_ast_sha256": "ffcd455fc0da26ee416ff307279c195d9a636fa614c044189c9312fabda7de1c",
+          "expected_method_ast_sha256": "ffcd455fc0da26ee416ff307279c195d9a636fa614c044189c9312fabda7de1c"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_rejects_explicit_null_event_discriminator_with_running_status",
+          "new_id": "tests.test_antigravity_stream_validation.AntigravityStreamValidationTests.test_antigravity_adapter_rejects_explicit_null_event_discriminator_with_running_status",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_antigravity_stream_validation.py",
+          "original_file_sha256": "36bab48c98c1176c24ddf437400b5b3a8b36cb1000745670b52c99743a9cf062",
+          "original_method_ast_sha256": "2a701843197efecfda3a196e656d9dd659052e3a6ea48b69b96b54aa61f0f3d8",
+          "expected_method_ast_sha256": "2a701843197efecfda3a196e656d9dd659052e3a6ea48b69b96b54aa61f0f3d8"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_rejects_explicit_null_type_discriminator",
+          "new_id": "tests.test_antigravity_stream_validation.AntigravityStreamValidationTests.test_antigravity_adapter_rejects_explicit_null_type_discriminator",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_antigravity_stream_validation.py",
+          "original_file_sha256": "36bab48c98c1176c24ddf437400b5b3a8b36cb1000745670b52c99743a9cf062",
+          "original_method_ast_sha256": "0275e876c16d447057b60a5486de6be11d6bb79ddfee4657962ad1f22f4a0648",
+          "expected_method_ast_sha256": "0275e876c16d447057b60a5486de6be11d6bb79ddfee4657962ad1f22f4a0648"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_rejects_invalid_line_before_terminal_result",
+          "new_id": "tests.test_antigravity_stream_validation.AntigravityStreamValidationTests.test_antigravity_adapter_rejects_invalid_line_before_terminal_result",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_antigravity_stream_validation.py",
+          "original_file_sha256": "36bab48c98c1176c24ddf437400b5b3a8b36cb1000745670b52c99743a9cf062",
+          "original_method_ast_sha256": "48b7f5f514897a64f1a7c2ff19a58dfea643dd8501fda827b5bd02871af6aa8a",
+          "expected_method_ast_sha256": "48b7f5f514897a64f1a7c2ff19a58dfea643dd8501fda827b5bd02871af6aa8a"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_rejects_multiple_terminal_results_in_stream",
+          "new_id": "tests.test_antigravity_stream_validation.AntigravityStreamValidationTests.test_antigravity_adapter_rejects_multiple_terminal_results_in_stream",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_antigravity_stream_validation.py",
+          "original_file_sha256": "36bab48c98c1176c24ddf437400b5b3a8b36cb1000745670b52c99743a9cf062",
+          "original_method_ast_sha256": "00d7e1bcfb17b4b139b9751f9ee46f886a126d84ff96d44ae71f6cc9d908916f",
+          "expected_method_ast_sha256": "00d7e1bcfb17b4b139b9751f9ee46f886a126d84ff96d44ae71f6cc9d908916f"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_rejects_nan_or_infinity_in_stream_line",
+          "new_id": "tests.test_antigravity_stream_validation.AntigravityStreamValidationTests.test_antigravity_adapter_rejects_nan_or_infinity_in_stream_line",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_antigravity_stream_validation.py",
+          "original_file_sha256": "36bab48c98c1176c24ddf437400b5b3a8b36cb1000745670b52c99743a9cf062",
+          "original_method_ast_sha256": "1064735ab1acacc11f1ca74377fc25d39a8c2bb65f6d34d8addf70ac0aa8824e",
+          "expected_method_ast_sha256": "1064735ab1acacc11f1ca74377fc25d39a8c2bb65f6d34d8addf70ac0aa8824e"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_rejects_one_null_discriminator_when_other_present",
+          "new_id": "tests.test_antigravity_stream_validation.AntigravityStreamValidationTests.test_antigravity_adapter_rejects_one_null_discriminator_when_other_present",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_antigravity_stream_validation.py",
+          "original_file_sha256": "36bab48c98c1176c24ddf437400b5b3a8b36cb1000745670b52c99743a9cf062",
+          "original_method_ast_sha256": "a7e7920ab089fb4ffeaaeb08746b263374ff159f9d2f72f6454541e8c0031c5c",
+          "expected_method_ast_sha256": "a7e7920ab089fb4ffeaaeb08746b263374ff159f9d2f72f6454541e8c0031c5c"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_rejects_recursion_error_in_stream_line",
+          "new_id": "tests.test_antigravity_stream_validation.AntigravityStreamValidationTests.test_antigravity_adapter_rejects_recursion_error_in_stream_line",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_antigravity_stream_validation.py",
+          "original_file_sha256": "36bab48c98c1176c24ddf437400b5b3a8b36cb1000745670b52c99743a9cf062",
+          "original_method_ast_sha256": "1796307c2d952bbbbb4fcdfea98c090cf9f787b47d3c069c2e677cc92c3c85ef",
+          "expected_method_ast_sha256": "1796307c2d952bbbbb4fcdfea98c090cf9f787b47d3c069c2e677cc92c3c85ef"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_rejects_trailing_data_after_terminal_result",
+          "new_id": "tests.test_antigravity_stream_validation.AntigravityStreamValidationTests.test_antigravity_adapter_rejects_trailing_data_after_terminal_result",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_antigravity_stream_validation.py",
+          "original_file_sha256": "36bab48c98c1176c24ddf437400b5b3a8b36cb1000745670b52c99743a9cf062",
+          "original_method_ast_sha256": "6c2291bb3d277e661a7ae10d26285cd97ba4402690c42a1800fb05744b6e8f95",
+          "expected_method_ast_sha256": "6c2291bb3d277e661a7ae10d26285cd97ba4402690c42a1800fb05744b6e8f95"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_rejects_unknown_event_type_carrying_status_running",
+          "new_id": "tests.test_antigravity_stream_validation.AntigravityStreamValidationTests.test_antigravity_adapter_rejects_unknown_event_type_carrying_status_running",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_antigravity_stream_validation.py",
+          "original_file_sha256": "36bab48c98c1176c24ddf437400b5b3a8b36cb1000745670b52c99743a9cf062",
+          "original_method_ast_sha256": "3f87dcfd7c457fd1895cf475b2f84abe2269a4b9a0eb913f53bee5d031fb88f8",
+          "expected_method_ast_sha256": "3f87dcfd7c457fd1895cf475b2f84abe2269a4b9a0eb913f53bee5d031fb88f8"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_rejects_unknown_event_type_carrying_structured_output",
+          "new_id": "tests.test_antigravity_stream_validation.AntigravityStreamValidationTests.test_antigravity_adapter_rejects_unknown_event_type_carrying_structured_output",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_antigravity_stream_validation.py",
+          "original_file_sha256": "36bab48c98c1176c24ddf437400b5b3a8b36cb1000745670b52c99743a9cf062",
+          "original_method_ast_sha256": "436d8b62046dd9adbc06c99c27fbd6911e4ddc53ab53f863f2e5f5685157eb26",
+          "expected_method_ast_sha256": "436d8b62046dd9adbc06c99c27fbd6911e4ddc53ab53f863f2e5f5685157eb26"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_replays_stdout_when_no_streaming_callbacks_delivered",
+          "new_id": "tests.test_antigravity_stream_delivery.AntigravityStreamDeliveryTests.test_antigravity_adapter_replays_stdout_when_no_streaming_callbacks_delivered",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_antigravity_stream_delivery.py",
+          "original_file_sha256": "36bab48c98c1176c24ddf437400b5b3a8b36cb1000745670b52c99743a9cf062",
+          "original_method_ast_sha256": "c8b37a758d311c286c7835e51c402e5cca1fb59a4bd8c208822ccadb72f2a207",
+          "expected_method_ast_sha256": "c8b37a758d311c286c7835e51c402e5cca1fb59a4bd8c208822ccadb72f2a207"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_running_status_notice_emits_status_and_is_not_captured_as_terminal",
+          "new_id": "tests.test_antigravity_stream_delivery.AntigravityStreamDeliveryTests.test_antigravity_adapter_running_status_notice_emits_status_and_is_not_captured_as_terminal",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_antigravity_stream_delivery.py",
+          "original_file_sha256": "36bab48c98c1176c24ddf437400b5b3a8b36cb1000745670b52c99743a9cf062",
+          "original_method_ast_sha256": "16692f89bcf8d729859111a94bdadb29bdd3cf8e8f4b0a4a6e2c8f2b50d8a4ea",
+          "expected_method_ast_sha256": "16692f89bcf8d729859111a94bdadb29bdd3cf8e8f4b0a4a6e2c8f2b50d8a4ea"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_sanitizes_stdout_in_streamed_response_diagnostic",
+          "new_id": "tests.test_antigravity_stream_delivery.AntigravityStreamDeliveryTests.test_antigravity_adapter_sanitizes_stdout_in_streamed_response_diagnostic",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_antigravity_stream_delivery.py",
+          "original_file_sha256": "36bab48c98c1176c24ddf437400b5b3a8b36cb1000745670b52c99743a9cf062",
+          "original_method_ast_sha256": "5aca4fd0b8bf89248623165efeb0b16d76b7caaad3a76b4624a3842be4ecc2e5",
+          "expected_method_ast_sha256": "5aca4fd0b8bf89248623165efeb0b16d76b7caaad3a76b4624a3842be4ecc2e5"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_streams_events_and_parses_stream_json",
+          "new_id": "tests.test_antigravity_stream_delivery.AntigravityStreamDeliveryTests.test_antigravity_adapter_streams_events_and_parses_stream_json",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_antigravity_stream_delivery.py",
+          "original_file_sha256": "36bab48c98c1176c24ddf437400b5b3a8b36cb1000745670b52c99743a9cf062",
+          "original_method_ast_sha256": "c16a0ae4a6c539ff57e0b1885e58e4143b2d2aab9ba8eb745a7ede6fad493c36",
+          "expected_method_ast_sha256": "c16a0ae4a6c539ff57e0b1885e58e4143b2d2aab9ba8eb745a7ede6fad493c36"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_streams_native_step_update_and_init_events",
+          "new_id": "tests.test_antigravity_stream_delivery.AntigravityStreamDeliveryTests.test_antigravity_adapter_streams_native_step_update_and_init_events",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_antigravity_stream_delivery.py",
+          "original_file_sha256": "36bab48c98c1176c24ddf437400b5b3a8b36cb1000745670b52c99743a9cf062",
+          "original_method_ast_sha256": "04c32750902d08fa072927b8f353c049e0d7e38edbc98696263d7fcaab5b44e7",
+          "expected_method_ast_sha256": "04c32750902d08fa072927b8f353c049e0d7e38edbc98696263d7fcaab5b44e7"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_strictly_rejects_duplicate_fields_in_streamed_result",
+          "new_id": "tests.test_antigravity_stream_validation.AntigravityStreamValidationTests.test_antigravity_adapter_strictly_rejects_duplicate_fields_in_streamed_result",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_antigravity_stream_validation.py",
+          "original_file_sha256": "36bab48c98c1176c24ddf437400b5b3a8b36cb1000745670b52c99743a9cf062",
+          "original_method_ast_sha256": "1afee22dca4fd89fd4cd2bb32a058ca9345c03d80f7a6f6e970ca6f28abd35ab",
+          "expected_method_ast_sha256": "1afee22dca4fd89fd4cd2bb32a058ca9345c03d80f7a6f6e970ca6f28abd35ab"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_surfaces_provider_error_on_non_zero_returncode",
+          "new_id": "tests.test_antigravity_stream_delivery.AntigravityStreamDeliveryTests.test_antigravity_adapter_surfaces_provider_error_on_non_zero_returncode",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_antigravity_stream_delivery.py",
+          "original_file_sha256": "36bab48c98c1176c24ddf437400b5b3a8b36cb1000745670b52c99743a9cf062",
+          "original_method_ast_sha256": "f6b0626ff4a6cd350afb853848aa21dfb001249a845793e68ad281ed546f3e34",
+          "expected_method_ast_sha256": "f6b0626ff4a6cd350afb853848aa21dfb001249a845793e68ad281ed546f3e34"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_thought_step_never_emits_text_delta_and_non_agent_response_steps_ignored",
+          "new_id": "tests.test_antigravity_stream_delivery.AntigravityStreamDeliveryTests.test_antigravity_adapter_thought_step_never_emits_text_delta_and_non_agent_response_steps_ignored",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_antigravity_stream_delivery.py",
+          "original_file_sha256": "36bab48c98c1176c24ddf437400b5b3a8b36cb1000745670b52c99743a9cf062",
+          "original_method_ast_sha256": "3277be17127d36812040ed7fec02f4fad227118f0ca942d1be28a3f6fbbc713c",
+          "expected_method_ast_sha256": "3277be17127d36812040ed7fec02f4fad227118f0ca942d1be28a3f6fbbc713c"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_unwraps_event_alias_result_envelope",
+          "new_id": "tests.test_antigravity_stream_delivery.AntigravityStreamDeliveryTests.test_antigravity_adapter_unwraps_event_alias_result_envelope",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_antigravity_stream_delivery.py",
+          "original_file_sha256": "36bab48c98c1176c24ddf437400b5b3a8b36cb1000745670b52c99743a9cf062",
+          "original_method_ast_sha256": "21c344942fc3d7edf03a5fcd7e26727264fdf071ebbca1e6ee7ad1afd17ae245",
+          "expected_method_ast_sha256": "21c344942fc3d7edf03a5fcd7e26727264fdf071ebbca1e6ee7ad1afd17ae245"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_unwraps_result_envelope_with_whitespace_discriminator",
+          "new_id": "tests.test_antigravity_stream_delivery.AntigravityStreamDeliveryTests.test_antigravity_adapter_unwraps_result_envelope_with_whitespace_discriminator",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_antigravity_stream_delivery.py",
+          "original_file_sha256": "36bab48c98c1176c24ddf437400b5b3a8b36cb1000745670b52c99743a9cf062",
+          "original_method_ast_sha256": "eb9959acb0244fb399bf96694dc5cce7f8944086d6461a975abeed7262a80406",
+          "expected_method_ast_sha256": "eb9959acb0244fb399bf96694dc5cce7f8944086d6461a975abeed7262a80406"
+        },
+        {
+          "old_id": "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_stream_extracts_validated_string_message_and_avoids_dict_leak",
+          "new_id": "tests.test_antigravity_stream_delivery.AntigravityStreamDeliveryTests.test_antigravity_stream_extracts_validated_string_message_and_avoids_dict_leak",
+          "subtest_cap": 0,
+          "source": "tests/test_adapter_streaming.py",
+          "destination": "tests/test_antigravity_stream_delivery.py",
+          "original_file_sha256": "36bab48c98c1176c24ddf437400b5b3a8b36cb1000745670b52c99743a9cf062",
+          "original_method_ast_sha256": "78da225194a150b79cd33a2e0b014effa4891bdefb2cbd959c393b7ef3b57283",
+          "expected_method_ast_sha256": "78da225194a150b79cd33a2e0b014effa4891bdefb2cbd959c393b7ef3b57283"
+        }
+      ]
     }
   ]
 }

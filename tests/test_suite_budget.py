@@ -246,8 +246,12 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
-        antigravity_command_current = suite_budget.load_budget()
-        *legacy_move_receipts, defaults_stage, wire_stage, stream_stage, invocation_stage, exchange_finalization_stage, native_recovery_stage, staging_stage, antigravity_command_stage = load_receipt()
+        antigravity_stream_current = suite_budget.load_budget()
+        *legacy_move_receipts, defaults_stage, wire_stage, stream_stage, invocation_stage, exchange_finalization_stage, native_recovery_stage, staging_stage, antigravity_command_stage, antigravity_stream_stage = load_receipt()
+        antigravity_stream_moves = antigravity_stream_stage["moves"]
+        antigravity_command_current = dict(antigravity_stream_current, max_test_source_lines=156851, subtest_caps=dict(antigravity_stream_current["subtest_caps"]))
+        for move in antigravity_stream_moves:
+            antigravity_command_current["subtest_caps"][move["old_id"]] = antigravity_command_current["subtest_caps"].pop(move["new_id"])
         antigravity_command_moves = antigravity_command_stage["moves"]
         staging_current = dict(antigravity_command_current, max_test_source_lines=156806, subtest_caps=dict(antigravity_command_current["subtest_caps"]))
         for move in antigravity_command_moves:
@@ -674,6 +678,8 @@ class SuiteBudgetTests(unittest.TestCase):
 
         from tests.test_antigravity_command import AntigravityCommandTests
         from tests.test_antigravity_invocation_options import AntigravityInvocationOptionsTests
+        from tests.test_antigravity_stream_delivery import AntigravityStreamDeliveryTests
+        from tests.test_antigravity_stream_validation import AntigravityStreamValidationTests
         from tests.test_antigravity_definition_staging import AntigravityDefinitionStagingTests
         self.assertEqual(AntigravityDefinitionStagingTests.test_binding_is_stable_isolated_and_uses_private_custom_agent.__module__, AntigravityDefinitionStagingTests.__module__)
         self.assertEqual(AntigravityCommandTests.test_command_stdin_paths_and_fresh_resume_results_are_exact.__module__, AntigravityCommandTests.__module__)
@@ -753,6 +759,8 @@ class SuiteBudgetTests(unittest.TestCase):
         self._assert_source_limit_neighbors_rejected(staging_current, native_recovery_current)
         self.assertIsNone(suite_budget.check_monotonic(antigravity_command_current, staging_current))
         self._assert_source_limit_neighbors_rejected(antigravity_command_current, staging_current)
+        self.assertIsNone(suite_budget.check_monotonic(antigravity_stream_current, antigravity_command_current))
+        self._assert_source_limit_neighbors_rejected(antigravity_stream_current, antigravity_command_current)
         invocation_caps = invocation_current["subtest_caps"]
         invocation_id = next(move["new_id"] for move in invocation_moves if move["subtest_cap"])
         for changed_caps in (
@@ -855,17 +863,40 @@ class SuiteBudgetTests(unittest.TestCase):
         moved_streaming = runner_selection.select(real, modules=["tests.test_codex_adapter_streaming"])
         retained_streaming = runner_selection.select(real, modules=["tests.test_adapter_streaming"])
         self.assertEqual(moved_streaming.ids, tuple(sorted(move["new_id"] for move in stream_moves)))
-        self.assertEqual(len(retained_streaming.ids), 32)
+        self.assertEqual(len(retained_streaming.ids), 3)
+        antigravity_stream_ids = sorted(move["new_id"] for move in antigravity_stream_moves)
+        self.assertTrue(all(move["old_id"] not in real.ids for move in antigravity_stream_moves))
+        self.assertEqual(len(antigravity_stream_ids), 29)
+        for case_type, count in ((AntigravityStreamValidationTests, 14), (AntigravityStreamDeliveryTests, 15)):
+            module = case_type.__module__
+            moved = runner_selection.select(real, modules=[module])
+            expected = tuple(case for case in antigravity_stream_ids if case.startswith(f"{module}."))
+            self.assertEqual((moved.ids, len(moved.ids)), (expected, count))
+            self.assertTrue(all(type(case) is case_type and getattr(case, case._testMethodName).__module__ == module for case in moved.tests))
+        antigravity_affected_ids = sorted((*antigravity_stream_ids, *(case for case in retained_streaming.ids if "provider_invocation" not in case)))
+        self.assertEqual(len(antigravity_affected_ids), 31)
+        stream_selection = select_impact(real, paths=("src/story_writing_agents/antigravity_stream_observation.py",))
+        self.assertEqual(stream_selection["focused_manifest"]["ordered_ids"], antigravity_stream_ids)
+        self.assertEqual(stream_selection["affected_manifest"]["ordered_ids"], antigravity_affected_ids)
         self.assertTrue(all(move["old_id"] not in real.ids for move in stream_moves))
         self.assertTrue(all(type(case).__bases__ == (unittest.IsolatedAsyncioTestCase,) and type(case).__module__ == "tests.test_codex_adapter_streaming" for case in moved_streaming.tests))
         for path, expected in (
             ("tests/test_adapter_streaming.py", list(retained_streaming.ids)),
             ("tests/test_codex_adapter_streaming.py", list(moved_streaming.ids)),
-            ("tests/adapter_streaming_fixture.py", sorted((*retained_streaming.ids, *moved_streaming.ids))),
         ):
             selected = select_impact(real, paths=(path,))
             self.assertEqual(selected["focused_manifest"]["ordered_ids"], expected)
             self.assertEqual(selected["affected_manifest"]["ordered_ids"], expected)
+        budget_policy_ids = runner_selection.select(real, modules=["tests.test_suite_budget"]).ids
+        self.assertEqual(len(budget_policy_ids), 4)
+        shared_ids = sorted((*retained_streaming.ids, *moved_streaming.ids, *antigravity_stream_ids))
+        shared = select_impact(real, paths=("tests/adapter_streaming_fixture.py",))
+        self.assertEqual(shared["focused_manifest"]["ordered_ids"], shared_ids)
+        self.assertEqual(shared["affected_manifest"]["ordered_ids"], sorted((*shared_ids, *budget_policy_ids)))
+        agy_fixture_ids = sorted((*retained_streaming.ids, *antigravity_stream_ids, *budget_policy_ids))
+        agy_fixture = select_impact(real, paths=("tests/antigravity_streaming_fixture.py",))
+        self.assertEqual(agy_fixture["focused_manifest"]["ordered_ids"], agy_fixture_ids)
+        self.assertEqual(agy_fixture["affected_manifest"]["ordered_ids"], agy_fixture_ids)
         moved_invocation = runner_selection.select(real, modules=["tests.test_codex_invocation_files"])
         retained_codex = runner_selection.select(real, modules=["tests.test_codex_backend"])
         self.assertEqual(moved_invocation.ids, tuple(sorted(move["new_id"] for move in invocation_moves)))
@@ -1041,7 +1072,7 @@ class SuiteBudgetTests(unittest.TestCase):
                             for case in recovery_selection.tests))
         recovery_paths = select_impact(real, paths=("src/story_writing_agents/antigravity_native_recovery.py",))
         self.assertEqual(recovery_paths["focused_manifest"]["ordered_ids"], recovery_ids)
-        recovery_caller = "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_sanitizes_stdout_in_streamed_response_diagnostic"
+        recovery_caller = "tests.test_antigravity_stream_delivery.AntigravityStreamDeliveryTests.test_antigravity_adapter_sanitizes_stdout_in_streamed_response_diagnostic"
         self.assertEqual(recovery_paths["affected_manifest"]["count"], 12)
         self.assertIn(recovery_caller, recovery_paths["affected_manifest"]["ordered_ids"])
         recovery_fixture = select_impact(real, paths=("tests/fixtures/antigravity_recovered_finish/terminal.json",))
@@ -1075,7 +1106,7 @@ class SuiteBudgetTests(unittest.TestCase):
         command_module = "tests.test_antigravity_command"
         options_module = "tests.test_antigravity_invocation_options"
         runner_selection.validate_definition_modules(real, (command_module, options_module))
-        antigravity_cap_map = antigravity_command_current["subtest_caps"]
+        antigravity_cap_map = antigravity_stream_current["subtest_caps"]
         for module, count, cap, affected_count, affected_cap in (
             (command_module, 4, 29, 8, 35),
             (options_module, 1, 0, 3, 0),
