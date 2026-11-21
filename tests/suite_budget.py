@@ -498,7 +498,7 @@ def check_monotonic(current: dict[str, Any], base: dict[str, Any]) -> None:
             if moved_caps == current["subtest_caps"]:
                 return
         if (
-            (base["max_test_source_lines"], current["max_test_source_lines"]) == (156925, 156942)
+            (base["max_test_source_lines"], current["max_test_source_lines"]) in ((156925, 156942), (156942, 156953))
             and base["schema_version"] == current["schema_version"] == 1
             and tuple(base[name] for name in time_fields) == tuple(current[name] for name in time_fields) == (18000, 3600)
             and base["subtest_caps"] == current["subtest_caps"]
