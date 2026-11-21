@@ -26,6 +26,7 @@
     "tests/lead_fixtures/artifact_review.py",
     "tests/backend_debug_log_fixture.py",
     "tests/conversation_retrieval_wire_fixture.py",
+    "tests/bound_context_provider_cases.py",
     "tests/codex_native_process_fixture.py",
     "tests/agent_exchange_capture_fixture.py",
     "tests/antigravity_adapter_fixture.py",
@@ -3295,6 +3296,58 @@
           "source": "tests/test_suite_budget.py",
           "sha256": "225757c9d5e10ccb9a9fa28e74d6e3234eb115f8e82097c7ce33c5d22fcb748d"
         }
+      ]
+    },
+    {
+      "issue": 1119,
+      "base": "ed09e20887bca731a44e360c9c845f56737cb57b",
+      "origin_commit": "ed09e20887bca731a44e360c9c845f56737cb57b",
+      "origins": [
+        {
+          "source": "tests/test_codex_backend.py",
+          "sha256": "4579729fe763551bfe9df23bbb096f6553a6d2abf5222a2c8eb1467a454a3234"
+        },
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "43fbf04476a1b08d56b08999acc3235b5071e817b007b668362a16ae6de34cf4"
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "c515207397c32a97365d341fb1c37d5ade619073abed7f5eb794dfdf1804b4c8"
+        }
+      ],
+      "prior_sources": [
+        {
+          "source": "tests/test_codex_backend.py",
+          "sha256": "4579729fe763551bfe9df23bbb096f6553a6d2abf5222a2c8eb1467a454a3234"
+        },
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "43fbf04476a1b08d56b08999acc3235b5071e817b007b668362a16ae6de34cf4"
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "c515207397c32a97365d341fb1c37d5ade619073abed7f5eb794dfdf1804b4c8"
+        }
+      ],
+      "counting": "ordinary tests + registered definition support + 1550 legacy",
+      "legacy_unresolved_lines": 1550,
+      "approved_source_delta": 62,
+      "planned_raw_delta": -13,
+      "planned_support_delta": 75,
+      "excluded_monotonic_rule_ordinary": 1,
+      "excluded_monotonic_rule_physical": 1,
+      "original_caps_sha256": "0fc8c5e140b56200643f090106395259da9ca23d1e90a0e64738c3bd3f5c5fbe",
+      "expected_caps_sha256": "0fc8c5e140b56200643f090106395259da9ca23d1e90a0e64738c3bd3f5c5fbe",
+      "cost_components": {
+        "tests/test_codex_backend.py": -57,
+        "tests/bound_context_provider_cases.py": 75,
+        "tests/test_suite_budget.py": 24,
+        "tests/test_rag_module_and_packaging_boundary.py": 20
+      },
+      "exact_source_pair": [
+        157102,
+        157164
       ]
     }
   ]
