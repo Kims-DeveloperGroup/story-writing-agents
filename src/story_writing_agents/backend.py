@@ -4381,7 +4381,7 @@ class AgentBackend:
                         ),
                     )
                 result = await provider_invocation_accounting.timed_provider_invoke(
-                    adapter, bound_agent._provider_binding, invocation,
+                    adapter, bound_agent._provider_binding, (replace(invocation, schema={"type": "object"}) if type(request) is BoundContextProviderCallRequest and bound_agent.vendor == "codex" else invocation),
                 )
                 self._require_postsubmission_workspace(invocation)
             provider_finalization.capture_provider_return_without_replacing(exchange, result)
