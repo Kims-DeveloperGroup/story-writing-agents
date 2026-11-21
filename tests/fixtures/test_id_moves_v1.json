@@ -15704,6 +15704,55 @@
           "expected_method_ast_sha256": "b038656457d0818c22ff96091ed87b18c59d5e8d0d39adc358ffe19107db72fd"
         }
       ]
+    },
+    {
+      "schema_version": 1,
+      "issue": 1101,
+      "origin_commit": "4e2dd9296201af887a16693b569365cac0042033",
+      "original_caps_sha256": "b8d9d16e6370b15259cd1cb208c41bb39b8b69229bbc75dfc459b2d4ed9c7545",
+      "expected_caps_sha256": "06626b9b86b0ef18ee928c69df2100be891efdb03c65162bc474f517c439f992",
+      "moves": [
+        {
+          "old_id": "tests.test_antigravity_adapter.AntigravityAdapterTests.test_binding_is_stable_isolated_and_uses_private_custom_agent",
+          "new_id": "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_binding_is_stable_isolated_and_uses_private_custom_agent",
+          "subtest_cap": 3,
+          "source": "tests/test_antigravity_rules.py",
+          "destination": "tests/test_antigravity_definition_staging.py",
+          "original_file_sha256": "626e9f9515199fa4e6c5420c9a013f92475578c7a83bab2a96981fe7d1f72eaa",
+          "original_method_ast_sha256": "bdfbcd0b56620fbd41a94b40d0fafafa50408ea31ff15b4970c94399a0c2e85c",
+          "expected_method_ast_sha256": "4a4f7a15a2bca3917560584f41eb5c5dc990dc963e005a846d23388123a81ff6"
+        },
+        {
+          "old_id": "tests.test_antigravity_adapter.AntigravityAdapterTests.test_contextual_binding_shared_semantics_and_vendor_constraints_are_exact",
+          "new_id": "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_contextual_binding_shared_semantics_and_vendor_constraints_are_exact",
+          "subtest_cap": 0,
+          "source": "tests/test_antigravity_adapter.py",
+          "destination": "tests/test_antigravity_definition_staging.py",
+          "original_file_sha256": "db946b053e10870c78c6bcb6d9f4ead456ac354fbae1e9c6c8af6b2456e83af2",
+          "original_method_ast_sha256": "fc2b6a0a8bc6bd81d3ca88a99a6c14fdfcc716f0ed69b847a62873ea666f0573",
+          "expected_method_ast_sha256": "c1b11b3ac5bfe29342afb80314c79f4ce360b9fb4a053a22c79e21d62183fc60"
+        },
+        {
+          "old_id": "tests.test_antigravity_adapter.AntigravityAdapterTests.test_definition_chain_rejects_links_and_non_directories",
+          "new_id": "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_definition_chain_rejects_links_and_non_directories",
+          "subtest_cap": 3,
+          "source": "tests/test_antigravity_adapter.py",
+          "destination": "tests/test_antigravity_definition_staging.py",
+          "original_file_sha256": "db946b053e10870c78c6bcb6d9f4ead456ac354fbae1e9c6c8af6b2456e83af2",
+          "original_method_ast_sha256": "8f637b30d11cb01be8dbcdf66d76a4c133f7d4e6ad26b2b01ff384d8db11dc5f",
+          "expected_method_ast_sha256": "8f637b30d11cb01be8dbcdf66d76a4c133f7d4e6ad26b2b01ff384d8db11dc5f"
+        },
+        {
+          "old_id": "tests.test_antigravity_adapter.AntigravityAdapterTests.test_mode_failures_are_best_effort_but_controls_propagate",
+          "new_id": "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_mode_failures_are_best_effort_but_controls_propagate",
+          "subtest_cap": 10,
+          "source": "tests/test_antigravity_rules.py",
+          "destination": "tests/test_antigravity_definition_staging.py",
+          "original_file_sha256": "626e9f9515199fa4e6c5420c9a013f92475578c7a83bab2a96981fe7d1f72eaa",
+          "original_method_ast_sha256": "6e6cc30447f2626f0a85cea9d35c1dd92fe8c2130f38c21cb91aedf448265b00",
+          "expected_method_ast_sha256": "1307a21d77ab05ef1d9dbfd1d2c214a86f40aaed6b0fe12c936223a4f6fcbfc9"
+        }
+      ]
     }
   ]
 }

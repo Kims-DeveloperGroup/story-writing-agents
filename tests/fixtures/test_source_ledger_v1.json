@@ -27,7 +27,8 @@
     "tests/backend_debug_log_fixture.py",
     "tests/conversation_retrieval_wire_fixture.py",
     "tests/codex_native_process_fixture.py",
-    "tests/agent_exchange_capture_fixture.py"
+    "tests/agent_exchange_capture_fixture.py",
+    "tests/antigravity_adapter_fixture.py"
   ],
   "origins": {
     "test_git_external_operation_inspection.py": {
@@ -2796,6 +2797,89 @@
         "id_receipt_registered_support": 3
       },
       "counting": "Seven existing tests move to the concrete recovery module; one existing streaming mock follows the moved supplier. Canonical inventory, subtest caps, timing weights and worker limits remain fixed."
+    },
+    {
+      "issue": 1101,
+      "origin_commit": "4e2dd9296201af887a16693b569365cac0042033",
+      "origins": [
+        {
+          "source": "tests/id_moves.py",
+          "sha256": "2a1f46afa763e43994a62e47f115040f42244156963c4aa9d3fe15ca5ed723b3"
+        },
+        {
+          "source": "tests/test_agent_policy_composition.py",
+          "sha256": "791b832df0abd4ed5046903721dc1ad81c6257f580de03011f29a426e5d3c2f8"
+        },
+        {
+          "source": "tests/test_antigravity_adapter.py",
+          "sha256": "db946b053e10870c78c6bcb6d9f4ead456ac354fbae1e9c6c8af6b2456e83af2"
+        },
+        {
+          "source": "tests/test_antigravity_rules.py",
+          "sha256": "626e9f9515199fa4e6c5420c9a013f92475578c7a83bab2a96981fe7d1f72eaa"
+        },
+        {
+          "source": "tests/test_artifact_application_contracts.py",
+          "sha256": "cb72af01a80882064024eeb824213687fd203d94fe6a709055d955b011daa044"
+        },
+        {
+          "source": "tests/test_artifact_application_store_recovery.py",
+          "sha256": "48c62ade1cd3142718a0b5c19dfaff1cfaa9049178b53e03412a62fcb27b21c6"
+        },
+        {
+          "source": "tests/test_artifact_relationship_policy.py",
+          "sha256": "f62d0c2c30ee476dccb1d354b51bde939f0630915cbef80bd43ae8437ab662f7"
+        },
+        {
+          "source": "tests/test_git_external_operation_inspection.py",
+          "sha256": "dc579568c5e82218fd5ce5382d65b74194253733566ac6df292e7d78c22a296b"
+        },
+        {
+          "source": "tests/test_interactive_controller.py",
+          "sha256": "c979e805ee9b5510053245a2527dca1a81e6a0745385f961a6ce25a678e189c3"
+        },
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "84e4c1423229662ba7aa06e806286fa8eca28fa32c6ebb87b929db82fc96d8a5"
+        },
+        {
+          "source": "tests/test_session_lifecycle.py",
+          "sha256": "14834bc36fb56cb49caa7be76639ee978d119f251b295a9c238ad216f1bfd489"
+        },
+        {
+          "source": "tests/test_session_recovery_contracts.py",
+          "sha256": "fe72276df2e47ff246fe9ce60c2b25f0df5502d8c762b2efc37489fd09fda389"
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "a1d26f187f54338814bcebaf54e86dc7584c3d6e9310965fd938d51dde8fae4d"
+        },
+        {
+          "source": "tests/test_workspace_session_history.py",
+          "sha256": "b3a038883711351d0309d33407d2eb45549eb8cc744dfb4fed69fbb515a49d4f"
+        }
+      ],
+      "approved_source_delta": 90,
+      "planned_raw_delta": -75,
+      "planned_support_delta": 165,
+      "legacy_unresolved_lines": 1550,
+      "exact_source_pair": [
+        156715,
+        156805
+      ],
+      "original_caps_sha256": "b8d9d16e6370b15259cd1cb208c41bb39b8b69229bbc75dfc459b2d4ed9c7545",
+      "expected_caps_sha256": "06626b9b86b0ef18ee928c69df2100be891efdb03c65162bc474f517c439f992",
+      "counted_support_path": "tests/antigravity_adapter_fixture.py",
+      "excluded_monotonic_rule_ordinary": 13,
+      "excluded_monotonic_rule_physical": 13,
+      "cost_components": {
+        "existing_case_source_moves": -124,
+        "registered_antigravity_adapter_fixture": 162,
+        "existing_module_and_packaging_assertions": 15,
+        "existing_budget_and_selector_policy": 34,
+        "id_receipt_registered_support": 3
+      },
+      "counting": "Four existing cases move 1:1, and the existing shared test fixture is counted exactly once."
     }
   ]
 }
