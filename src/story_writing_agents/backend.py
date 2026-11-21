@@ -547,7 +547,7 @@ class _BoundContextProvider:
         if request.continuation_identity != self._continuation_identity:
             raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
         execution_workspace = self._active_workspace(request.execution_workspace)
-        result = await self._bound_agent.backend._invoke_context_physical(self._bound_agent, request=request, execution_workspace=execution_workspace)
+        result = await self._bound_agent.backend._invoke_context_physical(self._bound_agent, request=replace(request, expected_thread_id=None) if request.expected_thread_id is not None else request, execution_workspace=execution_workspace)
         self._active_workspace(execution_workspace)
         return result
 
