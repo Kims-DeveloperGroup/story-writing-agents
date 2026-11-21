@@ -1210,7 +1210,7 @@ class AntigravityAdapter:
         model = (
             self._explicit_model
             if self._explicit_model is not None
-            else agent_model or self._system_model
+            else self._system_model
         )
         effort = (
             self._explicit_effort
