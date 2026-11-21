@@ -5,6 +5,10 @@ import story_writing_agents.backend_reply_decoding as backend_reply_decoding
 import story_writing_agents.agent_exchanges.provider_finalization as provider_finalization
 import story_writing_agents.conversation_retrieval_wire as conversation_retrieval_wire
 import story_writing_agents.provider_binding_call_lifetime as provider_binding_call_lifetime
+from .provider_adapter_generations import (
+    AdapterGeneration as _AdapterGeneration,
+    ProviderAdapterGenerations,
+)
 import story_writing_agents.provider_context_thread_store as provider_context_thread_store
 import story_writing_agents.provider_direct_call_wire as provider_direct_call_wire
 import story_writing_agents.provider_execution_profiles as provider_execution_profiles
@@ -237,21 +241,6 @@ class _StructuredOutputRejected(BackendProtocolError):
     def __init__(self, message: str, details: tuple[str, ...] = ()) -> None:
         super().__init__(message)
         self.validation_details = details
-
-
-@dataclass(slots=True)
-class _AdapterGeneration:
-    """One exact adapter/profile generation retained by its live bindings."""
-
-    generation_id: int
-    configuration: ConfigurationSnapshot
-    profiles: Mapping[str, AgentExecutionProfile]
-    provider_routes: Mapping[str, ProviderRouteEntry]
-    adapters: dict[str, ProviderAdapter]
-    switched_agents: frozenset[str] = frozenset()
-    binding_count: int = 0
-    retired: bool = False
-    closed: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -1707,7 +1696,6 @@ class AgentBackend:
         self.antigravity_executable = antigravity_executable
         self.timeout_seconds = float(timeout_seconds)
         self._generation_lock = threading.RLock()
-        self._next_adapter_generation_id = 1
         self._provider_routes = MappingProxyType(dict(provider_routes))
         profiles = provider_execution_profiles.resolve_execution_profiles(
             self.workspace,
@@ -1751,7 +1739,7 @@ class AgentBackend:
             self._codex_adapter.vendor: self._codex_adapter,
             self._antigravity_adapter.vendor: self._antigravity_adapter,
         }
-        self._active_adapter_generation = _AdapterGeneration(
+        initial_generation = _AdapterGeneration(
             generation_id=0,
             configuration=configuration,
             profiles=profiles,
@@ -1759,9 +1747,9 @@ class AgentBackend:
             adapters=self._adapters,
             switched_agents=startup_switched_agents,
         )
-        self._adapter_generations: dict[int, _AdapterGeneration] = {
-            0: self._active_adapter_generation
-        }
+        self._adapter_generations = ProviderAdapterGenerations(
+            initial_generation, self._generation_lock
+        )
         self._profile_confirmed = {agent_id: False for agent_id in ROSTER}
         self._active_profile_correlation = {agent_id: "startup" for agent_id in ROSTER}
         self._profile_thread_status = {
@@ -1797,7 +1785,7 @@ class AgentBackend:
         )
         startup_applied_profiles = tuple(
             (
-                self._active_adapter_generation.profiles[agent_id],
+                self._adapter_generations.active.profiles[agent_id],
                 self._provider_routes[agent_id].generation,
             )
             for agent_id in ROSTER
@@ -1817,7 +1805,7 @@ class AgentBackend:
         if agent_id not in ROSTER:
             raise ConfigurationError(f"unknown agent: {agent_id}")
         with self._generation_lock:
-            return self._active_adapter_generation.profiles[agent_id]
+            return self._adapter_generations.active.profiles[agent_id]
 
     def execution_profile_fingerprint(self, agent_id: str) -> str:
         """Return provider/model/effort and source facts without prompt content."""
@@ -1830,7 +1818,7 @@ class AgentBackend:
         """Return the active roster in canonical order."""
 
         with self._generation_lock:
-            profiles = self._active_adapter_generation.profiles
+            profiles = self._adapter_generations.active.profiles
             return tuple(profiles[agent_id] for agent_id in ROSTER)
 
     def execution_profile_confirmation(self, agent_id: str) -> str:
@@ -1884,7 +1872,7 @@ class AgentBackend:
             return
         emit_confirmation = False
         with self._generation_lock:
-            if generation is not self._active_adapter_generation:
+            if generation is not self._adapter_generations.active:
                 return
             self._profile_thread_status[profile.agent_id] = thread_disposition
             if not self._profile_confirmed[profile.agent_id]:
@@ -1991,10 +1979,9 @@ class AgentBackend:
                     "Antigravity headless capabilities are unavailable"
                 )
             with self._generation_lock:
-                generation_id = self._next_adapter_generation_id
-                self._next_adapter_generation_id += 1
-                base_generation_id = self._active_adapter_generation.generation_id
-                current_profiles = self._active_adapter_generation.profiles
+                generation_id, base_generation_id, current_profiles = (
+                    self._adapter_generations.reserve_locked()
+                )
                 switched_agents = frozenset(
                     agent_id
                     for agent_id in ROSTER
@@ -2037,7 +2024,7 @@ class AgentBackend:
             raise TypeError("candidate does not belong to this backend")
         close_generation: _AdapterGeneration | None = None
         with self._generation_lock:
-            current = self._active_adapter_generation
+            current = self._adapter_generations.active
             if current.generation_id != candidate.base_generation_id:
                 raise BackendProtocolError("runtime configuration candidate is stale")
             if self._bound_agents:
@@ -2061,8 +2048,7 @@ class AgentBackend:
                         new_profile=next_generation.profiles[agent_id],
                         activation_state="accepted",
                     )
-            self._active_adapter_generation = next_generation
-            self._adapter_generations[next_generation.generation_id] = next_generation
+            self._adapter_generations.publish_locked(next_generation)
             self._configuration_snapshot = next_generation.configuration
             self._provider_routes = next_generation.provider_routes
             self._adapters = next_generation.adapters
@@ -2135,7 +2121,7 @@ class AgentBackend:
                     "runtime configuration candidate is already closed"
                 )
             if (
-                self._active_adapter_generation.generation_id
+                self._adapter_generations.active.generation_id
                 != candidate.base_generation_id
             ):
                 raise BackendProtocolError("runtime configuration candidate is stale")
@@ -2156,7 +2142,7 @@ class AgentBackend:
         ):
             raise TypeError("candidate does not belong to this backend")
         with self._generation_lock:
-            return candidate.generation is self._active_adapter_generation
+            return candidate.generation is self._adapter_generations.active
 
     def discard_runtime_configuration(
         self,
@@ -2170,7 +2156,7 @@ class AgentBackend:
         ):
             raise TypeError("candidate does not belong to this backend")
         with self._generation_lock:
-            if candidate.generation is self._active_adapter_generation:
+            if candidate.generation is self._adapter_generations.active:
                 return
         self._close_adapter_generation(candidate.generation)
 
@@ -2235,11 +2221,8 @@ class AgentBackend:
     def _close_adapter_generation(self, generation: _AdapterGeneration) -> None:
         """Close one retired/staged generation exactly once."""
 
-        with self._generation_lock:
-            if generation.closed:
-                return
-            generation.closed = True
-            self._adapter_generations.pop(generation.generation_id, None)
+        if not self._adapter_generations.begin_close(generation):
+            return
         for adapter in generation.adapters.values():
             try:
                 adapter.close()
@@ -2385,7 +2368,7 @@ class AgentBackend:
         )
         try:
             with self._generation_lock:
-                generation = self._active_adapter_generation
+                generation = self._adapter_generations.active
                 profile = generation.profiles[agent_id]
                 if profile.provider != definition.backend:
                     raise BackendProtocolError(
@@ -4559,7 +4542,7 @@ class AgentBackend:
                 self.workspace, baseline.configuration,
                 provider_overrides=self.backend_overrides,
             )
-            generation = self._active_adapter_generation
+            generation = self._adapter_generations.active
             binding_generation = bound_agent._adapter_generation
             profile = bound_agent.execution_profile
             root_stat = self.workspace.root.stat()
@@ -4579,7 +4562,7 @@ class AgentBackend:
                     self.workspace, baseline.configuration,
                     provider_overrides=self.backend_overrides,
                 ) == routes
-                and self._active_adapter_generation is generation
+                and self._adapter_generations.active is generation
                 and bound_agent._adapter_generation is binding_generation
                 and not generation.retired and not generation.closed
                 and bound_agent.execution_profile == profile
