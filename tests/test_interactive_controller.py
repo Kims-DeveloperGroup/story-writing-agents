@@ -1749,7 +1749,7 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 343)
+        self.assertEqual(len(modules), 344)
         self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 1915)
         self.assertTrue(
             {
