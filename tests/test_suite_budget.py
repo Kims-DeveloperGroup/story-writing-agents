@@ -246,8 +246,12 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
-        staging_current = suite_budget.load_budget()
-        *legacy_move_receipts, defaults_stage, wire_stage, stream_stage, invocation_stage, exchange_finalization_stage, native_recovery_stage, staging_stage = load_receipt()
+        antigravity_command_current = suite_budget.load_budget()
+        *legacy_move_receipts, defaults_stage, wire_stage, stream_stage, invocation_stage, exchange_finalization_stage, native_recovery_stage, staging_stage, antigravity_command_stage = load_receipt()
+        antigravity_command_moves = antigravity_command_stage["moves"]
+        staging_current = dict(antigravity_command_current, max_test_source_lines=156806, subtest_caps=dict(antigravity_command_current["subtest_caps"]))
+        for move in antigravity_command_moves:
+            staging_current["subtest_caps"][move["old_id"]] = staging_current["subtest_caps"].pop(move["new_id"])
         staging_moves = staging_stage["moves"]
         native_recovery_current = dict(staging_current, max_test_source_lines=156715,
                                        subtest_caps=dict(staging_current["subtest_caps"]))
@@ -668,11 +672,12 @@ class SuiteBudgetTests(unittest.TestCase):
         self.assertRaises(suite_budget.BudgetError, suite_budget.check_monotonic, rules_current, dict(combined_current, subtest_caps={**combined_current["subtest_caps"], matrix_id: 2}))
 
 
-        from tests.test_antigravity_adapter import AntigravityAdapterTests
-        from tests.test_antigravity_rules import AntigravityRulesDefinitions
+        from tests.test_antigravity_command import AntigravityCommandTests
+        from tests.test_antigravity_invocation_options import AntigravityInvocationOptionsTests
         from tests.test_antigravity_definition_staging import AntigravityDefinitionStagingTests
         self.assertEqual(AntigravityDefinitionStagingTests.test_binding_is_stable_isolated_and_uses_private_custom_agent.__module__, AntigravityDefinitionStagingTests.__module__)
-        self.assertIs(AntigravityAdapterTests.test_command_stdin_paths_and_fresh_resume_results_are_exact, AntigravityRulesDefinitions.test_command_stdin_paths_and_fresh_resume_results_are_exact)
+        self.assertEqual(AntigravityCommandTests.test_command_stdin_paths_and_fresh_resume_results_are_exact.__module__, AntigravityCommandTests.__module__)
+        self.assertEqual(AntigravityInvocationOptionsTests.test_model_effort_precedence_and_backend_projection_are_immutable.__module__, AntigravityInvocationOptionsTests.__module__)
         self.assertEqual(AntigravityDefinitionStagingTests.test_mode_failures_are_best_effort_but_controls_propagate.__module__, AntigravityDefinitionStagingTests.__module__)
         decoder_current = dict(suite_budget.load_budget(), max_test_source_lines=155687, subtest_caps=execution_profiles_current["subtest_caps"])
         self.assertEqual(decoder_current["max_test_source_lines"], 155687)
@@ -746,6 +751,8 @@ class SuiteBudgetTests(unittest.TestCase):
         self._assert_source_limit_neighbors_rejected(native_recovery_current, exchange_finalization_current)
         self.assertIsNone(suite_budget.check_monotonic(staging_current, native_recovery_current))
         self._assert_source_limit_neighbors_rejected(staging_current, native_recovery_current)
+        self.assertIsNone(suite_budget.check_monotonic(antigravity_command_current, staging_current))
+        self._assert_source_limit_neighbors_rejected(antigravity_command_current, staging_current)
         invocation_caps = invocation_current["subtest_caps"]
         invocation_id = next(move["new_id"] for move in invocation_moves if move["subtest_cap"])
         for changed_caps in (
@@ -1012,9 +1019,6 @@ class SuiteBudgetTests(unittest.TestCase):
                 'tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_synthesis_contract_is_semantic_and_runtime_derives_attribution',
                 'tests.test_specialist_orchestration_execution.SpecialistExecutionAcceptanceTests.test_synthesis_derives_non_supporting_inputs_locally',
             ),
-            "tests.test_antigravity_rules": (
-                'tests.test_antigravity_adapter.AntigravityAdapterTests.test_command_stdin_paths_and_fresh_resume_results_are_exact',
-            ),
             "tests.test_backend_reply_decoding": (
                 'tests.test_codex_backend.CodexBackendTestCase.test_strict_phase_reply_mapping',
                 'tests.test_codex_backend.CodexBackendTestCase.test_retrieval_decoder_rejects_malformed_duplicate_and_schema_errors',
@@ -1067,6 +1071,25 @@ class SuiteBudgetTests(unittest.TestCase):
             if not case.endswith(".test_contextual_binding_shared_semantics_and_vendor_constraints_are_exact")
         ])
         self.assertEqual(directory_selection["affected_manifest"]["count"], 7)
+        self.assertTrue(all(move["old_id"] not in real.ids for move in antigravity_command_moves))
+        command_module = "tests.test_antigravity_command"
+        options_module = "tests.test_antigravity_invocation_options"
+        runner_selection.validate_definition_modules(real, (command_module, options_module))
+        antigravity_cap_map = antigravity_command_current["subtest_caps"]
+        for module, count, cap, affected_count, affected_cap in (
+            (command_module, 4, 29, 8, 35),
+            (options_module, 1, 0, 3, 0),
+        ):
+            moved_ids = tuple(sorted(move["new_id"] for move in antigravity_command_moves if move["new_id"].startswith(f"{module}.")))
+            self.assertEqual(runner_selection.select(real, modules=[module]).ids, moved_ids)
+            self.assertEqual((len(moved_ids), sum(antigravity_cap_map[test_id] for test_id in moved_ids)), (count, cap))
+            selected = select_impact(real, paths=(f"src/story_writing_agents/{module.removeprefix('tests.test_')}.py",))
+            self.assertEqual(selected["focused_manifest"]["ordered_ids"], list(moved_ids))
+            affected_ids = selected["affected_manifest"]["ordered_ids"]
+            self.assertEqual((len(affected_ids), sum(antigravity_cap_map[test_id] for test_id in affected_ids)), (affected_count, affected_cap))
+        rules_ids = select_impact(real, paths=("src/story_writing_agents/antigravity_rules.py",))["affected_manifest"]["ordered_ids"]
+        self.assertEqual((len(rules_ids), sum(antigravity_cap_map[test_id] for test_id in rules_ids)), (8, 33))
+        self.assertIn(f"{command_module}.AntigravityCommandTests.test_command_stdin_paths_and_fresh_resume_results_are_exact", rules_ids)
         shared_fixture = select_impact(real, paths=("tests/antigravity_adapter_fixture.py",))
         self.assertEqual(shared_fixture["affected_manifest"]["count"], 42)
         self.assertTrue(set(staging_ids) <= set(shared_fixture["affected_manifest"]["ordered_ids"]))
