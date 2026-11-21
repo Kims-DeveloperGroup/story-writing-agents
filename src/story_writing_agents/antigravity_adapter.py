@@ -14,10 +14,8 @@ import os
 import re
 import shutil
 import subprocess
-import unicodedata
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from types import MappingProxyType
 from typing import Any
 from uuid import uuid4
 
@@ -56,6 +54,8 @@ from .workspace.session_role_projection import (
     require_session_role_projection,
 )
 import story_writing_agents.antigravity_agent_definition as antigravity_agent_definition
+import story_writing_agents.antigravity_command as antigravity_command
+import story_writing_agents.antigravity_invocation_options as antigravity_invocation_options
 import story_writing_agents.antigravity_native_recovery as antigravity_native_recovery
 import story_writing_agents.antigravity_recovery_matching as antigravity_recovery_matching
 import story_writing_agents.antigravity_state_directories as antigravity_state_directories
@@ -75,27 +75,8 @@ _NATIVE_PARTIAL_TIMEOUT = re.compile(
 _NATIVE_TRUNCATED = re.compile(
     rb"^error: [^\r\n]+ \(response may be truncated\)\r?$", re.MULTILINE,
 )
-_HELP_LONG_OPTION = re.compile(
-    r"(?<![A-Za-z0-9_-])--[A-Za-z0-9][A-Za-z0-9_-]*(?![A-Za-z0-9_-])"
-)
-_EFFORTS = ("low", "medium", "high")
-_REQUIRED_HEADLESS_FLAGS = (
-    "--agent",
-    "--conversation",
-    "--disable-slash-commands",
-    "--effort",
-    "--input-format",
-    "--json-schema",
-    "--mode",
-    "--model",
-    "--new-project",
-    "--output-format",
-    "--print",
-    "--print-timeout",
-    "--sandbox",
-)
 
-CapabilityRun = Callable[..., subprocess.CompletedProcess[bytes]]
+CapabilityRun = antigravity_command.CapabilityRun
 
 
 class AntigravityAdapter:
@@ -130,29 +111,27 @@ class AntigravityAdapter:
         self.executable = executable
         self.timeout_seconds = timeout_seconds
         self.state_root = state_root
-        self._explicit_model = self._optional_setting(
+        self._explicit_model = antigravity_invocation_options.optional_setting(
             explicit_model,
             label="Antigravity model",
         )
-        self._explicit_effort = self._optional_effort(explicit_effort)
-        self._system_model = self._optional_setting(
+        self._explicit_effort = antigravity_invocation_options.optional_effort(explicit_effort)
+        self._system_model = antigravity_invocation_options.optional_setting(
             system_model,
             label="Antigravity system model",
         )
-        self._system_effort = self._optional_effort(system_effort)
-        self._agent_settings = self._copy_agent_settings(agent_settings)
-        self._execution_profiles = (
-            None
-            if execution_profiles is None
-            else MappingProxyType(dict(execution_profiles))
+        self._system_effort = antigravity_invocation_options.optional_effort(system_effort)
+        self._agent_settings = antigravity_invocation_options.copy_agent_settings(
+            agent_settings,
+            agent_id_pattern=antigravity_native_recovery.SAFE_CONVERSATION_ID,
         )
-        if self._execution_profiles is not None and any(
-            profile.provider != self.vendor
-            for profile in self._execution_profiles.values()
-        ):
-            raise ValueError(
-                "Antigravity execution profiles must use the Antigravity provider"
-            )
+        self._execution_profiles = antigravity_invocation_options.copy_execution_profiles(
+            execution_profiles,
+        )
+        antigravity_invocation_options.require_execution_profile_provider(
+            self._execution_profiles,
+            get_vendor=lambda: self.vendor,
+        )
         self._create_process = create_process
         self._wait_for = wait_for
         self._which = which
@@ -161,79 +140,12 @@ class AntigravityAdapter:
     @property
     def model(self) -> str | None:
         """Return the construction-time effective system Antigravity model."""
-
-        if self._explicit_model is not None:
-            return self._explicit_model
-        return self._system_model
+        return antigravity_invocation_options.model(self._explicit_model, self._system_model)
 
     @property
     def effort(self) -> str | None:
         """Return the construction-time effective system Antigravity effort."""
-
-        if self._explicit_effort is not None:
-            return self._explicit_effort
-        return self._system_effort
-
-    @staticmethod
-    def _optional_setting(value: str | None, *, label: str) -> str | None:
-        """Return one flag-safe optional setting without normalizing it."""
-
-        if value is None:
-            return None
-        if (
-            not isinstance(value, str)
-            or not value
-            or value.startswith("-")
-            or any(
-                unicodedata.category(character) in {"Cc", "Cf", "Cs"}
-                for character in value
-            )
-        ):
-            raise ValueError(f"{label} must be safe non-empty text or None")
-        return value
-
-    @staticmethod
-    def _optional_effort(value: str | None) -> str | None:
-        """Return one validated optional Antigravity effort."""
-
-        if value is not None and (
-            not isinstance(value, str) or value not in _EFFORTS
-        ):
-            raise ValueError(
-                "Antigravity effort must be None or one of: low, medium, high"
-            )
-        return value
-
-    @classmethod
-    def _copy_agent_settings(
-        cls,
-        value: Mapping[
-            str,
-            tuple[str | None, str | None],
-        ] | None,
-    ) -> Mapping[str, tuple[str | None, str | None]] | None:
-        """Validate and defensively copy provider-specific agent primitives."""
-
-        if value is None:
-            return None
-        if not isinstance(value, Mapping):
-            raise ValueError("Antigravity agent settings must be a mapping")
-        copied: dict[str, tuple[str | None, str | None]] = {}
-        for agent_id, setting in value.items():
-            if (
-                not isinstance(agent_id, str)
-                or antigravity_native_recovery.SAFE_CONVERSATION_ID.fullmatch(agent_id) is None
-                or type(setting) is not tuple
-                or len(setting) != 2
-            ):
-                raise ValueError("Antigravity agent setting is invalid")
-            model = cls._optional_setting(
-                setting[0],
-                label="Antigravity agent model",
-            )
-            effort = cls._optional_effort(setting[1])
-            copied[agent_id] = (model, effort)
-        return MappingProxyType(copied)
+        return antigravity_invocation_options.effort(self._explicit_effort, self._system_effort)
 
 
 
@@ -376,7 +288,7 @@ class AntigravityAdapter:
                 taint_existing_thread=False,
             ) from None
         try:
-            self._require_state_workspace_disjoint(
+            antigravity_command.require_state_workspace_disjoint(
                 provider_state_directory,
                 execution_workspace,
             )
@@ -400,11 +312,13 @@ class AntigravityAdapter:
                 execution_workspace,
                 plan=staged_role,
             )
-            command = self._execution_command(
+            command = antigravity_command.execution_command(
                 command,
                 provider_state_directory=provider_state_directory,
                 execution_workspace=execution_workspace,
                 projected_role=projected_role.path,
+                settings=self,
+                which=lambda: self._which(),
             )
         except ProviderInvocationError as exc:
             record_provider_failure_accounting(
@@ -1089,135 +1003,33 @@ class AntigravityAdapter:
         output_format: str = "json",
         native_agent_id: str,
     ) -> list[str]:
-        """Build Antigravity options from the already rendered transport schema."""
-
-        if (
-            antigravity_native_recovery.SAFE_CONVERSATION_ID.fullmatch(agent_id) is None
-            or antigravity_native_recovery.SAFE_CONVERSATION_ID.fullmatch(native_agent_id) is None
-        ):
-            raise ValueError("Antigravity custom agent ID is invalid")
-        command = [
-            self.executable,
-            # agy retains this inherited option spelling.
-            f"--gemini_dir={provider_state_directory}",
-            "--input-format",
-            "text",
-            "--output-format",
-            output_format,
-            "--json-schema",
-            canonical_provider_json(schema).decode(
-                "utf-8", errors="strict"
-            ),
-            "--agent",
-            native_agent_id,
-            "--sandbox",
-            "--mode",
-            "plan",
-            "--disable-slash-commands",
-            "--print-timeout",
-            f"{self.timeout_seconds:g}s",
-        ]
-        model, effort = self.invocation_settings(agent_id)
-        if model is not None:
-            command.extend(["--model", model])
-        if effort is not None:
-            command.extend(["--effort", effort])
-        if thread_id is None:
-            command.append("--new-project")
-        else:
-            command.extend(["--conversation", thread_id])
-        return command
-
-    def _execution_command(
-        self,
-        command: list[str],
-        *,
-        provider_state_directory: Path,
-        execution_workspace: ProviderExecutionWorkspace,
-        projected_role: Path,
-    ) -> list[str]:
-        """Resolve one native command for the exact execution workspace."""
-
-        session_root, _ = self._require_state_workspace_disjoint(
-            provider_state_directory,
-            execution_workspace,
+        """Build Antigravity options for the already rendered transport schema."""
+        return antigravity_command.command(
+            self,
+            provider_state_directory=provider_state_directory,
+            schema=schema,
+            thread_id=thread_id,
+            agent_id=agent_id,
+            output_format=output_format,
+            native_agent_id=native_agent_id,
+            agent_id_pattern=antigravity_native_recovery.SAFE_CONVERSATION_ID,
         )
-        resolved = self._which()(self.executable)
-        if resolved is None:
-            raise ProviderInvocationError(
-                "Antigravity CLI executable was not found",
-                taint_existing_thread=False,
-            )
-        executable = Path(os.path.realpath(resolved))
-        role = Path(os.path.realpath(projected_role))
-        agents_root = session_root / ".agents"
-        agents_directory = agents_root / "agents"
-        selected_agent_directory = agents_directory / projected_role.parent.name
-        if (
-            session_root != execution_workspace.worktree_root
-            or role != projected_role
-            or role != selected_agent_directory / "agent.md"
-        ):
-            raise ProviderInvocationError(
-                "Antigravity execution workspace is unavailable",
-                taint_existing_thread=False,
-            )
-        resolved_command = list(command)
-        resolved_command[0] = os.fspath(executable)
-        return resolved_command
-
-    @staticmethod
-    def _require_state_workspace_disjoint(
-        provider_state_directory: Path,
-        execution_workspace: ProviderExecutionWorkspace,
-    ) -> tuple[Path, Path]:
-        """Require canonical provider state outside the live session root."""
-
-        execution_workspace.require_current()
-        session_root = Path(os.path.realpath(execution_workspace.worktree_root))
-        native_state = Path(os.path.realpath(provider_state_directory))
-        if (
-            session_root != execution_workspace.worktree_root
-            or native_state == session_root
-            or session_root in native_state.parents
-            or native_state in session_root.parents
-        ):
-            raise ProviderInvocationError(
-                "Antigravity execution workspace is unavailable",
-                taint_existing_thread=False,
-            )
-        return session_root, native_state
 
     def invocation_settings(
         self,
         agent_id: str | None,
     ) -> tuple[str | None, str | None]:
         """Resolve Antigravity flags from immutable settings for one agent."""
-
-        if agent_id is None or self._agent_settings is None:
-            if agent_id is None:
-                return self.model, self.effort
-        if self._execution_profiles is not None:
-            profile = self._execution_profiles.get(agent_id)
-            if profile is None:
-                raise ValueError("Antigravity execution profile is unavailable")
-            return profile.model, profile.effort
-        if self._agent_settings is None:
-            return self.model, self.effort
-        if agent_id not in self._agent_settings:
-            raise ValueError("Antigravity agent setting is unavailable")
-        agent_model, agent_effort = self._agent_settings[agent_id]
-        model = (
-            self._explicit_model
-            if self._explicit_model is not None
-            else agent_model or self._system_model
+        return antigravity_invocation_options.invocation_settings(
+            agent_id,
+            agent_settings=self._agent_settings,
+            execution_profiles=self._execution_profiles,
+            explicit_model=self._explicit_model,
+            explicit_effort=self._explicit_effort,
+            system_model=self._system_model,
+            system_effort=self._system_effort,
+            defaults=self,
         )
-        effort = (
-            self._explicit_effort
-            if self._explicit_effort is not None
-            else agent_effort or self._system_effort
-        )
-        return model, effort
 
     @classmethod
     def _provider_result(
@@ -1336,47 +1148,15 @@ class AntigravityAdapter:
 
     def executable_available(self) -> bool:
         """Return whether the configured Antigravity executable resolves."""
-
-        return self._which()(self.executable) is not None
+        return antigravity_command.executable_available(self._which, self)
 
     def headless_capabilities_available(self) -> bool:
-        """Run one bounded, provider-free check for required headless flags."""
-
-        probe_directory = self.state_root / "capability-probe"
-        try:
-            if not self.executable_available():
-                return False
-            try:
-                result = self._capability_run()(
-                    [
-                        self.executable,
-                        f"--gemini_dir={probe_directory}",
-                        "--help",
-                    ],
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    timeout=min(5.0, self.timeout_seconds),
-                    check=False,
-                )
-            except (OSError, subprocess.SubprocessError):
-                return False
-            if result.returncode != 0:
-                return False
-            try:
-                output = (result.stdout + result.stderr).decode(
-                    "utf-8",
-                    errors="strict",
-                )
-            except UnicodeDecodeError:
-                return False
-            available_flags = frozenset(_HELP_LONG_OPTION.findall(output))
-            return all(flag in available_flags for flag in _REQUIRED_HEADLESS_FLAGS)
-        finally:
-            try:
-                shutil.rmtree(probe_directory, ignore_errors=True)
-            except Exception:
-                pass
+        """Run one bounded, provider-free check for the required headless flags."""
+        return antigravity_command.headless_capabilities_available(
+            self,
+            state_root=self.state_root,
+            capability_run=lambda: self._capability_run(),
+        )
 
     def close(self) -> None:
         """Retain provider-native state for later backend instances."""
