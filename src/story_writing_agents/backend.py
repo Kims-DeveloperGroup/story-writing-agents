@@ -3341,7 +3341,7 @@ class AgentBackend:
             )
         except _StructuredOutputRejected as original_failure:
             original_details = original_failure.validation_details
-            if not allow_repair:
+            if allow_repair:
                 if on_fallback is not None:
                     on_fallback()
                 return self._attach_reply_trace(
