@@ -21171,13 +21171,15 @@
         "src/story_writing_agents/provider_adapter_generations.py"
       ],
       "focused_ids": [
-        "tests.test_codex_backend.CodexBackendTestCase.test_hot_same_provider_profile_applies_now_and_reuses_thread"
+        "tests.test_codex_backend.CodexBackendTestCase.test_hot_same_provider_profile_applies_now_and_reuses_thread",
+        "tests.test_codex_backend.CodexBackendTestCase.test_retirement_defers_exact_cleanup_for_each_bound_operation"
       ],
       "affected_ids": [
         "tests.test_codex_backend.CodexBackendTestCase.test_a_to_b_to_a_route_generation_never_resumes_old_a_threads_after_restart",
         "tests.test_codex_backend.CodexBackendTestCase.test_close_waits_for_active_binding_then_cleans_every_resource_once",
         "tests.test_codex_backend.CodexBackendTestCase.test_failure_and_cancellation_release_retired_staging_once",
         "tests.test_codex_backend.CodexBackendTestCase.test_hot_same_provider_profile_applies_now_and_reuses_thread",
+        "tests.test_codex_backend.CodexBackendTestCase.test_reference_read_pre_provider_resource_failures_terminate_exactly",
         "tests.test_codex_backend.CodexBackendTestCase.test_retirement_defers_exact_cleanup_for_each_bound_operation",
         "tests.test_codex_backend.CodexBackendTestCase.test_terminal_backend_rejects_call_before_binding_retirement",
         "tests.test_interactive_controller.ControllerSettingsTests.test_hot_save_preflight_quiescence_restore_and_recovery_are_truthful"

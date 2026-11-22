@@ -408,7 +408,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
         self.assertEqual(len(modules), 361)
-        self.assertEqual(len(edges), 2193)
+        self.assertEqual(len(edges), 2194)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -2172,6 +2172,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             {target for source, target in edges if source == adapter_generations},
             {
                 "story_writing_agents.config",
+                "story_writing_agents.errors",
                 "story_writing_agents.interactive_settings",
                 "story_writing_agents.provider_adapter",
             },
