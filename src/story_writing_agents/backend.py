@@ -2163,7 +2163,7 @@ class AgentBackend:
             return ConversationReply(
                 session_id=request.session_id,
                 conversation_id=request.conversation_id,
-                turn_id=request.turn_id,
+                turn_id='turn_mismatched',
                 content=_SAFE_STRUCTURED_FALLBACK_MESSAGE,
             )
 
