@@ -74,7 +74,16 @@ from .provider_reference_read_lifecycle import (
 )
 import story_writing_agents.provider_session_access_transactions as provider_session_access_transactions
 import story_writing_agents.provider_session_artifacts as provider_session_artifacts
-import story_writing_agents.provider_session_lifecycle_queries as provider_session_lifecycle_queries
+from .provider_session_lifecycle_operations import (
+    acquire_session_access as _acquire_session_access,
+    assert_provider_work_ready as _assert_provider_work_ready,
+    create_session_with_access as _create_session_with_access,
+    get_session_lifecycle as _get_session_lifecycle,
+    list_session_lifecycles as _list_session_lifecycles,
+    pause_session_and_release_access as _pause_session_and_release_access,
+    release_session_access as _release_session_access,
+    reopen_session_with_access as _reopen_session_with_access,
+)
 import story_writing_agents.provider_session_transitions as provider_session_transitions
 from .provider_structured_invocation import (
     DEFERRED_DIRECT_CODEX_ACCEPTANCES as _DEFERRED_DIRECT_CODEX_ACCEPTANCES,
@@ -157,11 +166,8 @@ from .debug_log import (
 from .errors import (
     BackendProtocolError,
     ConfigurationError,
-    SessionAccessBlockedError,
     SessionIdError,
     SessionNotFoundError,
-    SessionOwnershipUnknownError,
-    SessionPausedError,
 )
 from .git.session_contracts import GitSessionResourceInspection
 from .models import (
@@ -205,12 +211,7 @@ from .provider_generation_adapters import (
 )
 from .provider_process import ProcessTimedOut, stop_process
 from .provider_execution_workspace import ProviderExecutionWorkspace
-from .session_lifecycle import (
-    SessionAccessState,
-    SessionDurableState,
-    SessionLifecycleState,
-    provider_work_is_ready,
-)
+from .session_lifecycle import SessionLifecycleState
 from .session_recovery import (
     SessionArtifactApplicationEvidence,
     SessionReviewedProposalEvidence,
@@ -1383,65 +1384,31 @@ class AgentBackend:
         )
         return bound
 
-    def get_session_lifecycle(self, session_id: str) -> SessionLifecycleState:
-        """Return validated durable and access facts without mutation.
+    @property
+    def session_lifecycle_ensure_open(self) -> Callable[[], None]:
+        return self._ensure_open
 
-        Absence is represented only when no manifest or access claim exists.
-        Old lifecycle artifacts raise ``WorkspaceVersionUnsupportedError`` and
-        an access claim without a manifest raises ``WorkspaceFormatError``.
-        """
+    @property
+    def session_lifecycle_trace_debug(self) -> _LogicalTrace:
+        return self._trace_debug
 
-        self._ensure_open()
-        session = self.workspace.validate_identifier(session_id)
-        try:
-            state = provider_session_lifecycle_queries.get_session_lifecycle(
-                self.workspace, session, self._access_transactions.access_state,
-            )
-        except BaseException as exc:
-            self._record_debug_error(
-                DebugOperation.SESSION_LIFECYCLE,
-                exc,
-                session_id=session,
-            )
-            raise
-        self._trace_debug(
-            DebugOperation.SESSION_LIFECYCLE,
-            DebugPhase.OBSERVED,
-            session_id=session,
-            outcome=(
-                DebugOutcome.HELD_HERE
-                if state.access_state is SessionAccessState.HELD_HERE
-                else DebugOutcome.CLAIMABLE
-                if state.access_state is SessionAccessState.CLAIMABLE
-                else DebugOutcome.COMPLETED
-            ),
-        )
-        return state
+    @property
+    def session_lifecycle_record_debug_error(self) -> Callable[..., None]:
+        return self._record_debug_error
 
-    def list_session_lifecycles(self) -> tuple[SessionLifecycleState, ...]:
-        """List validated persisted lifecycle facts without mutation.
+    @property
+    def session_lifecycle_access_transactions(
+        self,
+    ) -> provider_session_access_transactions.ProviderSessionAccessTransactions:
+        return self._access_transactions
 
-        Results are ordered by newest durable update and then session ID.
-        Unsupported version-1 artifacts and orphan access claims fail closed.
-        """
+    @property
+    def session_lifecycle_transitions(self) -> provider_session_transitions.ProviderSessionTransitions:
+        return self._session_transitions
 
-        self._ensure_open()
-        try:
-            result = provider_session_lifecycle_queries.list_session_lifecycles(
-                self.workspace, self._access_transactions.access_state,
-            )
-        except BaseException as exc:
-            self._record_debug_error(
-                DebugOperation.SESSION_LIFECYCLE,
-                exc,
-            )
-            raise
-        self._trace_debug(
-            DebugOperation.SESSION_LIFECYCLE,
-            DebugPhase.OBSERVED,
-            outcome=DebugOutcome.COMPLETED,
-        )
-        return result
+    get_session_lifecycle = _get_session_lifecycle
+
+    list_session_lifecycles = _list_session_lifecycles
 
     def provision_session_resources(
         self,
@@ -1523,178 +1490,15 @@ class AgentBackend:
         )
         return True
 
-    def acquire_session_access(self, session_id: str) -> SessionLifecycleState:
-        """Acquire or prove access without changing durable session bytes."""
+    acquire_session_access = _acquire_session_access
 
-        self._ensure_open()
-        session = self.workspace.validate_identifier(session_id)
-        self._trace_debug(
-            DebugOperation.SESSION_LIFECYCLE,
-            DebugPhase.STARTED,
-            session_id=session,
-        )
-        try:
-            state, _ = self._access_transactions.acquire_access_with_reuse(
-                self.workspace, session, self.get_session_lifecycle,
-            )
-        except BaseException as exc:
-            self._record_debug_error(
-                DebugOperation.SESSION_LIFECYCLE,
-                exc,
-                session_id=session,
-            )
-            raise
-        self._trace_debug(
-            DebugOperation.SESSION_LIFECYCLE,
-            DebugPhase.SUCCEEDED,
-            session_id=session,
-            outcome=DebugOutcome.HELD_HERE,
-        )
-        return state
+    release_session_access = _release_session_access
 
-    def release_session_access(self, session_id: str) -> SessionLifecycleState:
-        """Release only this backend's claim and return current lifecycle facts.
+    create_session_with_access = _create_session_with_access
 
-        Without a locally recorded claim the operation is a read-only no-op;
-        foreign claims are never removed or rewritten.
-        """
+    reopen_session_with_access = _reopen_session_with_access
 
-        self._ensure_open()
-        session = self.workspace.validate_identifier(session_id)
-        self._trace_debug(
-            DebugOperation.SESSION_LIFECYCLE,
-            DebugPhase.STARTED,
-            session_id=session,
-        )
-        try:
-            token = self._access_claim_tokens.get(session)
-            if token is not None:
-                self._access_transactions.release_access_claim(self.workspace, session, token)
-            state = self.get_session_lifecycle(session)
-        except BaseException as exc:
-            self._record_debug_error(
-                DebugOperation.SESSION_LIFECYCLE,
-                exc,
-                session_id=session,
-            )
-            raise
-        self._trace_debug(
-            DebugOperation.SESSION_LIFECYCLE,
-            DebugPhase.SUCCEEDED,
-            session_id=session,
-            outcome=DebugOutcome.CLAIMABLE,
-        )
-        return state
-
-    def create_session_with_access(
-        self,
-        session_id: str,
-    ) -> SessionLifecycleState:
-        """Atomically create one ready V2 session and retain its access claim.
-
-        Creation writes an empty provider-thread map with equal timestamps.
-        Configuration validation remains the caller's separate operation.
-        """
-
-        self._ensure_open()
-        session = self.workspace.validate_identifier(session_id)
-        self._trace_debug(
-            DebugOperation.SESSION_LIFECYCLE,
-            DebugPhase.STARTED,
-            session_id=session,
-        )
-        try:
-            state = self._session_transitions.create_session_with_access(
-                self.workspace, session, self.get_session_lifecycle,
-            )
-        except BaseException as exc:
-            self._record_debug_error(
-                DebugOperation.SESSION_LIFECYCLE,
-                exc,
-                session_id=session,
-            )
-            raise
-        self._trace_debug(
-            DebugOperation.SESSION_LIFECYCLE,
-            DebugPhase.SUCCEEDED,
-            session_id=session,
-            outcome=DebugOutcome.READY,
-        )
-        return state
-
-    def reopen_session_with_access(
-        self,
-        session_id: str,
-    ) -> SessionLifecycleState:
-        """Acquire an existing session, make it ready, and retain access.
-
-        An already-ready manifest is a byte- and timestamp-preserving no-op.
-        A newly acquired claim is released if durable validation or writing
-        fails; access already owned by this backend is retained on failure.
-        """
-
-        self._ensure_open()
-        session = self.workspace.validate_identifier(session_id)
-        self._trace_debug(
-            DebugOperation.SESSION_LIFECYCLE,
-            DebugPhase.STARTED,
-            session_id=session,
-        )
-        try:
-            state = self._session_transitions.reopen_session_with_access(
-                self.workspace, session, self.get_session_lifecycle,
-            )
-        except BaseException as exc:
-            self._record_debug_error(
-                DebugOperation.SESSION_LIFECYCLE,
-                exc,
-                session_id=session,
-            )
-            raise
-        self._trace_debug(
-            DebugOperation.SESSION_LIFECYCLE,
-            DebugPhase.SUCCEEDED,
-            session_id=session,
-            outcome=DebugOutcome.READY,
-        )
-        return state
-
-    def pause_session_and_release_access(
-        self,
-        session_id: str,
-    ) -> SessionLifecycleState:
-        """Acquire a session, make it paused, then release local access.
-
-        An already-paused manifest is not rewritten. A durable-write failure
-        releases only an access claim acquired by this call; after a successful
-        pause, release is always attempted and its failure propagates.
-        """
-
-        self._ensure_open()
-        session = self.workspace.validate_identifier(session_id)
-        self._trace_debug(
-            DebugOperation.SESSION_LIFECYCLE,
-            DebugPhase.STARTED,
-            session_id=session,
-        )
-        try:
-            state = self._session_transitions.pause_session_and_release_access(
-                self.workspace, session, self.get_session_lifecycle,
-            )
-        except BaseException as exc:
-            self._record_debug_error(
-                DebugOperation.SESSION_LIFECYCLE,
-                exc,
-                session_id=session,
-            )
-            raise
-        self._trace_debug(
-            DebugOperation.SESSION_LIFECYCLE,
-            DebugPhase.SUCCEEDED,
-            session_id=session,
-            outcome=DebugOutcome.PAUSED,
-        )
-        return state
+    pause_session_and_release_access = _pause_session_and_release_access
 
     def close(self) -> None:
         """Retire bindings, then release claims and adapters after calls exit.
@@ -2259,35 +2063,7 @@ class AgentBackend:
     def context_provider_owned_access_check(self) -> Callable[[Workspace, str], None]:
         return self._access_transactions.assert_owned_access
 
-    def _assert_provider_work_ready(self, session_id: str) -> None:
-        """Require ready durable state and access already held by this backend."""
-
-        state = self.get_session_lifecycle(session_id)
-        if state.durable_state is SessionDurableState.ABSENT:
-            raise SessionNotFoundError(
-                f"provider session does not exist: {session_id}; "
-                f"run 'story session create {session_id}'"
-            )
-        if state.durable_state is SessionDurableState.PAUSED:
-            raise SessionPausedError(
-                f"provider session is paused: {session_id}; "
-                f"run 'story session reopen {session_id}'"
-            )
-        if state.access_state is SessionAccessState.BLOCKED_BY_LIVE_LOCAL_OWNER:
-            raise SessionAccessBlockedError(
-                f"provider session access is blocked: {session_id}"
-            )
-        if state.access_state is SessionAccessState.OWNERSHIP_UNKNOWN:
-            raise SessionOwnershipUnknownError(
-                f"provider session access ownership is unknown: {session_id}"
-            )
-        if not provider_work_is_ready(
-            state,
-            provider_configuration_ready=True,
-        ):
-            raise BackendProtocolError(
-                f"provider session access is not held here: {session_id}"
-            )
+    _assert_provider_work_ready = _assert_provider_work_ready
 
 
     logical_thread_disposition = _logical_thread_disposition

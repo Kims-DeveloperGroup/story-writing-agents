@@ -59,6 +59,7 @@ from story_writing_agents import bound_agent_logical_invocation, provider_conver
 from story_writing_agents import provider_direct_structured_calls, provider_invocation_routing
 from story_writing_agents import provider_context_invocation, provider_reference_read_lifecycle, provider_structured_invocation
 from story_writing_agents import provider_context_thread_store, provider_manifest_thread_store, provider_session_lifecycle_queries
+from story_writing_agents import provider_session_lifecycle_operations
 from story_writing_agents import conversation_retrieval_wire, provider_direct_call_wire, provider_execution_profiles, provider_session_transitions
 from story_writing_agents.errors import (
     BackendProtocolError, SessionNotFoundError, WorkspaceFormatError, WorkspaceSecurityError, WorkspaceVersionUnsupportedError,
@@ -407,8 +408,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 361)
-        self.assertEqual(len(edges), 2194)
+        self.assertEqual(len(modules), 362)
+        self.assertEqual(len(edges), 2198)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -2286,6 +2287,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
         stamps_owner = provider_session_timestamps.__name__
         access_records_owner = provider_session_access_records.__name__
         artifacts_owner = provider_session_artifacts.__name__
+        operations_owner = provider_session_lifecycle_operations.__name__
         queries_owner = provider_session_lifecycle_queries.__name__
         transactions_owner = provider_session_access_transactions.__name__
         context_store_owner = provider_context_thread_store.__name__
@@ -2337,7 +2339,14 @@ class RagModuleBoundaryTests(unittest.TestCase):
              "story_writing_agents.workspace"},
         )
         self.assertEqual({source for source, target in edges if target == queries_owner},
-                         {"story_writing_agents.backend", transactions_owner, transitions_owner})
+                         {operations_owner, transactions_owner, transitions_owner})
+        self.assertEqual(
+            {target for source, target in edges if source == operations_owner},
+            {"story_writing_agents.debug_log", "story_writing_agents.errors", queries_owner,
+             "story_writing_agents.session_lifecycle"},
+        )
+        self.assertEqual({source for source, target in edges if target == operations_owner},
+                         {"story_writing_agents.backend"})
         self.assertEqual(
             {target for source, target in edges if source == transactions_owner},
             {"story_writing_agents.errors", access_records_owner, artifacts_owner, guard_owner, queries_owner,
@@ -2962,7 +2971,18 @@ class RagModuleBoundaryTests(unittest.TestCase):
         self.assertIs(backend_module.provider_session_artifacts, artifacts)
         self.assertIs(transitions.provider_session_artifacts, artifacts)
         queries = provider_session_lifecycle_queries
-        self.assertIs(backend_module.provider_session_lifecycle_queries, queries)
+        operations = provider_session_lifecycle_operations
+        self.assertIs(operations.provider_session_lifecycle_queries, queries)
+        for name in (
+            "get_session_lifecycle", "list_session_lifecycles",
+            "acquire_session_access", "release_session_access",
+            "create_session_with_access", "reopen_session_with_access",
+            "pause_session_and_release_access",
+        ):
+            self.assertIs(getattr(backend_module.AgentBackend, name), getattr(operations, name))
+            self.assertFalse(hasattr(story_writing_agents, name))
+        self.assertIs(backend_module.AgentBackend._assert_provider_work_ready, operations.assert_provider_work_ready)
+        self.assertFalse(hasattr(story_writing_agents, "assert_provider_work_ready"))
         self.assertIs(transitions.provider_session_lifecycle_queries, queries)
         transactions = provider_session_access_transactions
         self.assertIs(backend_module.provider_session_access_transactions, transactions)
@@ -2972,6 +2992,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
         for method, parameters in (
             (transaction_type.__init__, ("access_claim_tokens", "guard_relative")),
             (transaction_type.acquire_access_with_reuse, ("workspace", "session_id", "get_session_lifecycle")),
+            (transaction_type.release_owned_access_claim, ("workspace", "session_id")),
             (transaction_type.release_access_claim, ("workspace", "session_id", "token")),
             (transaction_type.access_state, ("session_id", "value")),
             (transaction_type.discard_access_claim_after_failed_create, ("workspace", "session_id", "token", "failure")),
@@ -3486,6 +3507,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             "story_writing_agents/provider_manifest_thread_store.py",
             "story_writing_agents/provider_session_artifacts.py",
             "story_writing_agents/provider_session_claim_guard.py",
+            "story_writing_agents/provider_session_lifecycle_operations.py",
             "story_writing_agents/provider_session_lifecycle_queries.py",
             "story_writing_agents/provider_session_timestamps.py",
             "story_writing_agents/provider_session_transitions.py",

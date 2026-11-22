@@ -122,6 +122,12 @@ class ProviderSessionAccessTransactions:
             workspace.write_json(relative, value)
             return token
 
+    def release_owned_access_claim(self, workspace: Workspace, session_id: str) -> None:
+        """Release the current local claim when this transaction owner has its token."""
+        token = self._access_claim_tokens.get(session_id)
+        if token is not None:
+            self.release_access_claim(workspace, session_id, token)
+
     def release_access_claim(self, workspace: Workspace, session_id: str, token: str) -> None:
         """Guard, compare, and remove only this backend's exact access claim."""
 
