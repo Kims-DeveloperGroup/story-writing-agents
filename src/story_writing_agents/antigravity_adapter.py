@@ -715,7 +715,7 @@ class AntigravityAdapter:
                     for key, item in entries:
                         if key == "enum":
                             node["minimum"] = value
-                            node["maximum"] = value
+                            node["maximum"] = value + 1
                         else:
                             node[key] = item
 
