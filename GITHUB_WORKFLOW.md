@@ -86,6 +86,35 @@ for a separate plan approval. Neither path may bypass a blocked dependency or mi
 scope decision. The other standalone stages validate their prerequisites and report missing
 owner/actions instead of automatically executing earlier stages.
 
+### Test impact pilot for #969
+
+Apply this pilot to the first three unstarted runtime or test work items under
+[#969](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/969) that first
+reach `Ready` after this policy lands, or to all remaining eligible items if fewer
+than three remain. The root records the participating Issues in #969.
+
+Before moving a participant to `Ready`, the root assigns `test_engineer` a read-only
+impact analysis against the accepted base. Record the base SHA, planned change, exact
+existing test IDs to update or retain and run, the reason for each decision, and the
+first normal selection in the owning Issue's implementation plan. If no test needs
+an edit, record the inspected dependencies and the existing cases to run. Resolve
+material uncertainty about coverage before moving the item to `Ready`.
+
+In implementation, the root assigns `test_engineer` to review the actual diff of
+the first runnable candidate and to review later changes to verification inputs
+before running the next related normal checks. Reconcile the review with the
+candidate before the first full CI and after review fixes. Settle test changes and
+the exact selection before execution. Follow the
+[test impact handoff](.agents/skills/subagent-routing/SKILL.md#test-impact-handoff)
+and the existing [verification policy](#verification-policy).
+
+For each participant, record in #969 the pre-Ready analysis and implementation review
+time, additional test impacts found in the actual diff, first normal failures, and
+the count and wall time of reruns. Record deliberate RED runs, runtime defects,
+infrastructure or measurement problems, and missed predictable test updates by cause.
+The pilot target is zero full CI reruns due to predictable missed test updates.
+Review the observed benefits and review cost before extending the policy.
+
 ## Design-related work
 
 Root records design impact and its reason in the owning Issue's implementation
