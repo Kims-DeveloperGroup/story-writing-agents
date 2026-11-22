@@ -1569,7 +1569,7 @@ class AgentBackend:
         try:
             token = self._access_claim_tokens.get(session)
             if token is not None:
-                self._access_transactions.release_access_claim(self.workspace, session, token)
+                pass  # Validation-only omission of the actual local claim release.
             state = self.get_session_lifecycle(session)
         except BaseException as exc:
             self._record_debug_error(
