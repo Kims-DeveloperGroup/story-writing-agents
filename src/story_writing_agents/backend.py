@@ -202,8 +202,15 @@ from .backend_diagnostic_events import (
     record_debug_error as _emit_record_debug_error,
     trace_debug as _emit_trace_debug,
 )
+from .provider_configuration_activation import (
+    activate_provider_configuration as _activate_provider_configuration,
+    discard_provider_configuration as _discard_provider_configuration,
+    provider_configuration_candidate_is_active as _provider_configuration_candidate_is_active,
+    record_provider_configuration_recovery_required as _record_provider_configuration_recovery_required,
+    validate_provider_configuration_candidate as _validate_provider_configuration_candidate,
+)
 from .provider_configuration_candidate import (
-    prepare_provider_configuration_candidate as _prepare_provider_configuration_candidate,
+    stage_provider_configuration as _stage_provider_configuration,
 )
 from .provider_generation_adapters import (
     create_antigravity_adapter as _create_antigravity_adapter,
@@ -1050,46 +1057,18 @@ class AgentBackend:
         """Build and preflight one isolated adapter generation."""
 
         self._ensure_open()
-        if type(configuration) is not ConfigurationSnapshot:
-            raise TypeError("configuration must be a ConfigurationSnapshot")
-        if set(provider_routes) != set(ROSTER) or any(
-            type(provider_routes[agent_id]) is not ProviderRouteEntry
-            for agent_id in ROSTER
-        ):
-            raise ValueError("provider_routes must contain the complete roster")
-        if not isinstance(correlation_id, str) or not correlation_id:
-            raise ValueError("correlation_id must be non-empty text")
-        profiles = provider_execution_profiles.resolve_execution_profiles(
-            self.workspace,
-            configuration,
-            backend_overrides=self.backend_overrides,
-            explicit_model=self._explicit_model,
-            explicit_antigravity_model=self._explicit_antigravity_model,
-            explicit_antigravity_effort=self._explicit_antigravity_effort,
-        )
-        if any(
-            provider_routes[agent_id].provider != profiles[agent_id].provider
-            for agent_id in ROSTER
-        ):
-            raise BackendProtocolError(
-                "provider route generation does not match the effective profile"
-            )
-        adapters = self._create_adapters(configuration, profiles)
 
-        def reserve() -> tuple[
-            int, int, Mapping[str, AgentExecutionProfile], frozenset[str]
-        ]:
-            with self._generation_lock:
-                generation_id, base_generation_id, current_profiles = (
-                    self._adapter_generations.reserve_locked()
-                )
-                switched_agents = frozenset(
-                    agent_id
-                    for agent_id in ROSTER
-                    if current_profiles[agent_id].provider
-                    != profiles[agent_id].provider
-                )
-            return generation_id, base_generation_id, current_profiles, switched_agents
+        def resolve_profiles(
+            configuration: ConfigurationSnapshot,
+        ) -> Mapping[str, AgentExecutionProfile]:
+            return provider_execution_profiles.resolve_execution_profiles(
+                self.workspace,
+                configuration,
+                backend_overrides=self.backend_overrides,
+                explicit_model=self._explicit_model,
+                explicit_antigravity_model=self._explicit_antigravity_model,
+                explicit_antigravity_effort=self._explicit_antigravity_effort,
+            )
 
         def make_candidate(
             base_generation_id: int,
@@ -1104,12 +1083,16 @@ class AgentBackend:
                 generation=generation,
             )
 
-        return _prepare_provider_configuration_candidate(
+        return _stage_provider_configuration(
             configuration,
             provider_routes,
-            profiles,
-            adapters,
-            reserve=reserve,
+            correlation_id=correlation_id,
+            generation_lock=self._generation_lock,
+            generations=self._adapter_generations,
+            resolve_profiles=resolve_profiles,
+            create_adapters=lambda configuration, profiles: self._create_adapters(
+                configuration, profiles
+            ),
             make_candidate=make_candidate,
         )
 
@@ -1119,70 +1102,20 @@ class AgentBackend:
     ) -> tuple[AgentExecutionProfile, ...]:
         """Atomically activate one staged generation after runtime quiescence."""
 
-        if (
-            type(candidate) is not BackendRuntimeConfigurationCandidate
-            or candidate.owner is not self
-        ):
+        if not self._owns_runtime_configuration_candidate(candidate):
             raise TypeError("candidate does not belong to this backend")
-        with self._generation_lock:
-            current = self._adapter_generations.active
-            if current.generation_id != candidate.base_generation_id:
-                raise BackendProtocolError("runtime configuration candidate is stale")
-            if self._bound_agents:
-                raise BackendProtocolError(
-                    "runtime configuration activation requires quiescent bindings"
-                )
-            next_generation = candidate.generation
-            old_profiles = current.profiles
-            previous_observations = self._profile_observations.snapshot_locked()
-            for agent_id in ROSTER:
-                if old_profiles[agent_id] != next_generation.profiles[agent_id]:
-                    self._log_execution_profile_event(
-                        DebugOperation.EXECUTION_SETTING_CHANGE,
-                        correlation_id=candidate.correlation_id,
-                        route_generation=(
-                            next_generation.provider_routes[agent_id].generation
-                        ),
-                        old_profile=old_profiles[agent_id],
-                        new_profile=next_generation.profiles[agent_id],
-                        activation_state="accepted",
-                    )
-            self._adapter_generations.publish_locked(next_generation)
-            self._configuration_snapshot = next_generation.configuration
-            self._provider_routes = next_generation.provider_routes
-            self._adapters = next_generation.adapters
-            self._codex_adapter = next_generation.adapters["codex"]
-            self._antigravity_adapter = next_generation.adapters["antigravity"]
-            self._staging_directories = self._codex_adapter.staging_directories
-            self.model = self._codex_adapter.model
-            self._codex_reasoning_effort = self._codex_adapter.reasoning_effort
-            self.antigravity_model = self._antigravity_adapter.model
-            self.antigravity_effort = self._antigravity_adapter.effort
-            self._profile_observations.install_locked(
-                previous_observations,
-                old_profiles=old_profiles,
-                new_profiles=next_generation.profiles,
-                switched_agents=next_generation.switched_agents,
-                correlation_id=candidate.correlation_id,
-            )
-            close_generation = self._adapter_generations.retire_locked(current)
-        if close_generation is not None:
-            self._adapter_generations.close_generation(
-                close_generation,
-                record_error=lambda exc: self._record_debug_error(DebugOperation.CLEANUP, exc),
-            )
-        for agent_id in ROSTER:
-            if old_profiles[agent_id] != candidate.generation.profiles[agent_id]:
-                self._log_execution_profile_event(
-                    DebugOperation.EXECUTION_PROFILE_APPLIED,
-                    correlation_id=candidate.correlation_id,
-                    route_generation=(
-                        candidate.generation.provider_routes[agent_id].generation
-                    ),
-                    old_profile=old_profiles[agent_id],
-                    new_profile=candidate.generation.profiles[agent_id],
-                    activation_state="active",
-                )
+        _activate_provider_configuration(
+            candidate,
+            generation_lock=self._generation_lock,
+            generations=self._adapter_generations,
+            profile_observations=self._profile_observations,
+            has_live_bindings=lambda: bool(self._bound_agents),
+            install_backend_mirrors=self._install_runtime_configuration_mirrors_locked,
+            record_profile_event=lambda operation, **fields: self._log_execution_profile_event(
+                operation, **fields
+            ),
+            record_close_error=lambda exc: self._record_debug_error(DebugOperation.CLEANUP, exc),
+        )
         return self.execution_profiles()
 
     def validate_runtime_configuration_candidate(
@@ -1191,25 +1124,14 @@ class AgentBackend:
     ) -> None:
         """Prove one staged generation can still activate before persistence."""
 
-        if (
-            type(candidate) is not BackendRuntimeConfigurationCandidate
-            or candidate.owner is not self
-        ):
+        if not self._owns_runtime_configuration_candidate(candidate):
             raise TypeError("candidate does not belong to this backend")
-        with self._generation_lock:
-            if candidate.generation.closed:
-                raise BackendProtocolError(
-                    "runtime configuration candidate is already closed"
-                )
-            if (
-                self._adapter_generations.active.generation_id
-                != candidate.base_generation_id
-            ):
-                raise BackendProtocolError("runtime configuration candidate is stale")
-            if self._bound_agents:
-                raise BackendProtocolError(
-                    "runtime configuration activation requires quiescent bindings"
-                )
+        _validate_provider_configuration_candidate(
+            candidate,
+            generation_lock=self._generation_lock,
+            generations=self._adapter_generations,
+            has_live_bindings=lambda: bool(self._bound_agents),
+        )
 
     def runtime_configuration_candidate_is_active(
         self,
@@ -1217,13 +1139,13 @@ class AgentBackend:
     ) -> bool:
         """Return whether one exact candidate generation became active."""
 
-        if (
-            type(candidate) is not BackendRuntimeConfigurationCandidate
-            or candidate.owner is not self
-        ):
+        if not self._owns_runtime_configuration_candidate(candidate):
             raise TypeError("candidate does not belong to this backend")
-        with self._generation_lock:
-            return candidate.generation is self._adapter_generations.active
+        return _provider_configuration_candidate_is_active(
+            candidate,
+            generation_lock=self._generation_lock,
+            generations=self._adapter_generations,
+        )
 
     def discard_runtime_configuration(
         self,
@@ -1231,17 +1153,13 @@ class AgentBackend:
     ) -> None:
         """Close one uncommitted staged generation idempotently."""
 
-        if (
-            type(candidate) is not BackendRuntimeConfigurationCandidate
-            or candidate.owner is not self
-        ):
+        if not self._owns_runtime_configuration_candidate(candidate):
             raise TypeError("candidate does not belong to this backend")
-        with self._generation_lock:
-            if candidate.generation is self._adapter_generations.active:
-                return
-        self._adapter_generations.close_generation(
-            candidate.generation,
-            record_error=lambda exc: self._record_debug_error(DebugOperation.CLEANUP, exc),
+        _discard_provider_configuration(
+            candidate,
+            generation_lock=self._generation_lock,
+            generations=self._adapter_generations,
+            record_close_error=lambda exc: self._record_debug_error(DebugOperation.CLEANUP, exc),
         )
 
     def record_runtime_configuration_recovery_required(
@@ -1250,27 +1168,34 @@ class AgentBackend:
     ) -> None:
         """Persist fixed recovery-required profile facts without exception prose."""
 
-        if (
-            type(candidate) is not BackendRuntimeConfigurationCandidate
-            or candidate.owner is not self
-        ):
+        if not self._owns_runtime_configuration_candidate(candidate):
             return
-        previous = candidate.previous_profiles
-        for agent_id in ROSTER:
-            active = candidate.generation.profiles[agent_id]
-            if previous[agent_id] == active:
-                continue
-            self._log_execution_profile_event(
-                DebugOperation.EXECUTION_PROFILE_RECOVERY_REQUIRED,
-                correlation_id=candidate.correlation_id,
-                route_generation=(
-                    candidate.generation.provider_routes[agent_id].generation
-                ),
-                old_profile=previous[agent_id],
-                new_profile=active,
-                activation_state="recovery_required",
-                recovery_required=True,
-            )
+        _record_provider_configuration_recovery_required(
+            candidate,
+            record_profile_event=lambda operation, **fields: self._log_execution_profile_event(
+                operation, **fields
+            ),
+        )
+
+    def _owns_runtime_configuration_candidate(
+        self, candidate: BackendRuntimeConfigurationCandidate
+    ) -> bool:
+        return type(candidate) is BackendRuntimeConfigurationCandidate and candidate.owner is self
+
+    def _install_runtime_configuration_mirrors_locked(
+        self, next_generation: _AdapterGeneration
+    ) -> None:
+        """Update every compatibility mirror within the generation transaction."""
+        self._configuration_snapshot = next_generation.configuration
+        self._provider_routes = next_generation.provider_routes
+        self._adapters = next_generation.adapters
+        self._codex_adapter = next_generation.adapters["codex"]
+        self._antigravity_adapter = next_generation.adapters["antigravity"]
+        self._staging_directories = self._codex_adapter.staging_directories
+        self.model = self._codex_adapter.model
+        self._codex_reasoning_effort = self._codex_adapter.reasoning_effort
+        self.antigravity_model = self._antigravity_adapter.model
+        self.antigravity_effort = self._antigravity_adapter.effort
 
     def _create_adapters(
         self,
