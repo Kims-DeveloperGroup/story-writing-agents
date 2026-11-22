@@ -246,7 +246,8 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
-        antigravity_response_decoding_current = suite_budget.load_budget()
+        codex_event_decoding_current = suite_budget.load_budget()
+        antigravity_response_decoding_current = dict(codex_event_decoding_current, max_test_source_lines=157582)
         backend_diagnostics_current = dict(antigravity_response_decoding_current, max_test_source_lines=157534)
         native_output_schema_current = dict(backend_diagnostics_current, max_test_source_lines=157504)
         invocation_routing_current = dict(native_output_schema_current, max_test_source_lines=157453)
@@ -788,6 +789,7 @@ class SuiteBudgetTests(unittest.TestCase):
         self._assert_source_limit_neighbors_rejected(native_output_schema_current, invocation_routing_current)
         self._assert_source_limit_neighbors_rejected(backend_diagnostics_current, native_output_schema_current)
         self._assert_source_limit_neighbors_rejected(antigravity_response_decoding_current, backend_diagnostics_current)
+        self._assert_source_limit_neighbors_rejected(codex_event_decoding_current, antigravity_response_decoding_current)
         self.assertIsNone(suite_budget.check_monotonic(invocation_routing_current, direct_structured_current))
         self.assertIsNone(suite_budget.check_monotonic(direct_structured_current, retrieval_loop_current))
         self.assertIsNone(suite_budget.check_monotonic(retrieval_loop_current, bound_logical_current))
@@ -939,18 +941,43 @@ class SuiteBudgetTests(unittest.TestCase):
         self.assertEqual(decoder_impact["affected_manifest"]["count"], 67)
         self.assertLessEqual(set(response_cases.ids), set(decoder_impact["focused_manifest"]["ordered_ids"]))
 
-        owner_catalogue = load_owners(real)
-        legacy_name = "tests.test_antigravity_adapter"
-        legacy_path = ["tests/test_antigravity_adapter.py"]
-        declared_alias_edges = {
-            dependency for row in owner_catalogue["owners"] if row["paths"] == legacy_path
-            for dependency in row["depends_on"]
+        codex_decoder_module = "tests.test_codex_event_decoding"
+        codex_usage_case = (
+            "tests.test_codex_backend.CodexBackendTestCase."
+            "test_codex_usage_accepts_only_one_recognized_exact_terminal_snapshot"
+        )
+        codex_decoder_cases = runner_selection.select(real, modules=[codex_decoder_module])
+        runner_selection.validate_definition_modules(codex_decoder_cases, (codex_decoder_module,))
+        self.assertEqual(codex_decoder_cases.ids, (codex_usage_case,))
+        codex_decoder_test_selection = select_impact(real, paths=("tests/test_codex_event_decoding.py",))
+        codex_decoder_path_ids = {codex_usage_case} | {
+            case for case in real.ids if case.startswith("tests.test_suite_budget.")
         }
+        self.assertEqual(len(codex_decoder_path_ids), 5)
+        for manifest_key in ("focused_manifest", "affected_manifest"):
+            self.assertEqual(set(codex_decoder_test_selection[manifest_key]["ordered_ids"]), codex_decoder_path_ids)
+        codex_decoder_selection = select_impact(
+            real, paths=("src/story_writing_agents/codex_event_decoding.py",), scope="affected",
+        )
+        self.assertFalse(codex_decoder_selection["fallback_reason"])
+        self.assertEqual(codex_decoder_selection["focused_manifest"]["count"], 4)
+        self.assertEqual(codex_decoder_selection["affected_manifest"]["count"], 47)
+        self.assertIn(codex_usage_case, codex_decoder_selection["focused_manifest"]["ordered_ids"])
+
+        owner_catalogue = load_owners(real)
+        legacy_alias_modules = ("tests.test_antigravity_adapter", "tests.test_codex_backend")
         legacy_ast_catalogue = {"owners": [
-            dict(row, boundary="existing-cases") if row["name"] == legacy_name else row
+            dict(row, boundary="existing-cases") if row["name"] in legacy_alias_modules else row
             for row in owner_catalogue["owners"]
         ]}
-        self.assertEqual(set(rebuilt_edges(legacy_ast_catalogue)[legacy_name]), declared_alias_edges)
+        actual_alias_edges = rebuilt_edges(legacy_ast_catalogue)
+        for legacy_name in legacy_alias_modules:
+            legacy_path = [legacy_name.replace(".", "/") + ".py"]
+            declared_alias_edges = {
+                dependency for row in owner_catalogue["owners"] if row["paths"] == legacy_path
+                for dependency in row["depends_on"]
+            }
+            self.assertEqual(set(actual_alias_edges[legacy_name]), declared_alias_edges)
 
         retained_streaming = runner_selection.select(real, modules=["tests.test_adapter_streaming"])
         self.assertEqual(moved_streaming.ids, tuple(sorted(move["new_id"] for move in stream_moves)))
