@@ -4,13 +4,11 @@ from __future__ import annotations
 from .provider_adapter import (ProviderContinuationRejection,
     NativeContextCheck, NativeContextObservation, NativeContextCheckStage,
     NativeContextSourceStage, NativeContextCheckReason)
-from .agent_context.accounting import ProviderUsageObservation, ProviderUsageScope
 
 import asyncio
 from dataclasses import replace
 import time
 import hashlib
-import json
 import math
 import os
 import re
@@ -23,7 +21,6 @@ from typing import Any
 from .agent_context import (
     ContextComponentBytes,
     ProviderCallState,
-    ProviderUsage,
 )
 from .config import ConfigurationSnapshot
 from .errors import ProviderAuthenticationRequiredError
@@ -54,14 +51,12 @@ import story_writing_agents.codex_invocation_files as codex_invocation_files
 import story_writing_agents.codex_native_context as codex_native_context
 import story_writing_agents.codex_stream_observation as codex_stream_observation
 from .codex_event_decoding import (
-    reject_duplicate_fields as _reject_duplicate_fields,
-    reject_constant as _reject_constant,
-    finite_float as _finite_float,
+    SAFE_THREAD_ID as _SAFE_THREAD_ID,
     codex_usage_observation as _codex_usage_observation,
+    parse_events as _codex_parse_events,
+    provider_usage as _codex_provider_usage,
+    started_thread as _codex_started_thread,
 )
-
-
-_SAFE_THREAD_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 
 
 class CodexAdapter:
@@ -539,93 +534,9 @@ class CodexAdapter:
                 return ProviderAuthenticationRequiredError("codex")
         return None
 
-    @staticmethod
-    def parse_events(
-        stdout: bytes, *, strict: bool = False,
-    ) -> tuple[dict[str, Any], ...]:
-        """Decode the Codex JSONL event envelope with fixed diagnostics."""
-
-        try:
-            text = stdout.decode("utf-8", errors="strict")
-        except UnicodeDecodeError as exc:
-            raise ProviderInvocationError(
-                "Codex CLI event stream is not valid UTF-8",
-                taint_existing_thread=True,
-            ) from exc
-        events: list[dict[str, Any]] = []
-        for line_number, line in enumerate(text.splitlines(), 1):
-            if not line:
-                continue
-            try:
-                value = (
-                    json.loads(
-                        line,
-                        object_pairs_hook=_reject_duplicate_fields,
-                        parse_constant=_reject_constant,
-                        parse_float=_finite_float,
-                    )
-                    if strict
-                    else json.loads(line)
-                )
-            except (ValueError, RecursionError) as exc:
-                raise ProviderInvocationError(
-                    f"Codex CLI emitted malformed JSONL at line {line_number}",
-                    taint_existing_thread=True,
-                ) from exc
-            if not isinstance(value, dict):
-                raise ProviderInvocationError(
-                    f"Codex CLI emitted a non-object event at line {line_number}",
-                    taint_existing_thread=True,
-                )
-            events.append(value)
-        return tuple(events)
-
-    @staticmethod
-    def started_thread(events: tuple[dict[str, Any], ...]) -> str | None:
-        """Return the first syntactically safe Codex thread identifier."""
-
-        for event in events:
-            if event.get("type") == "thread.started":
-                thread_id = event.get("thread_id")
-                if (
-                    isinstance(thread_id, str)
-                    and _SAFE_THREAD_ID.fullmatch(thread_id) is not None
-                ):
-                    return thread_id
-        return None
-
-    @staticmethod
-    def provider_usage(
-        events: tuple[dict[str, Any], ...],
-    ) -> ProviderUsage | None:
-        """Return only exact counters from one recognized terminal event."""
-
-        terminals = tuple(
-            event for event in events if event.get("type") == "turn.completed"
-        )
-        if len(terminals) != 1:
-            return None
-        raw_usage = terminals[0].get("usage")
-        if type(raw_usage) is not dict:
-            return None
-        assert isinstance(raw_usage, dict)
-        values: dict[str, int | None] = {}
-        for field in (
-            "input_tokens",
-            "output_tokens",
-            "cached_input_tokens",
-        ):
-            if field not in raw_usage:
-                values[field] = None
-                continue
-            value = raw_usage[field]
-            if type(value) is not int or value < 0:
-                values[field] = None
-            else:
-                values[field] = value
-        if all(value is None for value in values.values()):
-            return None
-        return ProviderUsage(**values)
+    parse_events = staticmethod(_codex_parse_events)
+    started_thread = staticmethod(_codex_started_thread)
+    provider_usage = staticmethod(_codex_provider_usage)
 
     def executable_available(self) -> bool:
         """Return whether the configured Codex executable resolves."""
