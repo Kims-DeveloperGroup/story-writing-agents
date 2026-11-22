@@ -1,14 +1,15 @@
-"""Reservation, registration, and closing state for provider adapter generations."""
+"""Reservations, binding lifetimes, and cleanup for provider adapter generations."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from threading import RLock
 
 from .config import ConfigurationSnapshot
+from .errors import BackendProtocolError
 from .interactive_settings import ProviderRouteEntry
-from .provider_adapter import AgentExecutionProfile, ProviderAdapter
+from .provider_adapter import AgentExecutionProfile, ProviderAdapter, ProviderBinding
 
 
 @dataclass(slots=True)
@@ -49,11 +50,49 @@ class ProviderAdapterGenerations:
         self.active = generation
         self._generations[generation.generation_id] = generation
 
-    def begin_close(self, generation: AdapterGeneration) -> bool:
-        """Mark the generation closed before its adapters are closed."""
+    def retain_binding_locked(self, generation: AdapterGeneration) -> None:
+        """Count a bound agent within the caller's binding transaction."""
+        generation.binding_count += 1
+
+    def retire_locked(self, generation: AdapterGeneration) -> AdapterGeneration | None:
+        """Retire the prior generation and return it when ready to close."""
+        generation.retired = True
+        return generation if generation.binding_count == 0 else None
+
+    def release_binding(
+        self,
+        generation: AdapterGeneration | None,
+        adapter: ProviderAdapter,
+        binding: ProviderBinding,
+    ) -> AdapterGeneration | None:
+        """Release the binding and return a retired generation with no bindings."""
+        pass  # Validation-only omission of provider binding release.
+        if generation is None:
+            return None
+        with self._lock:
+            generation.binding_count -= 1
+            if generation.binding_count < 0:
+                raise BackendProtocolError(
+                    "adapter generation binding count became negative"
+                )
+            if generation.retired and generation.binding_count == 0:
+                return generation
+        return None
+
+    def close_generation(
+        self,
+        generation: AdapterGeneration,
+        *,
+        record_error: Callable[[Exception], None],
+    ) -> None:
+        """Close one retired or staged generation exactly once."""
         with self._lock:
             if generation.closed:
-                return False
+                return
             generation.closed = True
             self._generations.pop(generation.generation_id, None)
-        return True
+        for adapter in generation.adapters.values():
+            try:
+                adapter.close()
+            except Exception as exc:
+                record_error(exc)

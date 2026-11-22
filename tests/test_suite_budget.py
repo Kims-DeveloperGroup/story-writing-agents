@@ -246,7 +246,8 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
-        provider_configuration_candidate_current = suite_budget.load_budget()
+        generation_release_current = suite_budget.load_budget()
+        provider_configuration_candidate_current = dict(generation_release_current, max_test_source_lines=157649)
         codex_event_decoding_current = dict(provider_configuration_candidate_current, max_test_source_lines=157617)
         antigravity_response_decoding_current = dict(codex_event_decoding_current, max_test_source_lines=157582)
         backend_diagnostics_current = dict(antigravity_response_decoding_current, max_test_source_lines=157534)
@@ -792,6 +793,7 @@ class SuiteBudgetTests(unittest.TestCase):
         self._assert_source_limit_neighbors_rejected(antigravity_response_decoding_current, backend_diagnostics_current)
         self._assert_source_limit_neighbors_rejected(codex_event_decoding_current, antigravity_response_decoding_current)
         self._assert_source_limit_neighbors_rejected(provider_configuration_candidate_current, codex_event_decoding_current)
+        self._assert_source_limit_neighbors_rejected(generation_release_current, provider_configuration_candidate_current)
         self.assertIsNone(suite_budget.check_monotonic(invocation_routing_current, direct_structured_current))
         self.assertIsNone(suite_budget.check_monotonic(direct_structured_current, retrieval_loop_current))
         self.assertIsNone(suite_budget.check_monotonic(retrieval_loop_current, bound_logical_current))
@@ -1033,12 +1035,15 @@ class SuiteBudgetTests(unittest.TestCase):
         adapter_generations = select_impact(real, paths=("src/story_writing_agents/provider_adapter_generations.py",))
         self.assertEqual(
             adapter_generations["focused_manifest"]["ordered_ids"],
-            ["tests.test_codex_backend.CodexBackendTestCase.test_hot_same_provider_profile_applies_now_and_reuses_thread"],
+            [
+                "tests.test_codex_backend.CodexBackendTestCase.test_hot_same_provider_profile_applies_now_and_reuses_thread",
+                "tests.test_codex_backend.CodexBackendTestCase.test_retirement_defers_exact_cleanup_for_each_bound_operation",
+            ],
         )
-        self.assertEqual(adapter_generations["affected_manifest"]["count"], 7)
+        self.assertEqual(adapter_generations["affected_manifest"]["count"], 8)
         self.assertEqual(
             sum(binding_lifetime_current["subtest_caps"][cid] for cid in adapter_generations["affected_manifest"]["ordered_ids"]),
-            9,
+            14,
         )
         configuration_candidate = select_impact(
             real, paths=("src/story_writing_agents/provider_configuration_candidate.py",), scope="affected",
