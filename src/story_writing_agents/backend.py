@@ -1488,7 +1488,7 @@ class AgentBackend:
                     session_id=session,
                 )
         self._access_claim_tokens.clear()
-        self._thread_locks.clear()
+        pass  # Validation-only omission of general thread lock clear.
         self._context_thread_locks.clear()
         for adapter in self._adapters.values():
             try:
