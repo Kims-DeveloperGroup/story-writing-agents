@@ -56,7 +56,7 @@ from story_writing_agents import backend as backend_module, backend_reply_decodi
 from story_writing_agents import provider_session_claim_guard, provider_session_timestamps, provider_thread_records
 from story_writing_agents import provider_session_access_records, provider_session_access_transactions, provider_session_artifacts
 from story_writing_agents import bound_agent_logical_invocation, provider_conversation_retrieval_loop
-from story_writing_agents import provider_direct_structured_calls
+from story_writing_agents import provider_direct_structured_calls, provider_invocation_routing
 from story_writing_agents import provider_context_invocation, provider_reference_read_lifecycle, provider_structured_invocation
 from story_writing_agents import provider_context_thread_store, provider_manifest_thread_store, provider_session_lifecycle_queries
 from story_writing_agents import conversation_retrieval_wire, provider_direct_call_wire, provider_execution_profiles, provider_session_transitions
@@ -406,8 +406,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 357)
-        self.assertEqual(len(edges), 2174)
+        self.assertEqual(len(modules), 358)
+        self.assertEqual(len(edges), 2181)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -418,6 +418,17 @@ class RagModuleBoundaryTests(unittest.TestCase):
         conversation_retrieval_owner = "story_writing_agents.provider_conversation_retrieval_loop"
         direct_structured_owner = "story_writing_agents.provider_direct_structured_calls"
         provider_dependencies = {
+            "story_writing_agents.provider_invocation_routing": (
+                {
+                    "story_writing_agents.conversation_retrieval",
+                    "story_writing_agents.errors",
+                    "story_writing_agents.models",
+                    "story_writing_agents.provider_adapter",
+                    "story_writing_agents.provider_execution_workspace",
+                    "story_writing_agents.writing_artifacts.read_actions",
+                },
+                {"story_writing_agents.backend"},
+            ),
             direct_structured_owner: (
                 {
                     "story_writing_agents.agent_context",
@@ -3016,6 +3027,12 @@ class RagModuleBoundaryTests(unittest.TestCase):
                       provider_conversation_retrieval_loop.converse_with_retrieval)
         self.assertIs(backend_module.AgentBackend._invoke_codex, provider_direct_structured_calls.invoke_direct_structured)
         self.assertIs(backend_module.AgentBackend._converse_codex, provider_direct_structured_calls.converse_direct_structured)
+        for route in (
+            "invoke_provider", "invoke_antigravity", "converse_provider", "converse_antigravity",
+            "converse_with_retrieval_provider", "converse_with_retrieval_antigravity",
+        ):
+            self.assertIs(getattr(backend_module.AgentBackend, f"_{route}"),
+                          getattr(provider_invocation_routing, route))
         self.assertIs(backend_module.AgentBackend._taint_retrieval_thread_without_replacing_failure,
                       provider_conversation_retrieval_loop.taint_retrieval_thread_without_replacing_failure)
         self.assertIs(backend_module.AgentBackend._load_authorized_reference_context,
@@ -3375,6 +3392,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             "story_writing_agents/bound_agent_logical_invocation.py",
             "story_writing_agents/provider_conversation_retrieval_loop.py",
             "story_writing_agents/provider_direct_structured_calls.py",
+            "story_writing_agents/provider_invocation_routing.py",
             "story_writing_agents/provider_retrieval_handler_outcomes.py",
             "story_writing_agents/antigravity_native_recovery.py",
             "story_writing_agents/antigravity_state_directories.py",
