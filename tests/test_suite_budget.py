@@ -246,7 +246,8 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
-        reference_read_current = suite_budget.load_budget()
+        structured_invocation_current = suite_budget.load_budget()
+        reference_read_current = dict(structured_invocation_current, max_test_source_lines=157235)
         context_invocation_current = dict(reference_read_current, max_test_source_lines=157207)
         bound_context_current = dict(context_invocation_current, max_test_source_lines=157164)
         profile_observations_current = dict(bound_context_current, max_test_source_lines=157102)
@@ -776,6 +777,7 @@ class SuiteBudgetTests(unittest.TestCase):
         self._assert_source_limit_neighbors_rejected(retrieval_outcomes_current, provider_generation_current)
         self.assertIsNone(suite_budget.check_monotonic(accounting_current, retrieval_outcomes_current))
         self._assert_source_limit_neighbors_rejected(accounting_current, retrieval_outcomes_current)
+        self.assertIsNone(suite_budget.check_monotonic(structured_invocation_current, reference_read_current))
         self.assertIsNone(suite_budget.check_monotonic(reference_read_current, context_invocation_current))
         self.assertIsNone(suite_budget.check_monotonic(context_invocation_current, bound_context_current))
         self.assertIsNone(suite_budget.check_monotonic(bound_context_current, profile_observations_current))
@@ -994,6 +996,14 @@ class SuiteBudgetTests(unittest.TestCase):
         reference_read_ids = reference_read_impact["affected_manifest"]["ordered_ids"]
         self.assertEqual(len(reference_read_ids), 14)
         self.assertEqual(sum(reference_read_current["subtest_caps"][cid] for cid in reference_read_ids), 22)
+        structured_impact = select_impact(real, paths=("src/story_writing_agents/provider_structured_invocation.py",))
+        self.assertEqual(structured_impact["focused_manifest"]["ordered_ids"], [
+            "tests.test_antigravity_parity.AntigravityParityTests.test_schema_failure_repairs_then_falls_back_with_runtime_identity",
+            "tests.test_codex_backend.CodexBackendTestCase.test_provider_invocation_error_preserves_adapter_cause_and_taint",
+        ])
+        structured_ids = structured_impact["affected_manifest"]["ordered_ids"]
+        self.assertEqual(len(structured_ids), 75)
+        self.assertEqual(sum(structured_invocation_current["subtest_caps"][cid] for cid in structured_ids), 96)
 
         self.assertTrue(all(move["old_id"] not in real.ids for move in stream_moves))
         self.assertTrue(all(type(case).__bases__ == (unittest.IsolatedAsyncioTestCase,) and type(case).__module__ == "tests.test_codex_adapter_streaming" for case in moved_streaming.tests))
