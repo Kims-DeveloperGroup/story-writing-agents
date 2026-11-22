@@ -246,7 +246,8 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
-        invocation_routing_current = suite_budget.load_budget()
+        native_output_schema_current = suite_budget.load_budget()
+        invocation_routing_current = dict(native_output_schema_current, max_test_source_lines=157453)
         direct_structured_current = dict(invocation_routing_current, max_test_source_lines=157386)
         retrieval_loop_current = dict(direct_structured_current, max_test_source_lines=157359)
         bound_logical_current = dict(retrieval_loop_current, max_test_source_lines=157318)
@@ -781,6 +782,8 @@ class SuiteBudgetTests(unittest.TestCase):
         self._assert_source_limit_neighbors_rejected(retrieval_outcomes_current, provider_generation_current)
         self.assertIsNone(suite_budget.check_monotonic(accounting_current, retrieval_outcomes_current))
         self._assert_source_limit_neighbors_rejected(accounting_current, retrieval_outcomes_current)
+        self.assertIsNone(suite_budget.check_monotonic(native_output_schema_current, invocation_routing_current))
+        self._assert_source_limit_neighbors_rejected(native_output_schema_current, invocation_routing_current)
         self.assertIsNone(suite_budget.check_monotonic(invocation_routing_current, direct_structured_current))
         self.assertIsNone(suite_budget.check_monotonic(direct_structured_current, retrieval_loop_current))
         self.assertIsNone(suite_budget.check_monotonic(retrieval_loop_current, bound_logical_current))
@@ -895,6 +898,23 @@ class SuiteBudgetTests(unittest.TestCase):
         self.assertEqual(selected_wire["focused_manifest"]["ordered_ids"], [next(move["new_id"] for move in wire_moves if move["old_id"].endswith(".test_retrieval_schema_uses_supported_strict_object_subset"))])
         self.assertEqual(selected_wire["affected_manifest"]["ordered_ids"], list(moved_wire.ids))
         moved_streaming = runner_selection.select(real, modules=["tests.test_codex_adapter_streaming"])
+        schema_module = "tests.test_antigravity_native_output_schema"
+        schema_definitions = runner_selection.select(real, modules=[schema_module])
+        runner_selection.validate_definition_modules(schema_definitions, [schema_module])
+        self.assertEqual(len(schema_definitions.ids), 4)
+        self.assertTrue(all(case.startswith("tests.test_antigravity_adapter.AntigravitySchemaRenderingTests.")
+                            for case in schema_definitions.ids))
+        schema_impact = select_impact(real, paths=("tests/test_antigravity_native_output_schema.py",))
+        self.assertEqual(schema_impact["focused_manifest"]["ordered_ids"], list(schema_definitions.ids))
+        literal_consumers = {
+            "tests.test_antigravity_adapter.AntigravityAdapterTests.test_direct_invocation_preserves_prepared_payload_and_failure_facts",
+            "tests.test_antigravity_adapter.AntigravityAdapterTests.test_rendered_schema_echo_is_exact_for_success_and_recovered_error",
+            "tests.test_antigravity_adapter.AntigravityAdapterTests.test_unrendered_or_mismatched_echo_retains_completed_failure_bytes",
+        }
+        self.assertEqual(set(schema_impact["affected_manifest"]["ordered_ids"]),
+                         set(schema_definitions.ids) | literal_consumers)
+        schema_source = select_impact(real, paths=("src/story_writing_agents/antigravity_native_output_schema.py",))
+        self.assertEqual(schema_source["focused_manifest"]["ordered_ids"], list(schema_definitions.ids))
         retained_streaming = runner_selection.select(real, modules=["tests.test_adapter_streaming"])
         self.assertEqual(moved_streaming.ids, tuple(sorted(move["new_id"] for move in stream_moves)))
         self.assertEqual(len(retained_streaming.ids), 3)
