@@ -1158,13 +1158,13 @@ class AgentBackend:
             self._codex_reasoning_effort = self._codex_adapter.reasoning_effort
             self.antigravity_model = self._antigravity_adapter.model
             self.antigravity_effort = self._antigravity_adapter.effort
-            self._profile_observations.install_locked(
-                previous_observations,
-                old_profiles=old_profiles,
-                new_profiles=next_generation.profiles,
-                switched_agents=next_generation.switched_agents,
-                correlation_id=candidate.correlation_id,
-            )
+            pass  # Validation-only omission of actual profile observation install.
+
+
+
+
+
+
             close_generation = self._adapter_generations.retire_locked(current)
         if close_generation is not None:
             self._adapter_generations.close_generation(
