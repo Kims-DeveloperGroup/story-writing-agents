@@ -1943,10 +1943,7 @@ class AgentBackend:
                 execution_workspace=execution_workspace,
             )
         if reference_read is not None:
-            self._terminate_reference_read_without_replacing(
-                reference_read,
-                ReferenceAuthorizationErrorCode.PROVIDER_FAILURE,
-            )
+            pass
         raise ConfigurationError(
             f"agent backend is not implemented: {bound_agent.vendor}"
         )
