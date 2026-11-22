@@ -246,7 +246,8 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
-        backend_diagnostics_current = suite_budget.load_budget()
+        antigravity_response_decoding_current = suite_budget.load_budget()
+        backend_diagnostics_current = dict(antigravity_response_decoding_current, max_test_source_lines=157534)
         native_output_schema_current = dict(backend_diagnostics_current, max_test_source_lines=157504)
         invocation_routing_current = dict(native_output_schema_current, max_test_source_lines=157453)
         direct_structured_current = dict(invocation_routing_current, max_test_source_lines=157386)
@@ -786,6 +787,7 @@ class SuiteBudgetTests(unittest.TestCase):
         self.assertIsNone(suite_budget.check_monotonic(native_output_schema_current, invocation_routing_current))
         self._assert_source_limit_neighbors_rejected(native_output_schema_current, invocation_routing_current)
         self._assert_source_limit_neighbors_rejected(backend_diagnostics_current, native_output_schema_current)
+        self._assert_source_limit_neighbors_rejected(antigravity_response_decoding_current, backend_diagnostics_current)
         self.assertIsNone(suite_budget.check_monotonic(invocation_routing_current, direct_structured_current))
         self.assertIsNone(suite_budget.check_monotonic(direct_structured_current, retrieval_loop_current))
         self.assertIsNone(suite_budget.check_monotonic(retrieval_loop_current, bound_logical_current))
@@ -884,7 +886,8 @@ class SuiteBudgetTests(unittest.TestCase):
         drift = runner_contracts.CanonicalCollection(cases, (*ids, *runner_profile.HOSTED_MIXED_SERIAL_IDS, ids[0].rsplit(".", 1)[0] + ".test_unreviewed"))
         self.assertRaises(runner_contracts.RunnerError, runner_hosted.hosted_partition, drift, drift)
         real = runner_execution.source_collection_for(self) or runner_collection.discover_canonical()
-        from tests.runner.impact import select_impact
+        from tests.runner.impact import load_owners, select_impact
+        from tests.runner.owner_map import rebuilt_edges
         moved_defaults = runner_selection.select(real, modules=["tests.test_codex_backend_defaults"])
         self.assertEqual(moved_defaults.ids, tuple(sorted(move["new_id"] for move in defaults_moves)))
         self.assertTrue(all(move["old_id"] not in real.ids for move in defaults_moves))
@@ -917,6 +920,38 @@ class SuiteBudgetTests(unittest.TestCase):
                          set(schema_definitions.ids) | literal_consumers)
         schema_source = select_impact(real, paths=("src/story_writing_agents/antigravity_native_output_schema.py",))
         self.assertEqual(schema_source["focused_manifest"]["ordered_ids"], list(schema_definitions.ids))
+
+        response_module = "tests.test_antigravity_response_decoding"
+        response_cases = runner_selection.select(real, modules=[response_module])
+        runner_selection.validate_definition_modules(response_cases, (response_module,))
+        self.assertEqual(len(response_cases.ids), 3)
+        self.assertTrue(all(case.startswith("tests.test_antigravity_adapter.AntigravityAdapterTests.")
+                            for case in response_cases.ids))
+        response_impact = select_impact(real, paths=(response_module.replace(".", "/") + ".py",))
+        for manifest_key in ("focused_manifest", "affected_manifest"):
+            self.assertEqual(response_impact[manifest_key]["ordered_ids"], list(response_cases.ids))
+
+        decoder_impact = select_impact(
+            real, paths=("src/story_writing_agents/antigravity_response_decoding.py",), scope="affected",
+        )
+        self.assertFalse(decoder_impact["fallback_reason"])
+        self.assertEqual(decoder_impact["focused_manifest"]["count"], 4)
+        self.assertEqual(decoder_impact["affected_manifest"]["count"], 67)
+        self.assertLessEqual(set(response_cases.ids), set(decoder_impact["focused_manifest"]["ordered_ids"]))
+
+        owner_catalogue = load_owners(real)
+        legacy_name = "tests.test_antigravity_adapter"
+        legacy_path = ["tests/test_antigravity_adapter.py"]
+        declared_alias_edges = {
+            dependency for row in owner_catalogue["owners"] if row["paths"] == legacy_path
+            for dependency in row["depends_on"]
+        }
+        legacy_ast_catalogue = {"owners": [
+            dict(row, boundary="existing-cases") if row["name"] == legacy_name else row
+            for row in owner_catalogue["owners"]
+        ]}
+        self.assertEqual(set(rebuilt_edges(legacy_ast_catalogue)[legacy_name]), declared_alias_edges)
+
         retained_streaming = runner_selection.select(real, modules=["tests.test_adapter_streaming"])
         self.assertEqual(moved_streaming.ids, tuple(sorted(move["new_id"] for move in stream_moves)))
         self.assertEqual(len(retained_streaming.ids), 3)
