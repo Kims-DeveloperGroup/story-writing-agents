@@ -80,7 +80,7 @@ jobs:
               command = ["git", "-C", str(src)]
               assert subprocess.check_output([*command, "rev-parse", "HEAD", "HEAD^{tree}"], text=True).split() == [commit, tree]
               deadline = min(time.time() + 3600, absolute_cutoff)
-              args = [sys.executable, "-m", "tests.runner", "--shard", "5/5",
+              args = [sys.executable, "-m", "tests.runner", "run", "--shard", "5/5",
                       "--hosted-methods", "audited-163-v11", "--hosted-deadline-epoch", str(deadline),
                       "--json", str(report)]
               with (out / f"{role}.log").open("wb") as log:
@@ -88,6 +88,8 @@ jobs:
                                           stderr=subprocess.STDOUT,
                                           timeout=max(1, deadline - time.time() + 30))
               (out / f"{role}-exit-code.txt").write_text(f"{result.returncode}\n")
+              if result.returncode != 0:
+                  raise RuntimeError(f"{role} canonical runner exited {result.returncode}; see retained raw log")
               data = json.loads(report.read_text())
               assert result.returncode == 0 and data["outcome"] == "success"
               assert data["environment_valid"] and not data["unexecuted_ids"] and data["totals"]["passed"] == 1
