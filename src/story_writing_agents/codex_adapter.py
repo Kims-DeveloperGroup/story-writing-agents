@@ -613,7 +613,6 @@ class CodexAdapter:
         for field in (
             "input_tokens",
             "output_tokens",
-            "cached_input_tokens",
         ):
             if field not in raw_usage:
                 values[field] = None
