@@ -55,6 +55,7 @@ from story_writing_agents import authoring_admission
 from story_writing_agents import backend as backend_module, backend_reply_decoding, conversation_retrieval, models
 from story_writing_agents import provider_session_claim_guard, provider_session_timestamps, provider_thread_records
 from story_writing_agents import provider_session_access_records, provider_session_access_transactions, provider_session_artifacts
+from story_writing_agents import bound_agent_logical_invocation
 from story_writing_agents import provider_context_invocation, provider_reference_read_lifecycle, provider_structured_invocation
 from story_writing_agents import provider_context_thread_store, provider_manifest_thread_store, provider_session_lifecycle_queries
 from story_writing_agents import conversation_retrieval_wire, provider_direct_call_wire, provider_execution_profiles, provider_session_transitions
@@ -404,15 +405,32 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 354)
-        self.assertEqual(len(edges), 2140)
+        self.assertEqual(len(modules), 355)
+        self.assertEqual(len(edges), 2152)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._core', 'story_writing_agents.agent_context.contracts.events'), edges)
         self.assertIsNone(_cycle_witness(modules, edges))
         structured_owner = "story_writing_agents.provider_structured_invocation"
+        logical_invocation_owner = "story_writing_agents.bound_agent_logical_invocation"
         provider_dependencies = {
+            logical_invocation_owner: (
+                {
+                    "story_writing_agents.agents",
+                    "story_writing_agents.conversation_retrieval",
+                    "story_writing_agents.debug_log",
+                    "story_writing_agents.errors",
+                    "story_writing_agents.models",
+                    "story_writing_agents.provider_execution_workspace",
+                    "story_writing_agents.provider_structured_invocation",
+                    "story_writing_agents.provider_thread_records",
+                    "story_writing_agents.workspace",
+                    "story_writing_agents.workspace.session_artifact_binding",
+                    "story_writing_agents.writing_artifacts.read_actions",
+                },
+                {"story_writing_agents.backend"},
+            ),
             structured_owner: (
                 {
                     "story_writing_agents.agent_context",
@@ -441,7 +459,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                     "story_writing_agents.workspace",
                     "story_writing_agents.writing_artifacts.read_actions",
                 },
-                {"story_writing_agents.backend"},
+                {"story_writing_agents.backend", logical_invocation_owner},
             ),
             "story_writing_agents.provider_reference_read_lifecycle": (
                 {
@@ -2213,7 +2231,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
         )
         self.assertEqual({source for source, target in edges if target == records_owner},
                          {"story_writing_agents.backend", "story_writing_agents.provider_context_invocation",
-                          artifacts_owner, context_store_owner, manifest_store_owner, transitions_owner})
+                          artifacts_owner, context_store_owner, manifest_store_owner, transitions_owner, logical_invocation_owner})
         self.assertEqual({target for source, target in edges if source == stamps_owner},
                          {"story_writing_agents.errors"})
         self.assertEqual({source for source, target in edges if target == stamps_owner},
@@ -2958,6 +2976,11 @@ class RagModuleBoundaryTests(unittest.TestCase):
                       provider_reference_read_lifecycle.load_authorized_reference_context)
         self.assertIs(backend_module._DEFERRED_DIRECT_CODEX_ACCEPTANCES,
                       provider_structured_invocation.DEFERRED_DIRECT_CODEX_ACCEPTANCES)
+        self.assertIs(bound_agent_logical_invocation._DEFERRED_DIRECT_CODEX_ACCEPTANCES,
+                      provider_structured_invocation.DEFERRED_DIRECT_CODEX_ACCEPTANCES)
+        self.assertIs(backend_module.BoundAgent._direct_execution_workspace,
+                      bound_agent_logical_invocation.direct_execution_workspace)
+        self.assertIs(backend_module.BoundAgent._invoke_logical, bound_agent_logical_invocation.invoke_logical)
         self.assertIs(backend_module.AgentBackend._invoke_provider_structured,
                       provider_structured_invocation.invoke_provider_structured)
         self.assertIs(backend_module.AgentBackend._begin_legacy_agent_exchange,
@@ -3303,6 +3326,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             "story_writing_agents/provider_context_invocation.py",
             "story_writing_agents/provider_reference_read_lifecycle.py",
             "story_writing_agents/provider_structured_invocation.py",
+            "story_writing_agents/bound_agent_logical_invocation.py",
             "story_writing_agents/provider_retrieval_handler_outcomes.py",
             "story_writing_agents/antigravity_native_recovery.py",
             "story_writing_agents/antigravity_state_directories.py",
