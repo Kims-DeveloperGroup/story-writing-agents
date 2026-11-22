@@ -6346,10 +6346,26 @@
         "tests/test_session_lifecycle.py"
       ],
       "focused_ids": [
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_diagnostic_control_flow_does_not_change_cleanup"
+      ],
+      "affected_ids": [
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_diagnostic_control_flow_does_not_change_cleanup"
+      ],
+      "depends_on": [
+        "tests.backend-lifecycle-diagnostic-fixture",
+        "tests.test_backend_diagnostic_events"
+      ]
+    },
+    {
+      "name": "tests.session-lifecycle-remaining-cases",
+      "boundary": "lifecycle-remaining-cases",
+      "paths": [
+        "tests/test_session_lifecycle.py"
+      ],
+      "focused_ids": [
         "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_absence_listing_order_and_configuration_validation_are_read_only",
         "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_access_liveness_is_conservative_and_dead_local_claim_is_reclaimed",
         "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_access_schema_duplicate_json_and_orphans_fail_closed",
-        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_diagnostic_control_flow_does_not_change_cleanup",
         "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_ordinary_release_failures_record_failed_terminal",
         "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_release_base_exception_preserves_interrupted_state",
         "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_success_records_terminal_and_is_idempotent",
@@ -6376,7 +6392,6 @@
         "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_absence_listing_order_and_configuration_validation_are_read_only",
         "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_access_liveness_is_conservative_and_dead_local_claim_is_reclaimed",
         "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_access_schema_duplicate_json_and_orphans_fail_closed",
-        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_diagnostic_control_flow_does_not_change_cleanup",
         "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_ordinary_release_failures_record_failed_terminal",
         "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_release_base_exception_preserves_interrupted_state",
         "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_success_records_terminal_and_is_idempotent",
@@ -21638,6 +21653,92 @@
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_rendered_schema_echo_is_exact_for_success_and_recovered_error",
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_unrendered_or_mismatched_echo_retains_completed_failure_bytes",
         "tests.test_antigravity_adapter.AntigravitySchemaRenderingTests.test_nested_schema_positions_render_exact_null_and_integer_singletons"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "provider.backend-diagnostic-events",
+      "boundary": "provider-backend-diagnostic-events",
+      "paths": [
+        "src/story_writing_agents/backend_diagnostic_events.py"
+      ],
+      "focused_ids": [
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_diagnostic_control_flow_does_not_change_cleanup"
+      ],
+      "affected_ids": [
+        "tests.test_antigravity_parity.AntigravityParityTests.test_completed_rejection_artifacts_match_codex_for_debate_and_conversation",
+        "tests.test_antigravity_parity.AntigravityParityTests.test_reference_read_mixed_batch_preserves_sequence_and_privacy",
+        "tests.test_artifact_application_contracts.ArtifactApplicationBoundaryTests.test_module_graph_matches_accepted_delta",
+        "tests.test_artifact_application_store_recovery.ArtifactApplicationBoundaryTests.test_store_is_sole_persistence_interpreter_and_matches_boundary",
+        "tests.test_artifact_relationship_policy.ArtifactRelationshipBoundaryTests.test_ast_graph_counts_and_cycles_match_accepted_brief",
+        "tests.test_codex_backend.CodexBackendTestCase.test_adapter_selected_bind_records_exact_lifecycle_terminals",
+        "tests.test_codex_backend.CodexBackendTestCase.test_antigravity_public_operations_use_provider_neutral_diagnostics",
+        "tests.test_codex_backend.CodexBackendTestCase.test_bound_agent_control_failures_emit_interrupted_terminal_records",
+        "tests.test_codex_backend.CodexBackendTestCase.test_configured_provider_rejection_is_typed_stderr_free_and_safe",
+        "tests.test_codex_backend.CodexBackendTestCase.test_debug_sink_control_failures_preserve_bound_interruptions",
+        "tests.test_codex_backend.CodexBackendTestCase.test_diagnostic_failure_does_not_replace_provider_failure_or_taint",
+        "tests.test_codex_backend.CodexBackendTestCase.test_hot_same_provider_profile_applies_now_and_reuses_thread",
+        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_handler_control_failures_taint_and_trace_interruption",
+        "tests.test_codex_backend.CodexBackendTestCase.test_trace_failure_preserves_provider_result_taint_and_cleanup",
+        "tests.test_codex_backend_defaults.CodexBackendDefaultsTests.test_constructor_validation_diagnostics_are_fixed_and_provider_safe",
+        "tests.test_codex_backend_defaults.CodexBackendDefaultsTests.test_startup_logs_four_exact_active_execution_profile_snapshots",
+        "tests.test_debug_log.DebugLogContractTests.test_record_does_not_swallow_process_control_exceptions",
+        "tests.test_debug_log.DebugLogContractTests.test_schema_v2_profile_transitions_are_exact_correlated_and_private",
+        "tests.test_git_external_operation_inspection.GitExternalOperationInspectionTests.test_contract_adapter_exports_and_dependencies_are_exact",
+        "tests.test_interactive_controller.ControllerContractTests.test_direct_import_is_clean_and_package_graph_is_acyclic",
+        "tests.test_interactive_controller.ControllerSettingsTests.test_hot_save_preflight_quiescence_restore_and_recovery_are_truthful",
+        "tests.test_rag_module_and_packaging_boundary.RagModuleBoundaryTests.test_inventory_edges_cycles_and_sole_dual_importer_match_the_brief",
+        "tests.test_rag_module_and_packaging_boundary.RagModuleBoundaryTests.test_supported_module_surfaces_do_not_expand_the_root_facade",
+        "tests.test_rag_module_and_packaging_boundary.RagPackagingBoundaryTests.test_temporary_base_and_optional_artifacts_exclude_vendored_source",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_absence_listing_order_and_configuration_validation_are_read_only",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_access_liveness_is_conservative_and_dead_local_claim_is_reclaimed",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_diagnostic_control_flow_does_not_change_cleanup",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_ordinary_release_failures_record_failed_terminal",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_release_base_exception_preserves_interrupted_state",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_success_records_terminal_and_is_idempotent",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_lifecycle_operation_records_cover_success_rejection_and_cleanup",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_write_failures_compensate_only_newly_acquired_access",
+        "tests.test_session_lifecycle.SessionLifecycleContractTests.test_lifecycle_module_is_leaf_and_clean_imports_work",
+        "tests.test_session_recovery_contracts.SessionRecoveryBoundaryTests.test_clean_import_and_exact_dependencies_match_accepted_delta",
+        "tests.test_suite_budget.SuiteBudgetTests.test_new_id_increased_subtests_and_relaxed_time_are_rejected",
+        "tests.test_workspace_session_history.WorkspaceSessionHistoryCompositionTests.test_internal_wrapper_uses_main_root_manifest_and_noncreating_snapshot"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "tests.test_backend_diagnostic_events",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/test_backend_diagnostic_events.py"
+      ],
+      "focused_ids": [
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_diagnostic_control_flow_does_not_change_cleanup"
+      ],
+      "affected_ids": [
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_diagnostic_control_flow_does_not_change_cleanup"
+      ],
+      "depends_on": [
+        "tests.backend-lifecycle-diagnostic-fixture"
+      ]
+    },
+    {
+      "name": "tests.backend-lifecycle-diagnostic-fixture",
+      "boundary": "test-support",
+      "paths": [
+        "tests/backend_lifecycle_diagnostic_fixture.py"
+      ],
+      "focused_ids": [
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_diagnostic_control_flow_does_not_change_cleanup"
+      ],
+      "affected_ids": [
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_absence_listing_order_and_configuration_validation_are_read_only",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_access_liveness_is_conservative_and_dead_local_claim_is_reclaimed",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_diagnostic_control_flow_does_not_change_cleanup",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_ordinary_release_failures_record_failed_terminal",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_release_base_exception_preserves_interrupted_state",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_success_records_terminal_and_is_idempotent",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_lifecycle_operation_records_cover_success_rejection_and_cleanup",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_write_failures_compensate_only_newly_acquired_access"
       ],
       "depends_on": []
     }
