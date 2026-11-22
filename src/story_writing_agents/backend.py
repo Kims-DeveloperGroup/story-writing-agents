@@ -41,6 +41,12 @@ from .provider_conversation_retrieval_loop import (
     taint_retrieval_thread_without_replacing_failure as _taint_retrieval_thread_without_replacing_failure,
 )
 import story_writing_agents.provider_direct_call_wire as provider_direct_call_wire
+from .provider_direct_structured_calls import (
+    DirectReferenceReadInvoke as _DirectReferenceReadInvoke,
+    DirectStructuredInvoke as _DirectStructuredInvoke,
+    converse_direct_structured as _converse_codex,
+    invoke_direct_structured as _invoke_codex,
+)
 import story_writing_agents.provider_execution_profiles as provider_execution_profiles
 from .provider_execution_profile_observations import ProviderExecutionProfileObservations
 import story_writing_agents.provider_manifest_thread_store as provider_manifest_thread_store
@@ -1963,120 +1969,15 @@ class AgentBackend:
             execution_workspace=execution_workspace,
         )
 
-    async def _invoke_codex(
-        self,
-        bound_agent: BoundAgent,
-        request: AgentRequest,
-        *,
-        reference_read: ReferenceReadInvocation | None = None,
-        _provider_name: str = "Codex",
-        execution_workspace: ProviderExecutionWorkspace | None = None,
-    ) -> AgentReply:
-        """Invoke Codex with conditional context projection and safe diagnostics.
+    @property
+    def direct_structured_invoke(self) -> _DirectStructuredInvoke[BoundAgent]:
+        return self._invoke_provider_structured_resilient
 
-        The request is serialized without changing the established key set unless an
-        included conversation window is present. Provider and staging resources
-        retain their established lifecycle; protocol, process, and decode errors
-        use provider-safe diagnostics that never reproduce response values.
-        """
+    @property
+    def direct_reference_read_invoke(self) -> _DirectReferenceReadInvoke[BoundAgent]:
+        return self._invoke_codex_after_reference_read
 
-        self._ensure_open()
-
-        def decode(response_text: str) -> AgentReply:
-            """Decode and correlate one phase-specific reply without I/O.
-
-            Revision mismatch or missing phase-required content raises
-            ``BackendProtocolError``.
-            """
-
-            reply = backend_reply_decoding.decode_reply(
-                request.phase,
-                response_text,
-                revision_id=request.revision_id,
-                provider_name=_provider_name,
-            )
-            if request.expected_reviewed_proposal is not None and (
-                reply.reviewed_proposal_id, reply.reviewed_proposal_digest
-            ) != request.expected_reviewed_proposal:
-                raise backend_reply_decoding.PhaseReplyConstraintError("expected_identity")
-            if reply.kind is AgentReplyKind.SYNTHESIS:
-                allowed_next = {AgentReplyNextPhase.REVIEW_COMPLETION} if request.review_only else {AgentReplyNextPhase.REPAIR, AgentReplyNextPhase.FINALIZATION}
-                if reply.next_phase not in allowed_next:
-                    raise backend_reply_decoding.PhaseReplyConstraintError("next")
-            if reply.revision_id != request.revision_id:
-                raise BackendProtocolError(
-                    f"{_provider_name} reply revision_id does not match its request"
-                )
-            if (
-                request.phase
-                in {
-                    Phase.DRAFT,
-                    Phase.PROPOSE_REVISION,
-                    Phase.SYNTHESIZE,
-                }
-                and not reply.content
-            ):
-                raise BackendProtocolError(
-                    f"{_provider_name} candidate response must contain text"
-                )
-            if (
-                request.phase is Phase.AUDIT
-                and reply.verdict is Verdict.CONFLICT
-                and not reply.content
-            ):
-                raise BackendProtocolError(
-                    f"{_provider_name} conflict response must contain a critique"
-                )
-            return reply
-
-        def fallback() -> AgentReply:
-            if request.phase is Phase.AUDIT:
-                return AgentReply(
-                    kind=AgentReplyKind.AUDIT,
-                    revision_id=request.revision_id,
-                    content=_SAFE_STRUCTURED_FALLBACK_MESSAGE,
-                    verdict=Verdict.CONFLICT,
-                )
-            if request.phase in {
-                Phase.DRAFT,
-                Phase.PROPOSE_REVISION,
-                Phase.SYNTHESIZE,
-                Phase.FINALIZE,
-            }:
-                return AgentReply.deadlock(
-                    request.revision_id,
-                    _SAFE_STRUCTURED_FALLBACK_MESSAGE,
-                )
-            raise BackendProtocolError("agent request phase has no safe fallback")
-
-        schema = provider_direct_call_wire.phase_output_schema(request.phase, expected_reviewed_proposal=request.expected_reviewed_proposal, review_only=request.review_only)
-        payload = provider_direct_call_wire.phase_request_payload(request)
-        if reference_read is None:
-            return await self._invoke_provider_structured_resilient(
-                bound_agent,
-                session_id=request.session_id,
-                debate_id=request.debate_id,
-                schema=schema,
-                payload=payload,
-                decode=decode,
-                fallback=fallback,
-                call_kind=ProviderCallKind.DEBATE,
-                trace_role=request.agent_id,
-                execution_workspace=execution_workspace,
-            )
-        return await self._invoke_codex_after_reference_read(
-            bound_agent,
-            session_id=request.session_id,
-            debate_id=request.debate_id,
-            reference_read=reference_read,
-            schema=schema,
-            payload=payload,
-            decode=decode,
-            fallback=fallback,
-            provider_name=_provider_name,
-            call_kind=ProviderCallKind.DEBATE,
-            execution_workspace=execution_workspace,
-        )
+    _invoke_codex = _invoke_codex
 
     async def _converse_provider(
         self,
@@ -2133,66 +2034,7 @@ class AgentBackend:
             execution_workspace=execution_workspace,
         )
 
-    async def _converse_codex(
-        self,
-        bound_agent: BoundAgent,
-        request: ConversationRequest,
-        *,
-        reference_read: ReferenceReadInvocation | None = None,
-        _provider_name: str = "Codex",
-        execution_workspace: ProviderExecutionWorkspace | None = None,
-    ) -> ConversationReply:
-        """Run one Codex turn with the exact conversation payload and schema.
-
-        Provider-thread mutation, cancellation cleanup, and protocol failures
-        retain the behavior of the shared structured invocation path.
-        """
-
-        self._ensure_open()
-        schema = provider_direct_call_wire.conversation_output_schema()
-        payload = provider_direct_call_wire.conversation_request_payload(request)
-
-        def decode(response_text: str) -> ConversationReply:
-            return backend_reply_decoding.decode_conversation_reply(
-                request,
-                response_text,
-                provider_name=_provider_name,
-            )
-
-        def fallback() -> ConversationReply:
-            return ConversationReply(
-                session_id=request.session_id,
-                conversation_id=request.conversation_id,
-                turn_id=request.turn_id,
-                content=_SAFE_STRUCTURED_FALLBACK_MESSAGE,
-            )
-
-        if reference_read is None:
-            return await self._invoke_provider_structured_resilient(
-                bound_agent,
-                session_id=request.session_id,
-                conversation_id=request.conversation_id,
-                schema=schema,
-                payload=payload,
-                decode=decode,
-                fallback=fallback,
-                call_kind=ProviderCallKind.CONVERSATION,
-                trace_role=request.agent_id,
-                execution_workspace=execution_workspace,
-            )
-        return await self._invoke_codex_after_reference_read(
-            bound_agent,
-            session_id=request.session_id,
-            conversation_id=request.conversation_id,
-            reference_read=reference_read,
-            schema=schema,
-            payload=payload,
-            decode=decode,
-            fallback=fallback,
-            provider_name=_provider_name,
-            call_kind=ProviderCallKind.CONVERSATION,
-            execution_workspace=execution_workspace,
-        )
+    _converse_codex = _converse_codex
 
     async def _converse_with_retrieval_provider(
         self,
@@ -2271,6 +2113,8 @@ class AgentBackend:
     @property
     def retrieval_fallback_message(self) -> str:
         return _SAFE_STRUCTURED_FALLBACK_MESSAGE
+
+    direct_structured_fallback_message = retrieval_fallback_message
 
     _converse_with_retrieval_codex = _converse_with_retrieval_codex
 
