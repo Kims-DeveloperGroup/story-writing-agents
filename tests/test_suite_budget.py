@@ -246,7 +246,8 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
-        direct_structured_current = suite_budget.load_budget()
+        invocation_routing_current = suite_budget.load_budget()
+        direct_structured_current = dict(invocation_routing_current, max_test_source_lines=157386)
         retrieval_loop_current = dict(direct_structured_current, max_test_source_lines=157359)
         bound_logical_current = dict(retrieval_loop_current, max_test_source_lines=157318)
         structured_invocation_current = dict(bound_logical_current, max_test_source_lines=157284)
@@ -780,6 +781,7 @@ class SuiteBudgetTests(unittest.TestCase):
         self._assert_source_limit_neighbors_rejected(retrieval_outcomes_current, provider_generation_current)
         self.assertIsNone(suite_budget.check_monotonic(accounting_current, retrieval_outcomes_current))
         self._assert_source_limit_neighbors_rejected(accounting_current, retrieval_outcomes_current)
+        self.assertIsNone(suite_budget.check_monotonic(invocation_routing_current, direct_structured_current))
         self.assertIsNone(suite_budget.check_monotonic(direct_structured_current, retrieval_loop_current))
         self.assertIsNone(suite_budget.check_monotonic(retrieval_loop_current, bound_logical_current))
         self.assertIsNone(suite_budget.check_monotonic(bound_logical_current, structured_invocation_current))
@@ -1034,6 +1036,23 @@ class SuiteBudgetTests(unittest.TestCase):
         direct_structured_ids = direct_structured_impact["affected_manifest"]["ordered_ids"]
         self.assertEqual(len(direct_structured_ids), 60)
         self.assertEqual(sum(direct_structured_current["subtest_caps"][cid] for cid in direct_structured_ids), 59)
+        routing_impact = select_impact(real, paths=("src/story_writing_agents/provider_invocation_routing.py",))
+        routing_focus = [
+            "tests.test_codex_backend.CodexBackendTestCase.test_reference_read_adapter_resolution_failures_terminate_once",
+            "tests.test_codex_backend.CodexBackendTestCase.test_reference_read_pre_provider_resource_failures_terminate_exactly",
+        ]
+        self.assertEqual(routing_impact["focused_manifest"]["ordered_ids"], routing_focus)
+        routing_affected = routing_impact["affected_manifest"]["ordered_ids"]
+        self.assertEqual(len(routing_affected), 76)
+        self.assertEqual(sum(invocation_routing_current["subtest_caps"][cid] for cid in routing_affected), 106)
+        routing_definition_module = "tests.test_provider_invocation_routing"
+        routing_definitions = runner_selection.select(real, modules=[routing_definition_module])
+        self.assertEqual(routing_definitions.ids, tuple(routing_focus))
+        runner_selection.validate_definition_modules(routing_definitions, [routing_definition_module])
+        routing_definition_path = ("tests/test_provider_invocation_routing.py",)
+        routing_definition_impact = select_impact(real, paths=routing_definition_path)
+        self.assertEqual(routing_definition_impact["focused_manifest"]["ordered_ids"], list(bound_definition_ids))
+        self.assertEqual(routing_definition_impact["affected_manifest"]["ordered_ids"], list(bound_definition_ids))
 
         self.assertTrue(all(move["old_id"] not in real.ids for move in stream_moves))
         self.assertTrue(all(type(case).__bases__ == (unittest.IsolatedAsyncioTestCase,) and type(case).__module__ == "tests.test_codex_adapter_streaming" for case in moved_streaming.tests))

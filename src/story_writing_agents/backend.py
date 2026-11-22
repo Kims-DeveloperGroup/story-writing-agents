@@ -49,6 +49,18 @@ from .provider_direct_structured_calls import (
 )
 import story_writing_agents.provider_execution_profiles as provider_execution_profiles
 from .provider_execution_profile_observations import ProviderExecutionProfileObservations
+from .provider_invocation_routing import (
+    NamedProviderRoute as _NamedProviderRoute,
+    NamedRetrievalRoute as _NamedRetrievalRoute,
+    ProviderRoute as _ProviderRoute,
+    RetrievalRoute as _RetrievalRoute,
+    converse_antigravity as _converse_antigravity,
+    converse_provider as _converse_provider,
+    converse_with_retrieval_antigravity as _converse_with_retrieval_antigravity,
+    converse_with_retrieval_provider as _converse_with_retrieval_provider,
+    invoke_antigravity as _invoke_antigravity,
+    invoke_provider as _invoke_provider,
+)
 import story_writing_agents.provider_manifest_thread_store as provider_manifest_thread_store
 from .provider_reference_read_lifecycle import (
     ReferenceReadContextLoad as _ReferenceReadContextLoad,
@@ -1918,56 +1930,39 @@ class AgentBackend:
         }
 
 
-    async def _invoke_provider(
+    @property
+    def routing_terminate_reference(
         self,
-        bound_agent: BoundAgent,
-        request: AgentRequest,
-        *,
-        reference_read: ReferenceReadInvocation | None = None,
-        execution_workspace: ProviderExecutionWorkspace | None = None,
-    ) -> AgentReply:
-        """Route one debate turn through the selected private adapter."""
+    ) -> Callable[[ReferenceReadInvocation, ReferenceAuthorizationErrorCode], None]:
+        return self._terminate_reference_read_without_replacing
 
-        if bound_agent.vendor == "codex":
-            return await self._invoke_codex(
-                bound_agent,
-                request,
-                reference_read=reference_read,
-                execution_workspace=execution_workspace,
-            )
-        if bound_agent.vendor == "antigravity":
-            return await self._invoke_antigravity(
-                bound_agent,
-                request,
-                reference_read=reference_read,
-                execution_workspace=execution_workspace,
-            )
-        if reference_read is not None:
-            self._terminate_reference_read_without_replacing(
-                reference_read,
-                ReferenceAuthorizationErrorCode.PROVIDER_FAILURE,
-            )
-        raise ConfigurationError(
-            f"agent backend is not implemented: {bound_agent.vendor}"
-        )
+    @property
+    def routing_invoke_codex(self) -> _NamedProviderRoute[BoundAgent, AgentRequest, AgentReply]:
+        return self._invoke_codex
 
-    async def _invoke_antigravity(
-        self,
-        bound_agent: BoundAgent,
-        request: AgentRequest,
-        *,
-        reference_read: ReferenceReadInvocation | None = None,
-        execution_workspace: ProviderExecutionWorkspace | None = None,
-    ) -> AgentReply:
-        """Invoke Antigravity through the shared structured-turn contract."""
+    @property
+    def routing_converse_codex(self) -> _NamedProviderRoute[BoundAgent, ConversationRequest, ConversationReply]:
+        return self._converse_codex
 
-        return await self._invoke_codex(
-            bound_agent,
-            request,
-            reference_read=reference_read,
-            _provider_name="Antigravity",
-            execution_workspace=execution_workspace,
-        )
+    @property
+    def routing_converse_with_retrieval_codex(self) -> _NamedRetrievalRoute[BoundAgent]:
+        return self._converse_with_retrieval_codex
+
+    @property
+    def routing_invoke_antigravity(self) -> _ProviderRoute[BoundAgent, AgentRequest, AgentReply]:
+        return self._invoke_antigravity
+
+    @property
+    def routing_converse_antigravity(self) -> _ProviderRoute[BoundAgent, ConversationRequest, ConversationReply]:
+        return self._converse_antigravity
+
+    @property
+    def routing_converse_with_retrieval_antigravity(self) -> _RetrievalRoute[BoundAgent]:
+        return self._converse_with_retrieval_antigravity
+
+    _invoke_provider = _invoke_provider
+
+    _invoke_antigravity = _invoke_antigravity
 
     @property
     def direct_structured_invoke(self) -> _DirectStructuredInvoke[BoundAgent]:
@@ -1979,128 +1974,15 @@ class AgentBackend:
 
     _invoke_codex = _invoke_codex
 
-    async def _converse_provider(
-        self,
-        bound_agent: BoundAgent,
-        request: ConversationRequest,
-        *,
-        reference_read: ReferenceReadInvocation | None = None,
-        execution_workspace: ProviderExecutionWorkspace | None = None,
-    ) -> ConversationReply:
-        """Route one conversation turn through the selected private adapter."""
+    _converse_provider = _converse_provider
 
-        try:
-            self._adapter_for(bound_agent.vendor)
-        except ConfigurationError:
-            if reference_read is not None:
-                self._terminate_reference_read_without_replacing(
-                    reference_read,
-                    ReferenceAuthorizationErrorCode.PROVIDER_FAILURE,
-                )
-            raise
-        if bound_agent.vendor == "codex":
-            return await self._converse_codex(
-                bound_agent,
-                request,
-                reference_read=reference_read,
-                execution_workspace=execution_workspace,
-            )
-        if bound_agent.vendor == "antigravity":
-            return await self._converse_antigravity(
-                bound_agent,
-                request,
-                reference_read=reference_read,
-                execution_workspace=execution_workspace,
-            )
-        raise ConfigurationError(
-            f"agent backend is not implemented: {bound_agent.vendor}"
-        )
-
-    async def _converse_antigravity(
-        self,
-        bound_agent: BoundAgent,
-        request: ConversationRequest,
-        *,
-        reference_read: ReferenceReadInvocation | None = None,
-        execution_workspace: ProviderExecutionWorkspace | None = None,
-    ) -> ConversationReply:
-        """Run one Antigravity turn through the shared conversation contract."""
-
-        return await self._converse_codex(
-            bound_agent,
-            request,
-            reference_read=reference_read,
-            _provider_name="Antigravity",
-            execution_workspace=execution_workspace,
-        )
+    _converse_antigravity = _converse_antigravity
 
     _converse_codex = _converse_codex
 
-    async def _converse_with_retrieval_provider(
-        self,
-        bound_agent: BoundAgent,
-        request: ConversationRetrievalRequest,
-        handler_method: Callable[
-            [ConversationRetrievalAction],
-            ConversationRetrievalObservation | ConversationRetrievalReply,
-        ],
-        *,
-        reference_read: ReferenceReadInvocation | None = None,
-        execution_workspace: ProviderExecutionWorkspace | None = None,
-    ) -> ConversationRetrievalReply:
-        """Route one retrieval loop through the selected private adapter."""
+    _converse_with_retrieval_provider = _converse_with_retrieval_provider
 
-        try:
-            self._adapter_for(bound_agent.vendor)
-        except ConfigurationError:
-            if reference_read is not None:
-                self._terminate_reference_read_without_replacing(
-                    reference_read,
-                    ReferenceAuthorizationErrorCode.PROVIDER_FAILURE,
-                )
-            raise
-        if bound_agent.vendor == "codex":
-            return await self._converse_with_retrieval_codex(
-                bound_agent,
-                request,
-                handler_method,
-                reference_read=reference_read,
-                execution_workspace=execution_workspace,
-            )
-        if bound_agent.vendor == "antigravity":
-            return await self._converse_with_retrieval_antigravity(
-                bound_agent,
-                request,
-                handler_method,
-                reference_read=reference_read,
-                execution_workspace=execution_workspace,
-            )
-        raise ConfigurationError(
-            f"agent backend is not implemented: {bound_agent.vendor}"
-        )
-
-    async def _converse_with_retrieval_antigravity(
-        self,
-        bound_agent: BoundAgent,
-        request: ConversationRetrievalRequest,
-        handler_method: Callable[
-            [ConversationRetrievalAction],
-            ConversationRetrievalObservation | ConversationRetrievalReply,
-        ],
-        *,
-        reference_read: ReferenceReadInvocation | None = None,
-        execution_workspace: ProviderExecutionWorkspace | None = None,
-    ) -> ConversationRetrievalReply:
-        """Run the bounded retrieval loop through Antigravity."""
-
-        return await self._converse_with_retrieval_codex(
-            bound_agent,
-            request,
-            handler_method,
-            reference_read=reference_read,
-            _provider_name="Antigravity",
-            execution_workspace=execution_workspace,
-        )
+    _converse_with_retrieval_antigravity = _converse_with_retrieval_antigravity
 
     @property
     def retrieval_reference_load(self) -> _RetrievalReferenceLoad[BoundAgent]:
