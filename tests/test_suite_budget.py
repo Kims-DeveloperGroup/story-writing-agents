@@ -246,7 +246,8 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
-        native_output_schema_current = suite_budget.load_budget()
+        backend_diagnostics_current = suite_budget.load_budget()
+        native_output_schema_current = dict(backend_diagnostics_current, max_test_source_lines=157504)
         invocation_routing_current = dict(native_output_schema_current, max_test_source_lines=157453)
         direct_structured_current = dict(invocation_routing_current, max_test_source_lines=157386)
         retrieval_loop_current = dict(direct_structured_current, max_test_source_lines=157359)
@@ -784,6 +785,7 @@ class SuiteBudgetTests(unittest.TestCase):
         self._assert_source_limit_neighbors_rejected(accounting_current, retrieval_outcomes_current)
         self.assertIsNone(suite_budget.check_monotonic(native_output_schema_current, invocation_routing_current))
         self._assert_source_limit_neighbors_rejected(native_output_schema_current, invocation_routing_current)
+        self._assert_source_limit_neighbors_rejected(backend_diagnostics_current, native_output_schema_current)
         self.assertIsNone(suite_budget.check_monotonic(invocation_routing_current, direct_structured_current))
         self.assertIsNone(suite_budget.check_monotonic(direct_structured_current, retrieval_loop_current))
         self.assertIsNone(suite_budget.check_monotonic(retrieval_loop_current, bound_logical_current))
