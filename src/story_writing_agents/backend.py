@@ -2045,7 +2045,7 @@ class AgentBackend:
             }:
                 return AgentReply.deadlock(
                     request.revision_id,
-                    _SAFE_STRUCTURED_FALLBACK_MESSAGE,
+                    'The direct provider response was unavailable.',
                 )
             raise BackendProtocolError("agent request phase has no safe fallback")
 
