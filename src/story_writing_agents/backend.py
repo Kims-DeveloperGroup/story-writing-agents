@@ -2537,12 +2537,6 @@ class AgentBackend:
                 "conversation retrieval ended without a terminal answer"
             )
         except BaseException as exc:
-            if pending_observation:
-                self._taint_retrieval_thread_without_replacing_failure(
-                    request.session_id,
-                    bound_agent.definition,
-                    fingerprint=continuation_fingerprint,
-                )
             if reference_read is not None:
                 self._fail_reference_read_without_replacing(
                     reference_read,
