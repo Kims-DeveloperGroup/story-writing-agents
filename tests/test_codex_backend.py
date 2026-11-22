@@ -18,20 +18,18 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, get_type_hints
 from unittest import mock
-from story_writing_agents import CONVERSATION_CONTEXT_POLICY, AgentBackend, AgentReply, AgentRequest, BoundAgent, CHARACTER_CUSTODIAN, ConversationContextWindow, ConversationEvent, ConversationEventKind, ConversationReply, ConversationRequest, ConversationRetrievalAction, ConversationRetrievalActionHandler, ConversationRetrievalActionKind, ConversationRetrievalAnswerAction, ConversationRetrievalObservation, ConversationRetrievalReadAction, ConversationRetrievalReadObservation, ConversationRetrievalReply, ConversationRetrievalRequest, ConversationRetrievalSearchAction, ConversationRetrievalSearchItem, ConversationRetrievalSearchObservation, ConversationRetrievalSource, EXECUTION_SPECIALIST, PLOT_ARCHITECT, Phase, PromptFileReference, ROSTER, ReplyTrace, ReplyTraceOrigin, SessionAccessState, SessionDurableState, Workspace
+from story_writing_agents import CONVERSATION_CONTEXT_POLICY, AgentBackend, AgentReply, AgentRequest, BoundAgent, CHARACTER_CUSTODIAN, ConversationContextWindow, ConversationEvent, ConversationEventKind, ConversationReply, ConversationRequest, ConversationRetrievalAction, ConversationRetrievalActionHandler, ConversationRetrievalActionKind, ConversationRetrievalAnswerAction, ConversationRetrievalObservation, ConversationRetrievalReadAction, ConversationRetrievalReply, ConversationRetrievalRequest, ConversationRetrievalSearchAction, ConversationRetrievalSearchObservation, EXECUTION_SPECIALIST, PLOT_ARCHITECT, Phase, PromptFileReference, ROSTER, ReplyTrace, ReplyTraceOrigin, SessionAccessState, SessionDurableState, Workspace
 from story_writing_agents import cli as cli_module, conversation_retrieval_wire, provider_direct_call_wire
 from story_writing_agents import backend as backend_module, provider_manifest_thread_store, provider_session_artifacts, provider_thread_records
 from story_writing_agents.conversation_retrieval import CONVERSATION_RETRIEVAL_POLICY, serialize_conversation_retrieval_observation
 from story_writing_agents.models import AgentReplyKind, AgentReplyNextPhase
-from story_writing_agents.conversation_search import CollaborationHistoryCitation
-from story_writing_agents.conversations import CollaborationReadableFieldKey
 from story_writing_agents.backend import backend_configuration_snapshot
 from story_writing_agents.structured_output_validation import diagnose_json_text, failure_issues
 from story_writing_agents.agent_context import ContextComponentKind, ProviderCallAccounting, ProviderCallKind, ProviderCallState, ProviderUsage, account_provider_payload, canonical_provider_json
 from story_writing_agents.agent_context.manifest import ContextContinuationIdentity, ContextScope, ContextSubjectKind
 from story_writing_agents.agents import CORE_DOCUMENTS, LEAD_ORCHESTRATOR
 from story_writing_agents.config import ConfigurationSnapshot
-from story_writing_agents.errors import BackendProtocolError, ConfigurationError, ConversationRetrievalBudgetError, ConversationRetrievalObserverError, ConversationRetrievalSemanticError, SessionIdError, SessionNotFoundError, WorkspaceFormatError
+from story_writing_agents.errors import BackendProtocolError, ConversationRetrievalBudgetError, ConversationRetrievalObserverError, ConversationRetrievalSemanticError, SessionIdError, SessionNotFoundError, WorkspaceFormatError
 from story_writing_agents.debug_log import DEBUG_LOG_RELATIVE_PATH, WorkspaceDebugLog
 from story_writing_agents.prompts import PromptAssembler
 from story_writing_agents.interactive_settings import ProviderRouteEntry, commit_prepared_settings_save, load_settings_state, prepare_settings_save, update_agent_backend
@@ -48,11 +46,12 @@ from story_writing_agents.models import StoryFocusedContextMode
 from story_writing_agents.agent_context.request_compaction import compact_context_payload
 from tests.test_agent_context_accounting import _shared_context_payload
 from tests.provider_wire_fixture import assert_guidance, direct_reply
-from tests.codex_native_process_fixture import CodexNativeProcessFixture, _context_window, _conversation_pair, _tree_snapshot
+from tests.codex_native_process_fixture import CodexNativeProcessFixture, _context_window, _conversation_pair, _fresh_literal_object_side_effect, _tree_snapshot
 from tests.helpers import initialized_workspace, pristine_initialized_workspace
 from story_writing_agents.agent_context.invocation import provider as ctx_provider
 
 from tests.conversation_retrieval_wire_fixture import (
+    _RecordingRetrievalHandler,
     provider_rag_context as _provider_rag_context, readable_context as _readable_context, retrieval_request as _retrieval_request,
 )
 from tests.backend_debug_log_fixture import (
@@ -62,6 +61,7 @@ from tests.backend_debug_log_fixture import (
 )
 
 from tests.bound_context_provider_cases import BoundContextProviderCaseDefinitions
+from tests.test_provider_invocation_routing import ProviderInvocationRoutingDefinitions
 from tests.test_backend_reply_decoding import (
     BackendReplyDecodingDefinitions,
     retrieval_action_json as _retrieval_action_json,
@@ -70,10 +70,6 @@ from tests.test_backend_reply_decoding import (
 )
 
 
-
-
-def _fresh_literal_object_side_effect(target, attribute, value):
-    return mock.patch.object(target, attribute, side_effect=value)
 
 
 def _rejected_response_artifact_patch():
@@ -134,57 +130,6 @@ def _conversation_request(*,
 
 
 
-
-
-class _RecordingRetrievalHandler:
-    """Return exact typed observations and a reply while recording actions."""
-
-    def __init__(self) -> None:
-        self.actions: list[ConversationRetrievalAction] = []
-        self.outcomes: list[ConversationRetrievalObservation | ConversationRetrievalReply
-        ] = []
-        self.source: ConversationRetrievalSource | None = None
-
-    def handle_conversation_retrieval_action(
-        self, action: ConversationRetrievalAction,
-    ) -> ConversationRetrievalObservation | ConversationRetrievalReply:
-        """Return the corresponding exact outcome for one decoded action."""
-
-        self.actions.append(action)
-        if type(action) is ConversationRetrievalSearchAction:
-            self.source = ConversationRetrievalSource(citation=CollaborationHistoryCitation(
-                    session_id=action.session_id, conversation_id="source_conversation",
-                    event_id="source_event", sequence=1,
-                    field_key=CollaborationReadableFieldKey.PROPOSAL_PURPOSE, start_codepoint=0,
-                    end_codepoint=len("Needle source"),),
-            )
-            outcome: ConversationRetrievalObservation | ConversationRetrievalReply = (
-                ConversationRetrievalSearchObservation(session_id=action.session_id,
-                    conversation_id=action.conversation_id,
-                    turn_id=action.turn_id,
-                    action_index=action.action_index, hits=(
-                        ConversationRetrievalSearchItem(citation_id=f"s{action.action_index}h1",
-                            source=self.source,
-                            snippet='Needle "source" 한🙂',),
-                    ), truncated=False,
-                )
-            )
-        elif type(action) is ConversationRetrievalReadAction:
-            assert self.source is not None
-            outcome = ConversationRetrievalReadObservation(session_id=action.session_id,
-                conversation_id=action.conversation_id,
-                turn_id=action.turn_id, action_index=action.action_index,
-                source_citation_id=action.citation_id, source=self.source,
-                records=(),
-                truncated=False,)
-        else:
-            assert type(action) is ConversationRetrievalAnswerAction
-            outcome = ConversationRetrievalReply(session_id=action.session_id,
-                conversation_id=action.conversation_id,
-                turn_id=action.turn_id, content=action.content,
-                sources=() if self.source is None else (self.source,),)
-        self.outcomes.append(outcome)
-        return outcome
 
 
 class _RaisingRetrievalHandler:
@@ -6135,219 +6080,13 @@ class CodexBackendTestCase(CodexNativeProcessFixture, unittest.IsolatedAsyncioTe
         prelude.assert_not_called()
         self.assertEqual(len(self.provider_invocations()), 1)
 
-    async def test_reference_read_pre_provider_resource_failures_terminate_exactly(
-        self,
-    ) -> None:
-        """Terminate real coordinators when no provider call can safely start."""
+    test_reference_read_pre_provider_resource_failures_terminate_exactly = (
+        ProviderInvocationRoutingDefinitions.test_reference_read_pre_provider_resource_failures_terminate_exactly
+    )
 
-        for case in (
-            "closed",
-            "retired",
-            "wrong_request",
-            "unsupported",
-            "lock_cancel",
-        ):
-            with self.subTest(case=case):
-                self.log_path.unlink(missing_ok=True)
-                session_id = f"reference_resource_{case}"
-                operation_id = f"resource_operation_{case}"
-                backend = self._session_backend(session_id)
-                bound = await backend.bind(self.definition())
-                repository, authorization, invocation = self.reference_invocation(
-                    operation_id=operation_id,
-                    invocation_id=f"resource_invocation_{case}",
-                )
-                expected = ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE
-                if case == "closed":
-                    backend.close()
-                    with self.assertRaisesRegex(
-                        BackendProtocolError,
-                        "agent backend is closed",
-                    ):
-                        await bound.invoke(
-                            self.request(session_id=session_id),
-                            reference_read=invocation,
-                        )
-                elif case == "retired":
-                    bound._retire()
-                    with self.assertRaisesRegex(
-                        BackendProtocolError,
-                        "bound agent is retired",
-                    ):
-                        await bound.invoke(
-                            self.request(session_id=session_id),
-                            reference_read=invocation,
-                        )
-                elif case == "wrong_request":
-                    with self.assertRaisesRegex(TypeError, "AgentRequest"):
-                        await bound.invoke(  # type: ignore[arg-type]
-                            object(),
-                            reference_read=invocation,
-                        )
-                elif case == "unsupported":
-                    expected = ReferenceAuthorizationErrorCode.PROVIDER_FAILURE
-                    unsupported = BoundAgent(
-                        backend,
-                        replace(self.definition(), backend="gemini"),
-                        bound.staging_directory,
-                    )
-                    with self.assertRaisesRegex(
-                        ConfigurationError,
-                        "not implemented: gemini",
-                    ):
-                        await unsupported.invoke(
-                            self.request(session_id=session_id),
-                            reference_read=invocation,
-                        )
-                else:
-                    expected = ReferenceAuthorizationErrorCode.CANCELLED
-                    attempted = asyncio.Event()
-                    never = asyncio.Event()
-
-                    class BlockingLock:
-                        async def __aenter__(self):
-                            attempted.set()
-                            await never.wait()
-
-                        async def __aexit__(self, *_args: object) -> None:
-                            return None
-
-                    with mock.patch.object(
-                        backend,
-                        "_thread_lock",
-                        return_value=BlockingLock(),
-                    ):
-                        task = asyncio.create_task(
-                            bound.invoke(
-                                self.request(session_id=session_id),
-                                reference_read=invocation,
-                            )
-                        )
-                        await attempted.wait()
-                        task.cancel()
-                        with self.assertRaises(asyncio.CancelledError):
-                            await task
-
-                self.assertEqual(self.provider_invocations(), [])
-                history = repository.inspect_reference_operation(operation_id)
-                assert history is not None
-                terminal = history.invocation_events[0][-1]
-                self.assertIs(
-                    terminal.invocation_state, ReferenceInvocationState.TERMINATED
-                )
-                self.assertIs(terminal.outcome, expected)
-                authorization.close()
-                backend.close()
-
-    async def test_reference_read_adapter_resolution_failures_terminate_once(
-        self,
-    ) -> None:
-        """Retire conversation/retrieval coordinators without an adapter."""
-
-        operations = (
-            ("conversation", "conversation"),
-            ("retrieval", "conversation_retrieval"),
-        )
-        for operation, phase in operations:
-            for resolution in ("unsupported", "missing"):
-                with self.subTest(operation=operation, resolution=resolution):
-                    self.log_path.unlink(missing_ok=True)
-                    session_id = f"reference_{operation}_{resolution}"
-                    operation_id = f"adapter_operation_{operation}_{resolution}"
-                    backend = self._session_backend(session_id)
-                    bound = await backend.bind(self.definition())
-                    call_bound = bound
-                    vendor = "codex"
-                    if resolution == "unsupported":
-                        vendor = "gemini"
-                        call_bound = BoundAgent(
-                            backend,
-                            replace(self.definition(), backend=vendor),
-                            bound.staging_directory,
-                        )
-                    repository, authorization, invocation = self.reference_invocation(
-                        operation_id=operation_id,
-                        invocation_id=(f"adapter_invocation_{operation}_{resolution}"),
-                        phase=phase,
-                        round_number=None,
-                    )
-                    handler = _RecordingRetrievalHandler()
-                    removed_adapter = None
-                    if resolution == "missing":
-                        removed_adapter = backend._adapters.pop(vendor)
-
-                    resolved_failure = None
-                    real_adapter_for = backend._adapter_for
-
-                    def resolve_adapter(adapter_vendor: str):
-                        nonlocal resolved_failure
-                        try:
-                            return real_adapter_for(adapter_vendor)
-                        except ConfigurationError as exc:
-                            resolved_failure = exc
-                            raise
-
-                    try:
-                        with (
-                            _fresh_literal_object_side_effect(backend, '_adapter_for', resolve_adapter) as adapter_for,
-                            self.assertRaises(ConfigurationError) as raised,
-                        ):
-                            if operation == "conversation":
-                                await call_bound.converse(
-                                    self.conversation_request(
-                                        session_id=session_id,
-                                    ),
-                                    reference_read=invocation,
-                                )
-                            else:
-                                await call_bound.converse_with_retrieval(
-                                    self.retrieval_request(
-                                        session_id=session_id,
-                                    ),
-                                    handler,
-                                    reference_read=invocation,
-                                )
-                    finally:
-                        if removed_adapter is not None:
-                            backend._adapters[vendor] = removed_adapter
-
-                    adapter_for.assert_called_once_with(vendor)
-                    self.assertIs(raised.exception, resolved_failure)
-                    self.assertEqual(
-                        str(raised.exception),
-                        f"agent backend is not implemented: {vendor}",
-                    )
-                    self.assertIsNone(raised.exception.__cause__)
-                    self.assertIsNone(raised.exception.__context__)
-                    self.assertEqual(self.provider_invocations(), [])
-                    self.assertEqual(handler.actions, [])
-                    history = repository.inspect_reference_operation(operation_id)
-                    assert history is not None
-                    events = history.invocation_events[0]
-                    self.assertEqual(
-                        tuple(event.invocation_state for event in events),
-                        (
-                            ReferenceInvocationState.AUTHORIZED,
-                            ReferenceInvocationState.TERMINATED,
-                        ),
-                    )
-                    self.assertIs(
-                        events[-1].outcome,
-                        ReferenceAuthorizationErrorCode.PROVIDER_FAILURE,
-                    )
-                    lock = backend._thread_lock(
-                        session_id,
-                        vendor,
-                        PLOT_ARCHITECT,
-                    )
-                    self.assertFalse(lock.locked())
-                    self.assertIn(bound, backend._bound_agents)
-                    self.assertTrue(bound.staging_directory.exists())
-
-                    authorization.close()
-                    backend.close()
-                    self.assertEqual(backend._bound_agents, set())
-                    self.assertFalse(bound.staging_directory.exists())
+    test_reference_read_adapter_resolution_failures_terminate_once = (
+        ProviderInvocationRoutingDefinitions.test_reference_read_adapter_resolution_failures_terminate_once
+    )
 
     async def test_debate_and_conversation_rejections_repair_then_fall_back_and_capture(
         self,
