@@ -1917,3 +1917,17 @@ Case 수는 611/592/652/688/1에서 658/564/574/747/1로 바뀐다.
 - `tests/test_suite_budget.py` +14행
 
 계상 테스트 소스 +42행으로 소스 한도를 157,787→157,829행으로 적용한다. 기존 Case·서브테스트·시간·worker 상한을 유지한다.
+
+### #1153 Backend 바인딩·전역 자원 정리의 기존 테스트 선택
+
+바인딩 수락과 Backend 전역 자원 정리는 경로별로 기존 집중 1개·영향 6개와 집중 2개·영향 11개를 각각 선택한다.
+종료 사례 세 개의 정의를 한 파일로 이동하고 기존 정규 ID와 fixture를 유지한다.
+새 정의 모듈의 정규 사례 3개와 파일 경로의 진단 별칭을 포함한 기존 사례 4개를 대조한다.
+기존 그래프·패키징·소유권 정책 단언에 새 소유 경계를 반영한다.
+
+- `tests/test_backend_shutdown_resources.py` +158행
+- `tests/test_rag_module_and_packaging_boundary.py` +17행
+- `tests/test_session_lifecycle.py` -141행
+- `tests/test_suite_budget.py` +24행
+
+계상 테스트 소스 +58행으로 소스 한도를 157,829→157,887행으로 적용한다. 기존 Case·서브테스트·시간·worker 상한을 유지한다.
