@@ -1123,7 +1123,6 @@ class AgentBackend:
             or candidate.owner is not self
         ):
             raise TypeError("candidate does not belong to this backend")
-        close_generation: _AdapterGeneration | None = None
         with self._generation_lock:
             current = self._adapter_generations.active
             if current.generation_id != candidate.base_generation_id:
@@ -1165,11 +1164,12 @@ class AgentBackend:
                 switched_agents=next_generation.switched_agents,
                 correlation_id=candidate.correlation_id,
             )
-            current.retired = True
-            if current.binding_count == 0:
-                close_generation = current
+            close_generation = self._adapter_generations.retire_locked(current)
         if close_generation is not None:
-            self._close_adapter_generation(close_generation)
+            self._adapter_generations.close_generation(
+                close_generation,
+                record_error=lambda exc: self._record_debug_error(DebugOperation.CLEANUP, exc),
+            )
         for agent_id in ROSTER:
             if old_profiles[agent_id] != candidate.generation.profiles[agent_id]:
                 self._log_execution_profile_event(
@@ -1238,7 +1238,10 @@ class AgentBackend:
         with self._generation_lock:
             if candidate.generation is self._adapter_generations.active:
                 return
-        self._close_adapter_generation(candidate.generation)
+        self._adapter_generations.close_generation(
+            candidate.generation,
+            record_error=lambda exc: self._record_debug_error(DebugOperation.CLEANUP, exc),
+        )
 
     def record_runtime_configuration_recovery_required(
         self,
@@ -1297,17 +1300,6 @@ class AgentBackend:
             profiles=profiles,
         )
         return {codex.vendor: codex, antigravity.vendor: antigravity}
-
-    def _close_adapter_generation(self, generation: _AdapterGeneration) -> None:
-        """Close one retired/staged generation exactly once."""
-
-        if not self._adapter_generations.begin_close(generation):
-            return
-        for adapter in generation.adapters.values():
-            try:
-                adapter.close()
-            except Exception as exc:
-                self._record_debug_error(DebugOperation.CLEANUP, exc)
 
     @property
     def diagnostic_event_sink(self) -> WorkspaceDebugLog:
@@ -1374,7 +1366,7 @@ class AgentBackend:
                     _adapter_generation=generation,
                     _execution_profile=profile,
                 )
-                generation.binding_count += 1
+                self._adapter_generations.retain_binding_locked(generation)
                 self._bound_agents.add(bound)
         except BaseException as exc:
             self._record_debug_error(
@@ -1734,19 +1726,14 @@ class AgentBackend:
             if generation is None
             else generation.adapters[bound_agent.vendor]
         )
-        adapter.release(bound_agent._provider_binding)
-        close_generation: _AdapterGeneration | None = None
-        if generation is not None:
-            with self._generation_lock:
-                generation.binding_count -= 1
-                if generation.binding_count < 0:
-                    raise BackendProtocolError(
-                        "adapter generation binding count became negative"
-                    )
-                if generation.retired and generation.binding_count == 0:
-                    close_generation = generation
+        close_generation = self._adapter_generations.release_binding(
+            generation, adapter, bound_agent._provider_binding
+        )
         if close_generation is not None:
-            self._close_adapter_generation(close_generation)
+            self._adapter_generations.close_generation(
+                close_generation,
+                record_error=lambda exc: self._record_debug_error(DebugOperation.CLEANUP, exc),
+            )
         self._finalize_close_if_ready()
 
     def _discard_staging_directory(self, directory: Path) -> None:
