@@ -21141,6 +21141,7 @@
         "tests.test_antigravity_parity.AntigravityParityTests.test_only_provider_known_same_state_conversations_can_resume",
         "tests.test_antigravity_parity.AntigravityParityTests.test_protocol_failures_are_fixed_taint_once_and_restart_fresh",
         "tests.test_antigravity_parity.AntigravityParityTests.test_reference_read_mixed_batch_preserves_sequence_and_privacy",
+        "tests.test_antigravity_parity.AntigravityParityTests.test_public_surface_and_provider_schema_remain_provider_neutral",
         "tests.test_antigravity_parity.AntigravityParityTests.test_retrieval_failure_after_observation_taints_and_restarts",
         "tests.test_antigravity_parity.AntigravityParityTests.test_schema_failure_repairs_then_falls_back_with_runtime_identity",
         "tests.test_antigravity_parity.AntigravityParityTests.test_standard_invocation_captures_and_accounts_rendered_schema_only_for_antigravity",

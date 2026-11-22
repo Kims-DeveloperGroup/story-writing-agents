@@ -1002,7 +1002,7 @@ class SuiteBudgetTests(unittest.TestCase):
             "tests.test_codex_backend.CodexBackendTestCase.test_provider_invocation_error_preserves_adapter_cause_and_taint",
         ])
         structured_ids = structured_impact["affected_manifest"]["ordered_ids"]
-        self.assertEqual(len(structured_ids), 74)
+        self.assertEqual(len(structured_ids), 75)
         self.assertEqual(sum(structured_invocation_current["subtest_caps"][cid] for cid in structured_ids), 96)
 
         self.assertTrue(all(move["old_id"] not in real.ids for move in stream_moves))
