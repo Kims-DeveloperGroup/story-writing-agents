@@ -3671,6 +3671,58 @@
         157386,
         157453
       ]
+    },
+    {
+      "issue": 1137,
+      "base": "ef1381a17a7427f1627763280e98cf351cb2e9c4",
+      "origin_commit": "ef1381a17a7427f1627763280e98cf351cb2e9c4",
+      "origins": [
+        {
+          "source": "tests/test_antigravity_adapter.py",
+          "sha256": "9f9d8a0d8cad4138f15986d363e664e1c80b1392fd8535e3e659dafa31541499"
+        },
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "d20c80cc88b0bf35f6e11ef7aed1bbbc23525e2ee613ab8d8032cc4bb55916c1"
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "d60f132aa79bde4d496697f72a34c297cfcc7d00430cf5011cc6c72fda5b1049"
+        }
+      ],
+      "prior_sources": [
+        {
+          "source": "tests/test_antigravity_adapter.py",
+          "sha256": "9f9d8a0d8cad4138f15986d363e664e1c80b1392fd8535e3e659dafa31541499"
+        },
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "d20c80cc88b0bf35f6e11ef7aed1bbbc23525e2ee613ab8d8032cc4bb55916c1"
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "d60f132aa79bde4d496697f72a34c297cfcc7d00430cf5011cc6c72fda5b1049"
+        }
+      ],
+      "counting": "ordinary tests + registered support + 1550 legacy",
+      "legacy_unresolved_lines": 1550,
+      "approved_source_delta": 51,
+      "planned_raw_delta": 51,
+      "planned_support_delta": 0,
+      "excluded_monotonic_rule_ordinary": 1,
+      "excluded_monotonic_rule_physical": 1,
+      "original_caps_sha256": "0fc8c5e140b56200643f090106395259da9ca23d1e90a0e64738c3bd3f5c5fbe",
+      "expected_caps_sha256": "0fc8c5e140b56200643f090106395259da9ca23d1e90a0e64738c3bd3f5c5fbe",
+      "cost_components": {
+        "tests/test_antigravity_adapter.py": -72,
+        "tests/test_antigravity_native_output_schema.py": 93,
+        "tests/test_rag_module_and_packaging_boundary.py": 10,
+        "tests/test_suite_budget.py": 20
+      },
+      "exact_source_pair": [
+        157453,
+        157504
+      ]
     }
   ]
 }
