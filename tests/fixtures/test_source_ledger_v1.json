@@ -3777,6 +3777,49 @@
         157504,
         157534
       ]
+    },
+    {
+      "issue": 1141,
+      "base": "39ef068eb140c7f2bfe798298d013ef194c04334",
+      "origin_commit": "39ef068eb140c7f2bfe798298d013ef194c04334",
+      "origins": [
+        {
+          "source": "tests/test_antigravity_adapter.py",
+          "sha256": "855498ea436550a959fe1b981d13e5cb271b23a899993039df270b092ed09d87"
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "a187bd3c8529239ce4ae39b43b9ff7bc1d2856892857592aa5e568cbf1aa70eb"
+        }
+      ],
+      "prior_sources": [
+        {
+          "source": "tests/test_antigravity_adapter.py",
+          "sha256": "855498ea436550a959fe1b981d13e5cb271b23a899993039df270b092ed09d87"
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "a187bd3c8529239ce4ae39b43b9ff7bc1d2856892857592aa5e568cbf1aa70eb"
+        }
+      ],
+      "counting": "ordinary tests + registered support + 1550 legacy",
+      "legacy_unresolved_lines": 1550,
+      "approved_source_delta": 48,
+      "planned_raw_delta": 48,
+      "planned_support_delta": 0,
+      "excluded_monotonic_rule_ordinary": 1,
+      "excluded_monotonic_rule_physical": 1,
+      "original_caps_sha256": "0fc8c5e140b56200643f090106395259da9ca23d1e90a0e64738c3bd3f5c5fbe",
+      "expected_caps_sha256": "0fc8c5e140b56200643f090106395259da9ca23d1e90a0e64738c3bd3f5c5fbe",
+      "cost_components": {
+        "tests/test_antigravity_adapter.py": -127,
+        "tests/test_antigravity_response_decoding.py": 144,
+        "tests/test_suite_budget.py": 31
+      },
+      "exact_source_pair": [
+        157534,
+        157582
+      ]
     }
   ]
 }
