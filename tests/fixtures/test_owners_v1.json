@@ -21143,6 +21143,28 @@
       "depends_on": []
     },
     {
+      "name": "provider.configuration-candidate",
+      "boundary": "provider-configuration-candidate",
+      "paths": [
+        "src/story_writing_agents/provider_configuration_candidate.py"
+      ],
+      "depends_on": [],
+      "focused_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_hot_same_provider_profile_applies_now_and_reuses_thread"
+      ],
+      "affected_ids": [
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_backend_preflight_reports_unverified_headless_capabilities",
+        "tests.test_codex_backend.CodexBackendTestCase.test_a_to_b_to_a_route_generation_never_resumes_old_a_threads_after_restart",
+        "tests.test_codex_backend.CodexBackendTestCase.test_hot_same_provider_profile_applies_now_and_reuses_thread",
+        "tests.test_interactive_controller.ControllerSettingsTests.test_antigravity_settings_edit_active_fields_and_preserve_codex",
+        "tests.test_interactive_controller.ControllerSettingsTests.test_hot_save_preflight_quiescence_restore_and_recovery_are_truthful",
+        "tests.test_interactive_controller.ControllerSettingsTests.test_message_details_only_save_is_confirmed_and_transaction_only",
+        "tests.test_interactive_controller.ControllerSettingsTests.test_persona_catalog_race_reports_conflict_and_preserves_config",
+        "tests.test_interactive_controller.ControllerSettingsTests.test_settings_edit_save_isolated_discovered_candidate_and_literal_cancel",
+        "tests.test_interactive_controller.ControllerSettingsTests.test_storage_edit_is_desired_only_and_keeps_current_shell_bundle"
+      ]
+    },
+    {
       "name": "provider.adapter-generations",
       "boundary": "provider-adapter-generations",
       "paths": [
