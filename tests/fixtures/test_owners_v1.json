@@ -830,6 +830,34 @@
         "tests/test_antigravity_adapter.py"
       ],
       "focused_ids": [
+        "tests.test_antigravity_adapter.AntigravitySchemaRenderingTests.test_annotations_and_non_target_constraints_remain_byte_exact",
+        "tests.test_antigravity_adapter.AntigravitySchemaRenderingTests.test_nested_schema_positions_render_exact_null_and_integer_singletons",
+        "tests.test_antigravity_adapter.AntigravitySchemaRenderingTests.test_rendering_is_deeply_immutable_idempotent_and_order_preserving",
+        "tests.test_antigravity_adapter.AntigravitySchemaRenderingTests.test_safe_integer_edges_and_original_constraint_equivalence"
+      ],
+      "affected_ids": [
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_direct_invocation_preserves_prepared_payload_and_failure_facts",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_rendered_schema_echo_is_exact_for_success_and_recovered_error",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_unrendered_or_mismatched_echo_retains_completed_failure_bytes",
+        "tests.test_antigravity_adapter.AntigravitySchemaRenderingTests.test_annotations_and_non_target_constraints_remain_byte_exact",
+        "tests.test_antigravity_adapter.AntigravitySchemaRenderingTests.test_nested_schema_positions_render_exact_null_and_integer_singletons",
+        "tests.test_antigravity_adapter.AntigravitySchemaRenderingTests.test_rendering_is_deeply_immutable_idempotent_and_order_preserving",
+        "tests.test_antigravity_adapter.AntigravitySchemaRenderingTests.test_safe_integer_edges_and_original_constraint_equivalence"
+      ],
+      "depends_on": [
+        "tests.antigravity-native-output-schema-literal",
+        "tests.antigravity_adapter_fixture",
+        "tests.test_agent_context_accounting",
+        "tests.test_antigravity_native_output_schema"
+      ]
+    },
+    {
+      "name": "tests.antigravity-adapter-integration",
+      "boundary": "adapter-integration-cases",
+      "paths": [
+        "tests/test_antigravity_adapter.py"
+      ],
+      "focused_ids": [
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_agent_cleanup_exception_precedence_is_exact",
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_agent_identity_mismatches_and_leaf_swap_are_contained",
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_agent_target_symlinks_preserve_outside_and_never_launch",
@@ -854,11 +882,7 @@
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_runtime_chain_rejects_links_and_files_before_launch",
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_shared_default_and_explicit_timeouts_keep_native_and_outer_deadlines_distinct",
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_unavailable_process_output_is_not_invented",
-        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_unrendered_or_mismatched_echo_retains_completed_failure_bytes",
-        "tests.test_antigravity_adapter.AntigravitySchemaRenderingTests.test_annotations_and_non_target_constraints_remain_byte_exact",
-        "tests.test_antigravity_adapter.AntigravitySchemaRenderingTests.test_nested_schema_positions_render_exact_null_and_integer_singletons",
-        "tests.test_antigravity_adapter.AntigravitySchemaRenderingTests.test_rendering_is_deeply_immutable_idempotent_and_order_preserving",
-        "tests.test_antigravity_adapter.AntigravitySchemaRenderingTests.test_safe_integer_edges_and_original_constraint_equivalence"
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_unrendered_or_mismatched_echo_retains_completed_failure_bytes"
       ],
       "affected_ids": [
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_agent_cleanup_exception_precedence_is_exact",
@@ -885,11 +909,7 @@
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_runtime_chain_rejects_links_and_files_before_launch",
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_shared_default_and_explicit_timeouts_keep_native_and_outer_deadlines_distinct",
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_unavailable_process_output_is_not_invented",
-        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_unrendered_or_mismatched_echo_retains_completed_failure_bytes",
-        "tests.test_antigravity_adapter.AntigravitySchemaRenderingTests.test_annotations_and_non_target_constraints_remain_byte_exact",
-        "tests.test_antigravity_adapter.AntigravitySchemaRenderingTests.test_nested_schema_positions_render_exact_null_and_integer_singletons",
-        "tests.test_antigravity_adapter.AntigravitySchemaRenderingTests.test_rendering_is_deeply_immutable_idempotent_and_order_preserving",
-        "tests.test_antigravity_adapter.AntigravitySchemaRenderingTests.test_safe_integer_edges_and_original_constraint_equivalence"
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_unrendered_or_mismatched_echo_retains_completed_failure_bytes"
       ],
       "depends_on": [
         "tests.antigravity_adapter_fixture",
@@ -21527,6 +21547,99 @@
         "codex-native-process-fixture",
         "conversation-retrieval-wire-fixture"
       ]
+    },
+    {
+      "name": "antigravity.native-output-schema",
+      "boundary": "provider-native-output-schema",
+      "paths": [
+        "src/story_writing_agents/antigravity_native_output_schema.py"
+      ],
+      "focused_ids": [
+        "tests.test_antigravity_adapter.AntigravitySchemaRenderingTests.test_annotations_and_non_target_constraints_remain_byte_exact",
+        "tests.test_antigravity_adapter.AntigravitySchemaRenderingTests.test_nested_schema_positions_render_exact_null_and_integer_singletons",
+        "tests.test_antigravity_adapter.AntigravitySchemaRenderingTests.test_rendering_is_deeply_immutable_idempotent_and_order_preserving",
+        "tests.test_antigravity_adapter.AntigravitySchemaRenderingTests.test_safe_integer_edges_and_original_constraint_equivalence"
+      ],
+      "affected_ids": [
+        "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review",
+        "tests.lead_preparation.test_recommendation_preparation.LeadRecommendationTests.test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_completed_failures_retain_exact_native_diagnostic_and_accounting",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_contextual_unicode_print_argument_and_transport_accounting_match_payload",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_direct_invocation_preserves_prepared_payload_and_failure_facts",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_private_import_has_no_filesystem_or_public_surface_effect",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_rendered_schema_echo_is_exact_for_success_and_recovered_error",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_unrendered_or_mismatched_echo_retains_completed_failure_bytes",
+        "tests.test_antigravity_adapter.AntigravitySchemaRenderingTests.test_annotations_and_non_target_constraints_remain_byte_exact",
+        "tests.test_antigravity_adapter.AntigravitySchemaRenderingTests.test_nested_schema_positions_render_exact_null_and_integer_singletons",
+        "tests.test_antigravity_adapter.AntigravitySchemaRenderingTests.test_rendering_is_deeply_immutable_idempotent_and_order_preserving",
+        "tests.test_antigravity_adapter.AntigravitySchemaRenderingTests.test_safe_integer_edges_and_original_constraint_equivalence",
+        "tests.test_antigravity_parity.AntigravityParityTests.test_contextual_invocation_captures_and_accounts_rendered_schema_only_for_antigravity",
+        "tests.test_antigravity_parity.AntigravityParityTests.test_lead_json_object_context_payload_uses_provider_neutral_wire",
+        "tests.test_antigravity_parity.AntigravityParityTests.test_public_surface_and_provider_schema_remain_provider_neutral",
+        "tests.test_antigravity_parity.AntigravityParityTests.test_standard_invocation_captures_and_accounts_rendered_schema_only_for_antigravity",
+        "tests.test_artifact_application_contracts.ArtifactApplicationBoundaryTests.test_module_graph_matches_accepted_delta",
+        "tests.test_artifact_application_store_recovery.ArtifactApplicationBoundaryTests.test_store_is_sole_persistence_interpreter_and_matches_boundary",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_revised_artifact_intent_replaces_candidate_in_the_same_step",
+        "tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_stale_confirmation_and_revision_require_fresh_authority",
+        "tests.test_artifact_relationship_policy.ArtifactRelationshipBoundaryTests.test_ast_graph_counts_and_cycles_match_accepted_brief",
+        "tests.test_git_external_operation_inspection.GitExternalOperationInspectionTests.test_contract_adapter_exports_and_dependencies_are_exact",
+        "tests.test_interactive_controller.ControllerContractTests.test_direct_import_is_clean_and_package_graph_is_acyclic",
+        "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_budget_notice_preserves_maximum_utf8_synthesis",
+        "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_only_budget_subtype_is_caught_after_successful_result",
+        "tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_restart_and_repeated_known_result_finalization_are_idempotent",
+        "tests.test_lead_orchestration.LeadDecisionAuthorityTests.test_mismatch_reject_revise_and_free_text_are_non_authorizing",
+        "tests.test_lead_orchestration.LeadDecisionAuthorityTests.test_revision_direct_workflow_cannot_erase_selected_story_scope",
+        "tests.test_lead_orchestration.LeadOutcomeAndProposalTests.test_front_schema_is_minimal_closed_and_provider_strict",
+        "tests.test_rag_module_and_packaging_boundary.RagModuleBoundaryTests.test_inventory_edges_cycles_and_sole_dual_importer_match_the_brief",
+        "tests.test_rag_module_and_packaging_boundary.RagModuleBoundaryTests.test_supported_module_surfaces_do_not_expand_the_root_facade",
+        "tests.test_rag_module_and_packaging_boundary.RagPackagingBoundaryTests.test_temporary_base_and_optional_artifacts_exclude_vendored_source",
+        "tests.test_recommendation_actions.RecommendationActionContractTests.test_action_values_and_decisions_are_closed_exact_and_immutable",
+        "tests.test_recommendation_actions.RecommendationActionContractTests.test_confirm_origin_v2_and_continuing_v1_preserve_exact_wire_facts",
+        "tests.test_recommendation_actions.RecommendationActionContractTests.test_history_rejects_foreign_origin_tail_and_nonatomic_action_batches",
+        "tests.test_recommendation_actions.RecommendationActionContractTests.test_recommendation_and_objective_v2_round_trip_through_both_stores_and_archive",
+        "tests.test_session_lifecycle.SessionLifecycleContractTests.test_lifecycle_module_is_leaf_and_clean_imports_work",
+        "tests.test_session_recovery_contracts.SessionRecoveryBoundaryTests.test_clean_import_and_exact_dependencies_match_accepted_delta",
+        "tests.test_suite_budget.SuiteBudgetTests.test_new_id_increased_subtests_and_relaxed_time_are_rejected",
+        "tests.test_workspace_session_history.WorkspaceSessionHistoryCompositionTests.test_internal_wrapper_uses_main_root_manifest_and_noncreating_snapshot"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "tests.test_antigravity_native_output_schema",
+      "paths": [
+        "tests/test_antigravity_native_output_schema.py"
+      ],
+      "boundary": "existing-cases",
+      "focused_ids": [
+        "tests.test_antigravity_adapter.AntigravitySchemaRenderingTests.test_annotations_and_non_target_constraints_remain_byte_exact",
+        "tests.test_antigravity_adapter.AntigravitySchemaRenderingTests.test_nested_schema_positions_render_exact_null_and_integer_singletons",
+        "tests.test_antigravity_adapter.AntigravitySchemaRenderingTests.test_rendering_is_deeply_immutable_idempotent_and_order_preserving",
+        "tests.test_antigravity_adapter.AntigravitySchemaRenderingTests.test_safe_integer_edges_and_original_constraint_equivalence"
+      ],
+      "affected_ids": [
+        "tests.test_antigravity_adapter.AntigravitySchemaRenderingTests.test_annotations_and_non_target_constraints_remain_byte_exact",
+        "tests.test_antigravity_adapter.AntigravitySchemaRenderingTests.test_nested_schema_positions_render_exact_null_and_integer_singletons",
+        "tests.test_antigravity_adapter.AntigravitySchemaRenderingTests.test_rendering_is_deeply_immutable_idempotent_and_order_preserving",
+        "tests.test_antigravity_adapter.AntigravitySchemaRenderingTests.test_safe_integer_edges_and_original_constraint_equivalence"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "tests.antigravity-native-output-schema-literal",
+      "paths": [
+        "tests/test_antigravity_native_output_schema.py"
+      ],
+      "boundary": "fixture-consumers",
+      "focused_ids": [
+        "tests.test_antigravity_adapter.AntigravitySchemaRenderingTests.test_nested_schema_positions_render_exact_null_and_integer_singletons"
+      ],
+      "affected_ids": [
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_direct_invocation_preserves_prepared_payload_and_failure_facts",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_rendered_schema_echo_is_exact_for_success_and_recovered_error",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_unrendered_or_mismatched_echo_retains_completed_failure_bytes",
+        "tests.test_antigravity_adapter.AntigravitySchemaRenderingTests.test_nested_schema_positions_render_exact_null_and_integer_singletons"
+      ],
+      "depends_on": []
     }
   ],
   "ignored_names": [
