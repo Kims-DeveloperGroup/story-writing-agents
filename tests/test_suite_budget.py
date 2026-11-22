@@ -246,7 +246,8 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
-        retrieval_loop_current = suite_budget.load_budget()
+        direct_structured_current = suite_budget.load_budget()
+        retrieval_loop_current = dict(direct_structured_current, max_test_source_lines=157359)
         bound_logical_current = dict(retrieval_loop_current, max_test_source_lines=157318)
         structured_invocation_current = dict(bound_logical_current, max_test_source_lines=157284)
         reference_read_current = dict(structured_invocation_current, max_test_source_lines=157235)
@@ -779,6 +780,7 @@ class SuiteBudgetTests(unittest.TestCase):
         self._assert_source_limit_neighbors_rejected(retrieval_outcomes_current, provider_generation_current)
         self.assertIsNone(suite_budget.check_monotonic(accounting_current, retrieval_outcomes_current))
         self._assert_source_limit_neighbors_rejected(accounting_current, retrieval_outcomes_current)
+        self.assertIsNone(suite_budget.check_monotonic(direct_structured_current, retrieval_loop_current))
         self.assertIsNone(suite_budget.check_monotonic(retrieval_loop_current, bound_logical_current))
         self.assertIsNone(suite_budget.check_monotonic(bound_logical_current, structured_invocation_current))
         self.assertIsNone(suite_budget.check_monotonic(structured_invocation_current, reference_read_current))
@@ -1024,6 +1026,14 @@ class SuiteBudgetTests(unittest.TestCase):
         retrieval_loop_ids = retrieval_loop_impact["affected_manifest"]["ordered_ids"]
         self.assertEqual(len(retrieval_loop_ids), 12)
         self.assertEqual(sum(retrieval_loop_current["subtest_caps"][cid] for cid in retrieval_loop_ids), 20)
+        direct_structured_impact = select_impact(real, paths=("src/story_writing_agents/provider_direct_structured_calls.py",))
+        self.assertEqual(direct_structured_impact["focused_manifest"]["ordered_ids"], [
+            "tests.test_codex_backend.CodexBackendTestCase.test_conversation_output_repairs_once_then_returns_safe_fallback",
+            "tests.test_codex_backend.CodexBackendTestCase.test_rejected_debate_attempts_return_phase_safe_deadlocks",
+        ])
+        direct_structured_ids = direct_structured_impact["affected_manifest"]["ordered_ids"]
+        self.assertEqual(len(direct_structured_ids), 60)
+        self.assertEqual(sum(direct_structured_current["subtest_caps"][cid] for cid in direct_structured_ids), 59)
 
         self.assertTrue(all(move["old_id"] not in real.ids for move in stream_moves))
         self.assertTrue(all(type(case).__bases__ == (unittest.IsolatedAsyncioTestCase,) and type(case).__module__ == "tests.test_codex_adapter_streaming" for case in moved_streaming.tests))
