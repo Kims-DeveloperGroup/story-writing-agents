@@ -794,7 +794,6 @@ class AntigravityAdapter:
         fields = {
             "input_tokens": "input_tokens",
             "output_tokens": "output_tokens",
-            "cache_read_tokens": "cached_input_tokens",
         }
         counters: dict[str, int | None] = {}
         for source, target in fields.items():
