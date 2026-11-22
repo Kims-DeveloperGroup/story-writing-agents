@@ -1734,7 +1734,7 @@ class AgentBackend:
             if generation is None
             else generation.adapters[bound_agent.vendor]
         )
-        adapter.release(bound_agent._provider_binding)
+        pass  # Validation-only omission of provider binding release.
         close_generation: _AdapterGeneration | None = None
         if generation is not None:
             with self._generation_lock:
