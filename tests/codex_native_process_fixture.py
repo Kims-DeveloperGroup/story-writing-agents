@@ -246,6 +246,10 @@ def _tree_snapshot(root: Path) -> dict[str, bytes | None]:
         for path in sorted(root.rglob("*"))}
 
 
+def _fresh_literal_object_side_effect(target, attribute, value):
+    return mock.patch.object(target, attribute, side_effect=value)
+
+
 class CodexNativeProcessFixture:
     """Provision the shared fake Codex process and session workspace."""
 
