@@ -196,6 +196,9 @@ from .backend_diagnostic_events import (
     record_debug_error as _emit_record_debug_error,
     trace_debug as _emit_trace_debug,
 )
+from .provider_configuration_candidate import (
+    prepare_provider_configuration_candidate as _prepare_provider_configuration_candidate,
+)
 from .provider_generation_adapters import (
     create_antigravity_adapter as _create_antigravity_adapter,
     create_codex_adapter as _create_codex_adapter,
@@ -1071,22 +1074,10 @@ class AgentBackend:
                 "provider route generation does not match the effective profile"
             )
         adapters = self._create_adapters(configuration, profiles)
-        try:
-            effective_providers = {profile.provider for profile in profiles.values()}
-            for provider in effective_providers:
-                if not adapters[provider].executable_available():
-                    raise ConfigurationError(
-                        f"configured provider executable is unavailable: {provider}"
-                    )
-            antigravity = adapters["antigravity"]
-            if (
-                "antigravity" in effective_providers
-                and isinstance(antigravity, AntigravityAdapter)
-                and not antigravity.headless_capabilities_available()
-            ):
-                raise ConfigurationError(
-                    "Antigravity headless capabilities are unavailable"
-                )
+
+        def reserve() -> tuple[
+            int, int, Mapping[str, AgentExecutionProfile], frozenset[str]
+        ]:
             with self._generation_lock:
                 generation_id, base_generation_id, current_profiles = (
                     self._adapter_generations.reserve_locked()
@@ -1097,14 +1088,13 @@ class AgentBackend:
                     if current_profiles[agent_id].provider
                     != profiles[agent_id].provider
                 )
-            generation = _AdapterGeneration(
-                generation_id=generation_id,
-                configuration=configuration,
-                profiles=profiles,
-                provider_routes=MappingProxyType(dict(provider_routes)),
-                adapters=adapters,
-                switched_agents=switched_agents,
-            )
+            return generation_id, base_generation_id, current_profiles, switched_agents
+
+        def make_candidate(
+            base_generation_id: int,
+            current_profiles: Mapping[str, AgentExecutionProfile],
+            generation: _AdapterGeneration,
+        ) -> BackendRuntimeConfigurationCandidate:
             return BackendRuntimeConfigurationCandidate(
                 owner=self,
                 base_generation_id=base_generation_id,
@@ -1112,13 +1102,15 @@ class AgentBackend:
                 previous_profiles=current_profiles,
                 generation=generation,
             )
-        except BaseException:
-            for adapter in adapters.values():
-                try:
-                    adapter.close()
-                except Exception:
-                    pass
-            raise
+
+        return _prepare_provider_configuration_candidate(
+            configuration,
+            provider_routes,
+            profiles,
+            adapters,
+            reserve=reserve,
+            make_candidate=make_candidate,
+        )
 
     def commit_runtime_configuration(
         self,
