@@ -1009,13 +1009,6 @@ class BoundAgent:
                     )
                     raise
                 except BaseException as exc:
-                    self.backend._record_debug_error(
-                        DebugOperation.PROVIDER_INVOCATION,
-                        exc,
-                        session_id=validated.session_id,
-                        conversation_id=validated.conversation_id,
-                        agent_id=self.definition.agent_id,
-                    )
                     raise
                 self._defer_direct_codex_acceptance(
                     lambda: (
