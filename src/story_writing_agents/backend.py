@@ -1100,7 +1100,7 @@ class AgentBackend:
             generation = _AdapterGeneration(
                 generation_id=generation_id,
                 configuration=configuration,
-                profiles=profiles,
+                profiles=current_profiles,
                 provider_routes=MappingProxyType(dict(provider_routes)),
                 adapters=adapters,
                 switched_agents=switched_agents,
