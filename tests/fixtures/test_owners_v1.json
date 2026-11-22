@@ -825,7 +825,7 @@
     },
     {
       "name": "tests.test_antigravity_adapter",
-      "boundary": "existing-cases",
+      "boundary": "adapter-integration-cases",
       "paths": [
         "tests/test_antigravity_adapter.py"
       ],
@@ -849,6 +849,26 @@
         "tests.antigravity_adapter_fixture",
         "tests.test_agent_context_accounting",
         "tests.test_antigravity_native_output_schema"
+      ]
+    },
+    {
+      "name": "tests.antigravity-adapter-decoder-aliases",
+      "boundary": "adapter-integration-cases",
+      "paths": [
+        "tests/test_antigravity_adapter.py"
+      ],
+      "depends_on": [
+        "tests.test_antigravity_response_decoding"
+      ],
+      "focused_ids": [
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_identifier_and_json_failures_are_fixed_and_confidential",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_malformed_usage_never_invalidates_a_valid_provider_response",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_provider_usage_accepts_only_recognized_exact_snapshot_counters"
+      ],
+      "affected_ids": [
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_identifier_and_json_failures_are_fixed_and_confidential",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_malformed_usage_never_invalidates_a_valid_provider_response",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_provider_usage_accepts_only_recognized_exact_snapshot_counters"
       ]
     },
     {
@@ -13991,17 +14011,80 @@
       ],
       "depends_on": [],
       "focused_ids": [
-        "tests.test_antigravity_stream_validation.AntigravityStreamValidationTests.test_antigravity_adapter_strictly_rejects_duplicate_fields_in_streamed_result",
-        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_identifier_and_json_failures_are_fixed_and_confidential"
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_identifier_and_json_failures_are_fixed_and_confidential",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_malformed_usage_never_invalidates_a_valid_provider_response",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_provider_usage_accepts_only_recognized_exact_snapshot_counters",
+        "tests.test_antigravity_stream_validation.AntigravityStreamValidationTests.test_antigravity_adapter_strictly_rejects_duplicate_fields_in_streamed_result"
       ],
       "affected_ids": [
-        "tests.test_antigravity_stream_delivery.AntigravityStreamDeliveryTests.test_antigravity_adapter_streams_events_and_parses_stream_json",
-        "tests.test_antigravity_stream_validation.AntigravityStreamValidationTests.test_antigravity_adapter_strictly_rejects_duplicate_fields_in_streamed_result",
+        "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_surfaces_provider_stderr_on_non_zero_returncode",
+        "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_uses_json_when_no_stream_sink",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_backend_routes_and_persists_antigravity_conversation_id",
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_completed_failures_retain_exact_native_diagnostic_and_accounting",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_contextual_unicode_print_argument_and_transport_accounting_match_payload",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_direct_invocation_preserves_prepared_payload_and_failure_facts",
         "tests.test_antigravity_adapter.AntigravityAdapterTests.test_identifier_and_json_failures_are_fixed_and_confidential",
-        "tests.test_antigravity_command.AntigravityCommandTests.test_command_stdin_paths_and_fresh_resume_results_are_exact"
-      ],
-      "affected_full": true
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_malformed_usage_never_invalidates_a_valid_provider_response",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_partial_exit_zero_requires_independent_current_finish_for_fresh_and_resumed_calls",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_partial_timeout_rejects_incomplete_envelopes_and_preserves_failure_facts",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_provider_usage_accepts_only_recognized_exact_snapshot_counters",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_recovered_invoke_uses_actual_current_trace_and_retains_error_envelope",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_rendered_schema_echo_is_exact_for_success_and_recovered_error",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_unrendered_or_mismatched_echo_retains_completed_failure_bytes",
+        "tests.test_antigravity_command.AntigravityCommandTests.test_command_stdin_paths_and_fresh_resume_results_are_exact",
+        "tests.test_antigravity_definition_staging.AntigravityDefinitionStagingTests.test_mode_failures_are_best_effort_but_controls_propagate",
+        "tests.test_antigravity_parity.AntigravityParityTests.test_contextual_invocation_captures_and_accounts_rendered_schema_only_for_antigravity",
+        "tests.test_antigravity_parity.AntigravityParityTests.test_contextual_thread_bootstrap_delta_restart_and_scope_isolation_match_codex",
+        "tests.test_antigravity_parity.AntigravityParityTests.test_public_surface_and_provider_schema_remain_provider_neutral",
+        "tests.test_antigravity_parity.AntigravityParityTests.test_schema_failure_repairs_then_falls_back_with_runtime_identity",
+        "tests.test_antigravity_parity.AntigravityParityTests.test_standard_invocation_captures_and_accounts_rendered_schema_only_for_antigravity",
+        "tests.test_antigravity_recovery_evidence.AntigravityRecoveryEvidenceTests.test_captured_shape_and_clean_current_finish_recover",
+        "tests.test_antigravity_recovery_evidence.AntigravityRecoveryEvidenceTests.test_incomplete_ambiguous_nonmonotonic_and_forged_native_steps_reject",
+        "tests.test_antigravity_recovery_evidence.AntigravityRecoveryEvidenceTests.test_missing_preexisting_wrong_request_or_replaced_directory_reject",
+        "tests.test_antigravity_recovery_evidence.AntigravityRecoveryEvidenceTests.test_reordered_finish_arguments_match_but_scalar_types_do_not",
+        "tests.test_antigravity_recovery_evidence.AntigravityRecoveryEvidenceTests.test_resume_requires_unchanged_prefix_and_new_matching_request",
+        "tests.test_antigravity_recovery_evidence.AntigravityRecoveryEvidenceTests.test_status_identity_schema_and_diagnostic_requirements_remain_strict",
+        "tests.test_antigravity_recovery_evidence.AntigravityRecoveryEvidenceTests.test_unsafe_native_paths_and_bounded_trace_reject",
+        "tests.test_antigravity_stream_delivery.AntigravityStreamDeliveryTests.test_antigravity_adapter_extracts_status_and_error_from_legacy_terminal_shape",
+        "tests.test_antigravity_stream_delivery.AntigravityStreamDeliveryTests.test_antigravity_adapter_generic_untyped_text_delta_ignored_without_agent_response_shape",
+        "tests.test_antigravity_stream_delivery.AntigravityStreamDeliveryTests.test_antigravity_adapter_legacy_text_delta_fails_closed_on_non_string_payload",
+        "tests.test_antigravity_stream_delivery.AntigravityStreamDeliveryTests.test_antigravity_adapter_recognizes_authentication_failure_with_streaming_preamble",
+        "tests.test_antigravity_stream_delivery.AntigravityStreamDeliveryTests.test_antigravity_adapter_recognizes_wrapped_authentication_error",
+        "tests.test_antigravity_stream_delivery.AntigravityStreamDeliveryTests.test_antigravity_adapter_replays_stdout_when_no_streaming_callbacks_delivered",
+        "tests.test_antigravity_stream_delivery.AntigravityStreamDeliveryTests.test_antigravity_adapter_running_status_notice_emits_status_and_is_not_captured_as_terminal",
+        "tests.test_antigravity_stream_delivery.AntigravityStreamDeliveryTests.test_antigravity_adapter_sanitizes_stdout_in_streamed_response_diagnostic",
+        "tests.test_antigravity_stream_delivery.AntigravityStreamDeliveryTests.test_antigravity_adapter_streams_events_and_parses_stream_json",
+        "tests.test_antigravity_stream_delivery.AntigravityStreamDeliveryTests.test_antigravity_adapter_streams_native_step_update_and_init_events",
+        "tests.test_antigravity_stream_delivery.AntigravityStreamDeliveryTests.test_antigravity_adapter_surfaces_provider_error_on_non_zero_returncode",
+        "tests.test_antigravity_stream_delivery.AntigravityStreamDeliveryTests.test_antigravity_adapter_thought_step_never_emits_text_delta_and_non_agent_response_steps_ignored",
+        "tests.test_antigravity_stream_delivery.AntigravityStreamDeliveryTests.test_antigravity_adapter_unwraps_event_alias_result_envelope",
+        "tests.test_antigravity_stream_delivery.AntigravityStreamDeliveryTests.test_antigravity_adapter_unwraps_result_envelope_with_whitespace_discriminator",
+        "tests.test_antigravity_stream_delivery.AntigravityStreamDeliveryTests.test_antigravity_stream_extracts_validated_string_message_and_avoids_dict_leak",
+        "tests.test_antigravity_stream_validation.AntigravityStreamValidationTests.test_antigravity_adapter_fails_closed_when_stream_contains_invalid_line_before_auth_terminal",
+        "tests.test_antigravity_stream_validation.AntigravityStreamValidationTests.test_antigravity_adapter_rejects_conflicting_event_discriminators",
+        "tests.test_antigravity_stream_validation.AntigravityStreamValidationTests.test_antigravity_adapter_rejects_duplicate_field_in_stream_line",
+        "tests.test_antigravity_stream_validation.AntigravityStreamValidationTests.test_antigravity_adapter_rejects_explicit_null_event_discriminator_with_running_status",
+        "tests.test_antigravity_stream_validation.AntigravityStreamValidationTests.test_antigravity_adapter_rejects_explicit_null_type_discriminator",
+        "tests.test_antigravity_stream_validation.AntigravityStreamValidationTests.test_antigravity_adapter_rejects_invalid_line_before_terminal_result",
+        "tests.test_antigravity_stream_validation.AntigravityStreamValidationTests.test_antigravity_adapter_rejects_multiple_terminal_results_in_stream",
+        "tests.test_antigravity_stream_validation.AntigravityStreamValidationTests.test_antigravity_adapter_rejects_nan_or_infinity_in_stream_line",
+        "tests.test_antigravity_stream_validation.AntigravityStreamValidationTests.test_antigravity_adapter_rejects_one_null_discriminator_when_other_present",
+        "tests.test_antigravity_stream_validation.AntigravityStreamValidationTests.test_antigravity_adapter_rejects_recursion_error_in_stream_line",
+        "tests.test_antigravity_stream_validation.AntigravityStreamValidationTests.test_antigravity_adapter_rejects_trailing_data_after_terminal_result",
+        "tests.test_antigravity_stream_validation.AntigravityStreamValidationTests.test_antigravity_adapter_rejects_unknown_event_type_carrying_status_running",
+        "tests.test_antigravity_stream_validation.AntigravityStreamValidationTests.test_antigravity_adapter_rejects_unknown_event_type_carrying_structured_output",
+        "tests.test_antigravity_stream_validation.AntigravityStreamValidationTests.test_antigravity_adapter_strictly_rejects_duplicate_fields_in_streamed_result",
+        "tests.test_provider_auth_recovery.AuthClassificationTests.test_antigravity_incident_shape_is_auth_and_safe_to_replay",
+        "tests.test_provider_auth_recovery.AuthClassificationTests.test_antigravity_partial_and_malformed_shapes_never_grant_replay",
+        "tests.test_provider_auth_recovery.AuthClassificationTests.test_antigravity_partial_timeout_auth_preserves_both_native_facts",
+        "tests.test_provider_auth_recovery.AuthClassificationTests.test_codex_completed_turn_with_historical_401_remains_success",
+        "tests.test_provider_auth_recovery.AuthClassificationTests.test_duplicate_nonfinite_and_invalid_native_fields_do_not_create_auth_authority",
+        "tests.test_provider_auth_recovery.AuthClassificationTests.test_generated_text_warnings_and_forbidden_errors_do_not_trigger_auth",
+        "tests.test_provider_auth_recovery.AuthClassificationTests.test_native_401_is_assisted_without_replay",
+        "tests.test_rag_module_and_packaging_boundary.RagModuleBoundaryTests.test_inventory_edges_cycles_and_sole_dual_importer_match_the_brief",
+        "tests.test_rag_module_and_packaging_boundary.RagModuleBoundaryTests.test_supported_module_surfaces_do_not_expand_the_root_facade",
+        "tests.test_suite_budget.SuiteBudgetTests.test_new_id_increased_subtests_and_relaxed_time_are_rejected"
+      ]
     },
     {
       "name": "lead-preparation.authoring_authority",
@@ -20918,7 +21001,6 @@
         "tests.test_interactive_controller.ControllerSettingsTests.test_antigravity_settings_edit_active_fields_and_preserve_codex"
       ]
     },
-
     {
       "name": "provider.retrieval-handler-outcomes",
       "boundary": "provider-retrieval-handler-outcomes",
@@ -21003,8 +21085,7 @@
         "tests.test_codex_backend.CodexBackendTestCase.test_terminal_backend_rejects_call_before_binding_retirement"
       ],
       "depends_on": []
-    }
-,
+    },
     {
       "name": "provider.adapter-generations",
       "boundary": "provider-adapter-generations",
@@ -21060,7 +21141,6 @@
       ],
       "depends_on": []
     },
-
     {
       "name": "provider.bound-context",
       "boundary": "provider-bound-context",
@@ -21086,7 +21166,6 @@
       ],
       "depends_on": []
     },
-
     {
       "name": "tests.bound_context_provider_cases",
       "boundary": "existing-cases",
@@ -21101,7 +21180,6 @@
       ],
       "depends_on": []
     },
-
     {
       "name": "provider.context-invocation",
       "boundary": "provider-context-invocation",
@@ -21127,7 +21205,6 @@
       ],
       "depends_on": []
     },
-
     {
       "name": "provider.reference-read-lifecycle",
       "boundary": "provider-reference-read-lifecycle",
@@ -21155,7 +21232,6 @@
       ],
       "depends_on": []
     },
-
     {
       "name": "provider.structured-invocation",
       "boundary": "provider-structured-invocation",
@@ -21245,7 +21321,6 @@
       ],
       "depends_on": []
     },
-
     {
       "name": "provider.bound-agent-logical-invocation",
       "boundary": "provider-bound-agent-logical-invocation",
@@ -21350,7 +21425,6 @@
       ],
       "depends_on": []
     },
-
     {
       "name": "provider.conversation-retrieval-loop",
       "boundary": "provider-conversation-retrieval-loop",
@@ -21377,7 +21451,6 @@
       ],
       "depends_on": []
     },
-
     {
       "name": "provider.direct-structured-calls",
       "boundary": "provider-direct-structured-calls",
@@ -21452,7 +21525,6 @@
       ],
       "depends_on": []
     },
-
     {
       "name": "provider.invocation-routing",
       "boundary": "provider-invocation-routing",
@@ -21543,7 +21615,6 @@
       ],
       "depends_on": []
     },
-
     {
       "name": "tests.test_provider_invocation_routing",
       "boundary": "existing-cases",
@@ -21638,6 +21709,26 @@
         "tests.test_antigravity_adapter.AntigravitySchemaRenderingTests.test_safe_integer_edges_and_original_constraint_equivalence"
       ],
       "depends_on": []
+    },
+    {
+      "name": "tests.test_antigravity_response_decoding",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/test_antigravity_response_decoding.py"
+      ],
+      "depends_on": [
+        "tests.antigravity_adapter_fixture"
+      ],
+      "focused_ids": [
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_identifier_and_json_failures_are_fixed_and_confidential",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_malformed_usage_never_invalidates_a_valid_provider_response",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_provider_usage_accepts_only_recognized_exact_snapshot_counters"
+      ],
+      "affected_ids": [
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_identifier_and_json_failures_are_fixed_and_confidential",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_malformed_usage_never_invalidates_a_valid_provider_response",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_provider_usage_accepts_only_recognized_exact_snapshot_counters"
+      ]
     },
     {
       "name": "tests.antigravity-native-output-schema-literal",
