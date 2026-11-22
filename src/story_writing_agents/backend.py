@@ -1327,16 +1327,7 @@ class AgentBackend:
         """Record a trace without allowing diagnostics to alter behavior."""
 
         try:
-            self._debug_log.trace(
-                component=DebugComponent.BACKEND,
-                operation=operation,
-                phase=phase,
-                session_id=session_id,
-                debate_id=debate_id,
-                conversation_id=conversation_id,
-                agent_id=agent_id,
-                outcome=outcome,
-            )
+            pass
         except BaseException:
             pass
 
