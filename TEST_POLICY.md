@@ -1840,3 +1840,15 @@ Case 수는 611/592/652/688/1에서 658/564/574/747/1로 바뀐다.
 - `tests/test_suite_budget.py` +20행
 
 계상 테스트 소스는 +51행, 등록 지원 파일은 +0행이다. 소스 상한은 157,453→157,504행으로, 순증은 51행이다. 기존 장부 전이 검증 도구의 정확한 새 항목 한 행은 계상 범위 밖이다. 기존 시간과 worker 상한을 유지한다.
+
+### #1139 Backend 진단 이벤트 테스트 소유권
+
+기존 Lifecycle 정리 사례 본문과 공용 헬퍼를 옮긴다. 새 생산·테스트 경로에서 같은 기존 첫 사례 한 개를 선택한다. 공용 헬퍼 소비자와 정책을 포함한 사전 영향 검증은 기존 36개 및 서브테스트 상한 72개다.
+
+- `tests/test_backend_diagnostic_events.py` +96행
+- `tests/test_rag_module_and_packaging_boundary.py` +5행
+- `tests/test_session_lifecycle.py` -102행
+- `tests/test_suite_budget.py` +2행
+- `tests/backend_lifecycle_diagnostic_fixture.py` +29행
+
+계상 테스트 소스 +1행과 등록 지원 파일 +29행으로 소스 한도를 157,504→157,534행으로 적용한다. 기존 Case·서브테스트·시간·worker 상한을 유지한다.
