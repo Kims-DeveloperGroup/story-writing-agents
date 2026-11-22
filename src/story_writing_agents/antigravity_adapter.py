@@ -702,7 +702,7 @@ class AntigravityAdapter:
             if type(enumeration) is list and len(enumeration) == 1:
                 value = enumeration[0]
                 if node.get("type") == "null" and value is None:
-                    del node["enum"]
+                    pass
                 elif (
                     node.get("type") == "integer"
                     and type(value) is int
