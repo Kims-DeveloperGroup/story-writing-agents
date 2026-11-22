@@ -246,7 +246,8 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
-        generation_release_current = suite_budget.load_budget()
+        session_lifecycle_current = suite_budget.load_budget()
+        generation_release_current = dict(session_lifecycle_current, max_test_source_lines=157655)
         provider_configuration_candidate_current = dict(generation_release_current, max_test_source_lines=157649)
         codex_event_decoding_current = dict(provider_configuration_candidate_current, max_test_source_lines=157617)
         antigravity_response_decoding_current = dict(codex_event_decoding_current, max_test_source_lines=157582)
@@ -794,6 +795,7 @@ class SuiteBudgetTests(unittest.TestCase):
         self._assert_source_limit_neighbors_rejected(codex_event_decoding_current, antigravity_response_decoding_current)
         self._assert_source_limit_neighbors_rejected(provider_configuration_candidate_current, codex_event_decoding_current)
         self._assert_source_limit_neighbors_rejected(generation_release_current, provider_configuration_candidate_current)
+        self._assert_source_limit_neighbors_rejected(session_lifecycle_current, generation_release_current)
         self.assertIsNone(suite_budget.check_monotonic(invocation_routing_current, direct_structured_current))
         self.assertIsNone(suite_budget.check_monotonic(direct_structured_current, retrieval_loop_current))
         self.assertIsNone(suite_budget.check_monotonic(retrieval_loop_current, bound_logical_current))
@@ -892,7 +894,7 @@ class SuiteBudgetTests(unittest.TestCase):
         drift = runner_contracts.CanonicalCollection(cases, (*ids, *runner_profile.HOSTED_MIXED_SERIAL_IDS, ids[0].rsplit(".", 1)[0] + ".test_unreviewed"))
         self.assertRaises(runner_contracts.RunnerError, runner_hosted.hosted_partition, drift, drift)
         real = runner_execution.source_collection_for(self) or runner_collection.discover_canonical()
-        from tests.runner.impact import load_owners, select_impact
+        from tests.runner.impact import load_owners, prepare_owners, select_impact
         from tests.runner.owner_map import rebuilt_edges
         moved_defaults = runner_selection.select(real, modules=["tests.test_codex_backend_defaults"])
         self.assertEqual(moved_defaults.ids, tuple(sorted(move["new_id"] for move in defaults_moves)))
@@ -1062,6 +1064,49 @@ class SuiteBudgetTests(unittest.TestCase):
         generation_test_definitions = select_impact(real, paths=("tests/test_provider_adapter_generations.py",))
         self.assertEqual(generation_test_definitions["focused_manifest"]["count"], 2)
         self.assertEqual(generation_test_definitions["affected_manifest"]["count"], 90)
+
+        lifecycle_module = "tests.test_session_lifecycle"
+        lifecycle_case = f"{lifecycle_module}.AgentBackendLifecycleTests."
+        lifecycle_definitions_module = "tests.test_provider_session_lifecycle_operations"
+        lifecycle_definitions = runner_selection.select(real, modules=[lifecycle_definitions_module])
+        self.assertEqual(lifecycle_definitions.ids, tuple(lifecycle_case + name for name in (
+            "test_access_liveness_is_conservative_and_dead_local_claim_is_reclaimed",
+            "test_access_schema_duplicate_json_and_orphans_fail_closed",
+            "test_create_release_and_duplicate_create_use_exact_artifacts",
+            "test_lifecycle_operation_records_cover_success_rejection_and_cleanup",
+            "test_manifest_schema_is_strict_and_v1_is_rejected_unchanged",
+            "test_reopen_and_pause_transitions_preserve_provider_state_and_noops",
+            "test_unknown_liveness_errors_never_replace_claim",
+            "test_v1_sidecar_and_guard_are_typed_rejections_without_migration",
+            "test_write_failures_compensate_only_newly_acquired_access",
+        )))
+        self.assertEqual(len(runner_selection.selected_ids(real, modules=[lifecycle_module])), 25)
+        for case in lifecycle_definitions.tests:
+            method = getattr(case, case._testMethodName)
+            self.assertEqual(method.__qualname__, f"ProviderSessionLifecycleOperationCases.{case._testMethodName}")
+        lifecycle_operations_ids = (
+            "tests.test_codex_backend.CodexBackendTestCase.test_pause_disables_invocation_and_reopen_retains_thread",
+            lifecycle_case + "test_create_release_and_duplicate_create_use_exact_artifacts",
+            lifecycle_case + "test_lifecycle_operation_records_cover_success_rejection_and_cleanup",
+        )
+        lifecycle_definition_ids = (
+            *lifecycle_definitions.ids, lifecycle_case + "test_close_diagnostic_control_flow_does_not_change_cleanup",
+        )
+        owners = prepare_owners(real)
+        for path, focused_ids, affected_count, subtest_cap in (
+            ("src/story_writing_agents/provider_session_lifecycle_operations.py", lifecycle_operations_ids, 25, 35),
+            ("tests/provider_session_lifecycle_artifacts_fixture.py", lifecycle_definitions.ids, 25, 67),
+            ("tests/test_provider_session_lifecycle_operations.py", lifecycle_definition_ids, 10, 19),
+        ):
+            lifecycle_impact = select_impact(real, paths=(path,), catalogue=owners)
+            self.assertIsNone(lifecycle_impact["fallback_reason"])
+            self.assertEqual(lifecycle_impact["focused_manifest"]["ordered_ids"], sorted(focused_ids))
+            lifecycle_affected = lifecycle_impact["affected_manifest"]["ordered_ids"]
+            self.assertEqual(len(lifecycle_affected), affected_count)
+            self.assertEqual(
+                sum(generation_release_current["subtest_caps"][cid] for cid in lifecycle_affected),
+                subtest_cap,
+            )
 
         profile_observations = select_impact(real, paths=("src/story_writing_agents/provider_execution_profile_observations.py",))
         self.assertEqual(
