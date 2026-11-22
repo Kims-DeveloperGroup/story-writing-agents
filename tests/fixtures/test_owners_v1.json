@@ -6411,7 +6411,9 @@
       ],
       "depends_on": [
         "tests.backend-lifecycle-diagnostic-fixture",
-        "tests.test_backend_diagnostic_events"
+        "tests.provider-session-lifecycle-artifacts-fixture",
+        "tests.test_backend_diagnostic_events",
+        "tests.test_provider_session_lifecycle_operations"
       ]
     },
     {
@@ -6422,23 +6424,14 @@
       ],
       "focused_ids": [
         "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_absence_listing_order_and_configuration_validation_are_read_only",
-        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_access_liveness_is_conservative_and_dead_local_claim_is_reclaimed",
-        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_access_schema_duplicate_json_and_orphans_fail_closed",
         "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_ordinary_release_failures_record_failed_terminal",
         "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_release_base_exception_preserves_interrupted_state",
         "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_success_records_terminal_and_is_idempotent",
         "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_concurrent_dead_reclaim_has_exactly_one_owner",
-        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_create_release_and_duplicate_create_use_exact_artifacts",
         "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_guard_is_lazy_persistent_secure_and_ignored_by_listing",
-        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_lifecycle_operation_records_cover_success_rejection_and_cleanup",
-        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_manifest_schema_is_strict_and_v1_is_rejected_unchanged",
         "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_provision_and_assessment_delegate_once_preserving_exact_identity",
         "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_release_token_comparison_and_close_preserve_foreign_claims",
-        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_reopen_and_pause_transitions_preserve_provider_state_and_noops",
-        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_unknown_liveness_errors_never_replace_claim",
-        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_v1_sidecar_and_guard_are_typed_rejections_without_migration",
         "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_windows_guard_branch_initializes_retries_and_unlocks",
-        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_write_failures_compensate_only_newly_acquired_access",
         "tests.test_session_lifecycle.SessionLifecycleContractTests.test_exact_enums_dataclass_exports_and_backend_protocol",
         "tests.test_session_lifecycle.SessionLifecycleContractTests.test_invalid_state_facts_fail_exactly",
         "tests.test_session_lifecycle.SessionLifecycleContractTests.test_lifecycle_module_is_leaf_and_clean_imports_work",
@@ -21912,6 +21905,125 @@
         "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_write_failures_compensate_only_newly_acquired_access"
       ],
       "depends_on": []
+    },
+    {
+      "name": "provider.session-lifecycle-operations",
+      "boundary": "provider-session-lifecycle-operations",
+      "paths": [
+        "src/story_writing_agents/provider_session_lifecycle_operations.py"
+      ],
+      "focused_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_pause_disables_invocation_and_reopen_retains_thread",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_create_release_and_duplicate_create_use_exact_artifacts",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_lifecycle_operation_records_cover_success_rejection_and_cleanup"
+      ],
+      "affected_ids": [
+        "tests.test_antigravity_parity.AntigravityParityTests.test_v2_lifecycle_partitions_threads_and_retains_exact_resume",
+        "tests.test_codex_backend.CodexBackendTestCase.test_both_native_backends_preserve_session_continuation_and_legacy_namespaces",
+        "tests.test_codex_backend.CodexBackendTestCase.test_close_waits_for_active_binding_then_cleans_every_resource_once",
+        "tests.test_codex_backend.CodexBackendTestCase.test_closed_backend_rejects_every_reuse_path",
+        "tests.test_codex_backend.CodexBackendTestCase.test_converse_rejects_wrong_types_tampering_and_routing_preflight",
+        "tests.test_codex_backend.CodexBackendTestCase.test_pause_disables_invocation_and_reopen_retains_thread",
+        "tests.test_codex_backend.CodexBackendTestCase.test_resume_only_attachment_reuses_compatible_thread",
+        "tests.test_provider_auth_recovery.ContextRecoveryTests.test_backend_route_session_thread_and_workspace_drift_veto_replay",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_absence_listing_order_and_configuration_validation_are_read_only",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_access_liveness_is_conservative_and_dead_local_claim_is_reclaimed",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_access_schema_duplicate_json_and_orphans_fail_closed",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_diagnostic_control_flow_does_not_change_cleanup",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_ordinary_release_failures_record_failed_terminal",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_release_base_exception_preserves_interrupted_state",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_success_records_terminal_and_is_idempotent",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_concurrent_dead_reclaim_has_exactly_one_owner",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_create_release_and_duplicate_create_use_exact_artifacts",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_guard_is_lazy_persistent_secure_and_ignored_by_listing",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_lifecycle_operation_records_cover_success_rejection_and_cleanup",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_manifest_schema_is_strict_and_v1_is_rejected_unchanged",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_release_token_comparison_and_close_preserve_foreign_claims",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_reopen_and_pause_transitions_preserve_provider_state_and_noops",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_unknown_liveness_errors_never_replace_claim",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_v1_sidecar_and_guard_are_typed_rejections_without_migration",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_write_failures_compensate_only_newly_acquired_access"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "tests.provider-session-lifecycle-artifacts-fixture",
+      "boundary": "lifecycle-artifacts-fixture",
+      "paths": [
+        "tests/provider_session_lifecycle_artifacts_fixture.py"
+      ],
+      "focused_ids": [
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_access_liveness_is_conservative_and_dead_local_claim_is_reclaimed",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_access_schema_duplicate_json_and_orphans_fail_closed",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_create_release_and_duplicate_create_use_exact_artifacts",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_lifecycle_operation_records_cover_success_rejection_and_cleanup",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_manifest_schema_is_strict_and_v1_is_rejected_unchanged",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_reopen_and_pause_transitions_preserve_provider_state_and_noops",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_unknown_liveness_errors_never_replace_claim",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_v1_sidecar_and_guard_are_typed_rejections_without_migration",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_write_failures_compensate_only_newly_acquired_access"
+      ],
+      "affected_ids": [
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_absence_listing_order_and_configuration_validation_are_read_only",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_access_liveness_is_conservative_and_dead_local_claim_is_reclaimed",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_access_schema_duplicate_json_and_orphans_fail_closed",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_diagnostic_control_flow_does_not_change_cleanup",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_ordinary_release_failures_record_failed_terminal",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_release_base_exception_preserves_interrupted_state",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_success_records_terminal_and_is_idempotent",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_concurrent_dead_reclaim_has_exactly_one_owner",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_create_release_and_duplicate_create_use_exact_artifacts",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_guard_is_lazy_persistent_secure_and_ignored_by_listing",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_lifecycle_operation_records_cover_success_rejection_and_cleanup",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_manifest_schema_is_strict_and_v1_is_rejected_unchanged",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_provision_and_assessment_delegate_once_preserving_exact_identity",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_release_token_comparison_and_close_preserve_foreign_claims",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_reopen_and_pause_transitions_preserve_provider_state_and_noops",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_unknown_liveness_errors_never_replace_claim",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_v1_sidecar_and_guard_are_typed_rejections_without_migration",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_windows_guard_branch_initializes_retries_and_unlocks",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_write_failures_compensate_only_newly_acquired_access",
+        "tests.test_session_lifecycle.SessionLifecycleContractTests.test_exact_enums_dataclass_exports_and_backend_protocol",
+        "tests.test_session_lifecycle.SessionLifecycleContractTests.test_invalid_state_facts_fail_exactly",
+        "tests.test_session_lifecycle.SessionLifecycleContractTests.test_lifecycle_module_is_leaf_and_clean_imports_work",
+        "tests.test_session_lifecycle.SessionLifecycleContractTests.test_old_lifecycle_surface_is_absent_without_aliases",
+        "tests.test_session_lifecycle.SessionLifecycleContractTests.test_readiness_truth_table_is_exact_and_pure",
+        "tests.test_session_lifecycle.SessionLifecycleContractTests.test_valid_state_matrix_is_immutable_and_hashable"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "tests.test_provider_session_lifecycle_operations",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/test_provider_session_lifecycle_operations.py"
+      ],
+      "focused_ids": [
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_access_liveness_is_conservative_and_dead_local_claim_is_reclaimed",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_access_schema_duplicate_json_and_orphans_fail_closed",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_create_release_and_duplicate_create_use_exact_artifacts",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_lifecycle_operation_records_cover_success_rejection_and_cleanup",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_manifest_schema_is_strict_and_v1_is_rejected_unchanged",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_reopen_and_pause_transitions_preserve_provider_state_and_noops",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_unknown_liveness_errors_never_replace_claim",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_v1_sidecar_and_guard_are_typed_rejections_without_migration",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_write_failures_compensate_only_newly_acquired_access"
+      ],
+      "affected_ids": [
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_access_liveness_is_conservative_and_dead_local_claim_is_reclaimed",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_access_schema_duplicate_json_and_orphans_fail_closed",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_create_release_and_duplicate_create_use_exact_artifacts",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_lifecycle_operation_records_cover_success_rejection_and_cleanup",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_manifest_schema_is_strict_and_v1_is_rejected_unchanged",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_reopen_and_pause_transitions_preserve_provider_state_and_noops",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_unknown_liveness_errors_never_replace_claim",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_v1_sidecar_and_guard_are_typed_rejections_without_migration",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_write_failures_compensate_only_newly_acquired_access"
+      ],
+      "depends_on": [
+        "tests.backend-lifecycle-diagnostic-fixture",
+        "tests.provider-session-lifecycle-artifacts-fixture"
+      ]
     }
   ],
   "ignored_names": [

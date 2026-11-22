@@ -1896,3 +1896,15 @@ Case 수는 611/592/652/688/1에서 658/564/574/747/1로 바뀐다.
 - `tests/test_suite_budget.py` +5행
 
 계상 테스트 소스 +6행과 등록 지원 파일 +0행으로 소스 한도를 157,649→157,655행으로 적용한다. 기존 Case·서브테스트·시간·worker 상한을 유지한다.
+
+### #1149 공급자 세션 수명주기 조정의 기존 테스트 선택
+
+수명주기 조정 모듈의 집중 3개와 영향 25개를 기존 정규 ID로 지정한다. 기존 테스트 9개의 정의를 전용 모듈로 옮기고 기존 클래스와 정규 ID를 보존한다. 이동한 테스트 정의와 공유 아티팩트 헬퍼에는 실제 사용 범위를 설정한다. 기존 테스트의 시나리오와 단언을 유지하고 그래프 및 패키징 정책 단언의 기대값을 갱신한다.
+
+- `tests/test_provider_session_lifecycle_operations.py` +442행
+- `tests/test_rag_module_and_packaging_boundary.py` +22행
+- `tests/test_session_lifecycle.py` -403행
+- `tests/test_suite_budget.py` +44행
+- `tests/provider_session_lifecycle_artifacts_fixture.py` +27행
+
+계상 테스트 소스 +105행과 등록 지원 파일 +27행으로 소스 한도를 157,655→157,787행으로 적용한다. 기존 Case·서브테스트·시간·worker 상한을 유지한다.
