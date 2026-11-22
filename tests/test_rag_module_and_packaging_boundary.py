@@ -407,8 +407,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 360)
-        self.assertEqual(len(edges), 2186)
+        self.assertEqual(len(modules), 361)
+        self.assertEqual(len(edges), 2193)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -419,6 +419,17 @@ class RagModuleBoundaryTests(unittest.TestCase):
         conversation_retrieval_owner = "story_writing_agents.provider_conversation_retrieval_loop"
         direct_structured_owner = "story_writing_agents.provider_direct_structured_calls"
         provider_dependencies = {
+            "story_writing_agents.provider_configuration_candidate": (
+                {
+                    "story_writing_agents.antigravity_adapter",
+                    "story_writing_agents.config",
+                    "story_writing_agents.errors",
+                    "story_writing_agents.interactive_settings",
+                    "story_writing_agents.provider_adapter",
+                    "story_writing_agents.provider_adapter_generations",
+                },
+                {"story_writing_agents.backend"},
+            ),
             "story_writing_agents.backend_diagnostic_events": (
                 {"story_writing_agents.debug_log", "story_writing_agents.provider_adapter"},
                 {"story_writing_agents.backend"},
@@ -2150,7 +2161,12 @@ class RagModuleBoundaryTests(unittest.TestCase):
         adapter_generations = "story_writing_agents.provider_adapter_generations"
         self.assertEqual(
             {source for source, target in edges if target == adapter_generations},
-            {"story_writing_agents.backend", "story_writing_agents.provider_context_invocation", structured_owner},
+            {
+                "story_writing_agents.backend",
+                "story_writing_agents.provider_configuration_candidate",
+                "story_writing_agents.provider_context_invocation",
+                structured_owner,
+            },
         )
         self.assertEqual(
             {target for source, target in edges if source == adapter_generations},
@@ -3396,6 +3412,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             "story_writing_agents/antigravity_invocation_options.py",
             "story_writing_agents/antigravity_stream_observation.py",
             "story_writing_agents/provider_generation_adapters.py",
+            "story_writing_agents/provider_configuration_candidate.py",
             "story_writing_agents/provider_invocation_accounting.py",
             "story_writing_agents/provider_binding_call_lifetime.py",
             "story_writing_agents/provider_bound_context.py",
