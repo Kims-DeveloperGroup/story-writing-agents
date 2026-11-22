@@ -18,6 +18,10 @@ jobs:
           - pair: 3
             order: before after
     steps:
+      - name: 호스트 실행 마감과 정리 시간 기록
+        run: |
+          deadline=$(($(date +%s) + 75 * 60))
+          printf 'TEST_JOB_DEADLINE=%s\nTEST_RUN_DEADLINE=%s\n' "$deadline" "$deadline" >> "$GITHUB_ENV"
       - name: 기준 소스 체크아웃
         uses: actions/checkout@v4
         with:
@@ -71,7 +75,9 @@ jobs:
           environment = {**os.environ, "PYTHONPATH": "src"}
           order = os.environ["ORDER"].split()
           assert set(order) == set(sources) and len(order) == 2
-          absolute_cutoff = time.time() + 4000
+          absolute_cutoff = min(float(os.environ[name]) for name in
+                                ("TEST_RUN_DEADLINE", "TEST_JOB_DEADLINE")) - 450
+          assert absolute_cutoff > time.time() + 3600
           records = []
           for role in order:
               subdir, commit, tree = sources[role]
