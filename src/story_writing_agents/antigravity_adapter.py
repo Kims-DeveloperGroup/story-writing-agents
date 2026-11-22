@@ -58,6 +58,7 @@ import story_writing_agents.antigravity_native_recovery as antigravity_native_re
 import story_writing_agents.antigravity_recovery_matching as antigravity_recovery_matching
 import story_writing_agents.antigravity_state_directories as antigravity_state_directories
 import story_writing_agents.antigravity_stream_observation as antigravity_stream_observation
+from .antigravity_native_output_schema import render_native_output_schema as _render_native_output_schema
 from .antigravity_response_decoding import (
     parse_result as _decode_antigravity_response,
     malformed_output as _raise_antigravity_malformed_output,
@@ -658,81 +659,7 @@ class AntigravityAdapter:
             )
         execution_workspace.require_current()
 
-    @staticmethod
-    def native_output_schema(schema: Mapping[str, Any]) -> dict[str, Any]:
-        """Copy an equivalent native schema without changing instance data.
-
-        Prepare this schema before ProviderInvocation when full schema-byte
-        accounting is required. Rendering is idempotent and never re-encodes
-        the invocation's captured payload.
-        """
-
-        if not isinstance(schema, Mapping):
-            raise TypeError("Antigravity output schema must be a mapping")
-        # Copy JSON values, including immutable mappings, in their wire order.
-        rendered = json.loads(canonical_provider_json(schema))
-        schema_maps = {
-            "properties",
-            "patternProperties",
-            "$defs",
-            "definitions",
-            "dependentSchemas",
-            "dependencies",
-        }
-        schema_arrays = {"allOf", "anyOf", "oneOf", "prefixItems"}
-        schema_values = {
-            "additionalProperties",
-            "additionalItems",
-            "unevaluatedProperties",
-            "unevaluatedItems",
-            "items",
-            "contains",
-            "propertyNames",
-            "not",
-            "if",
-            "then",
-            "else",
-            "contentSchema",
-        }
-
-        def visit(node: object) -> None:
-            if type(node) is not dict:
-                return
-            enumeration = node.get("enum")
-            if type(enumeration) is list and len(enumeration) == 1:
-                value = enumeration[0]
-                if node.get("type") == "null" and value is None:
-                    del node["enum"]
-                elif (
-                    node.get("type") == "integer"
-                    and type(value) is int
-                    and abs(value) <= 2**53 - 1
-                    and "minimum" not in node
-                    and "maximum" not in node
-                ):
-                    entries = tuple(node.items())
-                    node.clear()
-                    for key, item in entries:
-                        if key == "enum":
-                            node["minimum"] = value
-                            node["maximum"] = value
-                        else:
-                            node[key] = item
-
-            for keyword, child in node.items():
-                if keyword in schema_maps and type(child) is dict:
-                    for nested in child.values():
-                        visit(nested)
-                elif (
-                    keyword in schema_arrays or keyword == "items"
-                ) and type(child) is list:
-                    for nested in child:
-                        visit(nested)
-                elif keyword in schema_values:
-                    visit(child)
-
-        visit(rendered)
-        return rendered
+    native_output_schema = staticmethod(_render_native_output_schema)
 
     def command(
         self,
