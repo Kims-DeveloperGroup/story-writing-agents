@@ -34,6 +34,12 @@ from .provider_context_invocation import (
     effective_context_continuation_fingerprints as _effective_context_continuation_fingerprints,
     invoke_context_physical as _invoke_context_physical,
 )
+from .provider_conversation_retrieval_loop import (
+    RetrievalReferenceLoad as _RetrievalReferenceLoad,
+    RetrievalStructuredInvoke as _RetrievalStructuredInvoke,
+    converse_with_retrieval as _converse_with_retrieval_codex,
+    taint_retrieval_thread_without_replacing_failure as _taint_retrieval_thread_without_replacing_failure,
+)
 import story_writing_agents.provider_direct_call_wire as provider_direct_call_wire
 import story_writing_agents.provider_execution_profiles as provider_execution_profiles
 from .provider_execution_profile_observations import ProviderExecutionProfileObservations
@@ -48,7 +54,6 @@ from .provider_reference_read_lifecycle import (
     taint_reference_thread_without_replacing as _taint_reference_thread_without_replacing,
     terminate_reference_read_without_replacing as _terminate_reference_read_without_replacing,
 )
-import story_writing_agents.provider_retrieval_handler_outcomes as provider_retrieval_handler_outcomes
 import story_writing_agents.provider_session_access_transactions as provider_session_access_transactions
 import story_writing_agents.provider_session_artifacts as provider_session_artifacts
 import story_writing_agents.provider_session_lifecycle_queries as provider_session_lifecycle_queries
@@ -69,8 +74,7 @@ from .provider_structured_invocation import (
     stage_validation_details as _stage_validation_details,
 )
 import story_writing_agents.provider_thread_records as provider_thread_records
-from .provider_message_catalog import WIRE_VERSION, RETRIEVAL_ACTIONS, WireShapeError
-from .provider_request_mapping import project_direct_payload
+from .provider_message_catalog import WIRE_VERSION, WireShapeError
 from .provider_response_mapping import (
     normalize_direct_result,
     normalize_retrieval_action,
@@ -119,19 +123,12 @@ from .config import ConfigurationSnapshot, ConfigManager
 from .codex_adapter import CodexAdapter
 from .conversations import CollaborationEventStore
 from .conversation_retrieval import (
-    CONVERSATION_RETRIEVAL_POLICY,
     ConversationRetrievalAction,
     ConversationRetrievalActionHandler,
-    ConversationRetrievalActionKind,
     ConversationRetrievalAnswerAction,
     ConversationRetrievalObservation,
-    ConversationRetrievalReadAction,
-    ConversationRetrievalReadObservation,
     ConversationRetrievalReply,
     ConversationRetrievalRequest,
-    ConversationRetrievalSearchAction,
-    ConversationRetrievalSearchObservation,
-    serialize_conversation_retrieval_observation,
 )
 from .debug_log import (
     DebugComponent,
@@ -182,7 +179,6 @@ from .provider_generation_adapters import (
     create_codex_adapter as _create_codex_adapter,
 )
 from .provider_process import ProcessTimedOut, stop_process
-from .reply_trace import ReplyTrace, ReplyTraceOrigin
 from .provider_execution_workspace import ProviderExecutionWorkspace
 from .session_lifecycle import (
     SessionAccessState,
@@ -2264,314 +2260,21 @@ class AgentBackend:
             execution_workspace=execution_workspace,
         )
 
-    async def _converse_with_retrieval_codex(
-        self,
-        bound_agent: BoundAgent,
-        request: ConversationRetrievalRequest,
-        handler_method: Callable[
-            [ConversationRetrievalAction],
-            ConversationRetrievalObservation | ConversationRetrievalReply,
-        ],
-        *,
-        reference_read: ReferenceReadInvocation | None = None,
-        _provider_name: str = "Codex",
-        execution_workspace: ProviderExecutionWorkspace | None = None,
-    ) -> ConversationRetrievalReply:
-        """Run the fixed Codex action loop without inter-call lock changes.
+    @property
+    def retrieval_reference_load(self) -> _RetrievalReferenceLoad[BoundAgent]:
+        return self._load_authorized_reference_context
 
-        Initial and continuation payloads use the accepted exact schemas. Each
-        decoded action reaches the synchronous handler once; observations are
-        canonically framed for the next call and a terminal handler reply is
-        returned. Provider metadata is the only mutation here. Once a
-        nonterminal action is accepted, every later failure or cancellation
-        taints the compatible thread before the original failure is re-raised.
-        """
+    @property
+    def retrieval_structured_invoke(self) -> _RetrievalStructuredInvoke[BoundAgent]:
+        return self._invoke_provider_structured_resilient
 
-        self._ensure_open()
-        continuation_fingerprint = self._legacy_continuation_fingerprint(
-            bound_agent,
-            execution_workspace,
-        )
-        reference_context: tuple[Mapping[str, object], ...] | None = None
-        if reference_read is not None:
-            prelude = await self._load_authorized_reference_context(
-                bound_agent,
-                session_id=request.session_id,
-                conversation_id=request.conversation_id,
-                reference_read=reference_read,
-                provider_name=_provider_name,
-                execution_workspace=execution_workspace,
-                continuation_fingerprint=continuation_fingerprint,
-            )
-            reference_context = prelude.context
-        observation_frame: str | None = None
-        after_read = False
-        pending_observation = False
-        reference_provider_failure = False
-        trace_sources: list[str] = []
-        diagnostic_chunks: list[str] = []
-        recovered = False
-        physical_provider_calls = 0
-        used_local_fallback = False
+    @property
+    def retrieval_fallback_message(self) -> str:
+        return _SAFE_STRUCTURED_FALLBACK_MESSAGE
 
-        def count_provider_call() -> None:
-            nonlocal physical_provider_calls
-            physical_provider_calls += 1
+    _converse_with_retrieval_codex = _converse_with_retrieval_codex
 
-        def reject_fallback_references() -> None:
-            """Keep local fallback delivery separate from reference acceptance."""
-
-            nonlocal used_local_fallback
-            used_local_fallback = True
-            if reference_read is not None:
-                self._terminate_reference_read_without_replacing(
-                    reference_read,
-                    ReferenceAuthorizationErrorCode.PROVIDER_FAILURE,
-                )
-
-        try:
-            for action_index in range(
-                1,
-                CONVERSATION_RETRIEVAL_POLICY.max_provider_calls + 1,
-            ):
-                remaining_provider_calls = (
-                    CONVERSATION_RETRIEVAL_POLICY.max_provider_calls
-                    - physical_provider_calls
-                )
-                if remaining_provider_calls < 1:
-                    break
-                allowed_actions = conversation_retrieval_wire.allowed_actions(
-                    action_index=action_index,
-                    has_observation=observation_frame is not None,
-                    after_read=after_read,
-                    final_provider_call=remaining_provider_calls == 1,
-                )
-                if observation_frame is None:
-                    call_kind = ProviderCallKind.CONVERSATION_RETRIEVAL_INITIAL
-                    payload = conversation_retrieval_wire.initial_payload(
-                        request,
-                        allowed_actions=allowed_actions,
-                    )
-                    if reference_context is not None:
-                        payload["untrusted_attached_references"] = project_direct_payload({"untrusted_writing_artifact_context": reference_context})["untrusted_attached_references"]
-                        reference_context = None
-                else:
-                    call_kind = ProviderCallKind.CONVERSATION_RETRIEVAL_CONTINUATION
-                    payload = conversation_retrieval_wire.continuation_payload(
-                        request,
-                        action_index=action_index,
-                        allowed_actions=allowed_actions,
-                        observation=observation_frame,
-                    )
-                repair_allowed_actions = (
-                    (ConversationRetrievalActionKind.ANSWER,)
-                    if remaining_provider_calls == 2
-                    else allowed_actions
-                )
-                repair_payload = dict(payload)
-                repair_control = dict(repair_payload["conversation_retrieval_control"])
-                repair_control["allowed_action_types"] = [
-                    RETRIEVAL_ACTIONS[action.value] for action in repair_allowed_actions
-                ]
-                repair_payload["conversation_retrieval_control"] = repair_control
-                reference_provider_failure = True
-                action = await self._invoke_provider_structured_resilient(
-                    bound_agent,
-                    session_id=request.session_id,
-                    conversation_id=request.conversation_id,
-                    schema=conversation_retrieval_wire.retrieval_action_schema(
-                        allowed_actions=allowed_actions,
-                    ),
-                    payload=payload,
-                    decode=lambda response_text: (
-                        backend_reply_decoding.decode_conversation_retrieval_action(
-                            response_text,
-                            request=request,
-                            action_index=action_index,
-                            provider_name=_provider_name,
-                            allowed_actions=allowed_actions,
-                        )
-                    ),
-                    fallback=lambda: ConversationRetrievalAnswerAction(
-                        kind=ConversationRetrievalActionKind.ANSWER,
-                        session_id=request.session_id,
-                        conversation_id=request.conversation_id,
-                        turn_id=request.turn_id,
-                        action_index=action_index,
-                        content=_SAFE_STRUCTURED_FALLBACK_MESSAGE,
-                        citation_ids=(),
-                    ),
-                    best_effort_taint=reference_read is not None,
-                    call_kind=call_kind,
-                    trace_role=request.agent_id,
-                    allow_repair=remaining_provider_calls > 1,
-                    repair_schema=conversation_retrieval_wire.retrieval_action_schema(
-                        allowed_actions=repair_allowed_actions,
-                    ),
-                    repair_payload=repair_payload,
-                    repair_decode=lambda response_text: (
-                        backend_reply_decoding.decode_conversation_retrieval_action(
-                            response_text,
-                            request=request,
-                            action_index=action_index,
-                            provider_name=_provider_name,
-                            allowed_actions=repair_allowed_actions,
-                        )
-                    ),
-                    on_provider_attempt=count_provider_call,
-                    on_fallback=reject_fallback_references,
-                    execution_workspace=execution_workspace,
-                )
-                diagnostic_chunks.extend(action.validation_details)
-                if action.trace is not None:
-                    trace_sources.extend(action.trace.context_sources)
-                    recovered = recovered or (
-                        action.trace.origin is ReplyTraceOrigin.RECOVERED
-                    )
-                    if type(action) is ConversationRetrievalAnswerAction:
-                        origin = action.trace.origin
-                        recovered_fields = action.trace.recovered_fields
-                        if recovered and origin is ReplyTraceOrigin.PROVIDER:
-                            origin = ReplyTraceOrigin.RECOVERED
-                            recovered_fields = ("structured_reply",)
-                        action = replace(
-                            action,
-                            trace=ReplyTrace(
-                                role=request.agent_id,
-                                action=action.trace.action,
-                                context_sources=tuple(
-                                    dict.fromkeys(trace_sources)
-                                ),
-                                recovered_fields=recovered_fields,
-                                origin=origin,
-                            ),
-                        )
-                reference_provider_failure = False
-                if type(action) in {
-                    ConversationRetrievalSearchAction,
-                    ConversationRetrievalReadAction,
-                }:
-                    pending_observation = True
-
-                outcome = handler_method(action)
-                if inspect.isawaitable(outcome):
-                    if inspect.iscoroutine(outcome):
-                        outcome.close()
-                    del outcome
-                    raise BackendProtocolError(
-                        "conversation retrieval handler returned an awaitable"
-                    )
-                if inspect.isasyncgen(outcome):
-                    del outcome
-                    raise BackendProtocolError(
-                        "conversation retrieval handler returned an async generator"
-                    )
-
-                if type(action) is ConversationRetrievalAnswerAction:
-                    if type(outcome) is not ConversationRetrievalReply:
-                        raise BackendProtocolError(
-                            "conversation retrieval answer handler returned an "
-                            "invalid reply"
-                        )
-                    try:
-                        outcome = provider_retrieval_handler_outcomes.canonicalize_reply(
-                            outcome, action, diagnostic_chunks
-                        )
-                    except Exception as exc:
-                        raise BackendProtocolError(
-                            "conversation retrieval answer handler returned an "
-                            "invalid reply"
-                        ) from exc
-                    if (
-                        outcome.session_id != request.session_id
-                        or outcome.conversation_id != request.conversation_id
-                        or outcome.turn_id != request.turn_id
-                    ):
-                        raise BackendProtocolError(
-                            "conversation retrieval handler reply correlation changed"
-                        )
-                    pending_observation = False
-                    if reference_read is not None and not used_local_fallback:
-                        self._complete_reference_read(
-                            reference_read,
-                            session_id=request.session_id,
-                            definition=bound_agent.definition,
-                            continuation_fingerprint=continuation_fingerprint,
-                            execution_workspace=execution_workspace,
-                        )
-                    return outcome
-
-                if type(action) is ConversationRetrievalSearchAction:
-                    expected_observation_type = ConversationRetrievalSearchObservation
-                else:
-                    assert type(action) is ConversationRetrievalReadAction
-                    expected_observation_type = ConversationRetrievalReadObservation
-                if type(outcome) is not expected_observation_type:
-                    raise BackendProtocolError(
-                        "conversation retrieval handler returned an invalid observation"
-                    )
-                try:
-                    outcome = provider_retrieval_handler_outcomes.canonicalize_observation(
-                        outcome
-                    )
-                except Exception as exc:
-                    raise BackendProtocolError(
-                        "conversation retrieval handler returned an invalid observation"
-                    ) from exc
-                if (
-                    outcome.session_id != request.session_id
-                    or outcome.conversation_id != request.conversation_id
-                    or outcome.turn_id != request.turn_id
-                    or outcome.action_index != action.action_index
-                ):
-                    raise BackendProtocolError(
-                        "conversation retrieval handler observation correlation changed"
-                    )
-                observation_frame = serialize_conversation_retrieval_observation(
-                    outcome
-                )
-                if type(action) is ConversationRetrievalReadAction:
-                    after_read = True
-            reference_provider_failure = True
-            raise BackendProtocolError(
-                "conversation retrieval ended without a terminal answer"
-            )
-        except BaseException as exc:
-            if pending_observation:
-                self._taint_retrieval_thread_without_replacing_failure(
-                    request.session_id,
-                    bound_agent.definition,
-                    fingerprint=continuation_fingerprint,
-                )
-            if reference_read is not None:
-                self._fail_reference_read_without_replacing(
-                    reference_read,
-                    exc,
-                    session_id=request.session_id,
-                    definition=bound_agent.definition,
-                    provider_failure=reference_provider_failure,
-                    continuation_fingerprint=continuation_fingerprint,
-                )
-            raise
-
-    def _taint_retrieval_thread_without_replacing_failure(
-        self,
-        session_id: str,
-        definition: AgentDefinition,
-        *,
-        fingerprint: str | None = None,
-    ) -> None:
-        """Best-effort taint an incomplete retrieval thread without masking failure."""
-
-        try:
-            provider_manifest_thread_store.taint_manifest_thread(
-                self.workspace,
-                session_id,
-                definition,
-                fingerprint=fingerprint,
-            )
-        except BaseException:
-            pass
+    _taint_retrieval_thread_without_replacing_failure = _taint_retrieval_thread_without_replacing_failure
 
     _record_rejected_provider_response_without_replacing_failure = _record_rejected_provider_response_without_replacing_failure
 
