@@ -3601,6 +3601,76 @@
         157359,
         157386
       ]
+    },
+    {
+      "issue": 1133,
+      "base": "b2c9907070f2797141719fa5f9b754e1b1af2f1f",
+      "origin_commit": "b2c9907070f2797141719fa5f9b754e1b1af2f1f",
+      "origins": [
+        {
+          "source": "tests/test_codex_backend.py",
+          "sha256": "8677ed70dbaf999cdcd74cdf11117a8c29537ab24c92320be00e745d8cd99097"
+        },
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "c26e326f2ccde33927353c5176fca7da237f1cf79a399ae074d0ad245333e223"
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "f2b1380cb83c09a844e8c3ddf2658b9e91ef261065dfe78fd9f93e966c44fd51"
+        },
+        {
+          "source": "tests/codex_native_process_fixture.py",
+          "sha256": "e4f6624f376b4438a82ab00df2f0bd0edb03233fba9c215f8e3d385d8040e2c9"
+        },
+        {
+          "source": "tests/conversation_retrieval_wire_fixture.py",
+          "sha256": "804d14cf9c771114ca83eb5ce545afbbea0a42494550c214e836691bf6382ec6"
+        }
+      ],
+      "prior_sources": [
+        {
+          "source": "tests/test_codex_backend.py",
+          "sha256": "8677ed70dbaf999cdcd74cdf11117a8c29537ab24c92320be00e745d8cd99097"
+        },
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "c26e326f2ccde33927353c5176fca7da237f1cf79a399ae074d0ad245333e223"
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "f2b1380cb83c09a844e8c3ddf2658b9e91ef261065dfe78fd9f93e966c44fd51"
+        },
+        {
+          "source": "tests/codex_native_process_fixture.py",
+          "sha256": "e4f6624f376b4438a82ab00df2f0bd0edb03233fba9c215f8e3d385d8040e2c9"
+        },
+        {
+          "source": "tests/conversation_retrieval_wire_fixture.py",
+          "sha256": "804d14cf9c771114ca83eb5ce545afbbea0a42494550c214e836691bf6382ec6"
+        }
+      ],
+      "counting": "ordinary tests + registered support + 1550 legacy",
+      "legacy_unresolved_lines": 1550,
+      "approved_source_delta": 67,
+      "planned_raw_delta": 6,
+      "planned_support_delta": 61,
+      "excluded_monotonic_rule_ordinary": 1,
+      "excluded_monotonic_rule_physical": 1,
+      "original_caps_sha256": "0fc8c5e140b56200643f090106395259da9ca23d1e90a0e64738c3bd3f5c5fbe",
+      "expected_caps_sha256": "0fc8c5e140b56200643f090106395259da9ca23d1e90a0e64738c3bd3f5c5fbe",
+      "cost_components": {
+        "tests/test_codex_backend.py": -243,
+        "tests/test_provider_invocation_routing.py": 212,
+        "tests/test_rag_module_and_packaging_boundary.py": 18,
+        "tests/test_suite_budget.py": 19,
+        "tests/codex_native_process_fixture.py": 2,
+        "tests/conversation_retrieval_wire_fixture.py": 59
+      },
+      "exact_source_pair": [
+        157386,
+        157453
+      ]
     }
   ]
 }
