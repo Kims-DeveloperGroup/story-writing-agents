@@ -21150,10 +21150,40 @@
         "tests.test_codex_backend.CodexBackendTestCase.test_a_to_b_to_a_route_generation_never_resumes_old_a_threads_after_restart",
         "tests.test_codex_backend.CodexBackendTestCase.test_hot_same_provider_profile_applies_now_and_reuses_thread",
         "tests.test_interactive_controller.ControllerSettingsTests.test_antigravity_settings_edit_active_fields_and_preserve_codex",
+        "tests.test_interactive_controller.ControllerSettingsTests.test_each_selection_save_failure_retains_candidate_and_redacts_details",
+        "tests.test_interactive_controller.ControllerSettingsTests.test_each_typed_save_failure_retains_candidate_and_redacts_details",
         "tests.test_interactive_controller.ControllerSettingsTests.test_hot_save_preflight_quiescence_restore_and_recovery_are_truthful",
         "tests.test_interactive_controller.ControllerSettingsTests.test_message_details_only_save_is_confirmed_and_transaction_only",
         "tests.test_interactive_controller.ControllerSettingsTests.test_persona_catalog_race_reports_conflict_and_preserves_config",
+        "tests.test_interactive_controller.ControllerSettingsTests.test_settings_confirmation_panel_is_changed_only_and_selectable",
         "tests.test_interactive_controller.ControllerSettingsTests.test_settings_edit_save_isolated_discovered_candidate_and_literal_cancel",
+        "tests.test_interactive_controller.ControllerSettingsTests.test_settings_routes_picker_and_prompt_inputs_as_transient_only",
+        "tests.test_interactive_controller.ControllerSettingsTests.test_storage_edit_is_desired_only_and_keeps_current_shell_bundle"
+      ]
+    },
+
+    {
+      "name": "provider.configuration-activation",
+      "boundary": "provider-configuration-activation",
+      "paths": [
+        "src/story_writing_agents/provider_configuration_activation.py"
+      ],
+      "depends_on": [],
+      "focused_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_hot_same_provider_profile_applies_now_and_reuses_thread",
+        "tests.test_interactive_controller.ControllerSettingsTests.test_antigravity_settings_edit_active_fields_and_preserve_codex",
+        "tests.test_interactive_controller.ControllerSettingsTests.test_hot_save_preflight_quiescence_restore_and_recovery_are_truthful"
+      ],
+      "affected_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_hot_same_provider_profile_applies_now_and_reuses_thread",
+        "tests.test_interactive_controller.ControllerSettingsTests.test_antigravity_settings_edit_active_fields_and_preserve_codex",
+        "tests.test_interactive_controller.ControllerSettingsTests.test_each_selection_save_failure_retains_candidate_and_redacts_details",
+        "tests.test_interactive_controller.ControllerSettingsTests.test_each_typed_save_failure_retains_candidate_and_redacts_details",
+        "tests.test_interactive_controller.ControllerSettingsTests.test_hot_save_preflight_quiescence_restore_and_recovery_are_truthful",
+        "tests.test_interactive_controller.ControllerSettingsTests.test_persona_catalog_race_reports_conflict_and_preserves_config",
+        "tests.test_interactive_controller.ControllerSettingsTests.test_settings_confirmation_panel_is_changed_only_and_selectable",
+        "tests.test_interactive_controller.ControllerSettingsTests.test_settings_edit_save_isolated_discovered_candidate_and_literal_cancel",
+        "tests.test_interactive_controller.ControllerSettingsTests.test_settings_routes_picker_and_prompt_inputs_as_transient_only",
         "tests.test_interactive_controller.ControllerSettingsTests.test_storage_edit_is_desired_only_and_keeps_current_shell_bundle"
       ]
     },
