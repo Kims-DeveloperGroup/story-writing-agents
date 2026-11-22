@@ -1991,13 +1991,13 @@ class AgentBackend:
 
         try:
             self._adapter_for(bound_agent.vendor)
-        except ConfigurationError:
+        except ConfigurationError as failure:
             if reference_read is not None:
                 self._terminate_reference_read_without_replacing(
                     reference_read,
                     ReferenceAuthorizationErrorCode.PROVIDER_FAILURE,
                 )
-            raise
+            raise ConfigurationError(str(failure))
         if bound_agent.vendor == "codex":
             return await self._converse_codex(
                 bound_agent,
