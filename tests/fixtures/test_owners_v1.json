@@ -21313,6 +21313,33 @@
         "tests.test_codex_invocation_files.CodexInvocationFilesTests.test_timeout_terminates_the_codex_process"
       ],
       "depends_on": []
+    },
+
+    {
+      "name": "provider.conversation-retrieval-loop",
+      "boundary": "provider-conversation-retrieval-loop",
+      "paths": [
+        "src/story_writing_agents/provider_conversation_retrieval_loop.py"
+      ],
+      "focused_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_exact_initial_continuation_payload_rules_schema_and_frame",
+        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_handler_control_failures_taint_and_trace_interruption"
+      ],
+      "affected_ids": [
+        "tests.test_antigravity_parity.AntigravityParityTests.test_all_phases_direct_and_retrieval_conversation_are_correlated",
+        "tests.test_antigravity_parity.AntigravityParityTests.test_retrieval_failure_after_observation_taints_and_restarts",
+        "tests.test_codex_backend.CodexBackendTestCase.test_debug_sink_control_failures_preserve_bound_interruptions",
+        "tests.test_codex_backend.CodexBackendTestCase.test_pending_search_taints_for_each_failure_and_restarts_fresh",
+        "tests.test_codex_backend.CodexBackendTestCase.test_reference_read_retrieval_preserves_action_indices_and_budgets",
+        "tests.test_codex_backend.CodexBackendTestCase.test_reference_runtime_fallback_terminates_and_repair_accepts",
+        "tests.test_codex_backend.CodexBackendTestCase.test_repaired_search_and_read_diagnostics_reach_clean_final_answer",
+        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_and_substantive_rejections_fall_back_with_correlation",
+        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_exact_initial_continuation_payload_rules_schema_and_frame",
+        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_handler_control_failures_taint_and_trace_interruption",
+        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_handler_declaration_and_exact_outcome_protocol",
+        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_repairs_share_five_call_budget_and_close_fifth_to_answer"
+      ],
+      "depends_on": []
     }
   ],
   "ignored_names": [
