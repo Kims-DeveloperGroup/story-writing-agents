@@ -407,8 +407,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 359)
-        self.assertEqual(len(edges), 2183)
+        self.assertEqual(len(modules), 360)
+        self.assertEqual(len(edges), 2186)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -419,6 +419,10 @@ class RagModuleBoundaryTests(unittest.TestCase):
         conversation_retrieval_owner = "story_writing_agents.provider_conversation_retrieval_loop"
         direct_structured_owner = "story_writing_agents.provider_direct_structured_calls"
         provider_dependencies = {
+            "story_writing_agents.backend_diagnostic_events": (
+                {"story_writing_agents.debug_log", "story_writing_agents.provider_adapter"},
+                {"story_writing_agents.backend"},
+            ),
             "story_writing_agents.antigravity_native_output_schema": (
                 {"story_writing_agents.agent_context.accounting"},
                 {"story_writing_agents.antigravity_adapter"},
@@ -3401,6 +3405,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             "story_writing_agents/bound_agent_logical_invocation.py",
             "story_writing_agents/provider_conversation_retrieval_loop.py",
             "story_writing_agents/provider_direct_structured_calls.py",
+            "story_writing_agents/backend_diagnostic_events.py",
             "story_writing_agents/provider_invocation_routing.py",
             "story_writing_agents/provider_retrieval_handler_outcomes.py",
             "story_writing_agents/antigravity_native_output_schema.py",

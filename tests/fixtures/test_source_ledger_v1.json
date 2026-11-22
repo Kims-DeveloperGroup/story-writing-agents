@@ -30,7 +30,8 @@
     "tests/codex_native_process_fixture.py",
     "tests/agent_exchange_capture_fixture.py",
     "tests/antigravity_adapter_fixture.py",
-    "tests/antigravity_streaming_fixture.py"
+    "tests/antigravity_streaming_fixture.py",
+    "tests/backend_lifecycle_diagnostic_fixture.py"
   ],
   "origins": {
     "test_git_external_operation_inspection.py": {
@@ -3722,6 +3723,59 @@
       "exact_source_pair": [
         157453,
         157504
+      ]
+    },
+    {
+      "issue": 1139,
+      "base": "262865cd5ab0bfb94cdf3c58768a475e944fc255",
+      "origin_commit": "262865cd5ab0bfb94cdf3c58768a475e944fc255",
+      "origins": [
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "31a22c1b6e571094ab3a6eda2196e8fea784b0abbdc05c7a9f7446b7fa754eaa"
+        },
+        {
+          "source": "tests/test_session_lifecycle.py",
+          "sha256": "a1cbbd34f70462b428010a6546a73b9bc67dbcd886498793e1f4b93c19168de7"
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "3fef862143c0a7477bf8237cc0029cd337cb473592440cde74627ae5e3f7629d"
+        }
+      ],
+      "prior_sources": [
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "31a22c1b6e571094ab3a6eda2196e8fea784b0abbdc05c7a9f7446b7fa754eaa"
+        },
+        {
+          "source": "tests/test_session_lifecycle.py",
+          "sha256": "a1cbbd34f70462b428010a6546a73b9bc67dbcd886498793e1f4b93c19168de7"
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "3fef862143c0a7477bf8237cc0029cd337cb473592440cde74627ae5e3f7629d"
+        }
+      ],
+      "counting": "ordinary tests + registered support + 1550 legacy",
+      "legacy_unresolved_lines": 1550,
+      "approved_source_delta": 30,
+      "planned_raw_delta": 1,
+      "planned_support_delta": 29,
+      "excluded_monotonic_rule_ordinary": 1,
+      "excluded_monotonic_rule_physical": 1,
+      "original_caps_sha256": "0fc8c5e140b56200643f090106395259da9ca23d1e90a0e64738c3bd3f5c5fbe",
+      "expected_caps_sha256": "0fc8c5e140b56200643f090106395259da9ca23d1e90a0e64738c3bd3f5c5fbe",
+      "cost_components": {
+        "tests/test_backend_diagnostic_events.py": 96,
+        "tests/test_rag_module_and_packaging_boundary.py": 5,
+        "tests/test_session_lifecycle.py": -102,
+        "tests/test_suite_budget.py": 2,
+        "tests/backend_lifecycle_diagnostic_fixture.py": 29
+      },
+      "exact_source_pair": [
+        157504,
+        157534
       ]
     }
   ]
