@@ -3,14 +3,21 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
+import re
 from typing import Any
 
 from .agent_context.accounting import (
+    ProviderUsage,
     ProviderUsageObservation,
     ProviderUsageScope,
     canonical_provider_json,
 )
+from .provider_adapter import ProviderInvocationError
+
+
+SAFE_THREAD_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 
 
 def reject_duplicate_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -31,6 +38,93 @@ def finite_float(value: str) -> float:
     if not math.isfinite(number):
         raise ValueError("nonfinite JSON value")
     return number
+
+
+def parse_events(
+    stdout: bytes, *, strict: bool = False,
+) -> tuple[dict[str, Any], ...]:
+    """Decode the Codex JSONL event envelope with fixed diagnostics."""
+
+    try:
+        text = stdout.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise ProviderInvocationError(
+            "Codex CLI event stream is not valid UTF-8",
+            taint_existing_thread=True,
+        ) from exc
+    events: list[dict[str, Any]] = []
+    for line_number, line in enumerate(text.splitlines(), 1):
+        if not line:
+            continue
+        try:
+            value = (
+                json.loads(
+                    line,
+                    object_pairs_hook=reject_duplicate_fields,
+                    parse_constant=reject_constant,
+                    parse_float=finite_float,
+                )
+                if strict
+                else json.loads(line)
+            )
+        except (ValueError, RecursionError) as exc:
+            raise ProviderInvocationError(
+                f"Codex CLI emitted malformed JSONL at line {line_number}",
+                taint_existing_thread=True,
+            ) from exc
+        if not isinstance(value, dict):
+            raise ProviderInvocationError(
+                f"Codex CLI emitted a non-object event at line {line_number}",
+                taint_existing_thread=True,
+            )
+        events.append(value)
+    return tuple(events)
+
+
+def started_thread(events: tuple[dict[str, Any], ...]) -> str | None:
+    """Return the first syntactically safe Codex thread identifier."""
+
+    for event in events:
+        if event.get("type") == "thread.started":
+            thread_id = event.get("thread_id")
+            if (
+                isinstance(thread_id, str)
+                and SAFE_THREAD_ID.fullmatch(thread_id) is not None
+            ):
+                return thread_id
+    return None
+
+
+def provider_usage(
+    events: tuple[dict[str, Any], ...],
+) -> ProviderUsage | None:
+    """Return only exact counters from one recognized terminal event."""
+
+    terminals = tuple(
+        event for event in events if event.get("type") == "turn.completed"
+    )
+    if len(terminals) != 1:
+        return None
+    raw_usage = terminals[0].get("usage")
+    if type(raw_usage) is not dict:
+        return None
+    assert isinstance(raw_usage, dict)
+    values: dict[str, int | None] = {}
+    for field in (
+        "input_tokens",
+        "output_tokens",
+    ):
+        if field not in raw_usage:
+            values[field] = None
+            continue
+        value = raw_usage[field]
+        if type(value) is not int or value < 0:
+            values[field] = None
+        else:
+            values[field] = value
+    if all(value is None for value in values.values()):
+        return None
+    return ProviderUsage(**values)
 
 
 def extract_stream_text(value: object) -> str:
