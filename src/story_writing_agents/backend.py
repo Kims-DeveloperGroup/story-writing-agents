@@ -2,6 +2,23 @@
 
 from __future__ import annotations
 import story_writing_agents.backend_reply_decoding as backend_reply_decoding
+from .bound_agent_logical_invocation import (
+    LogicalProviderDispatch as _LogicalProviderDispatch,
+    LogicalRetrievalDispatch as _LogicalRetrievalDispatch,
+    LogicalTrace as _LogicalTrace,
+    compose_direct_codex_binding as _compose_direct_codex_binding,
+    converse as _converse_bound_agent,
+    converse_logical as _converse_logical,
+    converse_with_retrieval as _converse_bound_agent_with_retrieval,
+    converse_with_retrieval_logical as _converse_with_retrieval_logical,
+    defer_direct_codex_acceptance as _defer_direct_codex_acceptance,
+    direct_codex_execution_workspace as _direct_codex_execution_workspace,
+    direct_execution_workspace as _direct_execution_workspace,
+    invoke as _invoke_bound_agent,
+    invoke_logical as _invoke_logical,
+    preflight_direct_codex_workspace as _preflight_direct_codex_workspace,
+    validated_reference_read_invocation as _validated_reference_read_invocation,
+)
 import story_writing_agents.conversation_retrieval_wire as conversation_retrieval_wire
 import story_writing_agents.provider_binding_call_lifetime as provider_binding_call_lifetime
 from .provider_adapter_generations import (
@@ -412,96 +429,15 @@ class BoundAgent:
 
         return _BoundContextProvider(_BoundContextBinding(self), reference_read)
 
-    @asynccontextmanager
-    async def _direct_execution_workspace(
-        self,
-        session_id: str,
-        reference_read: ReferenceReadInvocation | None,
-    ) -> AsyncIterator[ProviderExecutionWorkspace]:
-        """Open direct-call authority and retire pre-entry references on loss."""
+    _direct_execution_workspace = _direct_execution_workspace
 
-        entered = False
-        body_failed = False
-        generation_lost = False
-        deferred: list[_DeferredDirectCodexAcceptance] = []
-        token: contextvars.Token[list[_DeferredDirectCodexAcceptance] | None] | None = (
-            None
-        )
-        try:
-            binding = await asyncio.to_thread(
-                self._compose_direct_codex_binding,
-                session_id,
-            )
-            binding = binding.transfer_to_current_thread()
-            with provider_execution_workspace_manager(self, binding) as workspace:
-                entered = True
-                token = _DEFERRED_DIRECT_CODEX_ACCEPTANCES.set(deferred)
-                try:
-                    yield workspace
-                except BaseException:
-                    body_failed = True
-                    try:
-                        workspace.require_current()
-                    except BaseException:
-                        generation_lost = True
-                    raise
-                finally:
-                    _DEFERRED_DIRECT_CODEX_ACCEPTANCES.reset(token)
-                    token = None
-        except BaseException as failure:
-            for acceptance in deferred:
-                if body_failed and not generation_lost:
-                    acceptance.accept()
-                else:
-                    acceptance.reject()
-            if not entered:
-                self._terminate_reference_before_provider(reference_read, failure)
-            raise
-        else:
-            for acceptance in deferred:
-                acceptance.accept()
+    _direct_codex_execution_workspace = _direct_codex_execution_workspace
 
-    @asynccontextmanager
-    async def _direct_codex_execution_workspace(
-        self,
-        session_id: str,
-        reference_read: ReferenceReadInvocation | None,
-    ) -> AsyncIterator[ProviderExecutionWorkspace]:
-        """Compatibility delegate for the generalized direct-call authority."""
+    _preflight_direct_codex_workspace = _preflight_direct_codex_workspace
 
-        async with self._direct_execution_workspace(
-            session_id,
-            reference_read,
-        ) as workspace:
-            yield workspace
+    _compose_direct_codex_binding = _compose_direct_codex_binding
 
-    def _preflight_direct_codex_workspace(self, session_id: str) -> None:
-        """Reject unavailable logical work before opening a physical workspace."""
-
-        self.backend._ensure_open()
-        self.backend._assert_provider_work_ready(session_id)
-
-    def _compose_direct_codex_binding(self, session_id: str) -> SessionArtifactBinding:
-        """Run blocking direct-call preflight and binding off the event loop."""
-
-        self._preflight_direct_codex_workspace(session_id)
-        return _compose_session_artifact_binding(
-            self.backend.workspace.root,
-            session_id,
-        )
-
-    @staticmethod
-    def _defer_direct_codex_acceptance(
-        accept: Callable[[], None],
-        reject: Callable[[], None],
-    ) -> None:
-        """Run a logical terminal action only after direct authority validates."""
-
-        deferred = _DEFERRED_DIRECT_CODEX_ACCEPTANCES.get()
-        if deferred is None:
-            accept()
-            return
-        deferred.append(_DeferredDirectCodexAcceptance(accept=accept, reject=reject))
+    _defer_direct_codex_acceptance = staticmethod(_defer_direct_codex_acceptance)
 
     def _context_provider(
         self,
@@ -577,531 +513,19 @@ class BoundAgent:
             )
         return reply
 
-    async def invoke(
-        self,
-        request: AgentRequest,
-        *,
-        reference_read: ReferenceReadInvocation | None = None,
-    ) -> AgentReply:
-        """Invoke the selected vendor while serializing its persistent thread."""
+    invoke = _invoke_bound_agent
 
-        if self.vendor in {"codex", "antigravity"}:
-            if type(request) is not AgentRequest:
-                failure = TypeError("request must be an AgentRequest")
-                self._terminate_reference_before_provider(reference_read, failure)
-                raise failure
-            if request.agent_id != self.definition.agent_id:
-                if reference_read is not None:
-                    AgentBackend._terminate_reference_read_without_replacing(
-                        reference_read,
-                        ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH,
-                    )
-                raise BackendProtocolError(
-                    "request was routed through the wrong bound agent: "
-                    f"{request.agent_id} != {self.definition.agent_id}"
-                )
-            if reference_read is not None:
-                if (
-                    type(request.phase) is not Phase
-                    or type(request.round_number) is not int
-                    or request.round_number < 0
-                    or request.agent_id not in ROSTER
-                ):
-                    AgentBackend._terminate_reference_read_without_replacing(
-                        reference_read,
-                        ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
-                    )
-                    raise BackendProtocolError(
-                        "agent request is invalid for reference routing"
-                    )
-                self._validated_reference_read_invocation(
-                    reference_read,
-                    agent_id=request.agent_id,
-                    phase=request.phase.value,
-                    round_number=request.round_number,
-                )
-            async with self._direct_execution_workspace(
-                request.session_id,
-                reference_read,
-            ) as workspace:
-                return await self._invoke_logical(
-                    request,
-                    reference_read=reference_read,
-                    execution_workspace=workspace,
-                )
-        return await self._invoke_logical(
-            request,
-            reference_read=reference_read,
-            execution_workspace=None,
-        )
+    _invoke_logical = _invoke_logical
 
-    async def _invoke_logical(
-        self,
-        request: AgentRequest,
-        *,
-        reference_read: ReferenceReadInvocation | None,
-        execution_workspace: ProviderExecutionWorkspace | None,
-    ) -> AgentReply:
-        """Implement the unchanged public invocation under private authority."""
+    converse = _converse_bound_agent
 
-        with self._reference_call_use(reference_read):
-            if reference_read is not None and type(request) is not AgentRequest:
-                failure = TypeError("request must be an AgentRequest")
-                self._terminate_reference_before_provider(reference_read, failure)
-                raise failure
-            if request.agent_id != self.definition.agent_id:
-                if reference_read is not None:
-                    AgentBackend._terminate_reference_read_without_replacing(
-                        reference_read,
-                        ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH,
-                    )
-                raise BackendProtocolError(
-                    "request was routed through the wrong bound agent: "
-                    f"{request.agent_id} != {self.definition.agent_id}"
-                )
-            if reference_read is not None:
-                if (
-                    type(request.phase) is not Phase
-                    or type(request.round_number) is not int
-                    or request.round_number < 0
-                    or request.agent_id not in ROSTER
-                ):
-                    AgentBackend._terminate_reference_read_without_replacing(
-                        reference_read,
-                        ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
-                    )
-                    raise BackendProtocolError(
-                        "agent request is invalid for reference routing"
-                    )
-                reference_read = self._validated_reference_read_invocation(
-                    reference_read,
-                    agent_id=request.agent_id,
-                    phase=request.phase.value,
-                    round_number=request.round_number,
-                )
-            try:
-                lock = self.backend._thread_lock(
-                    request.session_id,
-                    self.vendor,
-                    self.definition.agent_id,
-                )
-            except BaseException as exc:
-                self._terminate_reference_before_provider(reference_read, exc)
-                raise
-            async with self._reference_thread_lock(lock, reference_read):
-                self.backend._trace_debug(
-                    DebugOperation.PROVIDER_INVOCATION,
-                    DebugPhase.STARTED,
-                    session_id=request.session_id,
-                    debate_id=request.debate_id,
-                    agent_id=self.definition.agent_id,
-                )
-                thread_disposition = self.backend._logical_thread_disposition(
-                    self,
-                    request.session_id,
-                    execution_workspace=execution_workspace,
-                )
-                try:
-                    reply = await self.backend._invoke_provider(
-                        self,
-                        request,
-                        reference_read=reference_read,
-                        execution_workspace=execution_workspace,
-                    )
-                except asyncio.CancelledError as exc:
-                    self.backend._record_debug_error(
-                        DebugOperation.PROVIDER_INVOCATION,
-                        exc,
-                        session_id=request.session_id,
-                        debate_id=request.debate_id,
-                        agent_id=self.definition.agent_id,
-                        phase=DebugPhase.CANCELLED,
-                        outcome=DebugOutcome.INTERRUPTED,
-                    )
-                    raise
-                except BaseException as exc:
-                    self.backend._record_debug_error(
-                        DebugOperation.PROVIDER_INVOCATION,
-                        exc,
-                        session_id=request.session_id,
-                        debate_id=request.debate_id,
-                        agent_id=self.definition.agent_id,
-                    )
-                    raise
-                self._defer_direct_codex_acceptance(
-                    lambda: (
-                        self.backend._confirm_execution_profile(
-                            self,
-                            context_rehydrated=(
-                                request.story_session_context is not None
-                            ),
-                            thread_disposition=thread_disposition,
-                        ),
-                        self.backend._trace_debug(
-                            DebugOperation.PROVIDER_INVOCATION,
-                            DebugPhase.SUCCEEDED,
-                            session_id=request.session_id,
-                            debate_id=request.debate_id,
-                            agent_id=self.definition.agent_id,
-                            outcome=DebugOutcome.COMPLETED,
-                        ),
-                    ),
-                    lambda: None,
-                )
-                return reply
+    _converse_logical = _converse_logical
 
-    async def converse(
-        self,
-        request: ConversationRequest,
-        *,
-        reference_read: ReferenceReadInvocation | None = None,
-    ) -> ConversationReply:
-        """Run one validated visible conversation turn on this agent thread."""
+    converse_with_retrieval = _converse_bound_agent_with_retrieval
 
-        if self.vendor in {"codex", "antigravity"}:
-            try:
-                validated = self._validated_conversation_request(request)
-            except BaseException as failure:
-                self._terminate_reference_before_provider(reference_read, failure)
-                raise
-            if reference_read is not None:
-                self._validated_reference_read_invocation(
-                    reference_read,
-                    agent_id=validated.agent_id,
-                    phase="conversation",
-                    round_number=None,
-                )
-            async with self._direct_execution_workspace(
-                validated.session_id,
-                reference_read,
-            ) as workspace:
-                return await self._converse_logical(
-                    validated,
-                    reference_read=reference_read,
-                    execution_workspace=workspace,
-                )
-        return await self._converse_logical(
-            request,
-            reference_read=reference_read,
-            execution_workspace=None,
-        )
+    _converse_with_retrieval_logical = _converse_with_retrieval_logical
 
-    async def _converse_logical(
-        self,
-        request: ConversationRequest,
-        *,
-        reference_read: ReferenceReadInvocation | None,
-        execution_workspace: ProviderExecutionWorkspace | None,
-    ) -> ConversationReply:
-        """Implement one conversation under optional internal authority."""
-
-        with self._reference_call_use(reference_read):
-            try:
-                validated = self._validated_conversation_request(request)
-            except BaseException as exc:
-                self._terminate_reference_before_provider(reference_read, exc)
-                raise
-            if reference_read is not None:
-                reference_read = self._validated_reference_read_invocation(
-                    reference_read,
-                    agent_id=validated.agent_id,
-                    phase="conversation",
-                    round_number=None,
-                )
-            try:
-                lock = self.backend._thread_lock(
-                    validated.session_id,
-                    self.vendor,
-                    self.definition.agent_id,
-                )
-            except BaseException as exc:
-                self._terminate_reference_before_provider(reference_read, exc)
-                raise
-            async with self._reference_thread_lock(lock, reference_read):
-                self.backend._trace_debug(
-                    DebugOperation.PROVIDER_INVOCATION,
-                    DebugPhase.STARTED,
-                    session_id=validated.session_id,
-                    conversation_id=validated.conversation_id,
-                    agent_id=self.definition.agent_id,
-                )
-                thread_disposition = self.backend._logical_thread_disposition(
-                    self,
-                    validated.session_id,
-                    execution_workspace=execution_workspace,
-                )
-                try:
-                    reply = await self.backend._converse_provider(
-                        self,
-                        validated,
-                        reference_read=reference_read,
-                        execution_workspace=execution_workspace,
-                    )
-                except asyncio.CancelledError as exc:
-                    self.backend._record_debug_error(
-                        DebugOperation.PROVIDER_INVOCATION,
-                        exc,
-                        session_id=validated.session_id,
-                        conversation_id=validated.conversation_id,
-                        agent_id=self.definition.agent_id,
-                        phase=DebugPhase.CANCELLED,
-                        outcome=DebugOutcome.INTERRUPTED,
-                    )
-                    raise
-                except BaseException as exc:
-                    self.backend._record_debug_error(
-                        DebugOperation.PROVIDER_INVOCATION,
-                        exc,
-                        session_id=validated.session_id,
-                        conversation_id=validated.conversation_id,
-                        agent_id=self.definition.agent_id,
-                    )
-                    raise
-                self._defer_direct_codex_acceptance(
-                    lambda: (
-                        self.backend._confirm_execution_profile(
-                            self,
-                            context_rehydrated=(
-                                validated.story_session_context is not None
-                            ),
-                            thread_disposition=thread_disposition,
-                        ),
-                        self.backend._trace_debug(
-                            DebugOperation.PROVIDER_INVOCATION,
-                            DebugPhase.SUCCEEDED,
-                            session_id=validated.session_id,
-                            conversation_id=validated.conversation_id,
-                            agent_id=self.definition.agent_id,
-                            outcome=DebugOutcome.COMPLETED,
-                        ),
-                    ),
-                    lambda: None,
-                )
-                return reply
-
-    async def converse_with_retrieval(
-        self,
-        request: ConversationRetrievalRequest,
-        handler: ConversationRetrievalActionHandler,
-        *,
-        reference_read: ReferenceReadInvocation | None = None,
-    ) -> ConversationRetrievalReply:
-        """Run one bounded retrieval loop under the persistent-thread lock.
-
-        ``request`` and the strictly synchronous runtime ``handler`` are
-        validated before provider work. One lock covers all provider calls and
-        handler invocations; a valid answer returns its correlated reply, while
-        provider, protocol, handler, timeout, and cancellation failures
-        propagate with incomplete observation state tainted when required.
-        """
-
-        if self.vendor in {"codex", "antigravity"}:
-            try:
-                validated = self._validated_conversation_retrieval_request(request)
-            except BaseException as failure:
-                self._terminate_reference_before_provider(reference_read, failure)
-                raise
-            if reference_read is not None:
-                self._validated_reference_read_invocation(
-                    reference_read,
-                    agent_id=validated.agent_id,
-                    phase="conversation_retrieval",
-                    round_number=None,
-                )
-            async with self._direct_execution_workspace(
-                validated.session_id,
-                reference_read,
-            ) as workspace:
-                return await self._converse_with_retrieval_logical(
-                    validated,
-                    handler,
-                    reference_read=reference_read,
-                    execution_workspace=workspace,
-                )
-        return await self._converse_with_retrieval_logical(
-            request,
-            handler,
-            reference_read=reference_read,
-            execution_workspace=None,
-        )
-
-    async def _converse_with_retrieval_logical(
-        self,
-        request: ConversationRetrievalRequest,
-        handler: ConversationRetrievalActionHandler,
-        *,
-        reference_read: ReferenceReadInvocation | None,
-        execution_workspace: ProviderExecutionWorkspace | None,
-    ) -> ConversationRetrievalReply:
-        """Implement one retrieval loop under optional internal authority."""
-
-        with self._reference_call_use(reference_read):
-            try:
-                validated = self._validated_conversation_retrieval_request(request)
-                handler_method = getattr(
-                    handler,
-                    "handle_conversation_retrieval_action",
-                    None,
-                )
-                if handler_method is None or not callable(handler_method):
-                    raise TypeError(
-                        "handler must provide handle_conversation_retrieval_action()"
-                    )
-                handler_call = getattr(handler_method, "__call__", None)
-                if (
-                    inspect.iscoroutinefunction(handler_method)
-                    or inspect.isasyncgenfunction(handler_method)
-                    or inspect.iscoroutinefunction(handler_call)
-                    or inspect.isasyncgenfunction(handler_call)
-                ):
-                    raise TypeError(
-                        "conversation retrieval handler must be synchronous"
-                    )
-            except BaseException as exc:
-                self._terminate_reference_before_provider(reference_read, exc)
-                raise
-            if reference_read is not None:
-                reference_read = self._validated_reference_read_invocation(
-                    reference_read,
-                    agent_id=validated.agent_id,
-                    phase="conversation_retrieval",
-                    round_number=None,
-                )
-            try:
-                lock = self.backend._thread_lock(
-                    validated.session_id,
-                    self.vendor,
-                    self.definition.agent_id,
-                )
-            except BaseException as exc:
-                self._terminate_reference_before_provider(reference_read, exc)
-                raise
-            async with self._reference_thread_lock(lock, reference_read):
-                self.backend._trace_debug(
-                    DebugOperation.PROVIDER_INVOCATION,
-                    DebugPhase.STARTED,
-                    session_id=validated.session_id,
-                    conversation_id=validated.conversation_id,
-                    agent_id=self.definition.agent_id,
-                )
-                thread_disposition = self.backend._logical_thread_disposition(
-                    self,
-                    validated.session_id,
-                    execution_workspace=execution_workspace,
-                )
-                try:
-                    reply = await self.backend._converse_with_retrieval_provider(
-                        self,
-                        validated,
-                        handler_method,
-                        reference_read=reference_read,
-                        execution_workspace=execution_workspace,
-                    )
-                except asyncio.CancelledError as exc:
-                    self.backend._record_debug_error(
-                        DebugOperation.PROVIDER_INVOCATION,
-                        exc,
-                        session_id=validated.session_id,
-                        conversation_id=validated.conversation_id,
-                        agent_id=self.definition.agent_id,
-                        phase=DebugPhase.CANCELLED,
-                        outcome=DebugOutcome.INTERRUPTED,
-                    )
-                    raise
-                except BaseException as exc:
-                    self.backend._record_debug_error(
-                        DebugOperation.PROVIDER_INVOCATION,
-                        exc,
-                        session_id=validated.session_id,
-                        conversation_id=validated.conversation_id,
-                        agent_id=self.definition.agent_id,
-                    )
-                    raise
-                self._defer_direct_codex_acceptance(
-                    lambda: (
-                        self.backend._confirm_execution_profile(
-                            self,
-                            context_rehydrated=(
-                                validated.story_session_context is not None
-                            ),
-                            thread_disposition=thread_disposition,
-                        ),
-                        self.backend._trace_debug(
-                            DebugOperation.PROVIDER_INVOCATION,
-                            DebugPhase.SUCCEEDED,
-                            session_id=validated.session_id,
-                            conversation_id=validated.conversation_id,
-                            agent_id=self.definition.agent_id,
-                            outcome=DebugOutcome.COMPLETED,
-                        ),
-                    ),
-                    lambda: None,
-                )
-                return reply
-
-    def _validated_reference_read_invocation(
-        self,
-        reference_read: ReferenceReadInvocation,
-        *,
-        agent_id: str,
-        phase: str,
-        round_number: int | None,
-    ) -> ReferenceReadInvocation:
-        """Validate one synchronous exact coordinator before provider work."""
-
-        request = getattr(reference_read, "request", None)
-        if type(request) is not ReferenceReadRequest:
-            raise TypeError("reference_read must expose a ReferenceReadRequest")
-        methods = (
-            "handle_reference_read_action",
-            "record_result_received",
-            "accept",
-            "terminate",
-        )
-        for name in methods:
-            method = getattr(reference_read, name, None)
-            if method is None or not callable(method):
-                raise TypeError(f"reference_read must provide synchronous {name}()")
-            method_call = getattr(method, "__call__", None)
-            if (
-                inspect.iscoroutinefunction(method)
-                or inspect.isasyncgenfunction(method)
-                or inspect.iscoroutinefunction(method_call)
-                or inspect.isasyncgenfunction(method_call)
-            ):
-                raise TypeError(f"reference_read {name}() must be synchronous")
-        definition = self.definition
-        if (
-            type(definition) is not AgentDefinition
-            or definition.agent_id not in ROSTER
-            or definition.agent_id != agent_id
-            or not isinstance(definition.backend, str)
-            or not definition.backend
-            or self.vendor != definition.backend
-            or not isinstance(definition.fingerprint, str)
-            or provider_thread_records.PROVIDER_FINGERPRINT_PATTERN.fullmatch(definition.fingerprint) is None
-        ):
-            AgentBackend._terminate_reference_read_without_replacing(
-                reference_read,
-                ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
-            )
-            raise BackendProtocolError(
-                "bound agent definition is invalid for reference routing"
-            )
-        correlation = request.correlation
-        if (
-            correlation.agent_id != agent_id
-            or correlation.phase != phase
-            or correlation.round_number != round_number
-        ):
-            AgentBackend._terminate_reference_read_without_replacing(
-                reference_read,
-                ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH,
-            )
-            raise ReferenceAuthorizationError(
-                ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH
-            )
-        return reference_read
+    _validated_reference_read_invocation = _validated_reference_read_invocation
 
     @staticmethod
     def _terminate_reference_before_provider(
@@ -1237,6 +661,26 @@ class BoundAgent:
                 f"{validated.agent_id} != {definition.agent_id}"
             )
         return validated
+
+
+    logical_reference_call_use = _reference_call_use
+    logical_reference_thread_lock = _reference_thread_lock
+    logical_terminate_reference_before_provider = _terminate_reference_before_provider
+    logical_validate_conversation = _validated_conversation_request
+    logical_validate_retrieval = _validated_conversation_retrieval_request
+    logical_compose_direct_codex_binding = _compose_direct_codex_binding
+
+    @property
+    def logical_open_provider_execution_workspace(
+        self,
+    ) -> Callable[[BoundAgent, SessionArtifactBinding], AbstractContextManager[ProviderExecutionWorkspace]]:
+        return provider_execution_workspace_manager
+
+    @property
+    def logical_force_terminate_reference(
+        self,
+    ) -> Callable[[ReferenceReadInvocation, ReferenceAuthorizationErrorCode], None]:
+        return AgentBackend._terminate_reference_read_without_replacing
 
 
 class AgentBackend:
@@ -3526,6 +2970,33 @@ class AgentBackend:
             raise BackendProtocolError(
                 f"provider session access is not held here: {session_id}"
             )
+
+
+    logical_thread_disposition = _logical_thread_disposition
+    logical_confirm_execution_profile = _confirm_execution_profile
+    logical_record_debug_error = _record_debug_error
+
+    @property
+    def logical_provider_thread_lock(self) -> Callable[[str, str, str], asyncio.Lock]:
+        return self._thread_lock
+
+    @property
+    def logical_provider_trace_debug(self) -> _LogicalTrace:
+        return self._trace_debug
+
+    @property
+    def logical_provider_invoke(self) -> _LogicalProviderDispatch[BoundAgent, AgentRequest, AgentReply]:
+        return self._invoke_provider
+
+    @property
+    def logical_provider_converse(
+        self,
+    ) -> _LogicalProviderDispatch[BoundAgent, ConversationRequest, ConversationReply]:
+        return self._converse_provider
+
+    @property
+    def logical_provider_converse_with_retrieval(self) -> _LogicalRetrievalDispatch[BoundAgent]:
+        return self._converse_with_retrieval_provider
 
 
 @contextmanager
