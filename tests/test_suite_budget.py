@@ -246,7 +246,8 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
-        configuration_activation_current = suite_budget.load_budget()
+        backend_shutdown_current = suite_budget.load_budget()
+        configuration_activation_current = dict(backend_shutdown_current, max_test_source_lines=157829)
         session_lifecycle_current = dict(configuration_activation_current, max_test_source_lines=157787)
         generation_release_current = dict(session_lifecycle_current, max_test_source_lines=157655)
         provider_configuration_candidate_current = dict(generation_release_current, max_test_source_lines=157649)
@@ -798,6 +799,7 @@ class SuiteBudgetTests(unittest.TestCase):
         self._assert_source_limit_neighbors_rejected(generation_release_current, provider_configuration_candidate_current)
         self._assert_source_limit_neighbors_rejected(session_lifecycle_current, generation_release_current)
         self._assert_source_limit_neighbors_rejected(configuration_activation_current, session_lifecycle_current)
+        self._assert_source_limit_neighbors_rejected(backend_shutdown_current, configuration_activation_current)
         self.assertIsNone(suite_budget.check_monotonic(invocation_routing_current, direct_structured_current))
         self.assertIsNone(suite_budget.check_monotonic(direct_structured_current, retrieval_loop_current))
         self.assertIsNone(suite_budget.check_monotonic(retrieval_loop_current, bound_logical_current))
@@ -1108,10 +1110,32 @@ class SuiteBudgetTests(unittest.TestCase):
         lifecycle_definition_ids = (
             *lifecycle_definitions.ids, lifecycle_case + "test_close_diagnostic_control_flow_does_not_change_cleanup",
         )
+        shutdown_test_module = "tests.test_backend_shutdown_resources"
+        shutdown_tests = runner_selection.select(real, modules=[shutdown_test_module])
+        self.assertEqual(shutdown_tests.ids, tuple(lifecycle_case + name for name in (
+            "test_close_ordinary_release_failures_record_failed_terminal",
+            "test_close_release_base_exception_preserves_interrupted_state",
+            "test_close_success_records_terminal_and_is_idempotent",
+        )))
+        for case in shutdown_tests.tests:
+            method = getattr(case, case._testMethodName)
+            self.assertEqual(method.__qualname__, f"BackendShutdownResourceCases.{case._testMethodName}")
+        codex_case = "tests.test_codex_backend.CodexBackendTestCase."
+        binding_admission_ids = (codex_case + "test_adapter_selected_bind_records_exact_lifecycle_terminals",)
+        shutdown_ids = (
+            codex_case + "test_close_waits_for_active_binding_then_cleans_every_resource_once",
+            lifecycle_case + "test_close_ordinary_release_failures_record_failed_terminal",
+        )
+        shutdown_definition_ids = (
+            *shutdown_tests.ids, lifecycle_case + "test_close_diagnostic_control_flow_does_not_change_cleanup",
+        )
         for path, focused_ids, affected_count, subtest_cap in (
             ("src/story_writing_agents/provider_session_lifecycle_operations.py", lifecycle_operations_ids, 25, 35),
             ("tests/provider_session_lifecycle_artifacts_fixture.py", lifecycle_definitions.ids, 25, 67),
             ("tests/test_provider_session_lifecycle_operations.py", lifecycle_definition_ids, 10, 19),
+            ("src/story_writing_agents/provider_binding_admission.py", binding_admission_ids, 6, 17),
+            ("src/story_writing_agents/backend_shutdown.py", shutdown_ids, 11, 19),
+            ("tests/test_backend_shutdown_resources.py", shutdown_definition_ids, 4, 2),
         ):
             lifecycle_impact = select_impact(real, paths=(path,), catalogue=owners)
             self.assertIsNone(lifecycle_impact["fallback_reason"])
