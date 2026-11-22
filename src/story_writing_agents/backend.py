@@ -454,8 +454,6 @@ class BoundAgent:
                     acceptance.accept()
                 else:
                     acceptance.reject()
-            if not entered:
-                self._terminate_reference_before_provider(reference_read, failure)
             raise
         else:
             for acceptance in deferred:
