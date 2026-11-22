@@ -6413,6 +6413,7 @@
         "tests.backend-lifecycle-diagnostic-fixture",
         "tests.provider-session-lifecycle-artifacts-fixture",
         "tests.test_backend_diagnostic_events",
+        "tests.test_backend_shutdown_resources",
         "tests.test_provider_session_lifecycle_operations"
       ]
     },
@@ -6424,9 +6425,6 @@
       ],
       "focused_ids": [
         "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_absence_listing_order_and_configuration_validation_are_read_only",
-        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_ordinary_release_failures_record_failed_terminal",
-        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_release_base_exception_preserves_interrupted_state",
-        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_success_records_terminal_and_is_idempotent",
         "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_concurrent_dead_reclaim_has_exactly_one_owner",
         "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_guard_is_lazy_persistent_secure_and_ignored_by_listing",
         "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_provision_and_assessment_delegate_once_preserving_exact_identity",
@@ -21097,6 +21095,50 @@
       "depends_on": []
     },
     {
+      "name": "provider.binding-admission",
+      "boundary": "provider-binding-admission",
+      "paths": [
+        "src/story_writing_agents/provider_binding_admission.py"
+      ],
+      "focused_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_adapter_selected_bind_records_exact_lifecycle_terminals"
+      ],
+      "affected_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_adapter_selected_bind_records_exact_lifecycle_terminals",
+        "tests.test_codex_backend.CodexBackendTestCase.test_close_waits_for_active_binding_then_cleans_every_resource_once",
+        "tests.test_codex_backend.CodexBackendTestCase.test_closed_backend_rejects_every_reuse_path",
+        "tests.test_codex_backend.CodexBackendTestCase.test_post_staging_validation_failure_discards_provisional_bytes",
+        "tests.test_codex_backend.CodexBackendTestCase.test_retirement_defers_exact_cleanup_for_each_bound_operation",
+        "tests.test_codex_backend.CodexBackendTestCase.test_unsupported_vendor_fails_during_binding"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "provider.backend-shutdown",
+      "boundary": "backend-shutdown",
+      "paths": [
+        "src/story_writing_agents/backend_shutdown.py"
+      ],
+      "focused_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_close_waits_for_active_binding_then_cleans_every_resource_once",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_ordinary_release_failures_record_failed_terminal"
+      ],
+      "affected_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_close_waits_for_active_binding_then_cleans_every_resource_once",
+        "tests.test_codex_backend.CodexBackendTestCase.test_closed_backend_rejects_every_reuse_path",
+        "tests.test_codex_backend.CodexBackendTestCase.test_failure_and_cancellation_release_retired_staging_once",
+        "tests.test_codex_backend.CodexBackendTestCase.test_retirement_defers_exact_cleanup_for_each_bound_operation",
+        "tests.test_codex_backend.CodexBackendTestCase.test_terminal_backend_rejects_call_before_binding_retirement",
+        "tests.test_codex_backend.CodexBackendTestCase.test_trace_failure_preserves_provider_result_taint_and_cleanup",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_diagnostic_control_flow_does_not_change_cleanup",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_ordinary_release_failures_record_failed_terminal",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_release_base_exception_preserves_interrupted_state",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_success_records_terminal_and_is_idempotent",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_release_token_comparison_and_close_preserve_foreign_claims"
+      ],
+      "depends_on": []
+    },
+    {
       "name": "provider.binding-call-lifetime",
       "boundary": "provider-binding-call-lifetime",
       "paths": [
@@ -21910,6 +21952,26 @@
       ],
       "affected_ids": [
         "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_diagnostic_control_flow_does_not_change_cleanup"
+      ],
+      "depends_on": [
+        "tests.backend-lifecycle-diagnostic-fixture"
+      ]
+    },
+    {
+      "name": "tests.test_backend_shutdown_resources",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/test_backend_shutdown_resources.py"
+      ],
+      "focused_ids": [
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_ordinary_release_failures_record_failed_terminal",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_release_base_exception_preserves_interrupted_state",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_success_records_terminal_and_is_idempotent"
+      ],
+      "affected_ids": [
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_ordinary_release_failures_record_failed_terminal",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_release_base_exception_preserves_interrupted_state",
+        "tests.test_session_lifecycle.AgentBackendLifecycleTests.test_close_success_records_terminal_and_is_idempotent"
       ],
       "depends_on": [
         "tests.backend-lifecycle-diagnostic-fixture"
