@@ -1,5 +1,6 @@
 """Concrete Codex CLI backend tests with no credentials or network access."""
 from __future__ import annotations
+from tests.test_codex_event_decoding import CodexEventDecodingCases
 from tests.test_provider_adapter_generations import ProviderAdapterGenerationCases
 from tests.test_provider_binding_call_lifetime import BindingCallLifetimeCases
 from tests.test_provider_schema_spec import check_schema
@@ -610,6 +611,10 @@ def _configure_process_stop(process, events, first_wait, final_wait):
 
 
 class CodexBackendTestCase(CodexNativeProcessFixture, unittest.IsolatedAsyncioTestCase):
+    test_codex_usage_accepts_only_one_recognized_exact_terminal_snapshot = (
+        CodexEventDecodingCases.test_codex_usage_accepts_only_one_recognized_exact_terminal_snapshot
+    )
+
     async def _invoke_empty_contract(self, backend, bound, *, session_id, decode, execution_workspace, **scope):
         return await backend._invoke_provider_structured(
             bound, session_id=session_id, **scope, schema={}, payload={},
@@ -1072,22 +1077,6 @@ class CodexBackendTestCase(CodexNativeProcessFixture, unittest.IsolatedAsyncioTe
         for content in expected:
             with self.subTest(content=content[:32]):
                 self.assertIn(content, staged)
-
-    def test_codex_usage_accepts_only_one_recognized_exact_terminal_snapshot( self, ) -> None:
-        backend = self._managed_backend()
-        parse = backend._codex_adapter.provider_usage
-        cases = ( ((), None), (({"type": "turn.completed"},), None),
-            (({"type": "turn.completed", "usage": {"unknown": 7}},), None), ( ( { "type": "turn.completed",
-                        "usage": { "input_tokens": 0, "output_tokens": 2, "cached_input_tokens": 3, }, }, ),
-                ProviderUsage(0, 2, 3), ), ( ({"type": "turn.completed", "usage": {"input_tokens": 4}},),
-                ProviderUsage(input_tokens=4), ), ( ( { "type": "turn.completed", "usage": {
-                            "input_tokens": 5, "output_tokens": -1, "cached_input_tokens": True, "unknown": 9,
-                        }, }, ), ProviderUsage(input_tokens=5), ), ( ( { "type": "turn.completed", "usage": {
-                            "input_tokens": -1, "output_tokens": "2", "cached_input_tokens": False, }, }, ),
-                None, ), ( ( {"type": "turn.completed", "usage": {"input_tokens": 1}},
-                    {"type": "turn.completed", "usage": {"input_tokens": 2}}, ), None, ), )
-        for events, expected in cases:
-            with self.subTest(events=events): self.assertEqual(parse(events), expected)
 
     async def test_malformed_usage_never_invalidates_a_valid_provider_reply( self, ) -> None:
         session_id = "malformed_usage_reply"

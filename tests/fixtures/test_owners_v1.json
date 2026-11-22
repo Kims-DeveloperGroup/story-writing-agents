@@ -1846,7 +1846,7 @@
     },
     {
       "name": "tests.test_codex_backend",
-      "boundary": "existing-cases",
+      "boundary": "codex-backend-integration-cases",
       "paths": [
         "tests/test_codex_backend.py"
       ],
@@ -1936,7 +1936,11 @@
         "tests.test_codex_backend.ConversationModelContractTests.test_exact_frozen_slotted_models_and_converse_signature",
         "tests.test_codex_backend.ConversationModelContractTests.test_identifier_content_agent_and_context_error_taxonomy",
         "tests.test_codex_backend.ConversationModelContractTests.test_retrieval_bound_signature_and_sync_handler_protocol_are_exact",
-        "tests.test_codex_backend.ConversationModelContractTests.test_story_session_context_must_match_outer_conversation_identity"
+        "tests.test_codex_backend.ConversationModelContractTests.test_story_session_context_must_match_outer_conversation_identity",
+        "tests.test_suite_budget.SuiteBudgetTests.test_exact_duration_boundary_passes_and_excess_fails",
+        "tests.test_suite_budget.SuiteBudgetTests.test_new_id_increased_subtests_and_relaxed_time_are_rejected",
+        "tests.test_suite_budget.SuiteBudgetTests.test_runner_counts_successful_subtests_in_parent_record",
+        "tests.test_suite_budget.SuiteBudgetTests.test_subtest_expansion_and_incomplete_shards_fail"
       ],
       "affected_ids": [
         "tests.test_codex_backend.CodexBackendTestCase.test_a_to_b_to_a_route_generation_never_resumes_old_a_threads_after_restart",
@@ -2024,7 +2028,11 @@
         "tests.test_codex_backend.ConversationModelContractTests.test_exact_frozen_slotted_models_and_converse_signature",
         "tests.test_codex_backend.ConversationModelContractTests.test_identifier_content_agent_and_context_error_taxonomy",
         "tests.test_codex_backend.ConversationModelContractTests.test_retrieval_bound_signature_and_sync_handler_protocol_are_exact",
-        "tests.test_codex_backend.ConversationModelContractTests.test_story_session_context_must_match_outer_conversation_identity"
+        "tests.test_codex_backend.ConversationModelContractTests.test_story_session_context_must_match_outer_conversation_identity",
+        "tests.test_suite_budget.SuiteBudgetTests.test_exact_duration_boundary_passes_and_excess_fails",
+        "tests.test_suite_budget.SuiteBudgetTests.test_new_id_increased_subtests_and_relaxed_time_are_rejected",
+        "tests.test_suite_budget.SuiteBudgetTests.test_runner_counts_successful_subtests_in_parent_record",
+        "tests.test_suite_budget.SuiteBudgetTests.test_subtest_expansion_and_incomplete_shards_fail"
       ],
       "depends_on": [
         "backend-debug-log-fixture",
@@ -2041,6 +2049,36 @@
         "tests.test_backend_reply_decoding",
         "tests.test_provider_invocation_routing",
         "tests.test_specialist_routing_runtime"
+      ]
+    },
+    {
+      "name": "tests.codex-backend-event-decoder-aliases",
+      "boundary": "codex-backend-event-decoder-aliases",
+      "paths": [
+        "tests/test_codex_backend.py"
+      ],
+      "depends_on": [
+        "tests.test_codex_event_decoding"
+      ],
+      "focused_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_codex_usage_accepts_only_one_recognized_exact_terminal_snapshot"
+      ],
+      "affected_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_codex_usage_accepts_only_one_recognized_exact_terminal_snapshot"
+      ]
+    },
+    {
+      "name": "tests.test_codex_event_decoding",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/test_codex_event_decoding.py"
+      ],
+      "depends_on": [],
+      "focused_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_codex_usage_accepts_only_one_recognized_exact_terminal_snapshot"
+      ],
+      "affected_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_codex_usage_accepts_only_one_recognized_exact_terminal_snapshot"
       ]
     },
     {
@@ -6974,6 +7012,7 @@
         "lead-fixtures.runtime-setup",
         "runner",
         "test-budget",
+        "tests.codex-backend-event-decoder-aliases",
         "tests.lead_preparation.test_specialist_response_semantics",
         "tests.test_antigravity_command",
         "tests.test_antigravity_definition_staging",
@@ -13992,16 +14031,33 @@
       "depends_on": [],
       "focused_ids": [
         "tests.test_codex_adapter_streaming.CodexAdapterStreamingTests.test_codex_adapter_extract_stream_text_ignores_non_string_values",
-        "tests.test_codex_adapter_streaming.CodexAdapterStreamingTests.test_codex_adapter_rejects_duplicate_keys_and_nonfinite_values_in_stream"
+        "tests.test_codex_adapter_streaming.CodexAdapterStreamingTests.test_codex_adapter_rejects_duplicate_keys_and_nonfinite_values_in_stream",
+        "tests.test_codex_backend.CodexBackendTestCase.test_codex_usage_accepts_only_one_recognized_exact_terminal_snapshot",
+        "tests.test_provider_auth_recovery.AuthClassificationTests.test_duplicate_nonfinite_and_invalid_native_fields_do_not_create_auth_authority"
       ],
       "affected_ids": [
+        "tests.test_antigravity_parity.AntigravityParityTests.test_contextual_invocation_captures_and_accounts_rendered_schema_only_for_antigravity",
+        "tests.test_antigravity_parity.AntigravityParityTests.test_contextual_thread_bootstrap_delta_restart_and_scope_isolation_match_codex",
+        "tests.test_antigravity_parity.AntigravityParityTests.test_public_surface_and_provider_schema_remain_provider_neutral",
+        "tests.test_antigravity_parity.AntigravityParityTests.test_standard_invocation_captures_and_accounts_rendered_schema_only_for_antigravity",
         "tests.test_codex_adapter_streaming.CodexAdapterStreamingTests.test_codex_adapter_extract_stream_text_ignores_non_string_values",
-        "tests.test_codex_adapter_streaming.CodexAdapterStreamingTests.test_codex_adapter_rejects_conflicting_top_level_and_nested_descriptors",
         "tests.test_codex_adapter_streaming.CodexAdapterStreamingTests.test_codex_adapter_rejects_duplicate_keys_and_nonfinite_values_in_stream",
-        "tests.test_codex_adapter_streaming.CodexAdapterStreamingTests.test_codex_adapter_streams_status_reasoning_and_message_events",
-        "tests.test_codex_backend.CodexBackendTestCase.test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread"
-      ],
-      "affected_full": true
+        "tests.test_codex_backend.CodexBackendTestCase.test_codex_usage_accepts_only_one_recognized_exact_terminal_snapshot",
+        "tests.test_codex_backend.CodexBackendTestCase.test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread",
+        "tests.test_codex_backend.CodexBackendTestCase.test_conversation_thread_spans_subjects_and_restarts_on_fingerprint",
+        "tests.test_codex_backend.CodexBackendTestCase.test_invoke_and_converse_share_one_serialized_thread",
+        "tests.test_codex_backend.CodexBackendTestCase.test_malformed_usage_never_invalidates_a_valid_provider_reply",
+        "tests.test_codex_backend.CodexBackendTestCase.test_thread_persists_across_backend_instances_and_debates",
+        "tests.test_codex_invocation_files.CodexInvocationFilesTests.test_binding_stages_isolated_agents_and_turn_omits_static_prompt",
+        "tests.test_codex_invocation_files.CodexInvocationFilesTests.test_missing_executable_nonzero_and_malformed_output_fail_cleanly",
+        "tests.test_codex_invocation_files.CodexInvocationFilesTests.test_native_mismatched_thread_is_ambiguous_without_replay_proof",
+        "tests.test_provider_auth_recovery.AuthClassificationTests.test_codex_completed_failures_keep_diagnostics_and_accounting",
+        "tests.test_provider_auth_recovery.AuthClassificationTests.test_codex_completed_turn_with_historical_401_remains_success",
+        "tests.test_provider_auth_recovery.AuthClassificationTests.test_duplicate_nonfinite_and_invalid_native_fields_do_not_create_auth_authority",
+        "tests.test_provider_auth_recovery.AuthClassificationTests.test_generated_text_warnings_and_forbidden_errors_do_not_trigger_auth",
+        "tests.test_provider_auth_recovery.AuthClassificationTests.test_native_401_is_assisted_without_replay",
+        "tests.test_suite_budget.SuiteBudgetTests.test_new_id_increased_subtests_and_relaxed_time_are_rejected"
+      ]
     },
     {
       "name": "antigravity-response-decoding",
