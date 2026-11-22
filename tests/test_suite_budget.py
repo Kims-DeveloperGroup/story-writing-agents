@@ -246,7 +246,8 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
-        session_lifecycle_current = suite_budget.load_budget()
+        configuration_activation_current = suite_budget.load_budget()
+        session_lifecycle_current = dict(configuration_activation_current, max_test_source_lines=157787)
         generation_release_current = dict(session_lifecycle_current, max_test_source_lines=157655)
         provider_configuration_candidate_current = dict(generation_release_current, max_test_source_lines=157649)
         codex_event_decoding_current = dict(provider_configuration_candidate_current, max_test_source_lines=157617)
@@ -796,6 +797,7 @@ class SuiteBudgetTests(unittest.TestCase):
         self._assert_source_limit_neighbors_rejected(provider_configuration_candidate_current, codex_event_decoding_current)
         self._assert_source_limit_neighbors_rejected(generation_release_current, provider_configuration_candidate_current)
         self._assert_source_limit_neighbors_rejected(session_lifecycle_current, generation_release_current)
+        self._assert_source_limit_neighbors_rejected(configuration_activation_current, session_lifecycle_current)
         self.assertIsNone(suite_budget.check_monotonic(invocation_routing_current, direct_structured_current))
         self.assertIsNone(suite_budget.check_monotonic(direct_structured_current, retrieval_loop_current))
         self.assertIsNone(suite_budget.check_monotonic(retrieval_loop_current, bound_logical_current))
@@ -1047,19 +1049,33 @@ class SuiteBudgetTests(unittest.TestCase):
             sum(binding_lifetime_current["subtest_caps"][cid] for cid in adapter_generations["affected_manifest"]["ordered_ids"]),
             14,
         )
+        owners = prepare_owners(real)
         configuration_candidate = select_impact(
-            real, paths=("src/story_writing_agents/provider_configuration_candidate.py",), scope="affected",
+            real, paths=("src/story_writing_agents/provider_configuration_candidate.py",), scope="affected", catalogue=owners,
         )
         self.assertIsNone(configuration_candidate["fallback_reason"])
         self.assertEqual(
             configuration_candidate["focused_manifest"]["ordered_ids"],
             ["tests.test_codex_backend.CodexBackendTestCase.test_hot_same_provider_profile_applies_now_and_reuses_thread"],
         )
-        self.assertEqual(configuration_candidate["affected_manifest"]["count"], 9)
+        self.assertEqual(configuration_candidate["affected_manifest"]["count"], 13)
         self.assertEqual(
             sum(binding_lifetime_current["subtest_caps"][cid] for cid in configuration_candidate["affected_manifest"]["ordered_ids"]),
-            0,
+            11,
         )
+
+        configuration_activation = select_impact(
+            real, paths=("src/story_writing_agents/provider_configuration_activation.py",), scope="affected", catalogue=owners,
+        )
+        self.assertIsNone(configuration_activation["fallback_reason"])
+        self.assertEqual(configuration_activation["focused_manifest"]["ordered_ids"], [
+            "tests.test_codex_backend.CodexBackendTestCase.test_hot_same_provider_profile_applies_now_and_reuses_thread",
+            "tests.test_interactive_controller.ControllerSettingsTests.test_antigravity_settings_edit_active_fields_and_preserve_codex",
+            "tests.test_interactive_controller.ControllerSettingsTests.test_hot_save_preflight_quiescence_restore_and_recovery_are_truthful",
+        ])
+        activation_ids = configuration_activation["affected_manifest"]["ordered_ids"]
+        self.assertEqual(len(activation_ids), 10)
+        self.assertEqual(sum(binding_lifetime_current["subtest_caps"][cid] for cid in activation_ids), 11)
 
         generation_test_definitions = select_impact(real, paths=("tests/test_provider_adapter_generations.py",))
         self.assertEqual(generation_test_definitions["focused_manifest"]["count"], 2)
@@ -1092,7 +1108,6 @@ class SuiteBudgetTests(unittest.TestCase):
         lifecycle_definition_ids = (
             *lifecycle_definitions.ids, lifecycle_case + "test_close_diagnostic_control_flow_does_not_change_cleanup",
         )
-        owners = prepare_owners(real)
         for path, focused_ids, affected_count, subtest_cap in (
             ("src/story_writing_agents/provider_session_lifecycle_operations.py", lifecycle_operations_ids, 25, 35),
             ("tests/provider_session_lifecycle_artifacts_fixture.py", lifecycle_definitions.ids, 25, 67),
