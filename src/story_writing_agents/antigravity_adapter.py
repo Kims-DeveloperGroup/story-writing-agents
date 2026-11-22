@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-from .agent_context.accounting import ProviderUsageObservation, ProviderUsageScope
-from .structured_output_validation import strict_json_member_text
-
-
 import asyncio
 import hashlib
 import json
@@ -15,16 +11,12 @@ import re
 import shutil
 import subprocess
 from collections.abc import Callable, Mapping
+from operator import attrgetter
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from .agent_context import (
-    ProviderCallState,
-    ProviderJsonEncodingError,
-    ProviderUsage,
-    canonical_provider_json,
-)
+from .agent_context import ProviderCallState, ProviderJsonEncodingError
 from .models import AgentDefinition
 from .errors import ProviderAuthenticationRequiredError
 from .provider_adapter import (
@@ -60,8 +52,12 @@ import story_writing_agents.antigravity_state_directories as antigravity_state_d
 import story_writing_agents.antigravity_stream_observation as antigravity_stream_observation
 from .antigravity_native_output_schema import render_native_output_schema as _render_native_output_schema
 from .antigravity_response_decoding import (
+    ProviderResultHooks as _ProviderResultHooks,
+    bind_provider_result as _bind_provider_result,
     parse_result as _decode_antigravity_response,
     malformed_output as _raise_antigravity_malformed_output,
+    provider_usage as _antigravity_provider_usage,
+    unwrap_result_envelope as _unwrap_antigravity_result_envelope,
 )
 
 
@@ -74,6 +70,17 @@ _NATIVE_TRUNCATED = re.compile(
 )
 
 CapabilityRun = antigravity_command.CapabilityRun
+
+
+_PROVIDER_RESULT_HOOKS: _ProviderResultHooks[type[AntigravityAdapter]] = _ProviderResultHooks(
+    parse_result=attrgetter("_parse_result"),
+    unwrap_result_envelope=attrgetter("_unwrap_result_envelope"),
+    malformed_output=attrgetter("_malformed_output"),
+    native_output_schema=attrgetter("native_output_schema"),
+    provider_usage=attrgetter("provider_usage"),
+    malformed_call_pattern=lambda: antigravity_recovery_matching.MALFORMED_FUNCTION_CALL,
+    safe_conversation_id_pattern=lambda: antigravity_native_recovery.SAFE_CONVERSATION_ID,
+)
 
 
 class AntigravityAdapter:
@@ -549,28 +556,7 @@ class AntigravityAdapter:
             )
             raise
 
-    @classmethod
-    def _unwrap_result_envelope(cls, terminal: dict[str, Any]) -> dict[str, Any]:
-        """Extract inner result payload if terminal is a result/event envelope."""
-        has_type = "type" in terminal
-        has_event = "event" in terminal
-        if not (has_type or has_event):
-            return terminal
-        types_to_check: list[str] = []
-        for key in ("type", "event"):
-            if key in terminal:
-                val = terminal.get(key)
-                if not isinstance(val, str):
-                    return terminal
-                norm_val = val.strip().lower()
-                if not norm_val:
-                    return terminal
-                types_to_check.append(norm_val)
-        if len(types_to_check) == 2 and types_to_check[0] != types_to_check[1]:
-            return terminal
-        if types_to_check and types_to_check[0] == "result" and isinstance(terminal.get("result"), dict):
-            return terminal["result"]
-        return terminal
+    _unwrap_result_envelope = classmethod(_unwrap_antigravity_result_envelope)
 
     @classmethod
     def _authentication_failure(
@@ -699,116 +685,10 @@ class AntigravityAdapter:
             defaults=self,
         )
 
-    @classmethod
-    def _provider_result(
-        cls,
-        stdout: bytes,
-        *,
-        expected_thread_id: str | None,
-        expected_schema: Mapping[str, Any],
-        completion_check: Callable[[str, dict[str, Any], str], bool] | None = None,
-        response_diagnostic: ProviderResponseDiagnostic | None = None,
-        completion_required: bool = False,
-    ) -> ProviderResult:
-        """Decode one Antigravity JSON result with fixed diagnostics."""
-
-        outer_terminal = cls._parse_result(stdout)
-        terminal = cls._unwrap_result_envelope(outer_terminal)
-        native_error = terminal.get("error")
-        recoverable_error = (
-            terminal.get("status") == "ERROR"
-            and type(native_error) is str
-            and antigravity_recovery_matching.MALFORMED_FUNCTION_CALL.fullmatch(
-                native_error
-            ) is not None
-        )
-        if terminal.get("status") != "SUCCESS" and not recoverable_error:
-            raise ProviderInvocationError(
-                "Antigravity CLI did not complete successfully",
-                taint_existing_thread=True,
-            )
-        thread_id = terminal.get("conversation_id")
-        if (
-            not isinstance(thread_id, str)
-            or antigravity_native_recovery.SAFE_CONVERSATION_ID.fullmatch(thread_id) is None
-            or (
-                expected_thread_id is not None
-                and thread_id != expected_thread_id
-            )
-        ):
-            raise ProviderInvocationError(
-                "Antigravity CLI returned an invalid conversation ID",
-                taint_existing_thread=True,
-            )
-
-        structured_output = terminal.get("structured_output")
-        schema_echo = terminal.get("json_schema")
-        if type(structured_output) is not dict or type(schema_echo) is not dict:
-            cls._malformed_output()
-        try:
-            canonical_provider_json(structured_output)
-            expected_schema_bytes = canonical_provider_json(
-                cls.native_output_schema(expected_schema)
-            )
-            echoed_schema_bytes = canonical_provider_json(schema_echo)
-            member_path = (("result",) if terminal is not outer_terminal else ()) + ("structured_output",)
-            response_text = strict_json_member_text(stdout.decode("utf-8", "strict"), member_path)
-        except (
-            ProviderJsonEncodingError,
-            UnicodeError,
-            TypeError,
-            ValueError,
-            RecursionError,
-        ):
-            cls._malformed_output()
-        if echoed_schema_bytes != expected_schema_bytes:
-            cls._malformed_output()
-        if (recoverable_error or completion_required) and (
-            completion_check is None
-            or not completion_check(thread_id, structured_output, native_error or "")
-        ):
-            raise ProviderInvocationError(
-                "Antigravity CLI did not complete successfully",
-                taint_existing_thread=True,
-            )
-        raw_usage = cls.provider_usage(terminal.get("usage"))
-        return ProviderResult(
-            thread_id=thread_id,
-            response_text=response_text,
-            usage=raw_usage,
-            usage_observation=(None if raw_usage is None else ProviderUsageObservation(
-                raw_usage, ProviderUsageScope.UNKNOWN, "antigravity.completed.usage")),
-            response_diagnostic=(
-                response_diagnostic if recoverable_error or completion_required else None
-            ),
-        )
+    _provider_result = classmethod(_bind_provider_result(_PROVIDER_RESULT_HOOKS))
 
 
-    @staticmethod
-    def provider_usage(value: object) -> ProviderUsage | None:
-        """Return only exact counters from the documented terminal usage object."""
-
-        if type(value) is not dict:
-            return None
-        assert isinstance(value, dict)
-        fields = {
-            "input_tokens": "input_tokens",
-            "output_tokens": "output_tokens",
-            "cache_read_tokens": "cached_input_tokens",
-        }
-        counters: dict[str, int | None] = {}
-        for source, target in fields.items():
-            if source not in value:
-                counters[target] = None
-                continue
-            counter = value[source]
-            if type(counter) is not int or counter < 0:
-                counters[target] = None
-            else:
-                counters[target] = counter
-        if all(counter is None for counter in counters.values()):
-            return None
-        return ProviderUsage(**counters)
+    provider_usage = staticmethod(_antigravity_provider_usage)
 
     _parse_result = staticmethod(_decode_antigravity_response)
 
