@@ -5,25 +5,38 @@ Read and follow root `AGENTS.md`; consume its canonical `task_packet` and
 return its canonical `result_packet` with only this role's findings.
 
 Accept `mode = analysis | implementation`. In analysis mode, remain read-only
-and perform assigned test planning, behavioral/coverage review, or unknown
-regression diagnosis. Reproduce the smallest authorized case, compare expected
-with actual behavior, assign a stable failure-family fingerprint, inventory
-equivalent occurrences, identify the likely cause and boundary impact, and
-recommend focused confirming checks. Do not implement a production fix.
+and perform assigned test planning, actual-diff and coverage review, or
+regression diagnosis. For the #969 pilot, follow the test impact handoff in
+`.agents/skills/subagent-routing/SKILL.md`. Start from the owner map and inspect
+old and new references, including string mocks, tests that read source,
+and fixture consumers. For module or import moves, inspect package-wide graph
+assertions. For test-file moves, check compiler settings, imports, collection
+IDs and owner declarations. Report existing IDs to update or retain and run,
+the rationale, first selection, and any unresolved coverage.
 
-In implementation mode, edit only assigned tests after production and boundary
-inputs are stable. Never edit production code, configuration, documentation,
-policies, guides, skills, templates, examples, or module indices. Return those
-changes to root or the runtime implementer. When useful, fuse test planning,
-test-only edits, exact execution, and final coverage review into one turn.
+During implementation review, read the actual candidate and the requested diff,
+including dirty and new files. Check unplanned changes for affected assertions,
+mocks, fixtures, and selections even when the edits are small. Return the
+reviewed source state, new or revised existing IDs and dispositions, and any
+coverage gaps. If a gap cannot be covered within the approved cases, return it
+to root for a scope decision. Keep diagnosis separate from planning: reproduce
+the smallest authorized failure, compare expected and actual, fingerprint the
+failure family, inventory equivalent occurrences, identify likely cause and
+boundary impact, and recommend focused confirming checks.
 
-Runtime tests are required only for runtime-code changes. Policy,
-documentation, template, development-agent, workflow, module-index, and
-test-only changes use their owner's static validation and do not require this
-role or a runtime suite. For runtime changes, execute only evidence assigned by
-root. Use the canonical runner `PYTHONPATH=src python -m tests.runner run` and only
-the authorized `--id`, `--module`, `--tier`, or `--shard` selectors
-with the assigned `--json` report path.
+In implementation mode, edit only assigned tests once the root has accepted
+the boundary and the inputs for those tests are stable. Prepare those changes
+alongside production work when the inputs allow it. Preserve the approved test
+IDs, scenarios, and negative assertions under `TEST_POLICY.md`. Never edit
+production code, configuration, documentation, policies, guides, skills,
+templates, examples, or module indices. Return those changes to root or the
+runtime implementer.
+
+Follow the verification policy in `GITHUB_WORKFLOW.md`. Execute only evidence
+assigned by root. Use the canonical runner
+`PYTHONPATH=src python -m tests.runner run` and only the authorized
+`--id`, `--module`, `--tier`, or `--shard` selectors with the assigned
+`--json` report path.
 
 Honor root selection, budget, deduplication, reuse, sharding, interruption,
 and completion decisions. Never broaden selection, concurrency, or budget and

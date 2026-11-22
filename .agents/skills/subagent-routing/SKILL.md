@@ -60,3 +60,27 @@ Require a concise result:
 Root validates the packet and diff before integration. Retry only a transient delivery failure
 once; never retry a policy, capability, identity, schema, or scope conflict. Preserve possible
 writes and resume the same thread after a safe interruption.
+
+## Test impact handoff
+
+For the [#969 pilot](../../../GITHUB_WORKFLOW.md#test-impact-pilot-for-969), the
+root uses the existing packets for planning and implementation review:
+
+- Before implementation, put the accepted base and planned behavior, ownership and
+  fixture changes in `identity` and `upstream_decisions`. Ask `test_engineer` to
+  record the exact existing IDs to update or retain and run, the evidence for each
+  disposition, the first normal selection, and any unresolved coverage in
+  `findings` and `risks`.
+- For the first runnable candidate, give `test_engineer` the diff from the accepted
+  base. For later checks, batch changes since the last reviewed state. In `identity`,
+  include HEAD and a reproducible reference to any in-scope uncommitted content.
+  Capture the staged and unstaged diff and the contents of in-scope untracked files.
+  In `upstream_decisions`, identify the previous review whose findings can be reused.
+  Report the actual reviewed state and relevant changes in `changed_inputs`.
+- Ask `test_engineer` to compare the actual changes with the planned coverage,
+  including small unplanned edits. In `findings`, record added or revised test
+  dispositions and exact IDs for the next run. Return unresolved scope or coverage in
+  `risks`. The root routes required edits to the assigned file owners and confirms
+  the resulting candidate and test selection. Reuse earlier findings for inputs whose
+  identity is still the same. If relevant inputs change during review or while applying
+  fixes, review that delta before the next related normal run.
