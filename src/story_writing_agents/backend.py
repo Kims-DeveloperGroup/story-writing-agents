@@ -149,7 +149,6 @@ from .conversation_retrieval import (
     ConversationRetrievalRequest,
 )
 from .debug_log import (
-    DebugComponent,
     DebugOperation,
     DebugOutcome,
     DebugPhase,
@@ -191,6 +190,11 @@ from .provider_adapter import (
     ProviderBinding,
     ProviderInvocation,
     ProviderInvocationError,
+)
+from .backend_diagnostic_events import (
+    log_execution_profile_event as _emit_log_execution_profile_event,
+    record_debug_error as _emit_record_debug_error,
+    trace_debug as _emit_trace_debug,
 )
 from .provider_generation_adapters import (
     create_antigravity_adapter as _create_antigravity_adapter,
@@ -1313,71 +1317,14 @@ class AgentBackend:
             except Exception as exc:
                 self._record_debug_error(DebugOperation.CLEANUP, exc)
 
-    def _trace_debug(
-        self,
-        operation: DebugOperation,
-        phase: DebugPhase,
-        *,
-        session_id: str | None = None,
-        debate_id: str | None = None,
-        conversation_id: str | None = None,
-        agent_id: str | None = None,
-        outcome: DebugOutcome | None = None,
-    ) -> None:
-        """Record a trace without allowing diagnostics to alter behavior."""
+    @property
+    def diagnostic_event_sink(self) -> WorkspaceDebugLog:
+        """Return the current sink for backend diagnostic events."""
+        return self._debug_log
 
-        try:
-            self._debug_log.trace(
-                component=DebugComponent.BACKEND,
-                operation=operation,
-                phase=phase,
-                session_id=session_id,
-                debate_id=debate_id,
-                conversation_id=conversation_id,
-                agent_id=agent_id,
-                outcome=outcome,
-            )
-        except BaseException:
-            pass
+    _trace_debug = _emit_trace_debug
 
-    def _log_execution_profile_event(
-        self,
-        operation: DebugOperation,
-        *,
-        correlation_id: str,
-        route_generation: int,
-        old_profile: AgentExecutionProfile | None = None,
-        new_profile: AgentExecutionProfile | None = None,
-        active_profile: AgentExecutionProfile | None = None,
-        activation_state: str,
-        thread_disposition: str | None = None,
-        context_state: str | None = None,
-        recovery_required: bool = False,
-    ) -> None:
-        """Write one schema-v2 profile event without altering runtime behavior."""
-
-        try:
-            self._debug_log.execution_profile_event(
-                operation,
-                correlation_id=correlation_id,
-                agent_id=(
-                    active_profile.agent_id
-                    if active_profile is not None
-                    else new_profile.agent_id
-                    if new_profile is not None
-                    else ""
-                ),
-                route_generation=route_generation,
-                old_profile=old_profile,
-                new_profile=new_profile,
-                active_profile=active_profile,
-                activation_state=activation_state,
-                thread_disposition=thread_disposition,
-                context_state=context_state,
-                recovery_required=recovery_required,
-            )
-        except BaseException:
-            pass
+    _log_execution_profile_event = _emit_log_execution_profile_event
 
     def _log_execution_profile_confirmed(
         self,
@@ -1401,44 +1348,7 @@ class AgentBackend:
             context_state=context_state,
         )
 
-    def _record_debug_error(
-        self,
-        operation: DebugOperation,
-        failure: BaseException,
-        *,
-        session_id: str | None = None,
-        debate_id: str | None = None,
-        conversation_id: str | None = None,
-        agent_id: str | None = None,
-        phase: DebugPhase = DebugPhase.FAILED,
-        outcome: DebugOutcome = DebugOutcome.FAILED,
-    ) -> None:
-        """Record a failure without allowing diagnostics to replace it."""
-
-        if (
-            phase is DebugPhase.FAILED
-            and outcome is DebugOutcome.FAILED
-            and isinstance(
-                failure,
-                (asyncio.CancelledError, KeyboardInterrupt, SystemExit),
-            )
-        ):
-            phase = DebugPhase.CANCELLED
-            outcome = DebugOutcome.INTERRUPTED
-        try:
-            self._debug_log.error(
-                DebugComponent.BACKEND,
-                operation,
-                failure,
-                phase=phase,
-                session_id=session_id,
-                debate_id=debate_id,
-                conversation_id=conversation_id,
-                agent_id=agent_id,
-                outcome=outcome,
-            )
-        except BaseException:
-            pass
+    _record_debug_error = _emit_record_debug_error
 
     async def bind(self, definition: AgentDefinition) -> BoundAgent:
         """Verify and stage a configured vendor binding."""
