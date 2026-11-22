@@ -2531,7 +2531,7 @@ class AgentBackend:
                     outcome
                 )
                 if type(action) is ConversationRetrievalReadAction:
-                    after_read = True
+                    after_read = False
             reference_provider_failure = True
             raise BackendProtocolError(
                 "conversation retrieval ended without a terminal answer"
