@@ -21277,11 +21277,17 @@
         "src/story_writing_agents/provider_execution_profile_observations.py"
       ],
       "focused_ids": [
-        "tests.test_codex_backend.CodexBackendTestCase.test_hot_same_provider_profile_applies_now_and_reuses_thread"
+        "tests.test_codex_backend.CodexBackendTestCase.test_hot_same_provider_profile_applies_now_and_reuses_thread",
+        "tests.test_codex_backend_defaults.CodexBackendDefaultsTests.test_execution_profiles_resolve_every_source_with_nullable_defaults"
       ],
       "affected_ids": [
         "tests.test_codex_backend.CodexBackendTestCase.test_a_to_b_to_a_route_generation_never_resumes_old_a_threads_after_restart",
         "tests.test_codex_backend.CodexBackendTestCase.test_hot_same_provider_profile_applies_now_and_reuses_thread",
+        "tests.test_codex_backend_defaults.CodexBackendDefaultsTests.test_execution_profiles_resolve_every_source_with_nullable_defaults",
+        "tests.test_codex_backend_defaults.CodexBackendDefaultsTests.test_startup_logs_four_exact_active_execution_profile_snapshots",
+        "tests.test_interactive_controller.ControllerContractTests.test_agents_and_status_ignore_message_detail_preference",
+        "tests.test_interactive_controller.ControllerSettingsTests.test_agent_and_field_choices_show_effective_current_and_pending_values",
+        "tests.test_interactive_controller.ControllerSettingsTests.test_antigravity_settings_edit_active_fields_and_preserve_codex",
         "tests.test_interactive_controller.ControllerSettingsTests.test_hot_save_preflight_quiescence_restore_and_recovery_are_truthful",
         "tests.test_interactive_controller.ControllerSettingsTests.test_message_details_only_save_is_confirmed_and_transaction_only"
       ],
