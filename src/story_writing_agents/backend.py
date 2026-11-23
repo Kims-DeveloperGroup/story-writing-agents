@@ -747,7 +747,6 @@ class AgentBackend:
             failure = ValueError(
                 "Antigravity effort must be None or one of: low, medium, high"
             )
-            self._record_debug_error(DebugOperation.CONFIGURATION, failure)
             raise failure from exc
         if (
             isinstance(timeout_seconds, bool)
