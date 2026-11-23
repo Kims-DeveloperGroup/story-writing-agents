@@ -246,7 +246,8 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
-        antigravity_outcome_current = suite_budget.load_budget()
+        execution_profile_current = suite_budget.load_budget()
+        antigravity_outcome_current = dict(execution_profile_current, max_test_source_lines=158075)
         workspace_authority_current = dict(antigravity_outcome_current, max_test_source_lines=158043)
         startup_options_current = dict(workspace_authority_current, max_test_source_lines=158008)
         legacy_thread_current = dict(startup_options_current, max_test_source_lines=157985)
@@ -810,6 +811,7 @@ class SuiteBudgetTests(unittest.TestCase):
         self._assert_source_limit_neighbors_rejected(startup_options_current, legacy_thread_current)
         self._assert_source_limit_neighbors_rejected(workspace_authority_current, startup_options_current)
         self._assert_source_limit_neighbors_rejected(antigravity_outcome_current, workspace_authority_current)
+        self._assert_source_limit_neighbors_rejected(execution_profile_current, antigravity_outcome_current)
         self.assertIsNone(suite_budget.check_monotonic(invocation_routing_current, direct_structured_current))
         self.assertIsNone(suite_budget.check_monotonic(direct_structured_current, retrieval_loop_current))
         self.assertIsNone(suite_budget.check_monotonic(retrieval_loop_current, bound_logical_current))
@@ -1158,15 +1160,30 @@ class SuiteBudgetTests(unittest.TestCase):
             )
 
         profile_observations = select_impact(real, paths=("src/story_writing_agents/provider_execution_profile_observations.py",))
+        self.assertIsNone(profile_observations["fallback_reason"])
         self.assertEqual(
             profile_observations["focused_manifest"]["ordered_ids"],
-            ["tests.test_codex_backend.CodexBackendTestCase.test_hot_same_provider_profile_applies_now_and_reuses_thread"],
+            [
+                "tests.test_codex_backend.CodexBackendTestCase.test_hot_same_provider_profile_applies_now_and_reuses_thread",
+                "tests.test_codex_backend_defaults.CodexBackendDefaultsTests.test_execution_profiles_resolve_every_source_with_nullable_defaults",
+            ],
         )
-        self.assertEqual(profile_observations["affected_manifest"]["count"], 4)
+        profile_affected = profile_observations["affected_manifest"]["ordered_ids"]
         self.assertEqual(
-            sum(binding_lifetime_current["subtest_caps"][cid] for cid in profile_observations["affected_manifest"]["ordered_ids"]),
-            0,
+            profile_affected,
+            [
+                "tests.test_codex_backend.CodexBackendTestCase.test_a_to_b_to_a_route_generation_never_resumes_old_a_threads_after_restart",
+                "tests.test_codex_backend.CodexBackendTestCase.test_hot_same_provider_profile_applies_now_and_reuses_thread",
+                "tests.test_codex_backend_defaults.CodexBackendDefaultsTests.test_execution_profiles_resolve_every_source_with_nullable_defaults",
+                "tests.test_codex_backend_defaults.CodexBackendDefaultsTests.test_startup_logs_four_exact_active_execution_profile_snapshots",
+                "tests.test_interactive_controller.ControllerContractTests.test_agents_and_status_ignore_message_detail_preference",
+                "tests.test_interactive_controller.ControllerSettingsTests.test_agent_and_field_choices_show_effective_current_and_pending_values",
+                "tests.test_interactive_controller.ControllerSettingsTests.test_antigravity_settings_edit_active_fields_and_preserve_codex",
+                "tests.test_interactive_controller.ControllerSettingsTests.test_hot_save_preflight_quiescence_restore_and_recovery_are_truthful",
+                "tests.test_interactive_controller.ControllerSettingsTests.test_message_details_only_save_is_confirmed_and_transaction_only",
+            ],
         )
+        self.assertEqual(sum(binding_lifetime_current["subtest_caps"][cid] for cid in profile_affected), 4)
         bound_context_module = "tests.bound_context_provider_cases"
         bound_context_id = (
             "tests.test_codex_backend.CodexBackendTestCase."
