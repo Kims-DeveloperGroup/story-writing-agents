@@ -1001,6 +1001,33 @@ class ConversationPackageBoundaryTests(unittest.TestCase):
         }
         moved_definitions = set().union(*contract_definitions.values())
         event_definitions = _EVENT_EXPORTS - vocabulary_constants - moved_definitions
+        view_definitions = {
+            "views/collaboration_history_values.py": {
+                "ArtifactObjective", "CollaborationNextAction",
+                "LeadMaterialChoice", "LeadPublicResponseView",
+                "LeadTaskView",
+            },
+            "views/conversation_windows.py": {
+                "CONVERSATION_CONTEXT_POLICY", "ConversationContextPolicy",
+                "ConversationContextWindow", "select_bounded_conversation_context",
+                "validate_conversation_context_window",
+            },
+            "views/decision_results.py": {
+                "ArtifactApplicationDecision", "ArtifactApplicationDecisionResult",
+                "ArtifactProposalResult", "LeadStepDecision",
+                "StoryCommitDecisionRequest", "StoryCommitDecisionResult",
+                "StoryCommitPreparationRequest",
+            },
+            "views/lead_results.py": {
+                "LeadTaskDecisionResult", "LeadTurnResult",
+            },
+            "views/readable_records.py": {
+                "COLLABORATION_READABLE_CONTEXT_POLICY", "CollaborationContextBootstrap",
+                "CollaborationReadableContext", "CollaborationReadableContextPolicy",
+                "CollaborationReadableField", "CollaborationReadableFieldKey",
+                "CollaborationReadableRecord",
+            },
+        }
         expected_by_file = {
             "__init__.py": (("__init__.py", set()),),
             "catalog.py": (("catalog.py", _CATALOG_EXPORTS),),
@@ -1009,8 +1036,11 @@ class ConversationPackageBoundaryTests(unittest.TestCase):
                 ("event_vocabulary.py", _VOCABULARY_EXPORTS | vocabulary_constants),
                 *contract_definitions.items(),
             ),
-            "context.py": (("context.py", _CONTEXT_EXPORTS | {
-                "document_lineage_cost", "project_document_plan_views", "is_new_task_recommendation_source"}),),
+            "context.py": (
+                ("context.py", (_CONTEXT_EXPORTS - set().union(*view_definitions.values())) | {
+                    "document_lineage_cost", "project_document_plan_views", "is_new_task_recommendation_source"}),
+                *view_definitions.items(),
+            ),
         }
         public_names = set(_CONVERSATION_FACADE_EXPORTS) | _OWNER_ONLY_EVENT_EXPORTS
 

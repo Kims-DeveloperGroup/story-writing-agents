@@ -22590,6 +22590,161 @@
         "tests.test_collaboration_events.CollaborationWireContractTests.test_unicode_is_not_normalized_and_tampered_digest_is_rejected",
         "tests.test_provider_response_mapping.ProviderResponseMappingTests.test_all_wire_values_have_stable_golden_hashes_and_round_trip"
       ]
+    },
+
+    {
+      "name": "conversations.views.context_value_validation",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/conversations/views/context_value_validation.py"
+      ],
+      "depends_on": [],
+      "focused_ids": [
+        "tests.test_conversation_runtime.ConversationResultContractTests.test_result_revalidates_identifiers_agent_content_and_context"
+      ],
+      "affected_ids": [
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_public_definitions_live_in_their_exact_owner_modules",
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_supported_package_exports_are_identity_stable",
+        "tests.test_conversation_runtime.ConversationResultContractTests.test_result_revalidates_identifiers_agent_content_and_context"
+      ]
+    },
+
+    {
+      "name": "conversations.views.conversation_windows",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/conversations/views/conversation_windows.py"
+      ],
+      "depends_on": [
+        "conversations.event-vocabulary",
+        "conversations.event_contracts.conversation_records",
+        "conversations.views.context_value_validation"
+      ],
+      "focused_ids": [
+        "tests.test_codex_backend.ConversationModelContractTests.test_context_accepts_interleaving_sequence_gaps_and_exact_caps",
+        "tests.test_codex_backend.ConversationModelContractTests.test_context_rejects_identity_order_pair_metadata_and_cap_errors"
+      ],
+      "affected_ids": [
+        "tests.test_codex_backend.ConversationModelContractTests.test_context_accepts_interleaving_sequence_gaps_and_exact_caps",
+        "tests.test_codex_backend.ConversationModelContractTests.test_context_rejects_identity_order_pair_metadata_and_cap_errors",
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_public_definitions_live_in_their_exact_owner_modules",
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_supported_package_exports_are_identity_stable",
+        "tests.test_workspace_and_config.DebateContextSidecarTests.test_absent_fresh_included_and_empty_schemas_are_exact"
+      ]
+    },
+
+    {
+      "name": "conversations.views.collaboration_history_values",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/conversations/views/collaboration_history_values.py"
+      ],
+      "depends_on": [
+        "conversations.event-vocabulary",
+        "conversations.views.context_value_validation"
+      ],
+      "focused_ids": [
+        "tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests.test_projection_is_deterministic_ordered_typed_and_history_only"
+      ],
+      "affected_ids": [
+        "tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_public_definitions_live_in_their_exact_owner_modules",
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_supported_package_exports_are_identity_stable"
+      ]
+    },
+
+    {
+      "name": "conversations.views.readable_records",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/conversations/views/readable_records.py"
+      ],
+      "depends_on": [
+        "conversations.event-vocabulary",
+        "conversations.event_contracts.artifact_apply",
+        "conversations.event_contracts.artifact_reviews",
+        "conversations.event_contracts.authoring_records",
+        "conversations.event_contracts.control_records",
+        "conversations.event_contracts.execution",
+        "conversations.event_contracts.lead_outcomes",
+        "conversations.event_contracts.proposal_inputs",
+        "conversations.event_contracts.story_commits",
+        "conversations.views.context_value_validation"
+      ],
+      "focused_ids": [
+        "tests.test_collaboration_context.CollaborationReadableProjectionTests.test_every_event_projects_once_with_complete_identity_and_closed_fields"
+      ],
+      "affected_ids": [
+        "tests.test_collaboration_context.CollaborationReadableProjectionTests.test_default_context_is_content_free_and_selection_is_bounded_additive",
+        "tests.test_collaboration_context.CollaborationReadableProjectionTests.test_every_event_projects_once_with_complete_identity_and_closed_fields",
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_public_definitions_live_in_their_exact_owner_modules",
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_supported_package_exports_are_identity_stable"
+      ]
+    },
+
+    {
+      "name": "conversations.views.decision_results",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/conversations/views/decision_results.py"
+      ],
+      "depends_on": [
+        "conversations.event-vocabulary",
+        "conversations.event_contracts.artifact_apply",
+        "conversations.event_contracts.artifact_reviews",
+        "conversations.event_contracts.story_commits",
+        "conversations.views.context_value_validation"
+      ],
+      "focused_ids": [
+        "tests.test_collaboration_context.CollaborationConfirmationAndRecoveryTests.test_failed_revision_result_cannot_carry_or_revive_confirmation_authority"
+      ],
+      "affected_ids": [
+        "tests.test_collaboration_context.CollaborationConfirmationAndRecoveryTests.test_failed_revision_result_cannot_carry_or_revive_confirmation_authority",
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_public_definitions_live_in_their_exact_owner_modules",
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_supported_package_exports_are_identity_stable"
+      ]
+    },
+
+    {
+      "name": "conversations.views.lead_results",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/conversations/views/lead_results.py"
+      ],
+      "depends_on": [
+        "conversations.event-vocabulary",
+        "conversations.event_contracts.artifact_apply",
+        "conversations.event_contracts.evidence",
+        "conversations.event_contracts.story_commits",
+        "conversations.views.collaboration_history_values",
+        "conversations.views.context_value_validation",
+        "conversations.views.decision_results"
+      ],
+      "focused_ids": [
+        "tests.test_collaboration_context.CollaborationConfirmationAndRecoveryTests.test_failed_revision_result_cannot_carry_or_revive_confirmation_authority"
+      ],
+      "affected_ids": [
+        "tests.test_collaboration_context.CollaborationConfirmationAndRecoveryTests.test_failed_revision_result_cannot_carry_or_revive_confirmation_authority",
+        "tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_public_definitions_live_in_their_exact_owner_modules",
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_supported_package_exports_are_identity_stable"
+      ]
+    },
+
+    {
+      "name": "conversations.views.package",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/conversations/views/__init__.py"
+      ],
+      "depends_on": [],
+      "focused_ids": [
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_supported_package_exports_are_identity_stable"
+      ],
+      "affected_ids": [
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_public_definitions_live_in_their_exact_owner_modules",
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_supported_package_exports_are_identity_stable"
+      ]
     }
   ],
   "ignored_names": [

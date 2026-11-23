@@ -414,8 +414,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 386)
-        self.assertEqual(len(edges), 2355)
+        self.assertEqual(len(modules), 393)
+        self.assertEqual(len(edges), 2402)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -835,17 +835,19 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 'story_writing_agents.agent_context.group_observation',
             },
             "story_writing_agents.conversations.context": {
+                "story_writing_agents.conversations.views.collaboration_history_values",
+                "story_writing_agents.conversations.views.context_value_validation",
+                "story_writing_agents.conversations.views.conversation_windows",
+                "story_writing_agents.conversations.views.decision_results",
+                "story_writing_agents.conversations.views.lead_results",
+                "story_writing_agents.conversations.views.readable_records",
                 "story_writing_agents.conversations.event_vocabulary",
                 "story_writing_agents.document_plan",
                 "story_writing_agents.authoring_task_lifecycle",
-                "story_writing_agents.review_contracts",
                 "story_writing_agents.lead_task_transitions",
-                "story_writing_agents.lead_exploration",
                 "story_writing_agents.lead_premise_decisions",
             "story_writing_agents.editorial_state",
-                "story_writing_agents.reply_trace",
                 "story_writing_agents.specialist_routing",
-                "story_writing_agents.structured_output_validation",
                 "story_writing_agents.conversations.events",
                 "story_writing_agents.errors",
                 "story_writing_agents.git.story_commit_contracts",
@@ -1557,7 +1559,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             "story_writing_agents.conversations.event_contracts.artifact_reviews",
             "story_writing_agents.conversations.event_contracts.lead_outcomes",
             "story_writing_agents.conversations.event_contracts.lead_scope",
-            "story_writing_agents.authoring_task_lifecycle", "story_writing_agents.conversations", "story_writing_agents.conversations.context",
+            "story_writing_agents.authoring_task_lifecycle", "story_writing_agents.conversations", "story_writing_agents.conversations.views.lead_results",
             "story_writing_agents.conversations.events", "story_writing_agents.interactive_terminal._collaboration_view",
             "story_writing_agents.artifact_transactions.artifact_application_authority", "story_writing_agents.lead_preparation.outcome_decoding",
             "story_writing_agents.lead_execution.known_result_finalization",
@@ -1574,6 +1576,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
             'story_writing_agents.conversations.event_contracts.lead_outcomes',
             'story_writing_agents.conversations',
             'story_writing_agents.conversations.context',
+            'story_writing_agents.conversations.views.collaboration_history_values',
+            'story_writing_agents.conversations.views.lead_results',
             'story_writing_agents.conversations.events',
             'story_writing_agents.interactive_controller._lead_policy',
             'story_writing_agents.interactive_terminal._collaboration_view',
@@ -3708,6 +3712,13 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 "story_writing_agents/conversations/__init__.py",
                 "story_writing_agents/conversations/catalog.py",
                 "story_writing_agents/conversations/context.py",
+                "story_writing_agents/conversations/views/__init__.py",
+                "story_writing_agents/conversations/views/collaboration_history_values.py",
+                "story_writing_agents/conversations/views/context_value_validation.py",
+                "story_writing_agents/conversations/views/conversation_windows.py",
+                "story_writing_agents/conversations/views/decision_results.py",
+                "story_writing_agents/conversations/views/lead_results.py",
+                "story_writing_agents/conversations/views/readable_records.py",
                 "story_writing_agents/conversations/events.py",
                 "story_writing_agents/conversations/event_contracts/__init__.py",
                 "story_writing_agents/conversations/event_contracts/conversation_records.py",
