@@ -547,7 +547,7 @@ class AntigravityAdapter:
         except BaseException as exc:
             if isinstance(exc, ProviderInvocationError):
                 if partial_timeout:
-                    exc.timed_out = True
+                    pass
                 exc.record_response_diagnostic(response_diagnostic)
             record_provider_failure_accounting(
                 exc,
