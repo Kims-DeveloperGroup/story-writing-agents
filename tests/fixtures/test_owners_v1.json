@@ -2047,6 +2047,7 @@
         "tests.test_agent_context_accounting",
         "tests.test_agent_exchange_viewer",
         "tests.test_backend_reply_decoding",
+        "tests.test_bound_agent_conversation_contracts",
         "tests.test_provider_invocation_routing",
         "tests.test_specialist_routing_runtime"
       ]
@@ -21571,6 +21572,28 @@
       "depends_on": []
     },
     {
+      "name": "provider.bound-agent-request-validation",
+      "boundary": "bound-agent-request-validation",
+      "paths": [
+        "src/story_writing_agents/bound_agent_request_validation.py"
+      ],
+      "focused_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_converse_rejects_wrong_types_tampering_and_routing_preflight",
+        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_whole_loop_serializes_with_legacy_converse_and_invoke"
+      ],
+      "affected_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_antigravity_public_operations_use_provider_neutral_diagnostics",
+        "tests.test_codex_backend.CodexBackendTestCase.test_converse_rejects_wrong_types_tampering_and_routing_preflight",
+        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_exact_initial_continuation_payload_rules_schema_and_frame",
+        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_handler_declaration_and_exact_outcome_protocol",
+        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_whole_loop_serializes_with_legacy_converse_and_invoke",
+        "tests.test_codex_backend.ConversationModelContractTests.test_exact_frozen_slotted_models_and_converse_signature",
+        "tests.test_codex_backend.ConversationModelContractTests.test_retrieval_bound_signature_and_sync_handler_protocol_are_exact",
+        "tests.test_codex_invocation_files.CodexInvocationFilesTests.test_conversation_projects_exact_payload_schema_and_no_artifacts"
+      ],
+      "depends_on": []
+    },
+    {
       "name": "provider.conversation-retrieval-loop",
       "boundary": "provider-conversation-retrieval-loop",
       "paths": [
@@ -21773,6 +21796,25 @@
       "affected_ids": [
         "tests.test_codex_backend.CodexBackendTestCase.test_reference_read_adapter_resolution_failures_terminate_once",
         "tests.test_codex_backend.CodexBackendTestCase.test_reference_read_pre_provider_resource_failures_terminate_exactly"
+      ],
+      "depends_on": [
+        "codex-native-process-fixture",
+        "conversation-retrieval-wire-fixture"
+      ]
+    },
+    {
+      "name": "tests.test_bound_agent_conversation_contracts",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/test_bound_agent_conversation_contracts.py"
+      ],
+      "focused_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_converse_rejects_wrong_types_tampering_and_routing_preflight",
+        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_whole_loop_serializes_with_legacy_converse_and_invoke"
+      ],
+      "affected_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_converse_rejects_wrong_types_tampering_and_routing_preflight",
+        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_whole_loop_serializes_with_legacy_converse_and_invoke"
       ],
       "depends_on": [
         "codex-native-process-fixture",

@@ -246,7 +246,8 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
-        backend_shutdown_current = suite_budget.load_budget()
+        request_validation_current = suite_budget.load_budget()
+        backend_shutdown_current = dict(request_validation_current, max_test_source_lines=157888)
         configuration_activation_current = dict(backend_shutdown_current, max_test_source_lines=157829)
         session_lifecycle_current = dict(configuration_activation_current, max_test_source_lines=157787)
         generation_release_current = dict(session_lifecycle_current, max_test_source_lines=157655)
@@ -800,6 +801,7 @@ class SuiteBudgetTests(unittest.TestCase):
         self._assert_source_limit_neighbors_rejected(session_lifecycle_current, generation_release_current)
         self._assert_source_limit_neighbors_rejected(configuration_activation_current, session_lifecycle_current)
         self._assert_source_limit_neighbors_rejected(backend_shutdown_current, configuration_activation_current)
+        self._assert_source_limit_neighbors_rejected(request_validation_current, backend_shutdown_current)
         self.assertIsNone(suite_budget.check_monotonic(invocation_routing_current, direct_structured_current))
         self.assertIsNone(suite_budget.check_monotonic(direct_structured_current, retrieval_loop_current))
         self.assertIsNone(suite_budget.check_monotonic(retrieval_loop_current, bound_logical_current))
@@ -1174,6 +1176,29 @@ class SuiteBudgetTests(unittest.TestCase):
         bound_definition_impact = select_impact(real, paths=("tests/bound_context_provider_cases.py",))
         self.assertEqual(bound_definition_impact["focused_manifest"]["ordered_ids"], list(bound_definition_ids))
         self.assertEqual(bound_definition_impact["affected_manifest"]["ordered_ids"], list(bound_definition_ids))
+        bound_contract_module = "tests.test_bound_agent_conversation_contracts"
+        bound_contracts = runner_selection.select(real, modules=[bound_contract_module])
+        self.assertEqual(bound_contracts.ids, (
+            "tests.test_codex_backend.CodexBackendTestCase.test_converse_rejects_wrong_types_tampering_and_routing_preflight",
+            "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_whole_loop_serializes_with_legacy_converse_and_invoke",
+        ))
+        for case in bound_contracts.tests:
+            method = getattr(case, case._testMethodName)
+            self.assertEqual(method.__qualname__, f"BoundAgentConversationContractCases.{case._testMethodName}")
+        request_validation = select_impact(
+            real, paths=("src/story_writing_agents/bound_agent_request_validation.py",), scope="affected", catalogue=owners,
+        )
+        self.assertIsNone(request_validation["fallback_reason"])
+        self.assertEqual(request_validation["focused_manifest"]["ordered_ids"], list(bound_contracts.ids))
+        validation_affected = request_validation["affected_manifest"]["ordered_ids"]
+        self.assertEqual(len(validation_affected), 8)
+        self.assertEqual(sum(generation_release_current["subtest_caps"][cid] for cid in validation_affected), 15)
+        bound_contract_impact = select_impact(
+            real, paths=("tests/test_bound_agent_conversation_contracts.py",), scope="affected", catalogue=owners,
+        )
+        self.assertIsNone(bound_contract_impact["fallback_reason"])
+        self.assertEqual(bound_contract_impact["focused_manifest"]["ordered_ids"], list(bound_definition_ids))
+        self.assertEqual(bound_contract_impact["affected_manifest"]["ordered_ids"], list(bound_definition_ids))
         bound_context_impact = select_impact(real, paths=("src/story_writing_agents/provider_bound_context.py",))
         self.assertEqual(bound_context_impact["focused_manifest"]["ordered_ids"], [bound_context_id])
         bound_context_affected = bound_context_impact["affected_manifest"]["ordered_ids"]
