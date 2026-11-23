@@ -22287,6 +22287,97 @@
         "tests.backend-lifecycle-diagnostic-fixture",
         "tests.provider-session-lifecycle-artifacts-fixture"
       ]
+    },
+    {
+      "name": "conversations.event_contracts.package",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/conversations/event_contracts/__init__.py"
+      ],
+      "depends_on": [],
+      "focused_ids": [
+        "tests.test_collaboration_events.CollaborationPackageBoundaryTests.test_clean_import_orders_have_no_cwd_io_or_dynamic_forwarding"
+      ],
+      "affected_ids": [
+        "tests.test_collaboration_events.CollaborationPackageBoundaryTests.test_clean_import_orders_have_no_cwd_io_or_dynamic_forwarding",
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_public_definitions_live_in_their_exact_owner_modules"
+      ]
+    },
+
+    {
+      "name": "conversations.event_contracts.conversation_records",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/conversations/event_contracts/conversation_records.py"
+      ],
+      "depends_on": [],
+      "focused_ids": [
+        "tests.test_conversation_runtime.ConversationResultContractTests.test_result_revalidates_identifiers_agent_content_and_context"
+      ],
+      "affected_ids": [
+        "tests.test_collaboration_events.CollaborationPackageBoundaryTests.test_leaf_and_facade_exports_identity_metadata_pickle_and_root_omission",
+        "tests.test_collaboration_events.CollaborationValueContractTests.test_all_schema_values_have_exact_fields_frozen_slots_and_nested_tuples",
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_public_definitions_live_in_their_exact_owner_modules",
+        "tests.test_conversation_runtime.ConversationResultContractTests.test_result_revalidates_identifiers_agent_content_and_context"
+      ]
+    },
+    {
+      "name": "conversations.event_contracts.proposal_inputs",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/conversations/event_contracts/proposal_inputs.py"
+      ],
+      "depends_on": [],
+      "focused_ids": [
+        "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip",
+        "tests.test_collaboration_events.CollaborationValueContractTests.test_proposal_closure_budget_and_advisory_invariants_fail_closed"
+      ],
+      "affected_ids": [
+        "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip",
+        "tests.test_collaboration_events.CollaborationPackageBoundaryTests.test_leaf_and_facade_exports_identity_metadata_pickle_and_root_omission",
+        "tests.test_collaboration_events.CollaborationValueContractTests.test_actor_direction_matrix_is_closed_and_exact",
+        "tests.test_collaboration_events.CollaborationValueContractTests.test_all_schema_values_have_exact_fields_frozen_slots_and_nested_tuples",
+        "tests.test_collaboration_events.CollaborationValueContractTests.test_proposal_closure_budget_and_advisory_invariants_fail_closed",
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_public_definitions_live_in_their_exact_owner_modules"
+      ]
+    },
+    {
+      "name": "conversations.event_contracts.evidence",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/conversations/event_contracts/evidence.py"
+      ],
+      "depends_on": [
+        "conversations.event_contracts.proposal_inputs"
+      ],
+      "focused_ids": [
+        "tests.test_lead_evidence_matrix.DurableLeadEvidenceMatrixTests.test_all_sixty_scope_status_kind_cells_are_closed_and_exact"
+      ],
+      "affected_ids": [
+        "tests.test_collaboration_events.CollaborationPackageBoundaryTests.test_leaf_and_facade_exports_identity_metadata_pickle_and_root_omission",
+        "tests.test_collaboration_events.CollaborationValueContractTests.test_all_schema_values_have_exact_fields_frozen_slots_and_nested_tuples",
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_public_definitions_live_in_their_exact_owner_modules",
+        "tests.test_lead_evidence_matrix.DurableLeadEvidenceMatrixTests.test_all_sixty_scope_status_kind_cells_are_closed_and_exact"
+      ]
+    },
+    {
+      "name": "conversations.event_contracts.lead_scope",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/conversations/event_contracts/lead_scope.py"
+      ],
+      "depends_on": [
+        "conversations.event_contracts.evidence"
+      ],
+      "focused_ids": [
+        "tests.test_lead_evidence_matrix.DurableLeadEvidenceMatrixTests.test_all_sixty_scope_status_kind_cells_are_closed_and_exact"
+      ],
+      "affected_ids": [
+        "tests.test_lead_evidence_matrix.DurableLeadEvidenceMatrixTests.test_all_sixty_scope_status_kind_cells_are_closed_and_exact",
+        "tests.test_collaboration_events.CollaborationPackageBoundaryTests.test_leaf_and_facade_exports_identity_metadata_pickle_and_root_omission",
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_public_definitions_live_in_their_exact_owner_modules",
+        "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_whole_and_range_conflict_bind_proposal_and_detect_drift"
+      ]
     }
   ],
   "ignored_names": [

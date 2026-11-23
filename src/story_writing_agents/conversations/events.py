@@ -12,12 +12,12 @@ from ..core_document_readiness import AuthoringTarget
 from ..agent_context.group_observation import LeadGroupTrace
 from ..agent_context.accounting import (ProviderCallAccounting, provider_call_accounting_from_object, provider_call_accounting_to_object)
 from ..review_contracts import (
-    LeadPreliminaryReview, FinalReviewEvidence, ReviewTarget, ReviewTargetKind, ReviewTargetAvailability,
+    LeadPreliminaryReview, FinalReviewEvidence, ReviewTarget, ReviewTargetKind,
     preliminary_review_to_dict, preliminary_review_from_dict, preliminary_scope_eligible,
     final_review_evidence_to_dict, final_review_evidence_from_dict, review_digest,
 )
-from ..specialist_routing import (SpecialistStagePlan, ReviewStage, SpecialistWorkKind,
-    stage_plan_to_dict, stage_plan_from_dict, validate_stage_routing)
+from ..specialist_routing import (SpecialistStagePlan, SpecialistWorkKind,
+    stage_plan_to_dict, stage_plan_from_dict)
 
 from ..core_document_readiness import (
     CoreDocumentAssessment, CoreDocumentReadinessBasis, targets_for_paths, validate_authoring_target_basis, assessment_from_dict as core_assessment_from_dict,
@@ -28,7 +28,7 @@ from ..core_document_readiness import (
 from dataclasses import replace
 
 from ..authoring_admission import (
-    AdmissionSource, AdmissionSourceKind, AuthoringAssessment, AuthoringAdmissionBasis,
+    AdmissionSourceKind, AuthoringAssessment, AuthoringAdmissionBasis,
     admission_digest, assessment_from_dict, admission_basis_from_dict, admission_basis_to_dict,
 )
 
@@ -69,7 +69,6 @@ from ..structured_output_validation import (
 from dataclasses import asdict, dataclass, field
 from ..agent_context import ProviderUsage
 from enum import StrEnum
-from typing import Any
 
 from ..agents import LEAD_ORCHESTRATOR, ROSTER, SPECIALIST_IDS
 from ..artifact_proposals import (
@@ -82,23 +81,14 @@ from ..artifact_proposals import (
 from ..reply_trace import ReplyTrace
 from ..structured_output_validation import validate_details
 from ..specialist_routing import (
-    AUTHORING_SCOPE_SCHEMA_VERSION,
-    ArtifactReviewDomain,
     AuthoringActivity,
     AuthoringIntent,
     AuthoringScope,
-    AuthoringContribution,
-    AuthoringContributionRole,
-    AuthoringDependencySlot,
     ReviewBasis,
     SpecialistAssignmentMode,
-    authoring_scope_rules, legal_specialist_rosters,
-    required_authoring_specialists,
     required_authoring_domains,
     artifact_domain,
-    assignment_mode_for_specialist,
     specialists_for_domains,
-    validate_specialist_assignment,
     validate_specialist_routing,
 )
 from ..git.story_commit_contracts import (
@@ -115,7 +105,6 @@ from ..writing_artifacts import (
     ArtifactApplicationRequest,
     ArtifactApplicationResult,
     ArtifactApplicationState,
-    parse_artifact_references,
     canonical_artifact_kind,
     deserialize_artifact_application_request,
     deserialize_artifact_application_result,
@@ -128,9 +117,7 @@ from story_writing_agents.conversations.event_value_validation import (
     decode_canonical_json as _decode_canonical_json,
     decode_optional_reply_trace as _decode_optional_reply_trace,
     digest_value as _digest_value,
-    optional_integer_value as _optional_integer,
     optional_string_value as _optional_string,
-    raise_content_free_value_error as _raise_content_free_value_error,
     reply_trace_fields as _reply_trace_fields,
     require_array_value as _array,
     require_boolean_value as _boolean,
@@ -157,6 +144,51 @@ from story_writing_agents.conversations.event_value_validation import (
     validate_utc_timestamp as _validate_utc_timestamp,
 )
 
+from .event_contracts.conversation_records import (
+    ConversationEvent,
+    ConversationEventAppend,
+)
+from .event_contracts.evidence import (
+    authoring_source_facts,
+    CollaborationEvidenceReceipt,
+    CollaborationLeadEvidence,
+    decode_lead_evidence as _decode_lead_evidence,
+    lead_evidence_value as _lead_evidence_value,
+    validate_planning_target as _validate_planning_target,
+)
+from .event_contracts.lead_scope import (
+    lead_outcome_scope_paths,
+    validate_authoring_evidence_scope as _validate_authoring_evidence_scope,
+    validate_lead_evidence_matrix as _validate_lead_evidence_matrix,
+)
+from .event_contracts.proposal_inputs import (
+    authoring_scope_from_dict,
+    authoring_scope_to_dict,
+    CollaborationActor,
+    CollaborationAgentProfile,
+    CollaborationAssignment,
+    CollaborationBudget,
+    CollaborationInputRevision,
+    review_basis_from_dict,
+    review_basis_to_dict,
+    actor_value as _actor_value,
+    assignment_routing_value as _assignment_routing_value,
+    assignment_value as _assignment_value,
+    authoring_scope_fields as _authoring_scope_fields,
+    budget_value as _budget_value,
+    decode_actor as _decode_actor,
+    decode_assignment as _decode_assignment,
+    decode_assignment_mode as _decode_assignment_mode,
+    decode_assignment_review_basis as _decode_assignment_review_basis,
+    decode_budget as _decode_budget,
+    decode_input as _decode_input,
+    decode_optional_authoring_scope as _decode_optional_authoring_scope,
+    decode_profile as _decode_profile,
+    input_value as _input_value,
+    profile_value as _profile_value,
+    validate_assignment_routing as _validate_assignment_routing,
+    validate_scoped_assignments as _validate_scoped_assignments,
+)
 from .event_vocabulary import (
     CONVERSATION_EVENT_SCHEMA_VERSION,
     COLLABORATION_EVENT_SCHEMA_VERSION,
@@ -177,7 +209,6 @@ from .event_vocabulary import (
     CollaborationAssignmentOutcomeKind,
     CollaborationConfirmationDecision,
     CollaborationDirection,
-    CollaborationEvidenceAcquisition,
     CollaborationEventKind,
     CollaborationExecutionOutcomeKind,
     CollaborationInputKind,
@@ -192,7 +223,6 @@ from .event_vocabulary import (
     CollaborationStepState,
     CollaborationSynthesisOutcomeKind,
     CollaborationTerminalScope,
-    ConversationEventKind,
     LeadOutcomeKind,
     LeadOutcomeScope,
     LeadEvidenceStatus,
@@ -201,323 +231,6 @@ from .event_vocabulary import (
     ArtifactReviewDecision,
     ArtifactReviewFailureCode,
 )
-
-
-@dataclass(frozen=True, slots=True)
-class CollaborationEvidenceReceipt:
-    """Content-free durable receipt for one runtime-authorized evidence fact."""
-
-    evidence_id: str
-    acquisition: CollaborationEvidenceAcquisition
-    operation_id: str
-    result_correlation_id: str
-    manifest_digest: str
-    source_id: str | None = None
-    source_kind: CollaborationInputKind | None = None
-    locator: str | None = None
-    source_state: CollaborationInputState | None = None
-    revision_digest: str | None = None
-    content_digest: str | None = None
-    utf8_bytes: int = 0
-    boundary_kind: str | None = None
-    boundary_start: int | None = None
-    boundary_end: int | None = None
-    start_line: int | None = None
-    end_line: int | None = None
-    ordinal: int | None = None
-    action_index: int | None = None
-    origin_action_index: int | None = None
-    query_digest: str | None = None
-    query_count: int = 0
-    authorized_source_ids: tuple[str, ...] = ()
-    authorized_source_kinds: tuple[CollaborationInputKind, ...] = ()
-    authorized_source_fingerprint: str | None = None
-    artifact_path_prefix: str | None = None
-
-    def __post_init__(self) -> None:
-        _validate_identifier(self.evidence_id, label="evidence ID")
-        _require_enum(
-            self.acquisition,
-            CollaborationEvidenceAcquisition,
-            "evidence acquisition",
-        )
-        _validate_identifier(self.operation_id, label="evidence operation ID")
-        _validate_identifier(
-            self.result_correlation_id,
-            label="evidence result correlation ID",
-        )
-        _validate_digest(self.manifest_digest, label="evidence manifest digest")
-        _validate_non_negative_integer(self.utf8_bytes, label="evidence UTF-8 bytes")
-        _validate_non_negative_integer(self.query_count, label="evidence query count")
-        if type(self.authorized_source_ids) is not tuple:
-            raise TypeError("authorized evidence source IDs must be an exact tuple")
-        for source_id in self.authorized_source_ids:
-            _validate_visible_text(
-                source_id,
-                label="authorized evidence source ID",
-                maximum=4_096,
-            )
-        _require_unique(
-            self.authorized_source_ids,
-            label="authorized evidence source IDs",
-        )
-        _validate_enum_tuple(
-            self.authorized_source_kinds,
-            CollaborationInputKind,
-            label="authorized evidence source kinds",
-        )
-        if self.artifact_path_prefix is not None:
-            _validate_visible_text(
-                self.artifact_path_prefix,
-                label="evidence artifact path prefix",
-                maximum=1_024,
-            )
-            if (
-                not self.artifact_path_prefix.endswith("/")
-                or self.artifact_path_prefix.startswith("/")
-                or "\\" in self.artifact_path_prefix
-                or ".." in self.artifact_path_prefix.split("/")
-            ):
-                raise ValueError("evidence artifact path prefix is invalid")
-        if (self.start_line is None) is not (self.end_line is None):
-            raise ValueError("evidence line range must provide both bounds or neither")
-        if self.start_line is not None and self.end_line is not None:
-            _validate_positive_integer(self.start_line, label="evidence start line")
-            _validate_positive_integer(self.end_line, label="evidence end line")
-            if self.end_line < self.start_line:
-                raise ValueError("evidence line range must be ordered")
-        if self.boundary_kind not in {None, "whole", "artifact_lines", "records"}:
-            raise ValueError("evidence boundary kind is invalid")
-        if (self.boundary_start is None) is not (self.boundary_end is None):
-            raise ValueError("evidence boundary must provide both bounds or neither")
-        if self.boundary_start is not None and self.boundary_end is not None:
-            _validate_positive_integer(
-                self.boundary_start,
-                label="evidence boundary start",
-            )
-            _validate_positive_integer(
-                self.boundary_end,
-                label="evidence boundary end",
-            )
-            if self.boundary_end < self.boundary_start:
-                raise ValueError("evidence boundary must be ordered")
-        if self.boundary_kind == "whole":
-            if self.boundary_start is not None:
-                raise ValueError("whole-source evidence cannot carry boundary bounds")
-        elif self.boundary_kind is not None and self.boundary_start is None:
-            raise ValueError("ranged evidence requires exact boundary bounds")
-        if self.boundary_kind == "artifact_lines" and (
-            self.start_line != self.boundary_start or self.end_line != self.boundary_end
-        ):
-            raise ValueError("artifact evidence line and boundary ranges must match")
-        if self.boundary_kind != "artifact_lines" and self.start_line is not None:
-            raise ValueError("only artifact-line evidence can carry a line range")
-        for value, label in (
-            (self.revision_digest, "evidence revision digest"),
-            (self.content_digest, "evidence content digest"),
-            (self.query_digest, "evidence query digest"),
-            (
-                self.authorized_source_fingerprint,
-                "authorized evidence source fingerprint",
-            ),
-        ):
-            if value is not None:
-                _validate_digest(value, label=label)
-        for value, label in (
-            (self.ordinal, "evidence ordinal"),
-            (self.action_index, "evidence action index"),
-            (self.origin_action_index, "evidence origin action index"),
-        ):
-            if value is not None:
-                _validate_positive_integer(value, label=label)
-        self._validate_shape()
-
-    def _validate_shape(self) -> None:
-        single_source = self.acquisition is not (
-            CollaborationEvidenceAcquisition.ZERO_HIT_SEARCH
-        )
-        if single_source:
-            if (
-                self.source_id is None
-                or self.source_kind is None
-                or self.locator is None
-                or self.source_state is None
-            ):
-                raise ValueError("source evidence must retain its exact identity")
-            _validate_visible_text(
-                self.source_id,
-                label="evidence source ID",
-                maximum=4_096,
-            )
-            _require_enum(
-                self.source_kind,
-                CollaborationInputKind,
-                "evidence source kind",
-            )
-            _validate_visible_text(
-                self.locator,
-                label="evidence locator",
-                maximum=4_096,
-            )
-            _require_enum(
-                self.source_state,
-                CollaborationInputState,
-                "evidence source state",
-            )
-            if self.authorized_source_ids or self.authorized_source_kinds:
-                raise ValueError("single-source evidence cannot carry search authority")
-            if self.artifact_path_prefix is not None:
-                raise ValueError("single-source evidence cannot carry a path prefix")
-            if self.authorized_source_fingerprint is not None:
-                raise ValueError(
-                    "single-source evidence cannot carry a source fingerprint"
-                )
-        elif (
-            any(
-                value is not None
-                for value in (
-                    self.source_id,
-                    self.source_kind,
-                    self.locator,
-                    self.revision_digest,
-                    self.content_digest,
-                    self.start_line,
-                    self.end_line,
-                    self.boundary_kind,
-                    self.boundary_start,
-                    self.boundary_end,
-                    self.ordinal,
-                    self.origin_action_index,
-                )
-            )
-            or self.source_state is not CollaborationInputState.ABSENT
-        ):
-            raise ValueError("zero-hit evidence cannot claim one source")
-
-        if self.acquisition is CollaborationEvidenceAcquisition.ATTACHED_REFERENCE:
-            if (
-                self.ordinal is None
-                or self.action_index is not None
-                or self.origin_action_index is not None
-                or self.query_digest is not None
-                or self.query_count
-                or self.source_state is not CollaborationInputState.PRESENT
-                or self.revision_digest is None
-                or self.content_digest is None
-            ):
-                raise ValueError("attached-reference evidence facts are incomplete")
-        elif self.acquisition is CollaborationEvidenceAcquisition.CORE_STATUS:
-            if (
-                self.ordinal is None
-                or self.action_index is not None
-                or self.origin_action_index is not None
-                or self.query_digest is not None
-                or self.query_count
-                or self.start_line is not None
-                or self.boundary_kind is not None
-            ):
-                raise ValueError("core-status evidence facts are inconsistent")
-            if self.source_state is CollaborationInputState.ABSENT:
-                if (
-                    self.revision_digest is not None
-                    or self.content_digest is not None
-                    or self.utf8_bytes
-                ):
-                    raise ValueError("absent core evidence cannot claim content")
-            elif self.revision_digest is None or self.content_digest is None:
-                raise ValueError("present core evidence requires exact digests")
-        elif self.acquisition is CollaborationEvidenceAcquisition.ZERO_HIT_SEARCH:
-            if (
-                self.action_index is None
-                or self.query_digest is None
-                or self.authorized_source_fingerprint is None
-                or self.query_count < 1
-                or not self.authorized_source_kinds
-                or self.utf8_bytes
-                or (
-                    self.artifact_path_prefix is not None
-                    and self.authorized_source_kinds
-                    != (CollaborationInputKind.WRITING_ARTIFACT,)
-                )
-            ):
-                raise ValueError("zero-hit SEARCH evidence facts are incomplete")
-        elif (
-            self.action_index is None
-            or self.origin_action_index is None
-            or self.origin_action_index >= self.action_index
-            or self.ordinal is not None
-            or self.query_digest is not None
-            or self.query_count
-            or self.source_state is not CollaborationInputState.PRESENT
-            or self.revision_digest is None
-            or self.content_digest is None
-            or self.boundary_kind is None
-        ):
-            raise ValueError("READ evidence facts are incomplete")
-
-
-@dataclass(frozen=True, slots=True)
-class CollaborationLeadEvidence:
-    """Exact ordered evidence classification for one lead judgment."""
-
-    scope: LeadOutcomeScope
-    status: LeadEvidenceStatus
-    receipts: tuple[CollaborationEvidenceReceipt, ...]
-
-    def __post_init__(self) -> None:
-        _require_enum(self.scope, LeadOutcomeScope, "lead evidence scope")
-        _require_enum(self.status, LeadEvidenceStatus, "lead evidence status")
-        _validate_exact_tuple(
-            self.receipts,
-            CollaborationEvidenceReceipt,
-            label="lead evidence receipts",
-        )
-        _require_unique(
-            tuple(item.evidence_id for item in self.receipts),
-            label="lead evidence receipt IDs",
-        )
-        correlations = {
-            (item.operation_id, item.result_correlation_id, item.manifest_digest)
-            for item in self.receipts
-        }
-        if len(correlations) > 1:
-            raise ValueError("lead evidence receipts must share one invocation")
-
-    def factual_writing_read_facts(self) -> tuple[tuple[str, str, bool], ...]:
-        """Project nonempty writing READ receipts without granting source authority.
-
-        The boolean describes the receipt boundary: an explicit range remains
-        ranged even when its content happens to cover the entire source.
-        """
-        facts: list[tuple[str, str, bool]] = []
-        for receipt in self.receipts:
-            if (receipt.acquisition not in {
-                    CollaborationEvidenceAcquisition.READ,
-                    CollaborationEvidenceAcquisition.ATTACHED_REFERENCE,
-                } or receipt.source_state is not CollaborationInputState.PRESENT
-                    or receipt.utf8_bytes <= 0 or receipt.source_kind not in {
-                        CollaborationInputKind.CORE_DOCUMENT,
-                        CollaborationInputKind.MANUSCRIPT,
-                        CollaborationInputKind.WRITING_ARTIFACT,
-                    }):
-                continue
-            path = receipt.locator
-            whole_source = receipt.boundary_kind == "whole"
-            if receipt.acquisition is CollaborationEvidenceAcquisition.ATTACHED_REFERENCE:
-                references = parse_artifact_references(receipt.locator).references
-                if len(references) != 1 or references[0].token != receipt.locator:
-                    raise ValueError("factual READ reference is not exact")
-                path = references[0].path
-                whole_source = references[0].line_range is None
-            facts.append((receipt.evidence_id, path, whole_source))
-        return tuple(facts)
-
-
-def _validate_planning_target(target, kind, scope) -> None:
-    if target is not None and (type(target) is not AuthoringTarget or kind is not LeadOutcomeKind.QUESTION
-            or scope is None or scope.intent is not AuthoringIntent.AUTHORING or scope.target_paths
-            or scope.activity not in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}):
-        raise ValueError("planning target is classification of an untargeted formal-writing question only")
 
 
 @dataclass(frozen=True, slots=True)
@@ -600,246 +313,6 @@ class CollaborationLeadOutcomeFailurePayload:
             return
         _validate_identifier(self.invocation_id, label="lead failure invocation ID")
         _validate_identifier(self.call_id, label="lead failure call ID")
-
-
-def lead_outcome_scope_paths(
-    kind: LeadOutcomeKind,
-    activity: AuthoringActivity,
-    domains: tuple[ArtifactReviewDomain, ...],
-    writing_read_facts: tuple[tuple[str, str, bool], ...],
-    *,
-    target_paths: tuple[str, ...] = (),
-    ordinary_answer: bool = False,
-) -> tuple[str, ...] | None:
-    """Derive current Lead kind/scope eligibility without granting authority.
-
-    None means unavailable; an empty tuple is a valid WORKFLOW result. Existing
-    substantive QUESTION/PROPOSAL/RECOMMENDATION scopes retain their targets.
-    Ordinary factual ANSWER requires REVIEW and returns canonical writing-READ
-    paths in offered order. Whole and ranged READs may both support inspection.
-    """
-    if (type(kind) is not LeadOutcomeKind or type(ordinary_answer) is not bool
-            or type(activity) is not AuthoringActivity
-            or type(domains) is not tuple
-            or any(type(domain) is not ArtifactReviewDomain for domain in domains)
-            or len(set(domains)) != len(domains)
-            or type(target_paths) is not tuple
-            or any(type(path) is not str for path in target_paths)
-            or len(set(target_paths)) != len(target_paths)
-            or type(writing_read_facts) is not tuple
-            or any(type(fact) is not tuple or len(fact) != 3
-                   or type(fact[0]) is not str or not fact[0]
-                   or type(fact[1]) is not str or not fact[1]
-                   or type(fact[2]) is not bool for fact in writing_read_facts)):
-        raise ValueError("Lead outcome scope requires exact current kind and READ facts")
-    if activity is AuthoringActivity.WORKFLOW:
-        return () if not domains and not target_paths else None
-    if not domains:
-        return None
-    if kind in (LeadOutcomeKind.QUESTION, LeadOutcomeKind.PROPOSAL,
-                LeadOutcomeKind.RECOMMENDATION):
-        return target_paths
-    if (kind is not LeadOutcomeKind.ANSWER or not ordinary_answer
-            or activity is not AuthoringActivity.REVIEW):
-        return None
-    read_domains = {
-        locator: artifact_domain(locator) for _, locator, _ in writing_read_facts
-    }
-    if not set(domains).issubset(set(read_domains.values())):
-        return None
-    paths = tuple(path for path, domain in read_domains.items() if domain in domains)
-    if not set(target_paths).issubset(paths):
-        return None
-    return paths
-
-
-def _validate_lead_evidence_matrix(
-    kind: LeadOutcomeKind,
-    evidence: CollaborationLeadEvidence, *,
-    authoring_scope: AuthoringScope | None = None,
-    preliminary_review: LeadPreliminaryReview | None = None,
-) -> None:
-    if preliminary_review is not None:
-        if (type(preliminary_review) is not LeadPreliminaryReview
-                or kind is not LeadOutcomeKind.ANSWER or authoring_scope is None
-                or not preliminary_scope_eligible(authoring_scope.activity.value,
-                    authoring_scope.target_paths, preliminary_review.targets)
-                or evidence.scope is not LeadOutcomeScope.STORY_SPECIFIC
-                or evidence.status not in {LeadEvidenceStatus.VERIFIED, LeadEvidenceStatus.INCOMPLETE,
-                                           LeadEvidenceStatus.CONFLICTING}):
-            raise ValueError("invalid bounded preliminary judgment")
-        receipts = {item.evidence_id: item for item in evidence.receipts if item.acquisition in {
-            CollaborationEvidenceAcquisition.READ, CollaborationEvidenceAcquisition.ATTACHED_REFERENCE}}
-        writing_kinds = {CollaborationInputKind.CORE_DOCUMENT, CollaborationInputKind.MANUSCRIPT,
-                         CollaborationInputKind.WRITING_ARTIFACT}
-        for target in preliminary_review.targets:
-            if (target.input_id not in preliminary_review.inspected_input_ids
-                    or target.kind not in {ReviewTargetKind.WRITING_ARTIFACT, ReviewTargetKind.READ_SOURCE}):
-                continue
-            receipt = receipts.get(target.input_id)
-            if receipt is None:
-                raise ValueError("preliminary READ target lacks actual current receipt")
-            writing = receipt.source_kind in writing_kinds
-            target_id = receipt.locator if writing else receipt.source_id
-            if receipt.acquisition is CollaborationEvidenceAcquisition.ATTACHED_REFERENCE:
-                references = parse_artifact_references(receipt.locator).references
-                if len(references) != 1 or references[0].token != receipt.locator:
-                    raise ValueError("preliminary attached reference must be exact")
-                target_id = references[0].path
-            if (target.kind is not (ReviewTargetKind.WRITING_ARTIFACT if writing else ReviewTargetKind.READ_SOURCE)
-                    or target.availability is not ReviewTargetAvailability.COMPLETED_READ
-                    or target.target_id != target_id
-                    or target.revision != receipt.revision_digest
-                    or target.content_digest != receipt.content_digest
-                    or target.boundary_digest != receipt.content_digest
-                    or (target.boundary_kind, target.boundary_start, target.boundary_end)
-                        != (receipt.boundary_kind, receipt.boundary_start, receipt.boundary_end)
-                    or (target.whole_source and (receipt.boundary_kind != "whole"
-                        or target.source_digest != receipt.content_digest))
-                    or (receipt.acquisition is CollaborationEvidenceAcquisition.ATTACHED_REFERENCE
-                        and target.source_digest != receipt.revision_digest)):
-                raise ValueError("preliminary READ target differs from its durable receipt")
-        return
-    receipts = evidence.receipts
-    if evidence.scope is LeadOutcomeScope.PREMISE_ANALYSIS:
-        if kind is not LeadOutcomeKind.PROPOSAL:
-            raise validation_failure(
-                ValueError("premise analysis evidence requires a proposal"),
-                "$.kind",
-                "premise analysis evidence requires a candidate-free proposal",
-            )
-        if evidence.status is LeadEvidenceStatus.NOT_APPLICABLE:
-            if receipts:
-                raise validation_failure(
-                    ValueError("unobserved premise analysis cannot carry evidence"),
-                    "$.authoring_scope",
-                    "USER-only premise analysis has no artifact evidence receipts",
-                )
-            return
-    if evidence.scope is LeadOutcomeScope.WORKFLOW_META:
-        if (
-            evidence.status is not LeadEvidenceStatus.NOT_APPLICABLE
-            or receipts
-            or kind is LeadOutcomeKind.PROPOSAL
-        ):
-            raise validation_failure(
-                ValueError('workflow/meta judgment evidence is inconsistent'),
-                '$.authoring_scope.activity',
-                (
-                    'workflow activity requires no story evidence receipts, evidence status '
-                    'not_applicable, and a kind other than proposal'
-                ),
-            )
-        return
-    if evidence.status is LeadEvidenceStatus.NOT_APPLICABLE:
-        raise validation_failure(
-            ValueError('story-specific judgment requires an evidence status'),
-            '$.authoring_scope.activity',
-            'story activity requires a runtime evidence status other than not_applicable',
-        )
-
-    content = tuple(
-        item
-        for item in receipts
-        if item.acquisition
-        in {
-            CollaborationEvidenceAcquisition.ATTACHED_REFERENCE,
-            CollaborationEvidenceAcquisition.READ,
-        }
-        and item.source_state is CollaborationInputState.PRESENT
-        and item.utf8_bytes > 0
-    )
-    statuses = tuple(
-        item
-        for item in receipts
-        if item.acquisition is CollaborationEvidenceAcquisition.CORE_STATUS
-    )
-    if evidence.status is LeadEvidenceStatus.VERIFIED:
-        valid = bool(content)
-        allowed = set(LeadOutcomeKind)
-    elif evidence.status is LeadEvidenceStatus.MISSING:
-        valid = any(
-            (
-                item.acquisition is CollaborationEvidenceAcquisition.ZERO_HIT_SEARCH
-                and CollaborationInputKind.WRITING_ARTIFACT
-                in item.authorized_source_kinds
-            )
-            or (
-                item.acquisition is CollaborationEvidenceAcquisition.CORE_STATUS
-                and item.source_state is CollaborationInputState.ABSENT
-            )
-            for item in receipts
-        )
-        allowed = {
-            LeadOutcomeKind.QUESTION,
-            LeadOutcomeKind.RECOMMENDATION,
-            LeadOutcomeKind.PROPOSAL,
-        }
-    elif evidence.status is LeadEvidenceStatus.EMPTY:
-        valid = any(
-            item.acquisition
-            in {
-                CollaborationEvidenceAcquisition.ATTACHED_REFERENCE,
-                CollaborationEvidenceAcquisition.CORE_STATUS,
-            }
-            and item.source_state is CollaborationInputState.PRESENT
-            and item.utf8_bytes == 0
-            for item in receipts
-        )
-        allowed = {
-            LeadOutcomeKind.QUESTION,
-            LeadOutcomeKind.RECOMMENDATION,
-            LeadOutcomeKind.PROPOSAL,
-        }
-    elif evidence.status is LeadEvidenceStatus.INCOMPLETE:
-        valid = bool(content or statuses)
-        allowed = {
-            LeadOutcomeKind.QUESTION,
-            LeadOutcomeKind.CRITIQUE,
-            LeadOutcomeKind.RECOMMENDATION,
-            LeadOutcomeKind.PROPOSAL,
-        }
-        if (kind is LeadOutcomeKind.ANSWER
-                and type(authoring_scope) is AuthoringScope
-                and authoring_scope.schema_version == AUTHORING_SCOPE_SCHEMA_VERSION
-                and authoring_scope.activity is AuthoringActivity.REVIEW):
-            writing_reads = evidence.factual_writing_read_facts()
-            if writing_reads and lead_outcome_scope_paths(
-                kind, authoring_scope.activity, required_authoring_domains(authoring_scope),
-                writing_reads, target_paths=authoring_scope.target_paths, ordinary_answer=True,
-            ) is not None:
-                allowed.add(LeadOutcomeKind.ANSWER)
-    else:
-        distinct = {
-            (
-                item.source_id,
-                item.locator,
-                item.boundary_kind,
-                item.boundary_start,
-                item.boundary_end,
-                item.start_line,
-                item.end_line,
-                item.content_digest,
-            )
-            for item in content
-        }
-        valid = len(distinct) >= 2
-        allowed = {
-            LeadOutcomeKind.QUESTION,
-            LeadOutcomeKind.CRITIQUE,
-            LeadOutcomeKind.RECOMMENDATION,
-            LeadOutcomeKind.PROPOSAL,
-        }
-    if not valid or kind not in allowed:
-        raise validation_failure(
-            ValueError('lead judgment violates the closed evidence matrix'),
-            '$' if not valid else '$.kind',
-            (
-                'runtime evidence status ' + evidence.status.value + ' requires ' + {LeadEvidenceStatus.VERIFIED: 'at least one nonempty attached-reference or READ receipt', LeadEvidenceStatus.MISSING: 'an authorized zero-hit artifact search or an absent core-document status', LeadEvidenceStatus.EMPTY: 'an attached-reference or core-document receipt proving zero bytes', LeadEvidenceStatus.INCOMPLETE: 'at least one nonempty content receipt or core-document status', LeadEvidenceStatus.CONFLICTING: 'at least two distinct nonempty content receipt identities'}[evidence.status]
-                if not valid
-                else 'expected one of ' + ', '.join((item.value for item in LeadOutcomeKind if item in allowed)) + ' for evidence status ' + evidence.status.value
-            ),
-        )
 
 
 def _validate_objective_paths(paths: tuple[str, ...]) -> None:
@@ -1507,131 +980,6 @@ class LeadProviderOutcome:
 
 
 @dataclass(frozen=True, slots=True)
-class ConversationEventAppend:
-    """Caller-supplied visible event before storage assigns ordering metadata."""
-
-    session_id: str
-    conversation_id: str
-    turn_id: str
-    sender: str
-    recipient: str
-    kind: ConversationEventKind
-    content: str
-
-    def __post_init__(self) -> None:
-        _validate_identifier(self.session_id, label="session ID")
-        _validate_identifier(self.conversation_id, label="conversation ID")
-        _validate_identifier(self.turn_id, label="turn ID")
-        _validate_event_payload(
-            sender=self.sender,
-            recipient=self.recipient,
-            kind=self.kind,
-            content=self.content,
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class ConversationEvent:
-    """One storage-ordered visible event in a conversation transcript."""
-
-    schema_version: int
-    session_id: str
-    conversation_id: str
-    turn_id: str
-    sequence: int
-    timestamp: str
-    sender: str
-    recipient: str
-    kind: ConversationEventKind
-    content: str
-
-    def __post_init__(self) -> None:
-        if (
-            isinstance(self.schema_version, bool)
-            or not isinstance(self.schema_version, int)
-            or self.schema_version != CONVERSATION_EVENT_SCHEMA_VERSION
-        ):
-            raise ValueError("unsupported conversation event schema version")
-        _validate_identifier(self.session_id, label="session ID")
-        _validate_identifier(self.conversation_id, label="conversation ID")
-        _validate_identifier(self.turn_id, label="turn ID")
-        _validate_positive_integer(self.sequence, label="event sequence")
-        _validate_utc_timestamp(self.timestamp, label="timestamp")
-        _validate_event_payload(
-            sender=self.sender,
-            recipient=self.recipient,
-            kind=self.kind,
-            content=self.content,
-        )
-
-    def to_dict(self) -> dict[str, Any]:
-        """Return the exact JSON-compatible authoritative event schema."""
-
-        return {
-            "schema_version": self.schema_version,
-            "session_id": self.session_id,
-            "conversation_id": self.conversation_id,
-            "turn_id": self.turn_id,
-            "sequence": self.sequence,
-            "timestamp": self.timestamp,
-            "sender": self.sender,
-            "recipient": self.recipient,
-            "kind": self.kind.value,
-            "content": self.content,
-        }
-
-
-@dataclass(frozen=True, slots=True)
-class CollaborationActor:
-    """One typed visible actor; only lead/specialist actors carry an agent ID."""
-
-    kind: CollaborationActorKind
-    agent_id: str | None = None
-
-    def __post_init__(self) -> None:
-        _require_enum(self.kind, CollaborationActorKind, "collaboration actor kind")
-        if self.kind is CollaborationActorKind.LEAD:
-            if self.agent_id != LEAD_ORCHESTRATOR:
-                raise ValueError("lead actor must use the canonical lead agent ID")
-        elif self.kind is CollaborationActorKind.SPECIALIST:
-            if self.agent_id not in SPECIALIST_IDS:
-                raise ValueError("specialist actor must use a canonical specialist ID")
-        elif self.agent_id is not None:
-            raise ValueError("only lead and specialist actors carry an agent ID")
-
-
-@dataclass(frozen=True, slots=True)
-class CollaborationInputRevision:
-    """Content-free identity and revision evidence for one closed proposal input."""
-
-    input_id: str
-    kind: CollaborationInputKind
-    locator: str
-    state: CollaborationInputState
-    revision_digest: str
-    start_line: int | None = None
-    end_line: int | None = None
-
-    def __post_init__(self) -> None:
-        _validate_identifier(self.input_id, label="collaboration input ID")
-        _require_enum(self.kind, CollaborationInputKind, "collaboration input kind")
-        _validate_visible_text(
-            self.locator,
-            label="collaboration input locator",
-            maximum=4_096,
-        )
-        _require_enum(self.state, CollaborationInputState, "collaboration input state")
-        _validate_digest(self.revision_digest, label="input revision digest")
-        if (self.start_line is None) is not (self.end_line is None):
-            raise ValueError("input line range must provide both bounds or neither")
-        if self.start_line is not None and self.end_line is not None:
-            _validate_positive_integer(self.start_line, label="input start line")
-            _validate_positive_integer(self.end_line, label="input end line")
-            if self.end_line < self.start_line:
-                raise ValueError("input line range must be ordered")
-
-
-@dataclass(frozen=True, slots=True)
 class CollaborationPremiseSource:
     """A revision snapshot with exact conversation-local ownership."""
     input_revision: CollaborationInputRevision
@@ -1662,27 +1010,6 @@ class CollaborationSharedPremise:
             raise ValueError("shared premise choice cannot be blank")
         _validate_exact_tuple(self.sources, CollaborationPremiseSource, label="shared premise sources", nonempty=True)
         _require_unique(tuple(premise_source_identity(item) for item in self.sources), label="shared premise source identities")
-
-
-@dataclass(frozen=True, slots=True)
-class CollaborationAgentProfile:
-    """Definition and content-free execution fingerprints for one participant."""
-
-    agent_id: str
-    definition_fingerprint: str
-    execution_fingerprint: str
-
-    def __post_init__(self) -> None:
-        if self.agent_id not in ROSTER:
-            raise ValueError("profile agent ID must be canonical")
-        _validate_digest(
-            self.definition_fingerprint,
-            label="definition fingerprint",
-        )
-        _validate_digest(
-            self.execution_fingerprint,
-            label="execution fingerprint",
-        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1981,80 +1308,6 @@ class LeadRecommendationResultPayload:
         if self.state in {LeadRecommendationState.PENDING, LeadRecommendationState.RUNNING}:
             raise ValueError("recommendation result must close the action")
         _validate_visible_text(self.message, label="recommendation result message")
-
-
-@dataclass(frozen=True, slots=True)
-class CollaborationAssignment:
-    """One complete visible and independently budgeted specialist assignment."""
-
-    assignment_id: str
-    specialist_id: str
-    round: int
-    instruction: str
-    input_ids: tuple[str, ...]
-    max_physical_calls: int
-    mode: SpecialistAssignmentMode | None = None
-    review_basis: ReviewBasis | None = None
-
-    def __post_init__(self) -> None:
-        _validate_identifier(self.assignment_id, label="assignment ID")
-        if self.specialist_id not in SPECIALIST_IDS:
-            raise ValueError("assignment specialist ID must be canonical")
-        _validate_positive_integer(self.round, label="assignment round")
-        if self.round > COLLABORATION_ROUND_LIMIT:
-            raise ValueError("assignment round exceeds the collaboration limit")
-        _validate_visible_text(self.instruction, label="assignment instruction")
-        if type(self.input_ids) is not tuple:
-            raise TypeError("assignment input IDs must be an exact tuple")
-        for input_index, input_id in enumerate(self.input_ids):
-            _validate_identifier(input_id, label="assignment input ID")
-        _require_unique(self.input_ids, label="assignment input IDs")
-        _validate_positive_integer(
-            self.max_physical_calls,
-            label="assignment maximum physical calls",
-        )
-        _validate_assignment_routing(self.mode, self.input_ids, self.review_basis)
-
-
-@dataclass(frozen=True, slots=True)
-class CollaborationBudget:
-    """Whole-lineage and whole-next-step physical provider-call reservation."""
-
-    round_limit: int
-    physical_call_limit: int
-    rounds_spent: int
-    rounds_added: int
-    physical_calls_spent: int
-    max_additional_physical_calls: int
-    synthesis_max_physical_calls: int
-
-    def __post_init__(self) -> None:
-        if self.round_limit != COLLABORATION_ROUND_LIMIT:
-            raise ValueError("collaboration round limit must be exactly two")
-        if self.physical_call_limit != COLLABORATION_PHYSICAL_CALL_LIMIT:
-            raise ValueError("collaboration physical-call limit must be exactly twelve")
-        _validate_non_negative_integer(self.rounds_spent, label="rounds spent")
-        if self.rounds_added != 1:
-            raise ValueError("collaboration rounds added must be exactly one")
-        _validate_non_negative_integer(
-            self.physical_calls_spent,
-            label="physical calls spent",
-        )
-        _validate_non_negative_integer(
-            self.max_additional_physical_calls,
-            label="maximum additional physical calls",
-        )
-        _validate_non_negative_integer(
-            self.synthesis_max_physical_calls,
-            label="synthesis maximum physical calls",
-        )
-        if self.rounds_spent + self.rounds_added > self.round_limit:
-            raise ValueError("collaboration proposal would exceed the round limit")
-        if (
-            self.physical_calls_spent + self.max_additional_physical_calls
-            > self.physical_call_limit
-        ):
-            raise ValueError("collaboration proposal would exceed the call limit")
 
 
 @dataclass(frozen=True, slots=True)
@@ -4255,66 +3508,6 @@ def authoring_capture_identity(scope: AuthoringScope, basis: CollaborationPropos
         ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
-def authoring_source_facts(
-    inputs: tuple[CollaborationInputRevision, ...],
-    evidence: CollaborationLeadEvidence | None,
-    *, selected_utf8_bytes: dict[str, int | None] | None = None,
-) -> tuple[AdmissionSource, ...]:
-    """Describe already host-qualified inputs; file indicators are not READs."""
-    facts = []
-    lengths = {} if selected_utf8_bytes is None else selected_utf8_bytes
-    for item in inputs:
-        if item.state is not CollaborationInputState.PRESENT:
-            continue
-        if item.kind is CollaborationInputKind.USER_INPUT:
-            facts.append(AdmissionSource(item.input_id, AdmissionSourceKind.USER,
-                item.locator, item.revision_digest, "literal_user", lengths.get(item.input_id)))
-        elif item.kind in {CollaborationInputKind.CONVERSATION_EVENT,
-                           CollaborationInputKind.ARTIFACT_CANDIDATE}:
-            reads = () if evidence is None else tuple(
-                receipt for receipt in evidence.receipts
-                if receipt.acquisition is CollaborationEvidenceAcquisition.READ
-                and receipt.evidence_id == item.input_id
-            )
-            if reads:
-                if len(reads) != 1 or sum(
-                    other.input_id == item.input_id for other in inputs
-                ) != 1:
-                    raise ValueError("authoring admission source identities collide")
-                receipt = reads[0]
-                if (
-                    receipt.source_state is not CollaborationInputState.PRESENT
-                    or receipt.source_kind is not item.kind
-                    or receipt.locator != item.locator
-                    or receipt.content_digest != item.revision_digest
-                    or receipt.start_line != item.start_line
-                    or receipt.end_line != item.end_line
-                    or receipt.boundary_kind not in {"whole", "records", "artifact_lines"}
-                    or (
-                        receipt.boundary_kind == "artifact_lines"
-                        and (receipt.boundary_start, receipt.boundary_end)
-                        != (item.start_line, item.end_line)
-                    )
-                ):
-                    raise ValueError("authoring admission READ input is unbound")
-            else:
-                facts.append(AdmissionSource(item.input_id, AdmissionSourceKind.MATERIAL,
-                    item.locator, item.revision_digest, "input_only", lengths.get(item.input_id)))
-    if evidence is not None:
-        for receipt in evidence.receipts:
-            if (receipt.acquisition in {CollaborationEvidenceAcquisition.READ,
-                                        CollaborationEvidenceAcquisition.ATTACHED_REFERENCE}
-                    and receipt.source_state is CollaborationInputState.PRESENT
-                    and receipt.content_digest is not None):
-                facts.append(AdmissionSource(receipt.evidence_id, AdmissionSourceKind.READ,
-                    receipt.operation_id + "/" + receipt.result_correlation_id + "/" + receipt.evidence_id,
-                    admission_digest(_evidence_receipt_value(receipt)), "actual_read", receipt.utf8_bytes))
-    by_id = {item.source_id: item for item in facts}
-    if len(by_id) != len(facts):
-        raise ValueError("authoring admission source identities collide")
-    return tuple(facts)
-
-
 def _validate_captured_admission(
     scope: AuthoringScope | None, basis: CollaborationProposalBasis, *, required: bool = False,
 ) -> None:
@@ -4398,19 +3591,6 @@ def specialist_assessments_for_mode(mode: SpecialistAssignmentMode | None) -> tu
                 CollaborationSpecialistAssessment.CONFLICT, CollaborationSpecialistAssessment.INSUFFICIENT_EVIDENCE)
     return (CollaborationSpecialistAssessment.SUPPORTS, CollaborationSpecialistAssessment.CONCERN,
             CollaborationSpecialistAssessment.CONFLICT, CollaborationSpecialistAssessment.INSUFFICIENT_EVIDENCE)
-
-
-def _decode_contribution(value: object) -> AuthoringContribution:
-    item = _object(value, {"domain", "role"}, label="authoring contribution")
-    return AuthoringContribution(_enum(ArtifactReviewDomain, item["domain"], label="contribution domain"),
-                                _enum(AuthoringContributionRole, item["role"], label="contribution role"))
-
-
-def _decode_dependency_slot(value: object) -> AuthoringDependencySlot:
-    item = _object(value, {"slot_id", "dependent_domains"}, label="dependency slot")
-    return AuthoringDependencySlot(_string(item["slot_id"], label="slot ID"),
-                                  tuple(_enum(ArtifactReviewDomain, domain, label="dependent domain")
-                                        for domain in _array(item["dependent_domains"], label="dependent domains")))
 
 
 def _decode_shared_premise_intent(value: object) -> LeadSharedPremiseIntent:
@@ -4633,209 +3813,6 @@ def decode_collaboration_batch(payload: bytes) -> CollaborationEventBatch:
     )
 
 
-def authoring_scope_to_dict(scope: AuthoringScope) -> dict[str, object]:
-    """Encode the exact versioned scope shape owned by collaboration codecs."""
-
-    if type(scope) is not AuthoringScope:
-        raise TypeError("authoring scope must be an AuthoringScope")
-    result = {
-        **({"intent": scope.intent.value} if scope.schema_version >= 2 else {}),
-        "activity": scope.activity.value,
-        "domains": [domain.value for domain in scope.domains],
-        "interpretation": scope.interpretation,
-        "schema_version": scope.schema_version,
-        "target_paths": list(scope.target_paths),
-        "task_id": scope.task_id,
-        "task_revision": scope.task_revision,
-    }
-
-    if scope.schema_version == 3:
-        result['contributions'] = [{'domain': item.domain.value, 'role': item.role.value} for item in scope.contributions]
-        result['dependency_slots'] = [{'slot_id': item.slot_id, 'dependent_domains': [domain.value for domain in item.dependent_domains]} for item in scope.dependency_slots]
-    return result
-
-def authoring_scope_from_dict(value: object) -> AuthoringScope:
-    """Decode a complete strict scope; absent legacy fields are handled outside."""
-    fields = {"activity", "domains", "interpretation", "schema_version", "target_paths", "task_id", "task_revision"}
-    if type(value) is dict and value.get("schema_version") in {2, 3}:
-        fields.add("intent")
-    if type(value) is dict and value.get("schema_version") == 3:
-        fields.update({"contributions", "dependency_slots"})
-    item = _object(value, fields, label="authoring scope")
-    return AuthoringScope(
-        contributions=tuple(_decode_contribution(entry) for entry in _array(item['contributions'], label='contributions')) if item['schema_version'] == 3 else (),
-        dependency_slots=tuple(_decode_dependency_slot(entry) for entry in _array(item['dependency_slots'], label='dependency slots')) if item['schema_version'] == 3 else (),
-        intent=validation_call('$.intent', _enum, AuthoringIntent, item.get("intent", "authoring"), label="authoring intent"),
-        activity=validation_call(
-            '$.activity',
-            _enum,
-            AuthoringActivity,
-            item['activity'],
-            label='authoring activity',
-        ),
-        target_paths=tuple(
-            validation_call(f"$.target_paths[{index}]", _string, path, label="authoring target path")
-            for index, path in enumerate(validation_call(
-                '$.target_paths',
-                _array,
-                item['target_paths'],
-                label='authoring target paths',
-            ))
-        ),
-        domains=tuple(
-            validation_call(
-                f'$.domains[{index}]',
-                _enum,
-                ArtifactReviewDomain,
-                domain,
-                label='authoring domain',
-            )
-            for index, domain in enumerate(validation_call('$.domains', _array, item['domains'], label='authoring domains'))
-        ),
-        interpretation=validation_call(
-            '$.interpretation',
-            _string,
-            item['interpretation'],
-            label='authoring interpretation',
-        ),
-        task_id=validation_call("$.task_id", _string, item["task_id"], label="authoring task ID"),
-        task_revision=validation_call(
-            '$.task_revision',
-            _integer,
-            item['task_revision'],
-            label='authoring task revision',
-        ),
-        schema_version=validation_call(
-            '$.schema_version',
-            _integer,
-            item['schema_version'],
-            label='authoring schema version',
-        ),
-    )
-
-
-def review_basis_to_dict(basis: ReviewBasis) -> dict[str, object]:
-    """Encode concrete review-input correlation without granting read authority."""
-
-    if type(basis) is not ReviewBasis:
-        raise TypeError("review basis must be a ReviewBasis")
-    return {
-        "candidate_input_ids": list(basis.candidate_input_ids),
-        "criteria": basis.criteria,
-        "schema_version": basis.schema_version,
-    }
-
-
-def review_basis_from_dict(value: object) -> ReviewBasis:
-    """Decode a complete strict, versioned candidate review basis."""
-
-    item = _object(
-        value,
-        {"candidate_input_ids", "criteria", "schema_version"},
-        label="review basis",
-    )
-    return ReviewBasis(
-        candidate_input_ids=tuple(
-            _string(input_id, label="review candidate input ID")
-            for input_id in _array(
-                item["candidate_input_ids"], label="review candidate input IDs"
-            )
-        ),
-        criteria=_string(item["criteria"], label="review criteria"),
-        schema_version=_integer(item["schema_version"], label="review schema version"),
-    )
-
-
-def _decode_optional_authoring_scope(item: dict[str, object]) -> AuthoringScope | None:
-    if "authoring_scope" not in item:
-        return None
-    return authoring_scope_from_dict(item["authoring_scope"])
-
-
-def _decode_assignment_mode(
-    item: dict[str, object],
-) -> SpecialistAssignmentMode | None:
-    if "mode" not in item:
-        return None
-    return _enum(SpecialistAssignmentMode, item["mode"], label="assignment mode")
-
-
-def _decode_assignment_review_basis(item: dict[str, object]) -> ReviewBasis | None:
-    value = item.get("review_basis")
-    return None if value is None else review_basis_from_dict(value)
-
-
-def _actor_value(actor: CollaborationActor) -> dict[str, object]:
-    return {"agent_id": actor.agent_id, "kind": actor.kind.value}
-
-
-def _input_value(item: CollaborationInputRevision) -> dict[str, object]:
-    return {
-        "end_line": item.end_line,
-        "input_id": item.input_id,
-        "kind": item.kind.value,
-        "locator": item.locator,
-        "revision_digest": item.revision_digest,
-        "start_line": item.start_line,
-        "state": item.state.value,
-    }
-
-
-def _profile_value(profile: CollaborationAgentProfile) -> dict[str, object]:
-    return {
-        "agent_id": profile.agent_id,
-        "definition_fingerprint": profile.definition_fingerprint,
-        "execution_fingerprint": profile.execution_fingerprint,
-    }
-
-
-def _evidence_receipt_value(
-    receipt: CollaborationEvidenceReceipt,
-) -> dict[str, object]:
-    return {
-        "acquisition": receipt.acquisition.value,
-        "action_index": receipt.action_index,
-        "authorized_source_ids": list(receipt.authorized_source_ids),
-        "authorized_source_fingerprint": receipt.authorized_source_fingerprint,
-        "authorized_source_kinds": [
-            item.value for item in receipt.authorized_source_kinds
-        ],
-        "artifact_path_prefix": receipt.artifact_path_prefix,
-        "boundary_end": receipt.boundary_end,
-        "boundary_kind": receipt.boundary_kind,
-        "boundary_start": receipt.boundary_start,
-        "content_digest": receipt.content_digest,
-        "end_line": receipt.end_line,
-        "evidence_id": receipt.evidence_id,
-        "locator": receipt.locator,
-        "manifest_digest": receipt.manifest_digest,
-        "operation_id": receipt.operation_id,
-        "ordinal": receipt.ordinal,
-        "origin_action_index": receipt.origin_action_index,
-        "query_count": receipt.query_count,
-        "query_digest": receipt.query_digest,
-        "result_correlation_id": receipt.result_correlation_id,
-        "revision_digest": receipt.revision_digest,
-        "source_id": receipt.source_id,
-        "source_kind": (
-            None if receipt.source_kind is None else receipt.source_kind.value
-        ),
-        "source_state": (
-            None if receipt.source_state is None else receipt.source_state.value
-        ),
-        "start_line": receipt.start_line,
-        "utf8_bytes": receipt.utf8_bytes,
-    }
-
-
-def _lead_evidence_value(evidence: CollaborationLeadEvidence) -> dict[str, object]:
-    return {
-        "receipts": [_evidence_receipt_value(item) for item in evidence.receipts],
-        "scope": evidence.scope.value,
-        "status": evidence.status.value,
-    }
-
-
 def _basis_value(basis: CollaborationProposalBasis) -> dict[str, object]:
     return {
         "core_document_readiness": readiness_basis_to_dict(basis.core_document_readiness) if basis.core_document_readiness is not None else None,
@@ -4856,36 +3833,6 @@ def _basis_value(basis: CollaborationProposalBasis) -> dict[str, object]:
     }
 
 
-def _assignment_value(assignment: CollaborationAssignment) -> dict[str, object]:
-    return {
-        "assignment_id": assignment.assignment_id,
-        "input_ids": list(assignment.input_ids),
-        "instruction": assignment.instruction,
-        "max_physical_calls": assignment.max_physical_calls,
-        "round": assignment.round,
-        "specialist_id": assignment.specialist_id,
-        **_assignment_routing_value(assignment.mode, assignment.review_basis),
-    }
-
-
-def _assignment_routing_value(
-    mode: SpecialistAssignmentMode | None,
-    review_basis: ReviewBasis | None,
-) -> dict[str, object]:
-    if mode is None:
-        return {}
-    return {
-        "mode": mode.value,
-        "review_basis": (
-            None if review_basis is None else review_basis_to_dict(review_basis)
-        ),
-    }
-
-
-def _authoring_scope_fields(scope: AuthoringScope | None) -> dict[str, object]:
-    return {} if scope is None else {"authoring_scope": authoring_scope_to_dict(scope)}
-
-
 def _lead_proposal_intent_value(intent: LeadProposalIntent) -> dict[str, object]:
     return {
         **({"stage_plan": stage_plan_to_dict(intent.stage_plan)} if intent.stage_plan is not None else {}),
@@ -4903,18 +3850,6 @@ def _lead_proposal_intent_value(intent: LeadProposalIntent) -> dict[str, object]
         "purpose": intent.purpose,
         "relation": intent.relation.value,
         **_authoring_scope_fields(intent.authoring_scope),
-    }
-
-
-def _budget_value(budget: CollaborationBudget) -> dict[str, object]:
-    return {
-        "max_additional_physical_calls": budget.max_additional_physical_calls,
-        "physical_call_limit": budget.physical_call_limit,
-        "physical_calls_spent": budget.physical_calls_spent,
-        "round_limit": budget.round_limit,
-        "rounds_added": budget.rounds_added,
-        "rounds_spent": budget.rounds_spent,
-        "synthesis_max_physical_calls": budget.synthesis_max_physical_calls,
     }
 
 
@@ -5421,210 +4356,6 @@ def _batch_value(batch: CollaborationEventBatch) -> dict[str, object]:
     }
 
 
-def _decode_actor(value: object) -> CollaborationActor:
-    item = _object(value, {"agent_id", "kind"}, label="collaboration actor")
-    return CollaborationActor(
-        kind=_enum(CollaborationActorKind, item["kind"], label="actor kind"),
-        agent_id=_optional_string(item["agent_id"], label="actor agent ID"),
-    )
-
-
-def _decode_input(value: object) -> CollaborationInputRevision:
-    item = _object(
-        value,
-        {
-            "end_line",
-            "input_id",
-            "kind",
-            "locator",
-            "revision_digest",
-            "start_line",
-            "state",
-        },
-        label="collaboration input",
-    )
-    return CollaborationInputRevision(
-        input_id=_string(item["input_id"], label="input ID"),
-        kind=_enum(CollaborationInputKind, item["kind"], label="input kind"),
-        locator=_string(item["locator"], label="input locator"),
-        state=_enum(CollaborationInputState, item["state"], label="input state"),
-        revision_digest=_string(item["revision_digest"], label="input digest"),
-        start_line=_optional_integer(item["start_line"], label="input start line"),
-        end_line=_optional_integer(item["end_line"], label="input end line"),
-    )
-
-
-def _decode_profile(value: object) -> CollaborationAgentProfile:
-    item = _object(
-        value,
-        {"agent_id", "definition_fingerprint", "execution_fingerprint"},
-        label="collaboration profile",
-    )
-    return CollaborationAgentProfile(
-        agent_id=_string(item["agent_id"], label="profile agent ID"),
-        definition_fingerprint=_string(
-            item["definition_fingerprint"],
-            label="definition fingerprint",
-        ),
-        execution_fingerprint=_string(
-            item["execution_fingerprint"],
-            label="execution fingerprint",
-        ),
-    )
-
-
-def _decode_evidence_receipt(value: object) -> CollaborationEvidenceReceipt:
-    fields = {
-        "acquisition",
-        "action_index",
-        "authorized_source_ids",
-        "authorized_source_fingerprint",
-        "authorized_source_kinds",
-        "artifact_path_prefix",
-        "boundary_end",
-        "boundary_kind",
-        "boundary_start",
-        "content_digest",
-        "end_line",
-        "evidence_id",
-        "locator",
-        "manifest_digest",
-        "operation_id",
-        "ordinal",
-        "origin_action_index",
-        "query_count",
-        "query_digest",
-        "result_correlation_id",
-        "revision_digest",
-        "source_id",
-        "source_kind",
-        "source_state",
-        "start_line",
-        "utf8_bytes",
-    }
-    item = _object(value, fields, label="collaboration evidence receipt")
-    source_kind = item["source_kind"]
-    source_state = item["source_state"]
-    return CollaborationEvidenceReceipt(
-        evidence_id=_string(item["evidence_id"], label="evidence ID"),
-        acquisition=_enum(
-            CollaborationEvidenceAcquisition,
-            item["acquisition"],
-            label="evidence acquisition",
-        ),
-        operation_id=_string(item["operation_id"], label="evidence operation ID"),
-        result_correlation_id=_string(
-            item["result_correlation_id"],
-            label="evidence result correlation ID",
-        ),
-        manifest_digest=_string(
-            item["manifest_digest"],
-            label="evidence manifest digest",
-        ),
-        source_id=_optional_string(item["source_id"], label="evidence source ID"),
-        source_kind=(
-            None
-            if source_kind is None
-            else _enum(
-                CollaborationInputKind,
-                source_kind,
-                label="evidence source kind",
-            )
-        ),
-        locator=_optional_string(item["locator"], label="evidence locator"),
-        source_state=(
-            None
-            if source_state is None
-            else _enum(
-                CollaborationInputState,
-                source_state,
-                label="evidence source state",
-            )
-        ),
-        revision_digest=_optional_string(
-            item["revision_digest"],
-            label="evidence revision digest",
-        ),
-        content_digest=_optional_string(
-            item["content_digest"],
-            label="evidence content digest",
-        ),
-        utf8_bytes=_integer(item["utf8_bytes"], label="evidence UTF-8 bytes"),
-        boundary_kind=_optional_string(
-            item["boundary_kind"],
-            label="evidence boundary kind",
-        ),
-        boundary_start=_optional_integer(
-            item["boundary_start"],
-            label="evidence boundary start",
-        ),
-        boundary_end=_optional_integer(
-            item["boundary_end"],
-            label="evidence boundary end",
-        ),
-        start_line=_optional_integer(item["start_line"], label="evidence start line"),
-        end_line=_optional_integer(item["end_line"], label="evidence end line"),
-        ordinal=_optional_integer(item["ordinal"], label="evidence ordinal"),
-        action_index=_optional_integer(
-            item["action_index"], label="evidence action index"
-        ),
-        origin_action_index=_optional_integer(
-            item["origin_action_index"],
-            label="evidence origin action index",
-        ),
-        query_digest=_optional_string(
-            item["query_digest"], label="evidence query digest"
-        ),
-        query_count=_integer(item["query_count"], label="evidence query count"),
-        authorized_source_ids=tuple(
-            _string(source_id, label="authorized evidence source ID")
-            for source_id in _array(
-                item["authorized_source_ids"],
-                label="authorized evidence source IDs",
-            )
-        ),
-        authorized_source_fingerprint=_optional_string(
-            item["authorized_source_fingerprint"],
-            label="authorized evidence source fingerprint",
-        ),
-        authorized_source_kinds=tuple(
-            _enum(
-                CollaborationInputKind,
-                kind,
-                label="authorized evidence source kind",
-            )
-            for kind in _array(
-                item["authorized_source_kinds"],
-                label="authorized evidence source kinds",
-            )
-        ),
-        artifact_path_prefix=_optional_string(
-            item["artifact_path_prefix"],
-            label="evidence artifact path prefix",
-        ),
-    )
-
-
-def _decode_lead_evidence(value: object) -> CollaborationLeadEvidence:
-    item = _object(
-        value,
-        {"receipts", "scope", "status"},
-        label="lead evidence",
-    )
-    return CollaborationLeadEvidence(
-        scope=_enum(LeadOutcomeScope, item["scope"], label="lead evidence scope"),
-        status=_enum(
-            LeadEvidenceStatus,
-            item["status"],
-            label="lead evidence status",
-        ),
-        receipts=tuple(
-            _decode_evidence_receipt(receipt)
-            for receipt in _array(item["receipts"], label="lead evidence receipts")
-        ),
-    )
-
-
 def _decode_lead_proposal_intent(value: object) -> LeadProposalIntent:
     item = _object_with_optional_extensions(
         value,
@@ -5721,75 +4452,6 @@ def _decode_basis(value: object) -> CollaborationProposalBasis:
             None
             if item["evidence"] is None
             else _decode_lead_evidence(item["evidence"])
-        ),
-    )
-
-
-def _decode_assignment(value: object) -> CollaborationAssignment:
-    item = _object_with_extension(
-        value,
-        {
-            "assignment_id",
-            "input_ids",
-            "instruction",
-            "max_physical_calls",
-            "round",
-            "specialist_id",
-        },
-        {"mode", "review_basis"},
-        label="collaboration assignment",
-    )
-    return CollaborationAssignment(
-        assignment_id=_string(item["assignment_id"], label="assignment ID"),
-        specialist_id=_string(item["specialist_id"], label="specialist ID"),
-        round=_integer(item["round"], label="assignment round"),
-        instruction=_string(item["instruction"], label="assignment instruction"),
-        input_ids=tuple(
-            _string(input_id, label="assignment input ID")
-            for input_id in _array(item["input_ids"], label="assignment input IDs")
-        ),
-        max_physical_calls=_integer(
-            item["max_physical_calls"],
-            label="assignment maximum physical calls",
-        ),
-        mode=_decode_assignment_mode(item),
-        review_basis=_decode_assignment_review_basis(item),
-    )
-
-
-def _decode_budget(value: object) -> CollaborationBudget:
-    item = _object(
-        value,
-        {
-            "max_additional_physical_calls",
-            "physical_call_limit",
-            "physical_calls_spent",
-            "round_limit",
-            "rounds_added",
-            "rounds_spent",
-            "synthesis_max_physical_calls",
-        },
-        label="collaboration budget",
-    )
-    return CollaborationBudget(
-        round_limit=_integer(item["round_limit"], label="round limit"),
-        physical_call_limit=_integer(
-            item["physical_call_limit"],
-            label="physical-call limit",
-        ),
-        rounds_spent=_integer(item["rounds_spent"], label="rounds spent"),
-        rounds_added=_integer(item["rounds_added"], label="rounds added"),
-        physical_calls_spent=_integer(
-            item["physical_calls_spent"],
-            label="physical calls spent",
-        ),
-        max_additional_physical_calls=_integer(
-            item["max_additional_physical_calls"],
-            label="maximum additional calls",
-        ),
-        synthesis_max_physical_calls=_integer(
-            item["synthesis_max_physical_calls"],
-            label="synthesis maximum calls",
         ),
     )
 
@@ -7313,164 +5975,10 @@ def _validate_collaboration_direction(
             raise ValueError("provider-call recipient must match its exact role")
 
 
-def _validate_authoring_evidence_scope(
-    scope: AuthoringScope | None,
-    evidence_scope: LeadOutcomeScope,
-) -> None:
-    if scope is None:
-        return
-    if evidence_scope is LeadOutcomeScope.PREMISE_ANALYSIS:
-        raise validation_failure(
-            ValueError("premise analysis cannot carry authoring scope"),
-            "$.authoring_scope",
-            "premise analysis requires no authoring scope or candidate authority",
-        )
-    if type(scope) is not AuthoringScope:
-        raise validation_failure(
-            TypeError('authoring scope must be an AuthoringScope'),
-            '$',
-            'authoring scope must be an AuthoringScope',
-        )
-    if (
-        scope.activity is not AuthoringActivity.WORKFLOW
-        and evidence_scope is not LeadOutcomeScope.STORY_SPECIFIC
-    ):
-        raise validation_failure(
-            ValueError('story authoring requires story-specific evidence scope'),
-            '$',
-            'story authoring requires story-specific evidence scope',
-        )
-
-
-def _validate_assignment_routing(
-    mode: SpecialistAssignmentMode | None,
-    input_ids: tuple[str, ...],
-    review_basis: ReviewBasis | None,
-) -> None:
-    if mode is None:
-        if review_basis is not None:
-            raise validation_failure(
-                ValueError('legacy assignment cannot carry a review basis'),
-                '$',
-                'legacy assignment cannot carry a review basis',
-            )
-        return
-    validate_specialist_assignment(mode, input_ids, review_basis)
-
-
-def _validate_scoped_assignments(
-    scope: AuthoringScope | None,
-    specialist_ids: tuple[str, ...],
-    modes: tuple[SpecialistAssignmentMode | None, ...],
-    premise_decision: PremiseQuestionIntent | None = None,
-    *,
-    stage_plan: SpecialistStagePlan | None = None,
-    _scope_rules=authoring_scope_rules,
-    _rosters=legal_specialist_rosters,
-) -> None:
-    if premise_decision is not None:
-        if type(premise_decision) is not PremiseQuestionIntent or scope is not None:
-            raise ValueError("premise analysis is separate from authoring scope")
-        if specialist_ids != specialists_for_domains(premise_decision.dependent_domains) or any(mode is not SpecialistAssignmentMode.PREMISE_ANALYSIS for mode in modes):
-            raise ValueError("premise analyst roster must match the complete question domains")
-        return
-    if scope is None:
-        if any(mode is not None for mode in modes):
-            raise validation_failure(
-                ValueError('explicit assignment modes require an authoring scope'),
-                '$',
-                'explicit assignment modes require an authoring scope',
-            )
-        return
-    validate_stage_routing(scope, specialist_ids, stage_plan)
-    if stage_plan is not None:
-        if stage_plan.stage not in {ReviewStage.SPECIALIST_WORK, ReviewStage.FINAL_CANDIDATE_REVIEW}:
-            raise ValueError("a nonexecution review stage cannot dispatch assignments")
-    if scope.activity is AuthoringActivity.WORKFLOW:
-        raise validation_failure(
-            ValueError('workflow scope cannot dispatch story specialists'),
-            '$',
-            'workflow scope cannot dispatch story specialists',
-        )
-    if any(type(mode) is not SpecialistAssignmentMode for mode in modes):
-        raise validation_failure(
-            TypeError('scoped assignments require explicit draft or review modes'),
-            '$',
-            'scoped assignments require explicit draft or review modes',
-        )
-    expected_mode = (
-        SpecialistAssignmentMode.REVIEW
-        if scope.activity is AuthoringActivity.REVIEW
-        else SpecialistAssignmentMode.DRAFT
-    )
-    if scope.intent is AuthoringIntent.REVIEW_ONLY and any(mode is not SpecialistAssignmentMode.REVIEW for mode in modes):
-        raise validation_failure(ValueError('review-only assignments cannot draft'), '$', 'review-only assignments must review the supplied material')
-    if scope.schema_version < 3 and SpecialistAssignmentMode.CONSTRAINT_ASSESSMENT in modes:
-        raise ValueError('legacy assignments cannot acquire constraint duties')
-    required = required_authoring_specialists(scope)
-    if scope.schema_version == 3:
-        declared = _scope_rules(
-            scope.activity, scope.intent, scope.domains, scope.contributions,
-            target_paths=scope.target_paths, dependency_slots=scope.dependency_slots,
-            schema_version=scope.schema_version,
-        )
-        if stage_plan is None and specialist_ids not in _rosters(declared):
-            raise ValueError('scope3 assignments must match the complete declared specialist union')
-    if any(
-        mode is not (assignment_mode_for_specialist(scope, specialist_id) if scope.schema_version == 3 else expected_mode)
-        for specialist_id, mode in zip(specialist_ids, modes, strict=True)
-        if specialist_id in required
-    ):
-        raise validation_failure(
-            ValueError('required specialists must perform the scoped activity'),
-            '$',
-            'required specialists must perform the scoped activity',
-        )
-
-
 def _decode_provider_usage(value: object) -> ProviderUsage:
     item = _object(value, {"input_tokens", "output_tokens", "cached_input_tokens"}, label="provider usage")
     return ProviderUsage(**{name: None if count is None else _integer(count, label=name)
                             for name, count in item.items()})
-
-
-def _validate_event_payload(
-    *,
-    sender: str,
-    recipient: str,
-    kind: ConversationEventKind,
-    content: str,
-) -> None:
-    """Validate one visible event's kind, actor direction, and content.
-
-    Content must be nonempty strict UTF-8 and actors must match the event kind.
-    The helper performs no mutation and raises ``TypeError`` or ``ValueError``.
-    """
-
-    if not isinstance(kind, ConversationEventKind):
-        raise TypeError("conversation event kind must be a ConversationEventKind")
-    if not isinstance(sender, str):
-        raise TypeError("conversation event sender must be a string")
-    if not isinstance(recipient, str):
-        raise TypeError("conversation event recipient must be a string")
-    if kind is ConversationEventKind.USER_MESSAGE:
-        actors_are_valid = sender == "user" and recipient in ROSTER
-    elif kind is ConversationEventKind.AGENT_REPLY:
-        actors_are_valid = sender in ROSTER and recipient == "user"
-    else:
-        actors_are_valid = sender == "runtime" and recipient == "user"
-    if not actors_are_valid:
-        raise ValueError(f"invalid actors for conversation event kind {kind.value!r}")
-    if not isinstance(content, str):
-        raise TypeError("conversation event content must be a string")
-    try:
-        content.encode("utf-8", errors="strict")
-    except UnicodeEncodeError:
-        _raise_content_free_value_error(
-            "conversation event content must be valid UTF-8"
-        )
-    if not content:
-        raise ValueError("conversation event content must not be empty")
 
 
 __all__ = [

@@ -924,12 +924,31 @@ class ConversationPackageBoundaryTests(unittest.TestCase):
             "COLLABORATION_ROUND_LIMIT", "COLLABORATION_PHYSICAL_CALL_LIMIT",
             "COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES", "ARTIFACT_REVIEW_SCHEMA_VERSION",
         }
+        contract_definitions = {
+            "event_contracts/conversation_records.py": {"ConversationEvent"},
+            "event_contracts/proposal_inputs.py": {
+                "CollaborationActor",
+                "CollaborationAgentProfile",
+                "CollaborationAssignment",
+                "CollaborationBudget",
+                "CollaborationInputRevision",
+                "authoring_scope_from_dict",
+                "authoring_scope_to_dict",
+                "review_basis_from_dict",
+                "review_basis_to_dict",
+            },
+            "event_contracts/evidence.py": {"CollaborationEvidenceReceipt", "CollaborationLeadEvidence"},
+            "event_contracts/lead_scope.py": {"lead_outcome_scope_paths"},
+        }
+        moved_definitions = set().union(*contract_definitions.values())
+        event_definitions = _EVENT_EXPORTS - vocabulary_constants - moved_definitions
         expected_by_file = {
             "__init__.py": (("__init__.py", set()),),
             "catalog.py": (("catalog.py", _CATALOG_EXPORTS),),
             "events.py": (
-                ("events.py", (_EVENT_EXPORTS - vocabulary_constants) | {"build_final_review_evidence"}),
+                ("events.py", event_definitions | {"build_final_review_evidence"}),
                 ("event_vocabulary.py", _VOCABULARY_EXPORTS | vocabulary_constants),
+                *contract_definitions.items(),
             ),
             "context.py": (("context.py", _CONTEXT_EXPORTS | {
                 "document_lineage_cost", "project_document_plan_views", "is_new_task_recommendation_source"}),),
