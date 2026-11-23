@@ -21572,6 +21572,31 @@
       "depends_on": []
     },
     {
+      "name": "provider.legacy-thread-compatibility",
+      "boundary": "legacy-provider-thread-compatibility",
+      "paths": [
+        "src/story_writing_agents/provider_legacy_thread_compatibility.py"
+      ],
+      "focused_ids": [
+        "tests.test_codex_backend.CodexBackendTestCase.test_conversation_thread_spans_subjects_and_restarts_on_fingerprint",
+        "tests.test_codex_backend.CodexBackendTestCase.test_hot_same_provider_profile_applies_now_and_reuses_thread"
+      ],
+      "affected_ids": [
+        "tests.test_antigravity_parity.AntigravityParityTests.test_mixed_provider_dispatch_and_thread_locks_are_independent",
+        "tests.test_codex_backend.CodexBackendTestCase.test_a_to_b_to_a_route_generation_never_resumes_old_a_threads_after_restart",
+        "tests.test_codex_backend.CodexBackendTestCase.test_artifact_failure_is_fail_open_and_preserves_decode_exception",
+        "tests.test_codex_backend.CodexBackendTestCase.test_conversation_thread_spans_subjects_and_restarts_on_fingerprint",
+        "tests.test_codex_backend.CodexBackendTestCase.test_hot_same_provider_profile_applies_now_and_reuses_thread",
+        "tests.test_codex_backend.CodexBackendTestCase.test_provider_invocation_error_preserves_adapter_cause_and_taint",
+        "tests.test_codex_backend.CodexBackendTestCase.test_reference_read_converse_uses_one_call_and_one_context",
+        "tests.test_codex_backend.CodexBackendTestCase.test_reference_read_retrieval_preserves_action_indices_and_budgets",
+        "tests.test_codex_backend.CodexBackendTestCase.test_retrieval_exact_initial_continuation_payload_rules_schema_and_frame",
+        "tests.test_codex_backend.CodexBackendTestCase.test_structured_decode_failures_taint_existing_thread_once"
+      ],
+      "depends_on": []
+    },
+
+    {
       "name": "provider.bound-agent-request-validation",
       "boundary": "bound-agent-request-validation",
       "paths": [
