@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from threading import RLock
+from threading import RLock
+from typing import TypeVar
 
 from .agents import ROSTER
+from .debug_log import DebugOperation
+from .errors import ConfigurationError
 from .provider_adapter import AgentExecutionProfile
+from .provider_adapter_generations import AdapterGeneration, ProviderAdapterGenerations
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,7 +25,13 @@ class _ProfileObservationSnapshot:
 class ProviderExecutionProfileObservations:
     """Track confirmation and thread observations under the Backend's generation lock."""
 
-    def __init__(self, startup_switched_agents: frozenset[str]) -> None:
+    def __init__(
+        self,
+        startup_switched_agents: frozenset[str],
+        *,
+        generation_lock: RLock,
+        adapter_generations: ProviderAdapterGenerations,
+    ) -> None:
         self._profile_confirmed = {agent_id: False for agent_id in ROSTER}
         self._active_profile_correlation = {agent_id: "startup" for agent_id in ROSTER}
         self._profile_thread_status = {
@@ -30,6 +42,8 @@ class ProviderExecutionProfileObservations:
             )
             for agent_id in ROSTER
         }
+        self._generation_lock = generation_lock
+        self._adapter_generations = adapter_generations
 
     def snapshot_locked(self) -> _ProfileObservationSnapshot:
         return _ProfileObservationSnapshot(
@@ -90,3 +104,82 @@ class ProviderExecutionProfileObservations:
             self._profile_confirmed[agent_id] = True
             return True
         return False
+
+    def active_profile(self, agent_id: str) -> AgentExecutionProfile:
+        """Return the exact active profile used for the next agent invocation."""
+
+        if agent_id not in ROSTER:
+            raise ConfigurationError(f"unknown agent: {agent_id}")
+        with self._generation_lock:
+            return self._adapter_generations.active.profiles[agent_id]
+
+    def active_profiles(self) -> tuple[AgentExecutionProfile, ...]:
+        """Return the active roster in canonical order."""
+
+        with self._generation_lock:
+            profiles = self._adapter_generations.active.profiles
+            return tuple(profiles[agent_id] for agent_id in ROSTER)
+
+    def confirmation(self, agent_id: str) -> str:
+        """Return pending or confirmed for the active execution profile."""
+
+        if agent_id not in ROSTER:
+            raise ConfigurationError(f"unknown agent: {agent_id}")
+        with self._generation_lock:
+            return self.confirmation_locked(agent_id)
+
+    def thread_status(self, agent_id: str) -> str:
+        """Return the active generation's observed or pending thread status."""
+
+        if agent_id not in ROSTER:
+            raise ConfigurationError(f"unknown agent: {agent_id}")
+        with self._generation_lock:
+            return self.thread_status_locked(agent_id)
+
+    def confirm_active_profile(
+        self,
+        profile: AgentExecutionProfile,
+        generation: AdapterGeneration,
+        *,
+        context_rehydrated: bool,
+        thread_disposition: str,
+        confirmation_logger: Callable[[], Callable[..., None]],
+    ) -> None:
+        """Confirm first successful use of the exact active generation."""
+        with self._generation_lock:
+            if generation is not self._adapter_generations.active:
+                return
+            emit_confirmation = self.confirm_locked(
+                profile.agent_id, thread_disposition
+            )
+        if not emit_confirmation:
+            return
+        confirmation_logger()(
+            profile,
+            thread_disposition=thread_disposition,
+            context_state=("rehydrated" if context_rehydrated else "unavailable"),
+        )
+
+
+    def record_confirmed_profile(
+        self,
+        profile: AgentExecutionProfile,
+        *,
+        thread_disposition: str,
+        context_state: str,
+        route_generation: Callable[[], int],
+        profile_event_logger: Callable[[], Callable[..., None]],
+    ) -> None:
+        """Capture current confirmation metadata and emit after unlocking."""
+        with self._generation_lock:
+            correlation_id = self.correlation_locked(profile.agent_id)
+            route_generation = route_generation()
+        profile_event_logger()(
+            DebugOperation.EXECUTION_PROFILE_CONFIRMED,
+            correlation_id=correlation_id,
+            route_generation=route_generation,
+            active_profile=profile,
+            activation_state="confirmed",
+            thread_disposition=thread_disposition,
+            context_state=context_state,
+        )

@@ -806,7 +806,9 @@ class AgentBackend:
             initial_generation, self._generation_lock
         )
         self._profile_observations = ProviderExecutionProfileObservations(
-            startup_switched_agents
+            startup_switched_agents,
+            generation_lock=self._generation_lock,
+            adapter_generations=self._adapter_generations,
         )
         self.antigravity_model = self._antigravity_adapter.model
         self.antigravity_effort = self._antigravity_adapter.effort
@@ -850,10 +852,7 @@ class AgentBackend:
     def execution_profile(self, agent_id: str) -> AgentExecutionProfile:
         """Return the exact active profile used for the next agent invocation."""
 
-        if agent_id not in ROSTER:
-            raise ConfigurationError(f"unknown agent: {agent_id}")
-        with self._generation_lock:
-            return self._adapter_generations.active.profiles[agent_id]
+        return self._profile_observations.active_profile(agent_id)
 
     def execution_profile_fingerprint(self, agent_id: str) -> str:
         """Return provider/model/effort and source facts without prompt content."""
@@ -865,25 +864,17 @@ class AgentBackend:
     def execution_profiles(self) -> tuple[AgentExecutionProfile, ...]:
         """Return the active roster in canonical order."""
 
-        with self._generation_lock:
-            profiles = self._adapter_generations.active.profiles
-            return tuple(profiles[agent_id] for agent_id in ROSTER)
+        return self._profile_observations.active_profiles()
 
     def execution_profile_confirmation(self, agent_id: str) -> str:
         """Return pending or confirmed for the active execution profile."""
 
-        if agent_id not in ROSTER:
-            raise ConfigurationError(f"unknown agent: {agent_id}")
-        with self._generation_lock:
-            return self._profile_observations.confirmation_locked(agent_id)
+        return self._profile_observations.confirmation(agent_id)
 
     def execution_profile_thread_status(self, agent_id: str) -> str:
         """Return the active generation's observed or pending thread status."""
 
-        if agent_id not in ROSTER:
-            raise ConfigurationError(f"unknown agent: {agent_id}")
-        with self._generation_lock:
-            return self._profile_observations.thread_status_locked(agent_id)
+        return self._profile_observations.thread_status(agent_id)
 
     def preview_execution_profile(
         self,
@@ -918,18 +909,12 @@ class AgentBackend:
         generation = bound_agent._adapter_generation
         if profile is None or generation is None:
             return
-        with self._generation_lock:
-            if generation is not self._adapter_generations.active:
-                return
-            emit_confirmation = self._profile_observations.confirm_locked(
-                profile.agent_id, thread_disposition
-            )
-        if not emit_confirmation:
-            return
-        self._log_execution_profile_confirmed(
+        self._profile_observations.confirm_active_profile(
             profile,
+            generation,
+            context_rehydrated=context_rehydrated,
             thread_disposition=thread_disposition,
-            context_state=("rehydrated" if context_rehydrated else "unavailable"),
+            confirmation_logger=lambda: self._log_execution_profile_confirmed,
         )
 
     def _logical_thread_disposition(
@@ -1165,17 +1150,12 @@ class AgentBackend:
     ) -> None:
         """Record first successful use of one active profile generation."""
 
-        with self._generation_lock:
-            correlation_id = self._profile_observations.correlation_locked(profile.agent_id)
-            route_generation = self._provider_routes[profile.agent_id].generation
-        self._log_execution_profile_event(
-            DebugOperation.EXECUTION_PROFILE_CONFIRMED,
-            correlation_id=correlation_id,
-            route_generation=route_generation,
-            active_profile=profile,
-            activation_state="confirmed",
+        self._profile_observations.record_confirmed_profile(
+            profile,
             thread_disposition=thread_disposition,
             context_state=context_state,
+            route_generation=lambda: self._provider_routes[profile.agent_id].generation,
+            profile_event_logger=lambda: self._log_execution_profile_event,
         )
 
     _record_debug_error = _emit_record_debug_error
