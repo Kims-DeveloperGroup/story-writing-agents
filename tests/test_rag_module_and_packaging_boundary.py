@@ -78,6 +78,7 @@ from story_writing_agents import (
     antigravity_state_directories,
 )
 from story_writing_agents import codex_adapter, codex_command_preflight, codex_definition_sources, codex_invocation_files, codex_stream_observation
+from story_writing_agents import codex_native_outcome
 from story_writing_agents.agent_context import ContextComponentBytes
 from story_writing_agents.agent_context.progress import ProviderStreamSink
 from story_writing_agents.agent_context.manifest import ContextScope
@@ -413,8 +414,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 370)
-        self.assertEqual(len(edges), 2245)
+        self.assertEqual(len(modules), 371)
+        self.assertEqual(len(edges), 2254)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -427,6 +428,19 @@ class RagModuleBoundaryTests(unittest.TestCase):
         activation_owner = "story_writing_agents.provider_configuration_activation"
         request_validation_owner = "story_writing_agents.bound_agent_request_validation"
         provider_dependencies = {
+            "story_writing_agents.codex_native_outcome": (
+                {
+                    "story_writing_agents.agent_context",
+                    "story_writing_agents.codex_event_decoding",
+                    "story_writing_agents.codex_invocation_files",
+                    "story_writing_agents.codex_native_context",
+                    "story_writing_agents.errors",
+                    "story_writing_agents.provider_adapter",
+                    "story_writing_agents.provider_execution_workspace",
+                    "story_writing_agents.provider_process",
+                },
+                {"story_writing_agents.codex_adapter"},
+            ),
             "story_writing_agents.antigravity_native_outcome": (
                 {
                     "story_writing_agents.agent_context",
@@ -2341,7 +2355,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
         self.assertEqual({target for source, target in edges if source == invocation_files_owner},
                          {"story_writing_agents.agent_context", "story_writing_agents.provider_adapter"})
         self.assertEqual({source for source, target in edges if target == invocation_files_owner},
-                         {"story_writing_agents.codex_adapter"})
+                         {"story_writing_agents.codex_adapter", "story_writing_agents.codex_native_outcome"})
         self.assertEqual(
             {target for source, target in edges if source == codex_definition_owner},
             {
@@ -3039,6 +3053,16 @@ class RagModuleBoundaryTests(unittest.TestCase):
         self.assertIs(codex_adapter.codex_stream_observation, codex_stream_observation)
         self.assertIs(codex_adapter.codex_command_preflight, codex_command_preflight)
         self.assertIs(codex_adapter.codex_invocation_files, codex_invocation_files)
+        self.assertIs(codex_native_outcome.codex_invocation_files, codex_invocation_files)
+        self.assertIs(codex_native_outcome.codex_native_context, codex_adapter.codex_native_context)
+        for name in ("classify_native_authentication_failure", "interpret_completed_native_outcome"):
+            self.assertIs(
+                getattr(codex_adapter, f"_{name}"),
+                getattr(codex_native_outcome, name),
+            )
+            self.assertFalse(hasattr(story_writing_agents, name))
+        codex_auth_classifier = vars(codex_adapter.CodexAdapter)["_authentication_failure"]
+        self.assertIs(type(codex_auth_classifier), classmethod)
         self.assertEqual(get_type_hints(codex_invocation_files.create_invocation_files),
                          {"make_temporary_directory": Callable[[], Callable[..., str]], "return": tuple[Path, Path, Path]})
         self.assertEqual(get_type_hints(codex_invocation_files.write_schema),
@@ -3633,6 +3657,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             "story_writing_agents/codex_definition_sources.py",
             "story_writing_agents/codex_stream_observation.py",
             "story_writing_agents/codex_invocation_files.py",
+            "story_writing_agents/codex_native_outcome.py",
             "story_writing_agents/agent_exchanges/provider_finalization.py",
             "story_writing_agents/provider_session_access_records.py",
             "story_writing_agents/provider_session_access_transactions.py",
