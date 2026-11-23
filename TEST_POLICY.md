@@ -2033,3 +2033,11 @@ Case 수는 611/592/652/688/1에서 658/564/574/747/1로 바뀐다.
 `tests/test_rag_module_and_packaging_boundary.py` +6행을 반영해
 테스트 소스 상한을 158,229→158,257행으로 적용한다.
 기존 Case·서브테스트·시간·worker 상한과 예약 2행을 유지한다.
+
+### #1012 잔여 대화 코덱·방향 검증·append 결과 분리
+
+기존 공개 정의 소유자와 의존성·패키징 단언을 실제 분리에 맞춘다.
+`tests/test_conversation_catalog.py` +4행과
+`tests/test_rag_module_and_packaging_boundary.py` +5행을 반영해
+테스트 소스 상한을 158,257→158,266행으로 적용한다.
+기존 Case·서브테스트·시간·worker 상한과 예약 2행을 유지한다.

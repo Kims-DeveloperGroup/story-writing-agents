@@ -414,8 +414,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 383)
-        self.assertEqual(len(edges), 2332)
+        self.assertEqual(len(modules), 386)
+        self.assertEqual(len(edges), 2355)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -805,6 +805,9 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.errors",
             },
             "story_writing_agents.conversations.events": {
+                "story_writing_agents.conversations.event_append_results",
+                "story_writing_agents.conversations.event_payload_validation",
+                "story_writing_agents.conversations.payload_codec",
                 "story_writing_agents.conversations.event_contracts.artifact_apply",
                 "story_writing_agents.conversations.event_contracts.artifact_reviews",
                 "story_writing_agents.conversations.event_contracts.story_commits",
@@ -819,8 +822,6 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.conversations.event_vocabulary",
                 "story_writing_agents.document_plan",
                 "story_writing_agents.review_contracts",
-                "story_writing_agents.lead_task_transitions",
-                "story_writing_agents.lead_exploration",
                 "story_writing_agents.lead_premise_decisions",
             "story_writing_agents.editorial_state",
                 "story_writing_agents.reply_trace",
@@ -831,7 +832,6 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.conversations.event_value_validation",
                 "story_writing_agents.writing_artifacts", "story_writing_agents.authoring_admission",
                 "story_writing_agents.core_document_readiness",
-                'story_writing_agents.agent_context.accounting',
                 'story_writing_agents.agent_context.group_observation',
             },
             "story_writing_agents.conversations.context": {
@@ -1553,6 +1553,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
         self.assertIn("story_writing_agents.review_contracts", modules)
         self.assertEqual({target for source, target in edges if source == "story_writing_agents.review_contracts"}, set())
         self.assertEqual({source for source, target in edges if target == "story_writing_agents.review_contracts"}, {
+            "story_writing_agents.conversations.payload_codec",
             "story_writing_agents.conversations.event_contracts.artifact_reviews",
             "story_writing_agents.conversations.event_contracts.lead_outcomes",
             "story_writing_agents.conversations.event_contracts.lead_scope",
@@ -1567,6 +1568,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             "story_writing_agents.core_document_readiness", "story_writing_agents.editorial_scope",
             "story_writing_agents.lead_task_transitions", "story_writing_agents.specialist_routing"})
         self.assertEqual({source for source, target in edges if target == "story_writing_agents.document_plan"}, {
+            'story_writing_agents.conversations.payload_codec',
             'story_writing_agents.conversations.event_contracts.authoring_records',
             'story_writing_agents.conversations.event_contracts.control_records',
             'story_writing_agents.conversations.event_contracts.lead_outcomes',
@@ -3721,6 +3723,9 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 "story_writing_agents/conversations/event_contracts/lead_outcomes.py",
                 "story_writing_agents/conversations/event_vocabulary.py",
                 "story_writing_agents/conversations/event_value_validation.py",
+                "story_writing_agents/conversations/event_append_results.py",
+                "story_writing_agents/conversations/event_payload_validation.py",
+                "story_writing_agents/conversations/payload_codec.py",
                 "story_writing_agents/lead_execution/__init__.py",
             )
             workspace_package_paths = (

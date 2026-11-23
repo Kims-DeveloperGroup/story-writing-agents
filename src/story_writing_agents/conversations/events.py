@@ -2,18 +2,13 @@
 
 from __future__ import annotations
 
-from ..document_plan import (DocumentPlan, DocumentNodeBinding, document_value_digest,
-    document_plan_to_dict, document_plan_from_dict,
-    document_node_binding_to_dict, document_node_binding_from_dict,
-    document_node_selection_to_dict, document_node_selection_from_dict,
-    document_plan_ref_to_dict, document_plan_ref_from_dict)
+from ..document_plan import DocumentPlan, DocumentNodeBinding, document_value_digest, document_plan_to_dict, document_plan_from_dict, document_node_binding_to_dict, document_node_binding_from_dict
 from ..core_document_readiness import AuthoringTarget
 
 from ..agent_context.group_observation import LeadGroupTrace
-from ..agent_context.accounting import (provider_call_accounting_from_object, provider_call_accounting_to_object)
 from ..review_contracts import (
     LeadPreliminaryReview, FinalReviewEvidence, ReviewTarget, ReviewTargetKind,
-    preliminary_review_to_dict, preliminary_review_from_dict, preliminary_scope_eligible,
+    preliminary_scope_eligible,
     review_digest,
 )
 from ..specialist_routing import (SpecialistStagePlan, SpecialistWorkKind,
@@ -32,29 +27,17 @@ from ..authoring_admission import (
     admission_digest, assessment_from_dict, admission_basis_from_dict, admission_basis_to_dict,
 )
 
-from ..lead_task_transitions import (
-    LeadTaskDecision, LeadTaskTransitionReceipt, LeadMaterialCapture,
-    LeadDiscussionReport, LeadPublicResponse, task_value_to_dict,
-    task_value_from_dict,
-)
 
 from ..lead_premise_decisions import (
     PremiseQuestionIntent, PremiseDecisionSpec, PremiseDecisionReport,
     premise_value_to_dict, premise_question_intent_from_dict,
-    premise_spec_from_dict, premise_analysis_from_dict, premise_report_from_dict,
-    premise_selection_from_dict, premise_capture_from_dict, premise_admission_from_dict,
-    premise_conflicts_from_dict,
+    premise_spec_from_dict, premise_report_from_dict,
 )
 
-from ..lead_exploration import (
-    LeadInteractionMode,
-    exploration_report_to_dict, exploration_report_from_dict,
-    adoption_capture_to_dict, adoption_capture_from_dict,
-)
 
 from ..editorial_state import (
-    EditorialRecordRef, editorial_revision_to_dict,
-    editorial_revision_from_dict, editorial_ref_to_dict, editorial_ref_from_dict,
+    EditorialRecordRef,
+    editorial_ref_to_dict, editorial_ref_from_dict,
 )
 
 import hashlib
@@ -118,6 +101,7 @@ from story_writing_agents.conversations.event_value_validation import (
     validate_utc_timestamp as _validate_utc_timestamp,
 )
 
+from .event_append_results import CollaborationAppendError, CollaborationAppendReceipt
 from .event_contracts.artifact_apply import (
     ArtifactApplicationDecisionPayload,
     ArtifactApplicationRequestPayload,
@@ -226,7 +210,6 @@ from .event_contracts.control_records import (
     CollaborationProviderCallPayload,
     CollaborationStepStatePayload,
     CollaborationTerminalOutcomePayload,
-    decode_provider_usage as _decode_provider_usage,
 )
 from .event_contracts.execution import (
     CollaborationAssignmentDispatchPayload,
@@ -235,8 +218,6 @@ from .event_contracts.execution import (
     CollaborationMessagePayload,
     CollaborationSpecialistReplyPayload,
     specialist_assessments_for_mode,
-    decode_result as _decode_result,
-    result_value as _result_value,
 )
 from .event_contracts.lead_outcomes import (
     authoring_scope_is_view,
@@ -253,28 +234,69 @@ from .event_vocabulary import (
     ARTIFACT_REVIEW_SCHEMA_VERSION,
     ArtifactObjectiveNextStep,
     LeadObjectiveAction,
-    CollaborationActorKind,
-    CollaborationAppendFailure,
-    CollaborationAppendStatus,
-    CollaborationAssignmentOutcomeKind,
     CollaborationConfirmationDecision,
     CollaborationDirection,
     CollaborationEventKind,
     CollaborationInputKind,
     CollaborationInputState,
-    CollaborationInvocationKind,
-    CollaborationLeadOutcomeFailureCode,
-    CollaborationProviderCallKind,
-    CollaborationProviderCallState,
     CollaborationSideEffect,
-    CollaborationSpecialistAssessment,
     CollaborationStepKind,
-    CollaborationStepState,
-    CollaborationTerminalScope,
     LeadOutcomeKind,
     LeadOutcomeScope,
     LeadEvidenceStatus,
     LeadProposalRelation,
+)
+from .event_payload_validation import (
+    collaboration_direction as _collaboration_direction,
+    validate_collaboration_direction as _validate_collaboration_direction,
+)
+from .payload_codec import (
+    assignment_dispatch_payload_value,
+    confirmation_payload_value,
+    decode_assignment_dispatch_payload,
+    decode_confirmation_payload,
+    decode_editorial_record_payload,
+    decode_execution_result_payload,
+    decode_exploration_adoption_payload,
+    decode_interruption_payload,
+    decode_lead_discussion_payload,
+    decode_lead_exploration_request_payload,
+    decode_lead_exploration_result_payload,
+    decode_lead_judgment_payload,
+    decode_lead_material_capture_payload,
+    decode_lead_outcome_failure_payload,
+    decode_lead_public_response_payload,
+    decode_lead_task_decision_payload,
+    decode_lead_task_transition_payload,
+    decode_message_payload,
+    decode_premise_decision_payload,
+    decode_premise_fresh_work_admission_payload,
+    decode_premise_selection_payload,
+    decode_provider_call_payload,
+    decode_specialist_reply_payload,
+    decode_step_state_payload,
+    decode_terminal_outcome_payload,
+    editorial_record_payload_value,
+    execution_result_payload_value,
+    exploration_adoption_payload_value,
+    interruption_payload_value,
+    lead_discussion_payload_value,
+    lead_exploration_request_payload_value,
+    lead_exploration_result_payload_value,
+    lead_judgment_payload_value,
+    lead_material_capture_payload_value,
+    lead_outcome_failure_payload_value,
+    lead_public_response_payload_value,
+    lead_task_decision_payload_value,
+    lead_task_transition_payload_value,
+    message_payload_value,
+    premise_decision_payload_value,
+    premise_fresh_work_admission_payload_value,
+    premise_selection_payload_value,
+    provider_call_payload_value,
+    specialist_reply_payload_value,
+    step_state_payload_value,
+    terminal_outcome_payload_value,
 )
 
 
@@ -1778,43 +1800,6 @@ class CollaborationEventBatch:
         return collaboration_batch_digest(self)
 
 
-@dataclass(frozen=True, slots=True)
-class CollaborationAppendReceipt:
-    """Stable append result, including original ordering and timestamps on retry."""
-
-    status: CollaborationAppendStatus
-    batch_id: str
-    batch_digest: str
-    first_sequence: int
-    last_sequence: int
-    timestamps: tuple[str, ...]
-
-    def __post_init__(self) -> None:
-        _require_enum(self.status, CollaborationAppendStatus, "append status")
-        _validate_identifier(self.batch_id, label="append receipt batch ID")
-        _validate_digest(self.batch_digest, label="append receipt batch digest")
-        _validate_positive_integer(self.first_sequence, label="first appended sequence")
-        _validate_positive_integer(self.last_sequence, label="last appended sequence")
-        if self.last_sequence < self.first_sequence:
-            raise ValueError("append receipt sequence range must be ordered")
-        if type(self.timestamps) is not tuple:
-            raise TypeError("append receipt timestamps must be an exact tuple")
-        expected = self.last_sequence - self.first_sequence + 1
-        if len(self.timestamps) != expected:
-            raise ValueError("append receipt timestamps must cover its sequence range")
-        for timestamp in self.timestamps:
-            _validate_utc_timestamp(timestamp, label="append receipt timestamp")
-
-
-class CollaborationAppendError(Exception):
-    """Fixed semantic collaboration-store failure with no diagnostic authority."""
-
-    def __init__(self, failure: CollaborationAppendFailure) -> None:
-        _require_enum(failure, CollaborationAppendFailure, "append failure")
-        self.failure = failure
-        super().__init__(failure.value)
-
-
 def premise_source_identity(source: CollaborationPremiseSource) -> tuple[object, ...]:
     """Compare qualified material facts independently of proposal lookup aliases."""
     item = source.input_revision
@@ -2195,23 +2180,22 @@ def _proposal_value(
 
 def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
     if type(payload) is CollaborationLeadTaskDecisionPayload:
-        return {"payload_type": "lead_task_decision", "decision": task_value_to_dict(payload.decision),
-            **({"document_selection": document_node_selection_to_dict(payload.document_selection)} if payload.document_selection is not None else {})}
+        return lead_task_decision_payload_value(payload)
     if type(payload) is CollaborationLeadTaskTransitionPayload:
-        return {"payload_type": "lead_task_transition", "receipt": task_value_to_dict(payload.receipt)}
+        return lead_task_transition_payload_value(payload)
     if type(payload) is CollaborationLeadMaterialCapturePayload:
-        return {"payload_type": "lead_material_capture", "capture": task_value_to_dict(payload.capture)}
+        return lead_material_capture_payload_value(payload)
     if type(payload) is CollaborationLeadDiscussionPayload:
-        return {**_response_invocation_fields(payload), "payload_type": "lead_discussion", "report": task_value_to_dict(payload.report)}
+        return lead_discussion_payload_value(payload)
     if type(payload) is CollaborationLeadPublicResponsePayload:
-        return {"payload_type": "lead_public_response", "response": task_value_to_dict(payload.response)}
+        return lead_public_response_payload_value(payload)
 
     if type(payload) is CollaborationPremiseDecisionPayload:
-        return {"payload_type": "premise_decision", "selection": premise_value_to_dict(payload.selection)}
+        return premise_decision_payload_value(payload)
     if type(payload) is CollaborationPremiseSelectionPayload:
-        return {"payload_type": "premise_selection", "capture": premise_value_to_dict(payload.capture)}
+        return premise_selection_payload_value(payload)
     if type(payload) is CollaborationPremiseFreshWorkAdmissionPayload:
-        return {"payload_type": "premise_fresh_work_admission", "admission": premise_value_to_dict(payload.admission)}
+        return premise_fresh_work_admission_payload_value(payload)
     if type(payload) is ArtifactObjectivePayload:
         value = asdict(payload); value.pop("document_plan"); value.pop("document_node")
         return {"payload_type": "artifact_objective_v1", **value,
@@ -2241,72 +2225,21 @@ def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
     if type(payload) is CollaborationProposal:
         return {"payload_type": "proposal", "proposal": _proposal_value(payload)}
     if type(payload) is CollaborationLeadExplorationRequestPayload:
-        return {"payload_type": "lead_exploration_request", "user_event_id": payload.user_event_id,
-                "interaction_mode": payload.interaction_mode.value}
+        return lead_exploration_request_payload_value(payload)
     if type(payload) is CollaborationLeadExplorationResultPayload:
-        return {"payload_type": "lead_exploration_result", "report": exploration_report_to_dict(payload.report)}
+        return lead_exploration_result_payload_value(payload)
     if type(payload) is CollaborationExplorationAdoptionPayload:
-        return {"payload_type": "exploration_adoption", "capture": adoption_capture_to_dict(payload.capture)}
+        return exploration_adoption_payload_value(payload)
     if type(payload) is CollaborationEditorialRecordPayload:
-        return {"payload_type": "editorial_record", "record": editorial_revision_to_dict(payload.record)}
+        return editorial_record_payload_value(payload)
     if type(payload) is CollaborationMessagePayload:
-        value = {
-            **_response_invocation_fields(payload),
-            "content": payload.content,
-            "payload_type": "message",
-            **_reply_trace_fields(payload.trace),
-        }
-        if payload.validation_details:
-            value["validation_details"] = list(payload.validation_details)
-        if payload.validation_invocation_id is not None:
-            value["validation_invocation_id"] = payload.validation_invocation_id
-            value["validation_call_id"] = payload.validation_call_id
-        return value
+        return message_payload_value(payload)
     if type(payload) is CollaborationLeadJudgmentPayload:
-        return {
-            **_response_invocation_fields(payload),
-            **({"core_document_readiness": readiness_basis_to_dict(payload.core_document_readiness)}
-               if payload.core_document_readiness is not None else {}),
-            **({"authoring_admission": admission_basis_to_dict(payload.authoring_admission)}
-               if payload.authoring_admission is not None else {}),
-            "evidence": _lead_evidence_value(payload.evidence),
-            "kind": payload.kind.value,
-            "message": payload.message,
-            "payload_type": "lead_judgment",
-            **({"preliminary_review": preliminary_review_to_dict(payload.preliminary_review)} if payload.preliminary_review is not None else {}),
-            **({"document_plan": document_plan_to_dict(payload.document_plan)} if payload.document_plan is not None else {}),
-            **({"document_node": document_node_binding_to_dict(payload.document_node)} if payload.document_node is not None else {}),
-            **({"planning_target": payload.planning_target.value} if payload.planning_target is not None else {}),
-            **_authoring_scope_fields(payload.authoring_scope),
-            **_reply_trace_fields(payload.trace),
-        }
+        return lead_judgment_payload_value(payload)
     if type(payload) is CollaborationAssignmentDispatchPayload:
-        return {
-            "assignment": _assignment_value(payload.assignment),
-            "execution_attempt_id": payload.execution_attempt_id,
-            "payload_type": "assignment_dispatch",
-            "proposal_digest": payload.proposal_digest,
-            "proposal_id": payload.proposal_id,
-            "proposal_revision": payload.proposal_revision,
-        }
+        return assignment_dispatch_payload_value(payload)
     if type(payload) is CollaborationSpecialistReplyPayload:
-        return {
-            **_response_invocation_fields(payload),
-            **({"premise_analysis": premise_value_to_dict(payload.premise_analysis)} if payload.premise_analysis is not None else {}),
-            **({"premise_conflicts": premise_value_to_dict(payload.premise_conflicts)} if payload.premise_conflicts else {}),
-            "assignment_id": payload.assignment_id,
-            "assessment": payload.assessment.value,
-            "dispatch_event_id": payload.dispatch_event_id,
-            "execution_attempt_id": payload.execution_attempt_id,
-            "input_ids": list(payload.input_ids),
-            "message": payload.message,
-            "payload_type": "specialist_reply",
-            **({} if payload.mode is None else {"mode": payload.mode.value}),
-            "proposal_digest": payload.proposal_digest,
-            "proposal_id": payload.proposal_id,
-            "proposal_revision": payload.proposal_revision,
-            **_reply_trace_fields(payload.trace),
-        }
+        return specialist_reply_payload_value(payload)
     if type(payload) is CollaborationLeadSynthesisPayload:
         return {
             **_response_invocation_fields(payload),
@@ -2329,71 +2262,21 @@ def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
             **_reply_trace_fields(payload.trace),
         }
     if type(payload) is CollaborationStepStatePayload:
-        return {
-            "confirmation_request_id": payload.confirmation_request_id,
-            "execution_attempt_id": payload.execution_attempt_id,
-            "execution_result_event_id": payload.execution_result_event_id,
-            "payload_type": "step_state",
-            "proposal_digest": payload.proposal_digest,
-            "proposal_id": payload.proposal_id,
-            "proposal_revision": payload.proposal_revision,
-            "state": payload.state.value,
-        }
+        return step_state_payload_value(payload)
     if type(payload) is CollaborationConfirmationPayload:
-        return {
-            "confirmation_request_event_id": payload.confirmation_request_event_id,
-            "confirmation_request_id": payload.confirmation_request_id,
-            "decision": payload.decision.value,
-            "payload_type": "confirmation",
-            "proposal_digest": payload.proposal_digest,
-            "proposal_id": payload.proposal_id,
-            "proposal_revision": payload.proposal_revision,
-        }
+        return confirmation_payload_value(payload)
     if type(payload) is CollaborationExecutionResult:
-        return {"payload_type": "execution_result", "result": _result_value(payload)}
+        return execution_result_payload_value(payload)
     if type(payload) is CollaborationInterruptionPayload:
-        return {
-            "content": payload.content,
-            "execution_attempt_id": payload.execution_attempt_id,
-            "payload_type": "interruption",
-        }
+        return interruption_payload_value(payload)
     if type(payload) is CollaborationTerminalOutcomePayload:
-        return {
-            "assignment_id": payload.assignment_id,
-            "execution_attempt_id": payload.execution_attempt_id,
-            "outcome": payload.outcome.value,
-            "payload_type": "terminal_outcome",
-            "scope": payload.scope.value,
-            "submitted_physical_calls": payload.submitted_physical_calls,
-        }
+        return terminal_outcome_payload_value(payload)
     if type(payload) is CollaborationProviderCallPayload:
-        value = {
-            **({"document_goal": document_plan_ref_to_dict(payload.document_goal),
-                "document_budget_task_id": payload.document_budget_task_id} if payload.document_goal is not None else {}),
-            **({"document_node": document_node_binding_to_dict(payload.document_node)} if payload.document_node is not None else {}),
-            **({"usage": asdict(payload.usage)} if payload.usage is not None else {}),
-            **({"accounting": provider_call_accounting_to_object(payload.accounting)} if payload.accounting is not None else {}),
-            "call_id": payload.call_id,
-            "call_kind": payload.call_kind.value,
-            "invocation_id": payload.invocation_id,
-            "invocation_kind": payload.invocation_kind.value,
-            "ordinal": payload.ordinal,
-            "payload_type": "provider_call",
-            "role": payload.role,
-            "state": payload.state.value,
-        }
-        if payload.validation_details:
-            value["validation_details"] = list(payload.validation_details)
-        return value
+        return provider_call_payload_value(payload)
     if type(payload) is CollaborationLeadGroupTracePayload:
         return {"payload_type": "lead_group_trace", "trace": payload.trace.as_object()}
     if type(payload) is CollaborationLeadOutcomeFailurePayload:
-        return {
-            "call_id": payload.call_id,
-            "code": payload.code.value,
-            "invocation_id": payload.invocation_id,
-            "payload_type": "lead_outcome_failure",
-        }
+        return lead_outcome_failure_payload_value(payload)
     if type(payload) is ArtifactReviewCandidatePayload:
         return artifact_review_candidate_payload_value(payload)
     if type(payload) is ArtifactReviewSynthesisPayload:
@@ -2629,35 +2512,21 @@ def _decode_payload(value: object) -> CollaborationPayload:
         raise ValueError("collaboration payload must be an object")
     payload_type = value.get("payload_type")
     if payload_type == "lead_task_decision":
-        if set(value) - {"document_selection"} != {"payload_type", "decision"}:
-            raise ValueError("invalid lead_task_decision payload fields")
-        return CollaborationLeadTaskDecisionPayload(decision=task_value_from_dict(LeadTaskDecision, value["decision"]),
-            document_selection=(document_node_selection_from_dict(value["document_selection"]) if "document_selection" in value else None))
+        return decode_lead_task_decision_payload(value)
     if payload_type == "lead_task_transition":
-        if set(value) != {"payload_type", "receipt"}:
-            raise ValueError("invalid lead_task_transition payload fields")
-        return CollaborationLeadTaskTransitionPayload(receipt=task_value_from_dict(LeadTaskTransitionReceipt, value["receipt"]))
+        return decode_lead_task_transition_payload(value)
     if payload_type == "lead_material_capture":
-        if set(value) != {"payload_type", "capture"}:
-            raise ValueError("invalid lead_material_capture payload fields")
-        return CollaborationLeadMaterialCapturePayload(capture=task_value_from_dict(LeadMaterialCapture, value["capture"]))
+        return decode_lead_material_capture_payload(value)
     if payload_type == "lead_discussion":
-        if set(value) != {"payload_type", "report"}:
-            raise ValueError("invalid lead_discussion payload fields")
-        return CollaborationLeadDiscussionPayload(report=task_value_from_dict(LeadDiscussionReport, value["report"]))
+        return decode_lead_discussion_payload(value)
     if payload_type == "lead_public_response":
-        if set(value) != {"payload_type", "response"}:
-            raise ValueError("invalid lead_public_response payload fields")
-        return CollaborationLeadPublicResponsePayload(response=task_value_from_dict(LeadPublicResponse, value["response"]))
+        return decode_lead_public_response_payload(value)
     if payload_type == "premise_decision":
-        item = _object(value, {"payload_type", "selection"}, label="premise decision")
-        return CollaborationPremiseDecisionPayload(premise_selection_from_dict(item["selection"]))
+        return decode_premise_decision_payload(value)
     if payload_type == "premise_selection":
-        item = _object(value, {"payload_type", "capture"}, label="premise selection")
-        return CollaborationPremiseSelectionPayload(premise_capture_from_dict(item["capture"]))
+        return decode_premise_selection_payload(value)
     if payload_type == "premise_fresh_work_admission":
-        item = _object(value, {"payload_type", "admission"}, label="premise admission")
-        return CollaborationPremiseFreshWorkAdmissionPayload(premise_admission_from_dict(item["admission"]))
+        return decode_premise_fresh_work_admission_payload(value)
     if payload_type in {"artifact_objective_v1", "artifact_objective_v2"}:
         item = _object_with_optional_extensions(value, {
             "payload_type", "facts", "action", "previous_objective_event_id",
@@ -2735,148 +2604,24 @@ def _decode_payload(value: object) -> CollaborationPayload:
             state=_enum(LeadRecommendationState, item["state"], label="recommendation result state"),
         )
     if payload_type == "editorial_record":
-        item = _object(value, {"payload_type", "record"}, label="editorial record payload")
-        return CollaborationEditorialRecordPayload(editorial_revision_from_dict(item["record"]))
+        return decode_editorial_record_payload(value)
     if payload_type == "proposal":
         item = _object(value, {"payload_type", "proposal"}, label="proposal payload")
         return _decode_proposal(item["proposal"])
     if payload_type == "lead_exploration_request":
-        item = _object(value, {"payload_type", "user_event_id", "interaction_mode"}, label="exploration request")
-        return CollaborationLeadExplorationRequestPayload(item["user_event_id"], LeadInteractionMode(item["interaction_mode"]))
+        return decode_lead_exploration_request_payload(value)
     if payload_type == "lead_exploration_result":
-        item = _object(value, {"payload_type", "report"}, label="exploration result")
-        return CollaborationLeadExplorationResultPayload(exploration_report_from_dict(item["report"]))
+        return decode_lead_exploration_result_payload(value)
     if payload_type == "exploration_adoption":
-        item = _object(value, {"payload_type", "capture"}, label="exploration adoption")
-        return CollaborationExplorationAdoptionPayload(adoption_capture_from_dict(item["capture"]))
+        return decode_exploration_adoption_payload(value)
     if payload_type == "message":
-        item = _object_with_optional_extensions(
-            value,
-            {"content", "payload_type"},
-            {"trace", "validation_details", "validation_invocation_id", "validation_call_id"},
-            label="message payload",
-        )
-        return CollaborationMessagePayload(
-            content=_string(item["content"], label="message content"),
-            trace=_decode_optional_reply_trace(item),
-            validation_details=(
-                tuple(_string(part, label="message validation detail") for part in
-                      _array(item["validation_details"], label="message validation details"))
-                if "validation_details" in item else ()
-            ),
-            validation_invocation_id=(
-                _string(item["validation_invocation_id"], label="message validation invocation ID")
-                if "validation_invocation_id" in item else None
-            ),
-            validation_call_id=(
-                _string(item["validation_call_id"], label="message validation call ID")
-                if "validation_call_id" in item else None
-            ),
-        )
+        return decode_message_payload(value)
     if payload_type == "lead_judgment":
-        admission = value.get("authoring_admission") if type(value) is dict else None
-        readiness = value.get("core_document_readiness") if type(value) is dict else None
-        base = {k: v for k, v in value.items() if k not in {"authoring_admission", "core_document_readiness"}} if type(value) is dict else value
-        item = _object_with_optional_extensions(
-            base,
-            {"evidence", "kind", "message", "payload_type"},
-            {"authoring_scope", "trace", "preliminary_review", "document_plan", "document_node", "planning_target"},
-            label="lead judgment payload",
-        )
-        return CollaborationLeadJudgmentPayload(
-            core_document_readiness=(readiness_basis_from_dict(readiness) if readiness is not None else None),
-            authoring_admission=(admission_basis_from_dict(admission) if admission is not None else None),
-            kind=_enum(LeadOutcomeKind, item["kind"], label="lead judgment kind"),
-            message=_string(item["message"], label="lead judgment message"),
-            evidence=_decode_lead_evidence(item["evidence"]),
-            authoring_scope=_decode_optional_authoring_scope(item),
-            trace=_decode_optional_reply_trace(item),
-            preliminary_review=(preliminary_review_from_dict(item["preliminary_review"])
-                                if "preliminary_review" in item else None),
-            document_plan=(document_plan_from_dict(item["document_plan"]) if "document_plan" in item else None),
-            planning_target=(AuthoringTarget(item["planning_target"]) if "planning_target" in item else None),
-            document_node=(document_node_binding_from_dict(item["document_node"]) if "document_node" in item else None))
+        return decode_lead_judgment_payload(value)
     if payload_type == "assignment_dispatch":
-        item = _object(
-            value,
-            {
-                "assignment",
-                "execution_attempt_id",
-                "payload_type",
-                "proposal_digest",
-                "proposal_id",
-                "proposal_revision",
-            },
-            label="assignment dispatch payload",
-        )
-        return CollaborationAssignmentDispatchPayload(
-            proposal_id=_string(item["proposal_id"], label="dispatch proposal ID"),
-            proposal_revision=_integer(
-                item["proposal_revision"],
-                label="dispatch proposal revision",
-            ),
-            proposal_digest=_string(
-                item["proposal_digest"],
-                label="dispatch proposal digest",
-            ),
-            execution_attempt_id=_string(
-                item["execution_attempt_id"],
-                label="dispatch attempt ID",
-            ),
-            assignment=_decode_assignment(item["assignment"]),
-        )
+        return decode_assignment_dispatch_payload(value)
     if payload_type == "specialist_reply":
-        item = _object_with_optional_extensions(
-            value,
-            {
-                "assignment_id",
-                "assessment",
-                "dispatch_event_id",
-                "execution_attempt_id",
-                "input_ids",
-                "message",
-                "payload_type",
-                "proposal_digest",
-                "proposal_id",
-                "proposal_revision",
-            },
-            {"mode", "trace", "premise_analysis", "premise_conflicts"},
-            label="specialist reply payload",
-        )
-        return CollaborationSpecialistReplyPayload(
-            premise_analysis=premise_analysis_from_dict(item["premise_analysis"]) if "premise_analysis" in item else None,
-            premise_conflicts=premise_conflicts_from_dict(item["premise_conflicts"]) if "premise_conflicts" in item else (),
-            proposal_id=_string(item["proposal_id"], label="reply proposal ID"),
-            proposal_revision=_integer(
-                item["proposal_revision"],
-                label="reply proposal revision",
-            ),
-            proposal_digest=_string(
-                item["proposal_digest"],
-                label="reply proposal digest",
-            ),
-            execution_attempt_id=_string(
-                item["execution_attempt_id"],
-                label="reply attempt ID",
-            ),
-            assignment_id=_string(item["assignment_id"], label="reply assignment ID"),
-            dispatch_event_id=_string(
-                item["dispatch_event_id"],
-                label="reply dispatch event ID",
-            ),
-            assessment=_enum(
-                CollaborationSpecialistAssessment,
-                item["assessment"],
-                label="specialist assessment",
-            ),
-            message=_string(item["message"], label="reply message"),
-            input_ids=tuple(
-                _string(input_id, label="reply input ID")
-                for input_id in _array(item["input_ids"], label="reply input IDs")
-            ),
-            mode=_decode_assignment_mode(item),
-            trace=_decode_optional_reply_trace(item),
-        )
+        return decode_specialist_reply_payload(value)
     if payload_type == "lead_synthesis":
         item = _object_with_optional_extensions(
             value,
@@ -2938,216 +2683,19 @@ def _decode_payload(value: object) -> CollaborationPayload:
         item = _object(value, {"payload_type", "trace"}, label="private group trace payload")
         return CollaborationLeadGroupTracePayload(LeadGroupTrace.from_object(item["trace"]))
     if payload_type == "lead_outcome_failure":
-        item = _object(
-            value,
-            {"call_id", "code", "invocation_id", "payload_type"},
-            label="lead outcome failure payload",
-        )
-        return CollaborationLeadOutcomeFailurePayload(
-            code=_enum(
-                CollaborationLeadOutcomeFailureCode,
-                item["code"],
-                label="lead outcome failure code",
-            ),
-            invocation_id=(
-                None if item["invocation_id"] is None else _string(
-                    item["invocation_id"], label="lead failure invocation ID"
-                )
-            ),
-            call_id=(
-                None if item["call_id"] is None else _string(
-                    item["call_id"], label="lead failure call ID"
-                )
-            ),
-        )
+        return decode_lead_outcome_failure_payload(value)
     if payload_type == "step_state":
-        item = _object(
-            value,
-            {
-                "confirmation_request_id",
-                "execution_attempt_id",
-                "execution_result_event_id",
-                "payload_type",
-                "proposal_digest",
-                "proposal_id",
-                "proposal_revision",
-                "state",
-            },
-            label="step-state payload",
-        )
-        return CollaborationStepStatePayload(
-            state=_enum(
-                CollaborationStepState,
-                item["state"],
-                label="step state",
-            ),
-            proposal_id=_string(item["proposal_id"], label="state proposal ID"),
-            proposal_revision=_integer(
-                item["proposal_revision"],
-                label="state proposal revision",
-            ),
-            proposal_digest=_string(item["proposal_digest"], label="state digest"),
-            confirmation_request_id=_optional_string(
-                item["confirmation_request_id"],
-                label="confirmation request ID",
-            ),
-            execution_attempt_id=_optional_string(
-                item["execution_attempt_id"],
-                label="execution attempt ID",
-            ),
-            execution_result_event_id=_optional_string(
-                item["execution_result_event_id"],
-                label="execution result event ID",
-            ),
-        )
+        return decode_step_state_payload(value)
     if payload_type == "confirmation":
-        item = _object(
-            value,
-            {
-                "confirmation_request_event_id",
-                "confirmation_request_id",
-                "decision",
-                "payload_type",
-                "proposal_digest",
-                "proposal_id",
-                "proposal_revision",
-            },
-            label="confirmation payload",
-        )
-        return CollaborationConfirmationPayload(
-            confirmation_request_id=_string(
-                item["confirmation_request_id"],
-                label="confirmation request ID",
-            ),
-            confirmation_request_event_id=_string(
-                item["confirmation_request_event_id"],
-                label="confirmation request event ID",
-            ),
-            proposal_id=_string(item["proposal_id"], label="confirmation proposal ID"),
-            proposal_revision=_integer(
-                item["proposal_revision"],
-                label="confirmation proposal revision",
-            ),
-            proposal_digest=_string(
-                item["proposal_digest"],
-                label="confirmation proposal digest",
-            ),
-            decision=_enum(
-                CollaborationConfirmationDecision,
-                item["decision"],
-                label="confirmation decision",
-            ),
-        )
+        return decode_confirmation_payload(value)
     if payload_type == "execution_result":
-        item = _object(
-            value,
-            {"payload_type", "result"},
-            label="execution-result payload",
-        )
-        return _decode_result(item["result"])
+        return decode_execution_result_payload(value)
     if payload_type == "interruption":
-        item = _object(
-            value,
-            {"content", "execution_attempt_id", "payload_type"},
-            label="interruption payload",
-        )
-        return CollaborationInterruptionPayload(
-            execution_attempt_id=_string(
-                item["execution_attempt_id"],
-                label="interruption attempt ID",
-            ),
-            content=_string(item["content"], label="interruption content"),
-        )
+        return decode_interruption_payload(value)
     if payload_type == "terminal_outcome":
-        item = _object(
-            value,
-            {
-                "assignment_id",
-                "execution_attempt_id",
-                "outcome",
-                "payload_type",
-                "scope",
-                "submitted_physical_calls",
-            },
-            label="terminal-outcome payload",
-        )
-        return CollaborationTerminalOutcomePayload(
-            execution_attempt_id=_string(
-                item["execution_attempt_id"],
-                label="terminal attempt ID",
-            ),
-            scope=_enum(
-                CollaborationTerminalScope,
-                item["scope"],
-                label="terminal scope",
-            ),
-            outcome=_enum(
-                CollaborationAssignmentOutcomeKind,
-                item["outcome"],
-                label="terminal outcome",
-            ),
-            submitted_physical_calls=_integer(
-                item["submitted_physical_calls"],
-                label="terminal submitted calls",
-            ),
-            assignment_id=_optional_string(
-                item["assignment_id"],
-                label="terminal assignment ID",
-            ),
-        )
+        return decode_terminal_outcome_payload(value)
     if payload_type == "provider_call":
-        item = _object(
-            value,
-            {
-                "call_id",
-                "call_kind",
-                "invocation_id",
-                "invocation_kind",
-                "ordinal",
-                "payload_type",
-                "role",
-                "state",
-            } | ({"validation_details"} if "validation_details" in value else set())
-            | ({"usage"} if "usage" in value else set())
-            | ({"accounting"} if "accounting" in value else set())
-            | ({"document_node"} if "document_node" in value else set())
-            | ({"document_goal", "document_budget_task_id"} if "document_goal" in value else set()),
-            label="provider-call payload",
-        )
-        return CollaborationProviderCallPayload(
-            document_goal=(document_plan_ref_from_dict(item["document_goal"]) if "document_goal" in item else None),
-            document_budget_task_id=(item["document_budget_task_id"] if "document_goal" in item else None),
-            document_node=(document_node_binding_from_dict(item["document_node"]) if "document_node" in item else None),
-            usage=_decode_provider_usage(item["usage"]) if "usage" in item else None,
-            accounting=provider_call_accounting_from_object(item["accounting"]) if "accounting" in item else None,
-            invocation_id=_string(
-                item["invocation_id"],
-                label="provider invocation ID",
-            ),
-            call_id=_string(item["call_id"], label="provider call ID"),
-            ordinal=_integer(item["ordinal"], label="provider call ordinal"),
-            role=_string(item["role"], label="provider call role"),
-            invocation_kind=_enum(
-                CollaborationInvocationKind,
-                item["invocation_kind"],
-                label="provider invocation kind",
-            ),
-            call_kind=_enum(
-                CollaborationProviderCallKind,
-                item["call_kind"],
-                label="provider call kind",
-            ),
-            state=_enum(
-                CollaborationProviderCallState,
-                item["state"],
-                label="provider call state",
-            ),
-            validation_details=(
-                tuple(_string(part, label="provider validation detail") for part in
-                      _array(item["validation_details"], label="provider validation details"))
-                if "validation_details" in item else ()
-            ),
-        )
+        return decode_provider_call_payload(value)
     if payload_type == "artifact_review_candidate":
         return decode_artifact_review_candidate_payload(value)
     if payload_type == "artifact_review_synthesis":
@@ -3309,215 +2857,6 @@ def _validate_collaboration_payload(
     }
     if type(payload) not in allowed[kind]:
         raise TypeError(f"payload does not match event kind {kind.value!r}")
-
-
-def _collaboration_direction(
-    sender: CollaborationActor,
-    recipient: CollaborationActor,
-) -> CollaborationDirection:
-    directions = {
-        (
-            CollaborationActorKind.USER,
-            CollaborationActorKind.LEAD,
-        ): CollaborationDirection.USER_TO_LEAD,
-        (
-            CollaborationActorKind.USER,
-            CollaborationActorKind.RUNTIME,
-        ): CollaborationDirection.USER_TO_RUNTIME,
-        (
-            CollaborationActorKind.LEAD,
-            CollaborationActorKind.USER,
-        ): CollaborationDirection.LEAD_TO_USER,
-        (
-            CollaborationActorKind.LEAD,
-            CollaborationActorKind.SPECIALIST,
-        ): CollaborationDirection.LEAD_TO_SPECIALIST,
-        (
-            CollaborationActorKind.SPECIALIST,
-            CollaborationActorKind.LEAD,
-        ): CollaborationDirection.SPECIALIST_TO_LEAD,
-        (
-            CollaborationActorKind.SPECIALIST,
-            CollaborationActorKind.USER,
-        ): CollaborationDirection.SPECIALIST_TO_USER,
-        (
-            CollaborationActorKind.RUNTIME,
-            CollaborationActorKind.USER,
-        ): CollaborationDirection.RUNTIME_TO_USER,
-        (
-            CollaborationActorKind.RUNTIME,
-            CollaborationActorKind.LEAD,
-        ): CollaborationDirection.RUNTIME_TO_LEAD,
-        (
-            CollaborationActorKind.RUNTIME,
-            CollaborationActorKind.SPECIALIST,
-        ): CollaborationDirection.RUNTIME_TO_SPECIALIST,
-        (
-            CollaborationActorKind.ARTIFACT,
-            CollaborationActorKind.USER,
-        ): CollaborationDirection.ARTIFACT_TO_USER,
-        (
-            CollaborationActorKind.ARTIFACT,
-            CollaborationActorKind.LEAD,
-        ): CollaborationDirection.ARTIFACT_TO_LEAD,
-        (
-            CollaborationActorKind.GIT,
-            CollaborationActorKind.USER,
-        ): CollaborationDirection.GIT_TO_USER,
-        (
-            CollaborationActorKind.GIT,
-            CollaborationActorKind.LEAD,
-        ): CollaborationDirection.GIT_TO_LEAD,
-    }
-    try:
-        return directions[(sender.kind, recipient.kind)]
-    except KeyError as exc:
-        raise ValueError("unsupported collaboration actor direction") from exc
-
-
-def _validate_collaboration_direction(
-    *,
-    kind: CollaborationEventKind,
-    sender: CollaborationActor,
-    recipient: CollaborationActor,
-    payload: CollaborationPayload,
-) -> None:
-    sender_kind = sender.kind
-    recipient_kind = recipient.kind
-    if (
-        sender_kind is CollaborationActorKind.SPECIALIST
-        and recipient_kind is CollaborationActorKind.SPECIALIST
-    ):
-        raise ValueError("specialist-to-specialist delegation is forbidden")
-    allowed: dict[
-        CollaborationEventKind,
-        set[tuple[CollaborationActorKind, CollaborationActorKind]],
-    ] = {
-        CollaborationEventKind.LEAD_TASK_DECISION: {(CollaborationActorKind.USER, CollaborationActorKind.RUNTIME)},
-        CollaborationEventKind.LEAD_TASK_TRANSITION: {(CollaborationActorKind.RUNTIME, CollaborationActorKind.USER)},
-        CollaborationEventKind.LEAD_MATERIAL_CAPTURE: {(CollaborationActorKind.RUNTIME, CollaborationActorKind.USER)},
-        CollaborationEventKind.LEAD_DISCUSSION: {(CollaborationActorKind.RUNTIME, CollaborationActorKind.USER)},
-        CollaborationEventKind.LEAD_PUBLIC_RESPONSE: {(CollaborationActorKind.RUNTIME, CollaborationActorKind.USER)},
-
-        CollaborationEventKind.ARTIFACT_OBJECTIVE: {
-            (CollaborationActorKind.RUNTIME, CollaborationActorKind.USER),
-        },
-        CollaborationEventKind.LEAD_RECOMMENDATION_REQUEST: {
-            (CollaborationActorKind.RUNTIME, CollaborationActorKind.USER),
-        },
-        CollaborationEventKind.LEAD_RECOMMENDATION_DECISION: {
-            (CollaborationActorKind.USER, CollaborationActorKind.RUNTIME),
-        },
-        CollaborationEventKind.LEAD_RECOMMENDATION_STARTED: {
-            (CollaborationActorKind.RUNTIME, CollaborationActorKind.LEAD),
-        },
-        CollaborationEventKind.LEAD_RECOMMENDATION_RESULT: {
-            (CollaborationActorKind.RUNTIME, CollaborationActorKind.USER),
-        },
-        CollaborationEventKind.LEAD_EXPLORATION_REQUEST: {(CollaborationActorKind.USER, CollaborationActorKind.LEAD)},
-        CollaborationEventKind.LEAD_EXPLORATION_RESULT: {(CollaborationActorKind.LEAD, CollaborationActorKind.USER)},
-        CollaborationEventKind.EXPLORATION_ADOPTION: {(CollaborationActorKind.USER, CollaborationActorKind.LEAD)},
-        CollaborationEventKind.EDITORIAL_RECORD: {(CollaborationActorKind.USER, CollaborationActorKind.LEAD)},
-        CollaborationEventKind.PREMISE_DECISION: {(CollaborationActorKind.USER, CollaborationActorKind.LEAD)},
-        CollaborationEventKind.PREMISE_SELECTION: {(CollaborationActorKind.RUNTIME, CollaborationActorKind.USER)},
-        CollaborationEventKind.PREMISE_FRESH_WORK_ADMISSION: {(CollaborationActorKind.RUNTIME, CollaborationActorKind.LEAD)},
-        CollaborationEventKind.MESSAGE: {
-            (CollaborationActorKind.USER, CollaborationActorKind.LEAD),
-            (CollaborationActorKind.LEAD, CollaborationActorKind.USER),
-            (CollaborationActorKind.RUNTIME, CollaborationActorKind.USER),
-            (CollaborationActorKind.ARTIFACT, CollaborationActorKind.USER),
-            (CollaborationActorKind.ARTIFACT, CollaborationActorKind.LEAD),
-            (CollaborationActorKind.GIT, CollaborationActorKind.USER),
-            (CollaborationActorKind.GIT, CollaborationActorKind.LEAD),
-        },
-        CollaborationEventKind.ASSIGNMENT_DISPATCH: {
-            (CollaborationActorKind.RUNTIME, CollaborationActorKind.SPECIALIST),
-            (CollaborationActorKind.LEAD, CollaborationActorKind.SPECIALIST),
-        },
-        CollaborationEventKind.SPECIALIST_REPLY: {
-            (CollaborationActorKind.SPECIALIST, CollaborationActorKind.LEAD),
-            (CollaborationActorKind.SPECIALIST, CollaborationActorKind.USER),
-        },
-        CollaborationEventKind.LEAD_SYNTHESIS: {
-            (CollaborationActorKind.LEAD, CollaborationActorKind.USER),
-        },
-        CollaborationEventKind.STEP_STATE: {
-            (CollaborationActorKind.RUNTIME, CollaborationActorKind.USER),
-            (CollaborationActorKind.RUNTIME, CollaborationActorKind.LEAD),
-        },
-        CollaborationEventKind.CONFIRMATION: {
-            (CollaborationActorKind.USER, CollaborationActorKind.RUNTIME),
-        },
-        CollaborationEventKind.EXECUTION_RESULT: {
-            (CollaborationActorKind.RUNTIME, CollaborationActorKind.LEAD),
-            (CollaborationActorKind.RUNTIME, CollaborationActorKind.USER),
-        },
-        CollaborationEventKind.INTERRUPTION: {
-            (CollaborationActorKind.USER, CollaborationActorKind.RUNTIME),
-            (CollaborationActorKind.RUNTIME, CollaborationActorKind.USER),
-        },
-        CollaborationEventKind.TERMINAL_OUTCOME: {
-            (CollaborationActorKind.RUNTIME, CollaborationActorKind.LEAD),
-            (CollaborationActorKind.RUNTIME, CollaborationActorKind.USER),
-        },
-        CollaborationEventKind.PROVIDER_CALL_ACCOUNTING: {
-            (CollaborationActorKind.RUNTIME, CollaborationActorKind.LEAD),
-            (CollaborationActorKind.RUNTIME, CollaborationActorKind.SPECIALIST),
-        },
-        CollaborationEventKind.LEAD_GROUP_TRACE: {(CollaborationActorKind.RUNTIME, CollaborationActorKind.LEAD)},
-        CollaborationEventKind.LEAD_OUTCOME_FAILURE: {
-            (CollaborationActorKind.RUNTIME, CollaborationActorKind.USER),
-        },
-        CollaborationEventKind.ARTIFACT_REVIEW_CANDIDATE: {
-            (CollaborationActorKind.RUNTIME, CollaborationActorKind.USER),
-        },
-        CollaborationEventKind.ARTIFACT_REVIEW_SYNTHESIS: {
-            (CollaborationActorKind.LEAD, CollaborationActorKind.USER),
-        },
-        CollaborationEventKind.ARTIFACT_REVIEWED_PROPOSAL: {
-            (CollaborationActorKind.RUNTIME, CollaborationActorKind.USER),
-        },
-        CollaborationEventKind.ARTIFACT_PROPOSAL_STATE: {
-            (CollaborationActorKind.RUNTIME, CollaborationActorKind.USER),
-        },
-        CollaborationEventKind.ARTIFACT_REVIEW_FAILURE: {
-            (CollaborationActorKind.RUNTIME, CollaborationActorKind.USER),
-        },
-        CollaborationEventKind.ARTIFACT_APPLICATION_REQUEST: {
-            (CollaborationActorKind.LEAD, CollaborationActorKind.USER),
-        },
-        CollaborationEventKind.ARTIFACT_APPLICATION_DECISION: {
-            (CollaborationActorKind.USER, CollaborationActorKind.RUNTIME),
-        },
-        CollaborationEventKind.ARTIFACT_APPLICATION_RESULT: {
-            (CollaborationActorKind.ARTIFACT, CollaborationActorKind.USER),
-        },
-        CollaborationEventKind.STORY_COMMIT_REQUEST: {
-            (CollaborationActorKind.LEAD, CollaborationActorKind.USER),
-        },
-        CollaborationEventKind.STORY_COMMIT_DECISION: {
-            (CollaborationActorKind.USER, CollaborationActorKind.RUNTIME),
-        },
-        CollaborationEventKind.STORY_COMMIT_RESULT: {
-            (CollaborationActorKind.GIT, CollaborationActorKind.USER),
-        },
-    }
-    if (sender_kind, recipient_kind) not in allowed[kind]:
-        raise ValueError(
-            f"invalid actor direction for collaboration event {kind.value!r}"
-        )
-    if kind is CollaborationEventKind.ASSIGNMENT_DISPATCH:
-        assert isinstance(payload, CollaborationAssignmentDispatchPayload)
-        if recipient.agent_id != payload.assignment.specialist_id:
-            raise ValueError("dispatch recipient must match the exact assignment")
-    if kind is CollaborationEventKind.SPECIALIST_REPLY:
-        assert isinstance(payload, CollaborationSpecialistReplyPayload)
-        if sender.agent_id is None:
-            raise ValueError("specialist reply sender requires a specialist ID")
-    if kind is CollaborationEventKind.PROVIDER_CALL_ACCOUNTING:
-        assert isinstance(payload, CollaborationProviderCallPayload)
-        if recipient.agent_id != payload.role:
-            raise ValueError("provider-call recipient must match its exact role")
 
 
 __all__ = [

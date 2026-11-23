@@ -22516,6 +22516,80 @@
         "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation",
         "tests.test_provider_response_mapping.ProviderResponseMappingTests.test_all_wire_values_have_stable_golden_hashes_and_round_trip"
       ]
+    },
+
+    {
+      "name": "conversations.event_append_results",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/conversations/event_append_results.py"
+      ],
+      "depends_on": [
+        "conversations.event-vocabulary",
+        "conversations.event_value_validation"
+      ],
+      "focused_ids": [
+        "tests.test_filesystem_collaboration_event_store.FilesystemCollaborationEventStorePersistenceTests.test_construction_absent_read_and_first_append_are_exact_and_isolated"
+      ],
+      "affected_ids": [
+        "tests.test_collaboration_events.CollaborationPackageBoundaryTests.test_append_receipt_error_and_public_signatures_are_exact",
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_public_definitions_live_in_their_exact_owner_modules",
+        "tests.test_filesystem_collaboration_event_store.FilesystemCollaborationEventStorePersistenceTests.test_construction_absent_read_and_first_append_are_exact_and_isolated",
+        "tests.test_sqlite_collaboration_event_store.SQLiteCollaborationEventStoreFirstSliceTests.test_exact_retry_returns_original_receipt_and_one_physical_batch",
+        "tests.test_sqlite_collaboration_event_store.SQLiteCollaborationEventStoreFirstSliceTests.test_fresh_direct_append_persists_exact_rows_and_refreshes_lexical_index"
+      ]
+    },
+
+    {
+      "name": "conversations.event_payload_validation",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/conversations/event_payload_validation.py"
+      ],
+      "depends_on": [
+        "conversations.event-vocabulary",
+        "conversations.event_contracts.control_records",
+        "conversations.event_contracts.execution",
+        "conversations.event_contracts.proposal_inputs"
+      ],
+      "focused_ids": [
+        "tests.test_collaboration_events.CollaborationValueContractTests.test_actor_direction_matrix_is_closed_and_exact"
+      ],
+      "affected_ids": [
+        "tests.test_collaboration_events.CollaborationValueContractTests.test_actor_direction_matrix_is_closed_and_exact",
+        "tests.test_collaboration_events.CollaborationValueContractTests.test_all_schema_values_have_exact_fields_frozen_slots_and_nested_tuples",
+        "tests.test_filesystem_collaboration_event_store.FilesystemCollaborationEventStorePersistenceTests.test_all_required_co_batches_append_and_split_forms_are_atomic",
+        "tests.test_sqlite_collaboration_event_store.SQLiteCollaborationEventStoreFirstSliceTests.test_all_batch_families_append_and_every_split_rolls_back"
+      ]
+    },
+
+    {
+      "name": "conversations.payload_codec",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/conversations/payload_codec.py"
+      ],
+      "depends_on": [
+        "conversations.event-vocabulary",
+        "conversations.event_value_validation",
+        "conversations.event_contracts.authoring_records",
+        "conversations.event_contracts.control_records",
+        "conversations.event_contracts.evidence",
+        "conversations.event_contracts.execution",
+        "conversations.event_contracts.lead_outcomes",
+        "conversations.event_contracts.proposal_inputs"
+      ],
+      "focused_ids": [
+        "tests.test_provider_response_mapping.ProviderResponseMappingTests.test_all_wire_values_have_stable_golden_hashes_and_round_trip"
+      ],
+      "affected_ids": [
+        "tests.test_collaboration_events.CollaborationPackageBoundaryTests.test_leaf_and_facade_exports_identity_metadata_pickle_and_root_omission",
+        "tests.test_collaboration_events.CollaborationWireContractTests.test_artifact_public_decoders_clear_content_from_exception_graphs",
+        "tests.test_collaboration_events.CollaborationWireContractTests.test_duplicate_extra_missing_nonfinite_and_noncanonical_json_are_rejected",
+        "tests.test_collaboration_events.CollaborationWireContractTests.test_every_proposal_dimension_and_order_changes_the_digest",
+        "tests.test_collaboration_events.CollaborationWireContractTests.test_unicode_is_not_normalized_and_tampered_digest_is_rejected",
+        "tests.test_provider_response_mapping.ProviderResponseMappingTests.test_all_wire_values_have_stable_golden_hashes_and_round_trip"
+      ]
     }
   ],
   "ignored_names": [

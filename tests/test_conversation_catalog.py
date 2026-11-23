@@ -925,6 +925,10 @@ class ConversationPackageBoundaryTests(unittest.TestCase):
             "COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES", "ARTIFACT_REVIEW_SCHEMA_VERSION",
         }
         contract_definitions = {
+            "event_append_results.py": {
+                "CollaborationAppendError",
+                "CollaborationAppendReceipt",
+            },
             "event_contracts/conversation_records.py": {"ConversationEvent"},
             "event_contracts/proposal_inputs.py": {
                 "CollaborationActor",
