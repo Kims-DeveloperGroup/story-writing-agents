@@ -246,7 +246,8 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
-        legacy_thread_current = suite_budget.load_budget()
+        startup_options_current = suite_budget.load_budget()
+        legacy_thread_current = dict(startup_options_current, max_test_source_lines=157985)
         request_validation_current = dict(legacy_thread_current, max_test_source_lines=157955)
         backend_shutdown_current = dict(request_validation_current, max_test_source_lines=157888)
         configuration_activation_current = dict(backend_shutdown_current, max_test_source_lines=157829)
@@ -804,6 +805,7 @@ class SuiteBudgetTests(unittest.TestCase):
         self._assert_source_limit_neighbors_rejected(backend_shutdown_current, configuration_activation_current)
         self._assert_source_limit_neighbors_rejected(request_validation_current, backend_shutdown_current)
         self._assert_source_limit_neighbors_rejected(legacy_thread_current, request_validation_current)
+        self._assert_source_limit_neighbors_rejected(startup_options_current, legacy_thread_current)
         self.assertIsNone(suite_budget.check_monotonic(invocation_routing_current, direct_structured_current))
         self.assertIsNone(suite_budget.check_monotonic(direct_structured_current, retrieval_loop_current))
         self.assertIsNone(suite_budget.check_monotonic(retrieval_loop_current, bound_logical_current))
@@ -1195,6 +1197,17 @@ class SuiteBudgetTests(unittest.TestCase):
         validation_affected = request_validation["affected_manifest"]["ordered_ids"]
         self.assertEqual(len(validation_affected), 8)
         self.assertEqual(sum(generation_release_current["subtest_caps"][cid] for cid in validation_affected), 15)
+        startup_options = select_impact(
+            real, paths=("src/story_writing_agents/provider_startup_options.py",),
+        )
+        self.assertIsNone(startup_options["fallback_reason"])
+        self.assertEqual(startup_options["focused_manifest"]["ordered_ids"], [
+            "tests.test_codex_backend_defaults.CodexBackendDefaultsTests.test_constructor_validation_diagnostics_are_fixed_and_provider_safe",
+            "tests.test_codex_backend_defaults.CodexBackendDefaultsTests.test_execution_profiles_resolve_every_source_with_nullable_defaults",
+        ])
+        startup_affected = startup_options["affected_manifest"]["ordered_ids"]
+        self.assertEqual(len(startup_affected), 8)
+        self.assertEqual(sum(generation_release_current["subtest_caps"][cid] for cid in startup_affected), 29)
         legacy_thread = select_impact(
             real, paths=("src/story_writing_agents/provider_legacy_thread_compatibility.py",),
             scope="affected", catalogue=owners,
