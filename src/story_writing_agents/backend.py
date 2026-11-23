@@ -213,6 +213,7 @@ from .provider_adapter import (
     ProviderBinding,
     ProviderInvocation,
     ProviderInvocationError,
+    record_provider_failure_accounting,
 )
 from .backend_diagnostic_events import (
     log_execution_profile_event as _emit_log_execution_profile_event,
