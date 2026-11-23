@@ -20,6 +20,12 @@ from ..structured_output_validation import (
 )
 
 
+from .event_vocabulary import (
+    COLLABORATION_EVENT_SCHEMA_VERSION,
+    COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES,
+)
+
+
 _SAFE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 _SHA256 = re.compile(r"sha256:[0-9a-f]{64}")
 _EnumT = TypeVar("_EnumT", bound=StrEnum)
@@ -335,3 +341,37 @@ def raise_content_free_value_error(message: str) -> NoReturn:
         failure.__cause__ = None
         failure.__context__ = None
         raise
+
+
+def validate_collaboration_schema_version(value: object) -> None:
+    if type(value) is not int or value != COLLABORATION_EVENT_SCHEMA_VERSION:
+        raise ValueError("unsupported collaboration schema version")
+
+
+def validate_visible_text(
+    value: str,
+    *,
+    label: str,
+    maximum: int = COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES,
+) -> str:
+    if not isinstance(value, str):
+        raise validation_failure(TypeError(f'{label} must be a string'), '$', 'expected text')
+    try:
+        encoded = value.encode("utf-8", errors="strict")
+    except UnicodeEncodeError:
+        raise_validation(
+            validation_failure(
+                ValueError(f'{label} must be valid UTF-8'),
+                '$',
+                'expected strict UTF-8 text',
+            ),
+        )
+    if not encoded:
+        raise validation_failure(ValueError(f'{label} must not be empty'), '$', 'expected nonempty text')
+    if len(encoded) > maximum:
+        raise validation_failure(
+            ValueError(f'{label} exceeds the UTF-8 byte limit'),
+            '$',
+            f'expected at most {maximum} UTF-8 bytes',
+        )
+    return value

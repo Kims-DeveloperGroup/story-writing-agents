@@ -151,11 +151,19 @@ from story_writing_agents.conversations.event_value_validation import (
     validate_non_negative_integer as _validate_non_negative_integer,
     validate_positive_integer as _validate_positive_integer,
     validate_response_invocation as _validate_response_invocation,
+    validate_collaboration_schema_version as _validate_schema_version,
+    validate_visible_text as _validate_visible_text,
     validate_specialist_tuple as _validate_specialist_tuple,
     validate_utc_timestamp as _validate_utc_timestamp,
 )
 
 from .event_vocabulary import (
+    CONVERSATION_EVENT_SCHEMA_VERSION,
+    COLLABORATION_EVENT_SCHEMA_VERSION,
+    COLLABORATION_ROUND_LIMIT,
+    COLLABORATION_PHYSICAL_CALL_LIMIT,
+    COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES,
+    ARTIFACT_REVIEW_SCHEMA_VERSION,
     ArtifactObjectiveNextStep,
     LeadObjectiveAction,
     ArtifactApplicationDecisionKind,
@@ -193,14 +201,6 @@ from .event_vocabulary import (
     ArtifactReviewDecision,
     ArtifactReviewFailureCode,
 )
-
-
-CONVERSATION_EVENT_SCHEMA_VERSION = 1
-COLLABORATION_EVENT_SCHEMA_VERSION = 2
-COLLABORATION_ROUND_LIMIT = 2
-COLLABORATION_PHYSICAL_CALL_LIMIT = 12
-COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES = 32_768
-ARTIFACT_REVIEW_SCHEMA_VERSION = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -7426,40 +7426,6 @@ def _validate_scoped_assignments(
             '$',
             'required specialists must perform the scoped activity',
         )
-
-
-def _validate_schema_version(value: object) -> None:
-    if type(value) is not int or value != COLLABORATION_EVENT_SCHEMA_VERSION:
-        raise ValueError("unsupported collaboration schema version")
-
-
-def _validate_visible_text(
-    value: str,
-    *,
-    label: str,
-    maximum: int = COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES,
-) -> str:
-    if not isinstance(value, str):
-        raise validation_failure(TypeError(f'{label} must be a string'), '$', 'expected text')
-    try:
-        encoded = value.encode("utf-8", errors="strict")
-    except UnicodeEncodeError:
-        raise_validation(
-            validation_failure(
-                ValueError(f'{label} must be valid UTF-8'),
-                '$',
-                'expected strict UTF-8 text',
-            ),
-        )
-    if not encoded:
-        raise validation_failure(ValueError(f'{label} must not be empty'), '$', 'expected nonempty text')
-    if len(encoded) > maximum:
-        raise validation_failure(
-            ValueError(f'{label} exceeds the UTF-8 byte limit'),
-            '$',
-            f'expected at most {maximum} UTF-8 bytes',
-        )
-    return value
 
 
 def _decode_provider_usage(value: object) -> ProviderUsage:
