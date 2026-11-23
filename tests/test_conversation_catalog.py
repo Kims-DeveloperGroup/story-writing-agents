@@ -1028,6 +1028,12 @@ class ConversationPackageBoundaryTests(unittest.TestCase):
                 "CollaborationReadableRecord",
             },
         }
+        reducer_definitions = {
+            "reducers/collaboration_transitions.py": {"validate_collaboration_transition"},
+            "reducers/document_plan_views.py": {"document_lineage_cost", "project_document_plan_views"},
+            "reducers/editorial_event_evidence.py": {"editorial_provenance_available"},
+            "reducers/recommendation_history.py": {"is_new_task_recommendation_source"},
+        }
         expected_by_file = {
             "__init__.py": (("__init__.py", set()),),
             "catalog.py": (("catalog.py", _CATALOG_EXPORTS),),
@@ -1037,9 +1043,9 @@ class ConversationPackageBoundaryTests(unittest.TestCase):
                 *contract_definitions.items(),
             ),
             "context.py": (
-                ("context.py", (_CONTEXT_EXPORTS - set().union(*view_definitions.values())) | {
-                    "document_lineage_cost", "project_document_plan_views", "is_new_task_recommendation_source"}),
+                ("context.py", _CONTEXT_EXPORTS - set().union(*view_definitions.values(), *reducer_definitions.values())),
                 *view_definitions.items(),
+                *reducer_definitions.items(),
             ),
         }
         public_names = set(_CONVERSATION_FACADE_EXPORTS) | _OWNER_ONLY_EVENT_EXPORTS
