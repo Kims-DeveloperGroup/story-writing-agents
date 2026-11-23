@@ -69,6 +69,10 @@ from .provider_invocation_routing import (
     invoke_antigravity as _invoke_antigravity,
     invoke_provider as _invoke_provider,
 )
+from .provider_legacy_thread_compatibility import (
+    initial_legacy_thread_disposition as _initial_legacy_thread_disposition,
+    legacy_continuation_fingerprint as _build_legacy_continuation_fingerprint,
+)
 import story_writing_agents.provider_manifest_thread_store as provider_manifest_thread_store
 from .provider_reference_read_lifecycle import (
     ReferenceReadContextLoad as _ReferenceReadContextLoad,
@@ -110,7 +114,7 @@ from .provider_structured_invocation import (
 )
 # Keep the existing Backend module alias for compatibility.
 import story_writing_agents.provider_thread_records as provider_thread_records
-from .provider_message_catalog import WIRE_VERSION, WireShapeError
+from .provider_message_catalog import WireShapeError
 from .provider_response_mapping import (
     normalize_direct_result,
     normalize_retrieval_action,
@@ -119,7 +123,6 @@ from .provider_response_mapping import (
 import asyncio
 import atexit
 import contextvars
-import hashlib
 import inspect
 import os
 import threading
@@ -175,7 +178,6 @@ from .debug_log import (
 from .errors import (
     BackendProtocolError,
     ConfigurationError,
-    SessionNotFoundError,
 )
 from .git.session_contracts import GitSessionResourceInspection
 from .models import (
@@ -955,8 +957,9 @@ class AgentBackend:
         """Capture logical-turn thread state before local reference loading."""
 
         generation = bound_agent._adapter_generation
-        try:
-            stored = provider_manifest_thread_store.load_manifest_thread(
+        return _initial_legacy_thread_disposition(
+            generation,
+            load_thread=lambda: provider_manifest_thread_store.load_manifest_thread(
                 self.workspace,
                 session_id,
                 bound_agent.definition,
@@ -964,16 +967,9 @@ class AgentBackend:
                     bound_agent,
                     execution_workspace,
                 ),
-            )
-        except SessionNotFoundError:
-            stored = None
-        if (
-            stored is None
-            and generation is not None
-            and bound_agent.definition.agent_id in generation.switched_agents
-        ):
-            return "fresh_after_provider_switch"
-        return "fresh" if stored is None else "reused"
+            ),
+            agent_id=lambda: bound_agent.definition.agent_id,
+        )
 
     def provider_route_generations(self) -> Mapping[str, int]:
         """Return the current shell's captured durable route generations."""
@@ -1633,15 +1629,7 @@ class AgentBackend:
     ) -> str:
         """Bind workspace-backed thread compatibility without changing its schema."""
 
-        fingerprint = hashlib.sha256((WIRE_VERSION + "\0" + bound_agent.definition.fingerprint).encode("utf-8")).hexdigest()
-        if bound_agent.vendor not in {"codex", "antigravity"}:
-            return fingerprint
-        if type(execution_workspace) is not ProviderExecutionWorkspace:
-            raise BackendProtocolError("provider execution workspace is unavailable")
-        return execution_workspace.continuation_digest(
-            "legacy-definition-policy",
-            fingerprint,
-        ).removeprefix("sha256:")
+        return _build_legacy_continuation_fingerprint(bound_agent, execution_workspace)
 
     @staticmethod
     def _require_postsubmission_workspace(
