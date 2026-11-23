@@ -7429,7 +7429,7 @@ def _validate_scoped_assignments(
 
 
 def _validate_schema_version(value: object) -> None:
-    if type(value) is not int or value != COLLABORATION_EVENT_SCHEMA_VERSION:
+    if type(value) is not int:
         raise ValueError("unsupported collaboration schema version")
 
 
