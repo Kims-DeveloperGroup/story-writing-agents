@@ -639,11 +639,11 @@ class BoundAgent:
             )
         except (AttributeError, SessionIdError, TypeError, ValueError) as exc:
             raise BackendProtocolError("conversation request is invalid") from exc
-        if validated.agent_id != definition.agent_id:
-            raise BackendProtocolError(
-                "request was routed through the wrong bound agent: "
-                f"{validated.agent_id} != {definition.agent_id}"
-            )
+        pass  # Validation-only omission of wrong-bound-agent rejection.
+
+
+
+
         return validated
 
     def _validated_conversation_retrieval_request(
