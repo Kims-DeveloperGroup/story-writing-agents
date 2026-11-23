@@ -918,18 +918,18 @@ class ConversationPackageBoundaryTests(unittest.TestCase):
         self.assertTrue(issubclass(ConversationNotFoundError, StoryWritingAgentsError))
 
     def test_public_definitions_live_in_their_exact_owner_modules(self) -> None:
-        package = (
-            Path(__file__).resolve().parents[1]
-            / "src"
-            / "story_writing_agents"
-            / "conversations"
-        )
+        package = Path(__file__).resolve().parents[1] / "src/story_writing_agents/conversations"
+        vocabulary_constants = {
+            "CONVERSATION_EVENT_SCHEMA_VERSION", "COLLABORATION_EVENT_SCHEMA_VERSION",
+            "COLLABORATION_ROUND_LIMIT", "COLLABORATION_PHYSICAL_CALL_LIMIT",
+            "COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES", "ARTIFACT_REVIEW_SCHEMA_VERSION",
+        }
         expected_by_file = {
             "__init__.py": (("__init__.py", set()),),
             "catalog.py": (("catalog.py", _CATALOG_EXPORTS),),
             "events.py": (
-                ("events.py", _EVENT_EXPORTS | {"build_final_review_evidence"}),
-                ("event_vocabulary.py", _VOCABULARY_EXPORTS),
+                ("events.py", (_EVENT_EXPORTS - vocabulary_constants) | {"build_final_review_evidence"}),
+                ("event_vocabulary.py", _VOCABULARY_EXPORTS | vocabulary_constants),
             ),
             "context.py": (("context.py", _CONTEXT_EXPORTS | {
                 "document_lineage_cost", "project_document_plan_views", "is_new_task_recommendation_source"}),),
