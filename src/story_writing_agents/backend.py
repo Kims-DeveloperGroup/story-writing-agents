@@ -22,6 +22,10 @@ from .bound_agent_logical_invocation import (
 )
 import story_writing_agents.conversation_retrieval_wire as conversation_retrieval_wire
 import story_writing_agents.provider_binding_call_lifetime as provider_binding_call_lifetime
+from .bound_agent_request_validation import (
+    validate_conversation_request as _validate_conversation_request,
+    validate_conversation_retrieval_request as _validate_conversation_retrieval_request,
+)
 from .provider_adapter_generations import (
     AdapterGeneration as _AdapterGeneration,
     ProviderAdapterGenerations,
@@ -104,6 +108,7 @@ from .provider_structured_invocation import (
     record_rejected_provider_response_without_replacing_failure as _record_rejected_provider_response_without_replacing_failure,
     stage_validation_details as _stage_validation_details,
 )
+# Keep the existing Backend module alias for compatibility.
 import story_writing_agents.provider_thread_records as provider_thread_records
 from .provider_message_catalog import WIRE_VERSION, WireShapeError
 from .provider_response_mapping import (
@@ -170,7 +175,6 @@ from .debug_log import (
 from .errors import (
     BackendProtocolError,
     ConfigurationError,
-    SessionIdError,
     SessionNotFoundError,
 )
 from .git.session_contracts import GitSessionResourceInspection
@@ -611,40 +615,7 @@ class BoundAgent:
         ``BackendProtocolError``.
         """
 
-        if type(request) is not ConversationRequest:
-            raise TypeError("request must be a ConversationRequest")
-        definition = self.definition
-        if (
-            type(definition) is not AgentDefinition
-            or not isinstance(definition.agent_id, str)
-            or definition.agent_id not in ROSTER
-            or not isinstance(definition.backend, str)
-            or not definition.backend
-            or self.vendor != definition.backend
-            or not isinstance(definition.fingerprint, str)
-            or provider_thread_records.PROVIDER_FINGERPRINT_PATTERN.fullmatch(definition.fingerprint) is None
-        ):
-            raise BackendProtocolError(
-                "bound agent definition is invalid for conversation routing"
-            )
-        try:
-            validated = ConversationRequest(
-                session_id=request.session_id,
-                conversation_id=request.conversation_id,
-                turn_id=request.turn_id,
-                agent_id=request.agent_id,
-                content=request.content,
-                context=request.context,
-                story_session_context=request.story_session_context,
-            )
-        except (AttributeError, SessionIdError, TypeError, ValueError) as exc:
-            raise BackendProtocolError("conversation request is invalid") from exc
-        if validated.agent_id != definition.agent_id:
-            raise BackendProtocolError(
-                "request was routed through the wrong bound agent: "
-                f"{validated.agent_id} != {definition.agent_id}"
-            )
-        return validated
+        return _validate_conversation_request(self, request)
 
     def _validated_conversation_retrieval_request(
         self,
@@ -657,43 +628,7 @@ class BoundAgent:
         ``BackendProtocolError`` while a wrong caller type remains ``TypeError``.
         """
 
-        if type(request) is not ConversationRetrievalRequest:
-            raise TypeError("request must be a ConversationRetrievalRequest")
-        definition = self.definition
-        if (
-            type(definition) is not AgentDefinition
-            or not isinstance(definition.agent_id, str)
-            or definition.agent_id not in ROSTER
-            or not isinstance(definition.backend, str)
-            or not definition.backend
-            or self.vendor != definition.backend
-            or not isinstance(definition.fingerprint, str)
-            or provider_thread_records.PROVIDER_FINGERPRINT_PATTERN.fullmatch(definition.fingerprint) is None
-        ):
-            raise BackendProtocolError(
-                "bound agent definition is invalid for conversation retrieval"
-            )
-        try:
-            validated = ConversationRetrievalRequest(
-                session_id=request.session_id,
-                conversation_id=request.conversation_id,
-                turn_id=request.turn_id,
-                agent_id=request.agent_id,
-                content=request.content,
-                context=request.context,
-                story_session_context=request.story_session_context,
-                rag_context=request.rag_context,
-            )
-        except (AttributeError, SessionIdError, TypeError, ValueError) as exc:
-            raise BackendProtocolError(
-                "conversation retrieval request is invalid"
-            ) from exc
-        if validated.agent_id != definition.agent_id:
-            raise BackendProtocolError(
-                "request was routed through the wrong bound agent: "
-                f"{validated.agent_id} != {definition.agent_id}"
-            )
-        return validated
+        return _validate_conversation_retrieval_request(self, request)
 
 
     logical_reference_call_use = _reference_call_use
