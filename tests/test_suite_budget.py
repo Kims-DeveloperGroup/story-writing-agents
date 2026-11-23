@@ -246,7 +246,8 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
-        workspace_authority_current = suite_budget.load_budget()
+        antigravity_outcome_current = suite_budget.load_budget()
+        workspace_authority_current = dict(antigravity_outcome_current, max_test_source_lines=158043)
         startup_options_current = dict(workspace_authority_current, max_test_source_lines=158008)
         legacy_thread_current = dict(startup_options_current, max_test_source_lines=157985)
         request_validation_current = dict(legacy_thread_current, max_test_source_lines=157955)
@@ -808,6 +809,7 @@ class SuiteBudgetTests(unittest.TestCase):
         self._assert_source_limit_neighbors_rejected(legacy_thread_current, request_validation_current)
         self._assert_source_limit_neighbors_rejected(startup_options_current, legacy_thread_current)
         self._assert_source_limit_neighbors_rejected(workspace_authority_current, startup_options_current)
+        self._assert_source_limit_neighbors_rejected(antigravity_outcome_current, workspace_authority_current)
         self.assertIsNone(suite_budget.check_monotonic(invocation_routing_current, direct_structured_current))
         self.assertIsNone(suite_budget.check_monotonic(direct_structured_current, retrieval_loop_current))
         self.assertIsNone(suite_budget.check_monotonic(retrieval_loop_current, bound_logical_current))
@@ -1210,6 +1212,17 @@ class SuiteBudgetTests(unittest.TestCase):
         startup_affected = startup_options["affected_manifest"]["ordered_ids"]
         self.assertEqual(len(startup_affected), 8)
         self.assertEqual(sum(generation_release_current["subtest_caps"][cid] for cid in startup_affected), 29)
+        antigravity_outcome = select_impact(
+            real, paths=("src/story_writing_agents/antigravity_native_outcome.py",),
+        )
+        self.assertIsNone(antigravity_outcome["fallback_reason"])
+        self.assertEqual(antigravity_outcome["focused_manifest"]["ordered_ids"], [
+            "tests.test_antigravity_adapter.AntigravityAdapterTests.test_partial_timeout_rejects_incomplete_envelopes_and_preserves_failure_facts",
+            "tests.test_antigravity_stream_delivery.AntigravityStreamDeliveryTests.test_antigravity_adapter_recognizes_authentication_failure_with_streaming_preamble",
+        ])
+        outcome_affected = antigravity_outcome["affected_manifest"]["ordered_ids"]
+        self.assertEqual(len(outcome_affected), 16)
+        self.assertEqual(sum(generation_release_current["subtest_caps"][cid] for cid in outcome_affected), 58)
         workspace_authority = select_impact(
             real, paths=("src/story_writing_agents/provider_workspace_authority_lifecycle.py",),
         )
