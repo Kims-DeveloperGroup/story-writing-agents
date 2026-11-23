@@ -939,6 +939,28 @@ class ConversationPackageBoundaryTests(unittest.TestCase):
             },
             "event_contracts/evidence.py": {"CollaborationEvidenceReceipt", "CollaborationLeadEvidence"},
             "event_contracts/lead_scope.py": {"lead_outcome_scope_paths"},
+            "event_contracts/artifact_apply.py": {
+                "ArtifactApplicationDecisionPayload",
+                "ArtifactApplicationRequestPayload",
+                "ArtifactApplicationResultPayload",
+            },
+            "event_contracts/artifact_reviews.py": {
+                "ArtifactProposalStatePayload",
+                "ArtifactReviewCandidatePayload",
+                "ArtifactReviewFailurePayload",
+                "ArtifactReviewReply",
+                "ArtifactReviewSynthesisPayload",
+                "ArtifactReviewedProposal",
+                "artifact_reviewed_proposal_digest",
+                "decode_artifact_reviewed_proposal",
+                "encode_artifact_reviewed_proposal",
+            },
+            "event_contracts/story_commits.py": {
+                "StoryCommitDecisionPayload",
+                "StoryCommitRequestPayload",
+                "StoryCommitResultPayload",
+                "build_story_commit_request_payload",
+            },
             "event_contracts/authoring_records.py": {
                 "CollaborationEditorialRecordPayload",
                 "CollaborationExplorationAdoptionPayload",
