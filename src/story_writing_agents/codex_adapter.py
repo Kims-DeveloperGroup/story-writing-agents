@@ -512,8 +512,6 @@ class CodexAdapter:
             events = cls.parse_events(stdout, strict=True)
         except ProviderInvocationError:
             return None
-        if any(event.get("type") == "turn.completed" for event in events):
-            return None
         for event in events:
             if event.get("type") not in {"error", "turn.failed"}:
                 continue
