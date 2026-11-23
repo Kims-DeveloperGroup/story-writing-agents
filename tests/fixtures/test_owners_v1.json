@@ -22378,6 +22378,88 @@
         "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_public_definitions_live_in_their_exact_owner_modules",
         "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_whole_and_range_conflict_bind_proposal_and_detect_drift"
       ]
+    },
+
+    {
+      "name": "conversations.event_contracts.authoring_records",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/conversations/event_contracts/authoring_records.py"
+      ],
+      "depends_on": [],
+      "focused_ids": [
+        "tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests.test_projection_is_deterministic_ordered_typed_and_history_only"
+      ],
+      "affected_ids": [
+        "tests.test_collaboration_events.CollaborationPackageBoundaryTests.test_leaf_and_facade_exports_identity_metadata_pickle_and_root_omission",
+        "tests.test_collaboration_events.CollaborationValueContractTests.test_all_schema_values_have_exact_fields_frozen_slots_and_nested_tuples",
+        "tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_public_definitions_live_in_their_exact_owner_modules"
+      ]
+    },
+
+    {
+      "name": "conversations.event_contracts.control_records",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/conversations/event_contracts/control_records.py"
+      ],
+      "depends_on": [],
+      "focused_ids": [
+        "tests.test_collaboration_events.CollaborationValueContractTests.test_all_schema_values_have_exact_fields_frozen_slots_and_nested_tuples"
+      ],
+      "affected_ids": [
+        "tests.test_collaboration_context.CollaborationBudgetAndOutcomeTests.test_twelve_calls_are_accepted_and_possible_thirteenth_is_rejected",
+        "tests.test_collaboration_events.CollaborationPackageBoundaryTests.test_leaf_and_facade_exports_identity_metadata_pickle_and_root_omission",
+        "tests.test_collaboration_events.CollaborationValueContractTests.test_all_schema_values_have_exact_fields_frozen_slots_and_nested_tuples",
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_public_definitions_live_in_their_exact_owner_modules"
+      ]
+    },
+
+    {
+      "name": "conversations.event_contracts.execution",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/conversations/event_contracts/execution.py"
+      ],
+      "depends_on": [
+        "conversations.event_contracts.proposal_inputs"
+      ],
+      "focused_ids": [
+        "tests.test_collaboration_events.CollaborationValueContractTests.test_result_value_requires_exact_terminal_facts"
+      ],
+      "affected_ids": [
+        "tests.test_collaboration_context.CollaborationBudgetAndOutcomeTests.test_assignment_synthesis_step_and_lineage_usage_caps_are_enforced",
+        "tests.test_collaboration_context.CollaborationBudgetAndOutcomeTests.test_first_second_and_third_round_boundaries_use_durable_lineage",
+        "tests.test_collaboration_context.CollaborationBudgetAndOutcomeTests.test_partial_failure_preserves_sibling_and_prohibits_synthesis",
+        "tests.test_collaboration_context.CollaborationBudgetAndOutcomeTests.test_zero_synthesis_advisory_is_valid_and_submission_is_rejected",
+        "tests.test_collaboration_events.CollaborationPackageBoundaryTests.test_leaf_and_facade_exports_identity_metadata_pickle_and_root_omission",
+        "tests.test_collaboration_events.CollaborationValueContractTests.test_all_schema_values_have_exact_fields_frozen_slots_and_nested_tuples",
+        "tests.test_collaboration_events.CollaborationValueContractTests.test_result_value_requires_exact_terminal_facts",
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_public_definitions_live_in_their_exact_owner_modules"
+      ]
+    },
+
+    {
+      "name": "conversations.event_contracts.lead_outcomes",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/conversations/event_contracts/lead_outcomes.py"
+      ],
+      "depends_on": [
+        "conversations.event_contracts.evidence",
+        "conversations.event_contracts.lead_scope",
+        "conversations.event_contracts.proposal_inputs"
+      ],
+      "focused_ids": [
+        "tests.test_lead_evidence_matrix.DurableLeadEvidenceMatrixTests.test_all_sixty_scope_status_kind_cells_are_closed_and_exact"
+      ],
+      "affected_ids": [
+        "tests.test_collaboration_events.CollaborationPackageBoundaryTests.test_leaf_and_facade_exports_identity_metadata_pickle_and_root_omission",
+        "tests.test_collaboration_events.CollaborationValueContractTests.test_all_schema_values_have_exact_fields_frozen_slots_and_nested_tuples",
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_public_definitions_live_in_their_exact_owner_modules",
+        "tests.test_lead_evidence_matrix.DurableLeadEvidenceMatrixTests.test_all_sixty_scope_status_kind_cells_are_closed_and_exact"
+      ]
     }
   ],
   "ignored_names": [

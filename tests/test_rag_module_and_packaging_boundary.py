@@ -414,8 +414,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 376)
-        self.assertEqual(len(edges), 2281)
+        self.assertEqual(len(modules), 380)
+        self.assertEqual(len(edges), 2317)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -805,6 +805,10 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.errors",
             },
             "story_writing_agents.conversations.events": {
+                "story_writing_agents.conversations.event_contracts.authoring_records",
+                "story_writing_agents.conversations.event_contracts.control_records",
+                "story_writing_agents.conversations.event_contracts.execution",
+                "story_writing_agents.conversations.event_contracts.lead_outcomes",
                 "story_writing_agents.conversations.event_contracts.conversation_records",
                 "story_writing_agents.conversations.event_contracts.evidence",
                 "story_writing_agents.conversations.event_contracts.lead_scope",
@@ -812,7 +816,6 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.conversations.event_vocabulary",
                 "story_writing_agents.document_plan",
                 "story_writing_agents.review_contracts",
-                "story_writing_agents.agent_context",
                 "story_writing_agents.lead_task_transitions",
                 "story_writing_agents.lead_exploration",
                 "story_writing_agents.lead_premise_decisions",
@@ -1548,6 +1551,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
         self.assertIn("story_writing_agents.review_contracts", modules)
         self.assertEqual({target for source, target in edges if source == "story_writing_agents.review_contracts"}, set())
         self.assertEqual({source for source, target in edges if target == "story_writing_agents.review_contracts"}, {
+            "story_writing_agents.conversations.event_contracts.lead_outcomes",
             "story_writing_agents.conversations.event_contracts.lead_scope",
             "story_writing_agents.authoring_task_lifecycle", "story_writing_agents.conversations", "story_writing_agents.conversations.context",
             "story_writing_agents.conversations.events", "story_writing_agents.interactive_terminal._collaboration_view",
@@ -1560,6 +1564,9 @@ class RagModuleBoundaryTests(unittest.TestCase):
             "story_writing_agents.core_document_readiness", "story_writing_agents.editorial_scope",
             "story_writing_agents.lead_task_transitions", "story_writing_agents.specialist_routing"})
         self.assertEqual({source for source, target in edges if target == "story_writing_agents.document_plan"}, {
+            'story_writing_agents.conversations.event_contracts.authoring_records',
+            'story_writing_agents.conversations.event_contracts.control_records',
+            'story_writing_agents.conversations.event_contracts.lead_outcomes',
             'story_writing_agents.conversations',
             'story_writing_agents.conversations.context',
             'story_writing_agents.conversations.events',
@@ -3702,6 +3709,10 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 "story_writing_agents/conversations/event_contracts/evidence.py",
                 "story_writing_agents/conversations/event_contracts/lead_scope.py",
                 "story_writing_agents/conversations/event_contracts/proposal_inputs.py",
+                "story_writing_agents/conversations/event_contracts/authoring_records.py",
+                "story_writing_agents/conversations/event_contracts/control_records.py",
+                "story_writing_agents/conversations/event_contracts/execution.py",
+                "story_writing_agents/conversations/event_contracts/lead_outcomes.py",
                 "story_writing_agents/conversations/event_vocabulary.py",
                 "story_writing_agents/conversations/event_value_validation.py",
                 "story_writing_agents/lead_execution/__init__.py",
