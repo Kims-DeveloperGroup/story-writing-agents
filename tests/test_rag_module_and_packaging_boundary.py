@@ -72,6 +72,7 @@ from story_writing_agents.session_lifecycle import SessionAccessState, SessionDu
 from story_writing_agents.workspace import Workspace
 from story_writing_agents import (
     antigravity_adapter, antigravity_agent_definition, antigravity_native_output_schema,
+    antigravity_native_outcome,
     antigravity_native_recovery,
     antigravity_recovery_matching, antigravity_response_decoding, antigravity_rules,
     antigravity_state_directories,
@@ -412,8 +413,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 369)
-        self.assertEqual(len(edges), 2237)
+        self.assertEqual(len(modules), 370)
+        self.assertEqual(len(edges), 2242)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -426,6 +427,15 @@ class RagModuleBoundaryTests(unittest.TestCase):
         activation_owner = "story_writing_agents.provider_configuration_activation"
         request_validation_owner = "story_writing_agents.bound_agent_request_validation"
         provider_dependencies = {
+            "story_writing_agents.antigravity_native_outcome": (
+                {
+                    "story_writing_agents.agent_context",
+                    "story_writing_agents.errors",
+                    "story_writing_agents.provider_adapter",
+                    "story_writing_agents.provider_process",
+                },
+                {"story_writing_agents.antigravity_adapter"},
+            ),
             "story_writing_agents.provider_workspace_authority_lifecycle": (
                 {
                     "story_writing_agents.agent_context.invocation.provider",
@@ -2984,6 +2994,14 @@ class RagModuleBoundaryTests(unittest.TestCase):
         self.assertIs(type(schema_descriptor), staticmethod)
         self.assertIs(schema_descriptor.__func__, antigravity_native_output_schema.render_native_output_schema)
         self.assertFalse(hasattr(story_writing_agents, "render_native_output_schema"))
+        for name in ("classify_native_authentication_failure", "complete_native_outcome"):
+            self.assertIs(
+                getattr(antigravity_adapter, f"_{name}"),
+                getattr(antigravity_native_outcome, name),
+            )
+            self.assertFalse(hasattr(story_writing_agents, name))
+        auth_classifier = vars(antigravity_adapter.AntigravityAdapter)["_authentication_failure"]
+        self.assertIs(type(auth_classifier), classmethod)
         self.assertIs(antigravity_adapter.antigravity_native_recovery, antigravity_native_recovery)
         self.assertIs(antigravity_native_recovery.antigravity_recovery_matching, antigravity_recovery_matching)
         self.assertEqual(antigravity_native_recovery.NativeRecoveryBaseline.__module__, antigravity_native_recovery.__name__)
@@ -3558,6 +3576,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             "story_writing_agents/provider_invocation_routing.py",
             "story_writing_agents/provider_retrieval_handler_outcomes.py",
             "story_writing_agents/antigravity_native_output_schema.py",
+            "story_writing_agents/antigravity_native_outcome.py",
             "story_writing_agents/antigravity_native_recovery.py",
             "story_writing_agents/antigravity_state_directories.py",
             "story_writing_agents/antigravity_recovery_matching.py",
