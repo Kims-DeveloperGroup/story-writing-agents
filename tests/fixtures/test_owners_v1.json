@@ -21594,6 +21594,36 @@
       "depends_on": []
     },
     {
+      "name": "provider.antigravity-native-outcome",
+      "boundary": "antigravity-native-outcome",
+      "paths": [
+        "src/story_writing_agents/antigravity_native_outcome.py"
+      ],
+      "focused_ids": [
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_partial_timeout_rejects_incomplete_envelopes_and_preserves_failure_facts",
+        "tests.test_antigravity_stream_delivery.AntigravityStreamDeliveryTests.test_antigravity_adapter_recognizes_authentication_failure_with_streaming_preamble"
+      ],
+      "affected_ids": [
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_completed_failures_retain_exact_native_diagnostic_and_accounting",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_partial_exit_zero_requires_independent_current_finish_for_fresh_and_resumed_calls",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_partial_timeout_rejects_incomplete_envelopes_and_preserves_failure_facts",
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_recovered_invoke_uses_actual_current_trace_and_retains_error_envelope",
+        "tests.test_antigravity_stream_delivery.AntigravityStreamDeliveryTests.test_antigravity_adapter_recognizes_authentication_failure_with_streaming_preamble",
+        "tests.test_antigravity_stream_delivery.AntigravityStreamDeliveryTests.test_antigravity_adapter_replays_stdout_when_no_streaming_callbacks_delivered",
+        "tests.test_antigravity_stream_delivery.AntigravityStreamDeliveryTests.test_antigravity_adapter_sanitizes_stdout_in_streamed_response_diagnostic",
+        "tests.test_antigravity_stream_delivery.AntigravityStreamDeliveryTests.test_antigravity_adapter_surfaces_provider_error_on_non_zero_returncode",
+        "tests.test_antigravity_stream_validation.AntigravityStreamValidationTests.test_antigravity_adapter_fails_closed_when_stream_contains_invalid_line_before_auth_terminal",
+        "tests.test_antigravity_stream_validation.AntigravityStreamValidationTests.test_antigravity_adapter_rejects_multiple_terminal_results_in_stream",
+        "tests.test_antigravity_stream_validation.AntigravityStreamValidationTests.test_antigravity_adapter_rejects_trailing_data_after_terminal_result",
+        "tests.test_provider_auth_recovery.AuthClassificationTests.test_antigravity_incident_shape_is_auth_and_safe_to_replay",
+        "tests.test_provider_auth_recovery.AuthClassificationTests.test_antigravity_partial_and_malformed_shapes_never_grant_replay",
+        "tests.test_provider_auth_recovery.AuthClassificationTests.test_antigravity_partial_timeout_auth_preserves_both_native_facts",
+        "tests.test_provider_auth_recovery.AuthClassificationTests.test_duplicate_nonfinite_and_invalid_native_fields_do_not_create_auth_authority",
+        "tests.test_provider_auth_recovery.AuthClassificationTests.test_native_401_is_assisted_without_replay"
+      ],
+      "depends_on": []
+    },
+    {
       "name": "provider.workspace-authority-lifecycle",
       "boundary": "provider-workspace-authority-lifecycle",
       "paths": [
