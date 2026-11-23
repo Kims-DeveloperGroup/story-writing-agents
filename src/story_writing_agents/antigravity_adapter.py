@@ -7,7 +7,6 @@ import hashlib
 import json
 import math
 import os
-import re
 import shutil
 import subprocess
 from collections.abc import Callable, Mapping
@@ -50,6 +49,10 @@ import story_writing_agents.antigravity_native_recovery as antigravity_native_re
 import story_writing_agents.antigravity_recovery_matching as antigravity_recovery_matching
 import story_writing_agents.antigravity_state_directories as antigravity_state_directories
 import story_writing_agents.antigravity_stream_observation as antigravity_stream_observation
+from .antigravity_native_outcome import (
+    classify_native_authentication_failure as _classify_native_authentication_failure,
+    complete_native_outcome as _complete_native_outcome,
+)
 from .antigravity_native_output_schema import render_native_output_schema as _render_native_output_schema
 from .antigravity_response_decoding import (
     ProviderResultHooks as _ProviderResultHooks,
@@ -60,14 +63,6 @@ from .antigravity_response_decoding import (
     unwrap_result_envelope as _unwrap_antigravity_result_envelope,
 )
 
-
-_NATIVE_PARTIAL_TIMEOUT = re.compile(
-    rb"^\[agy\] print timeout after [^\r\n]+ with turn in progress; "
-    rb"returning partial output\r?$", re.MULTILINE,
-)
-_NATIVE_TRUNCATED = re.compile(
-    rb"^error: [^\r\n]+ \(response may be truncated\)\r?$", re.MULTILINE,
-)
 
 CapabilityRun = antigravity_command.CapabilityRun
 
@@ -457,104 +452,29 @@ class AntigravityAdapter:
                 actual_transport_utf8_bytes=transport_utf8_bytes,
             )
             raise failure from exc
-        replay_stream = invocation.stream_sink is not None
-        (
-            captured_result_bytes,
-            invalid_stream_line,
-            has_trailing_data_after_terminal,
-        ) = finalize_stream_observation((lambda: result.stdout) if replay_stream else None)
-        if replay_stream:
-            diagnostic_stdout = (
-                result.stdout
-                if len(result.stdout.splitlines()) <= 1
-                else captured_result_bytes[0]
-                if len(captured_result_bytes) == 1
-                else b""
-            )
-        else:
-            diagnostic_stdout = result.stdout
-
-        partial_timeout = bool(_NATIVE_PARTIAL_TIMEOUT.search(result.stderr))
-        incomplete_output = partial_timeout or bool(
-            _NATIVE_TRUNCATED.search(result.stderr)
-        )
-        response_diagnostic = ProviderResponseDiagnostic(
-            stdout=diagnostic_stdout,
-            stderr=result.stderr,
-            exit_code=result.returncode,
-        )
-        try:
-            if invocation.stream_sink is not None:
-                if invalid_stream_line is not None:
-                    raise ProviderInvocationError(
-                        f"Antigravity streaming response contained invalid stream line: {invalid_stream_line}",
-                        taint_existing_thread=True,
-                    )
-            effective_stdout = (
-                captured_result_bytes[0]
-                if (invocation.stream_sink is not None and len(captured_result_bytes) == 1)
-                else result.stdout
-            )
-            authentication = self._authentication_failure(
-                effective_stdout, result.returncode,
-            )
-            if authentication is not None:
-                raise ProviderInvocationError(
-                    str(authentication),
-                    taint_existing_thread=not authentication.replay_safe,
-                    authentication_failure=authentication,
-                )
-            if result.returncode != 0:
-                raise ProviderInvocationError(
-                    f"Antigravity CLI exited with status {result.returncode}",
-                    taint_existing_thread=True,
-                )
-            if invocation.stream_sink is not None:
-                if len(captured_result_bytes) != 1:
-                    raise ProviderInvocationError(
-                        f"Antigravity streaming response contained {len(captured_result_bytes)} terminal result events; expected exactly 1",
-                        taint_existing_thread=True,
-                    )
-                if has_trailing_data_after_terminal:
-                    raise ProviderInvocationError(
-                        "Antigravity streaming response contained trailing data after terminal result",
-                        taint_existing_thread=True,
-                    )
-            provider_result = self._provider_result(
-                effective_stdout,
-                expected_thread_id=effective_thread_id,
-                expected_schema=transport_schema,
-                completion_check=lambda thread_id, output, error: antigravity_native_recovery.has_current_finish(
-                    self,
-                    provider_state_directory,
-                    recovery_baseline,
-                    thread_id,
-                    prompt,
-                    output,
-                    error,
+        return _complete_native_outcome(
+            result,
+            invocation,
+            finalize_stream_observation=finalize_stream_observation,
+            transport_utf8_bytes=transport_utf8_bytes,
+            get_authentication_failure=lambda: self._authentication_failure,
+            decode_result=lambda effective_stdout, response_diagnostic, incomplete_output: self._provider_result(
+                    effective_stdout,
+                    expected_thread_id=effective_thread_id,
+                    expected_schema=transport_schema,
+                    completion_check=lambda thread_id, output, error: antigravity_native_recovery.has_current_finish(
+                        self,
+                        provider_state_directory,
+                        recovery_baseline,
+                        thread_id,
+                        prompt,
+                        output,
+                        error,
+                    ),
+                    response_diagnostic=response_diagnostic,
+                    completion_required=incomplete_output,
                 ),
-                response_diagnostic=response_diagnostic,
-                completion_required=incomplete_output,
-            )
-            return ProviderResult(
-                thread_id=provider_result.thread_id,
-                response_text=provider_result.response_text,
-                usage=provider_result.usage,
-                usage_observation=provider_result.usage_observation,
-                actual_transport_utf8_bytes=transport_utf8_bytes,
-                response_diagnostic=provider_result.response_diagnostic,
-            )
-        except BaseException as exc:
-            if isinstance(exc, ProviderInvocationError):
-                if partial_timeout:
-                    exc.timed_out = True
-                exc.record_response_diagnostic(response_diagnostic)
-            record_provider_failure_accounting(
-                exc,
-                state=ProviderCallState.SUBMITTED,
-                actual_transport_utf8_bytes=transport_utf8_bytes,
-            )
-            raise
+        )
 
     _unwrap_result_envelope = classmethod(_unwrap_antigravity_result_envelope)
 
@@ -564,43 +484,12 @@ class AntigravityAdapter:
     ) -> ProviderAuthenticationRequiredError | None:
         """Recognize native auth errors; only the supported exit-1 shape proves rejection."""
 
-        try:
-            terminal = cls._parse_result(stdout)
-        except ProviderInvocationError:
-            return None
-        terminal = cls._unwrap_result_envelope(terminal)
-        error = terminal.get("error")
-        if terminal.get("status") != "ERROR":
-            return None
-        message = error.get("message") if type(error) is dict else error
-        native_401 = (
-            type(error) is dict
-            and any(type(error.get(key)) is int and error[key] == 401
-                    for key in ("status", "status_code", "code"))
-        ) or (
-            type(message) is str
-            and re.search(r"\b(?:HTTP(?: status)?|status(?: code)?)\s*:?\s*401\b|\b401 Unauthorized\b", message, re.IGNORECASE)
-            is not None
+        return _classify_native_authentication_failure(
+            stdout,
+            returncode,
+            parse_result=lambda stdout: cls._parse_result(stdout),
+            unwrap_result_envelope=lambda terminal: cls._unwrap_result_envelope(terminal),
         )
-        if message != "authentication failed or timed out" and not native_401:
-            return None
-        usage = terminal.get("usage")
-        counters = {"input_tokens", "output_tokens", "thinking_tokens",
-                    "cache_read_tokens", "total_tokens"}
-        replay_safe = (
-            returncode == 1
-            and set(terminal) == {"conversation_id", "status", "response", "error",
-                                  "duration_seconds", "num_turns", "usage"}
-            and terminal["error"] == "authentication failed or timed out"
-            and terminal["conversation_id"] == ""
-            and terminal["response"] == ""
-            and type(terminal["duration_seconds"]) is int
-            and terminal["duration_seconds"] == 0
-            and type(terminal["num_turns"]) is int and terminal["num_turns"] == 0
-            and type(usage) is dict and set(usage) == counters
-            and all(type(value) is int and value == 0 for value in usage.values())
-        )
-        return ProviderAuthenticationRequiredError("antigravity", replay_safe=replay_safe)
 
     @staticmethod
     def _validate_invocation(
