@@ -246,7 +246,8 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
-        request_validation_current = suite_budget.load_budget()
+        legacy_thread_current = suite_budget.load_budget()
+        request_validation_current = dict(legacy_thread_current, max_test_source_lines=157955)
         backend_shutdown_current = dict(request_validation_current, max_test_source_lines=157888)
         configuration_activation_current = dict(backend_shutdown_current, max_test_source_lines=157829)
         session_lifecycle_current = dict(configuration_activation_current, max_test_source_lines=157787)
@@ -802,6 +803,7 @@ class SuiteBudgetTests(unittest.TestCase):
         self._assert_source_limit_neighbors_rejected(configuration_activation_current, session_lifecycle_current)
         self._assert_source_limit_neighbors_rejected(backend_shutdown_current, configuration_activation_current)
         self._assert_source_limit_neighbors_rejected(request_validation_current, backend_shutdown_current)
+        self._assert_source_limit_neighbors_rejected(legacy_thread_current, request_validation_current)
         self.assertIsNone(suite_budget.check_monotonic(invocation_routing_current, direct_structured_current))
         self.assertIsNone(suite_budget.check_monotonic(direct_structured_current, retrieval_loop_current))
         self.assertIsNone(suite_budget.check_monotonic(retrieval_loop_current, bound_logical_current))
@@ -1193,6 +1195,18 @@ class SuiteBudgetTests(unittest.TestCase):
         validation_affected = request_validation["affected_manifest"]["ordered_ids"]
         self.assertEqual(len(validation_affected), 8)
         self.assertEqual(sum(generation_release_current["subtest_caps"][cid] for cid in validation_affected), 15)
+        legacy_thread = select_impact(
+            real, paths=("src/story_writing_agents/provider_legacy_thread_compatibility.py",),
+            scope="affected", catalogue=owners,
+        )
+        self.assertIsNone(legacy_thread["fallback_reason"])
+        self.assertEqual(legacy_thread["focused_manifest"]["ordered_ids"], [
+            "tests.test_codex_backend.CodexBackendTestCase.test_conversation_thread_spans_subjects_and_restarts_on_fingerprint",
+            "tests.test_codex_backend.CodexBackendTestCase.test_hot_same_provider_profile_applies_now_and_reuses_thread",
+        ])
+        legacy_affected = legacy_thread["affected_manifest"]["ordered_ids"]
+        self.assertEqual(len(legacy_affected), 10)
+        self.assertEqual(sum(generation_release_current["subtest_caps"][cid] for cid in legacy_affected), 20)
         bound_contract_impact = select_impact(
             real, paths=("tests/test_bound_agent_conversation_contracts.py",), scope="affected", catalogue=owners,
         )
