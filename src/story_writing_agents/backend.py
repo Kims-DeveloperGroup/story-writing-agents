@@ -973,7 +973,7 @@ class AgentBackend:
             and bound_agent.definition.agent_id in generation.switched_agents
         ):
             return "fresh_after_provider_switch"
-        return "fresh" if stored is None else "reused"
+        return "fresh" if stored is None else "fresh"
 
     def provider_route_generations(self) -> Mapping[str, int]:
         """Return the current shell's captured durable route generations."""
