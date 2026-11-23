@@ -1931,3 +1931,17 @@ Case 수는 611/592/652/688/1에서 658/564/574/747/1로 바뀐다.
 - `tests/test_suite_budget.py` +24행
 
 계상 테스트 소스 +59행으로 소스 한도를 157,829→157,888행으로 적용한다. 기존 Case·서브테스트·시간·worker 상한을 유지한다.
+
+### #1155 대화·검색 요청 검증 사례 분리
+
+새 생산 경로는 기존 집중 2개와 영향 8개를 선택한다.
+기존 두 런타임 사례를 별도 정의 모듈로 옮기고 정규 ID, fixture와 단언을 유지한다.
+직접 모듈 선택은 2개다. 정의 파일의 경로 선택은 기존 수집 모듈의 의존 범위 90개를 포함한다.
+기존 그래프·배포 경계와 테스트 소유권 정책에 필요한 변경을 반영한다.
+
+- `tests/test_bound_agent_conversation_contracts.py` +156행
+- `tests/test_codex_backend.py` -130행
+- `tests/test_rag_module_and_packaging_boundary.py` +16행
+- `tests/test_suite_budget.py` +25행
+
+계상 테스트 소스 +67행으로 소스 한도를 157,888→157,955행으로 적용한다. 기존 Case·서브테스트·시간·worker 상한을 유지한다.
