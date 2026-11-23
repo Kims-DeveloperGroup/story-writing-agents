@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import story_writing_agents.backend_reply_decoding as backend_reply_decoding
+from .backend_shutdown import release_backend_resources as _release_backend_resources
 from .bound_agent_logical_invocation import (
     LogicalProviderDispatch as _LogicalProviderDispatch,
     LogicalRetrievalDispatch as _LogicalRetrievalDispatch,
@@ -24,6 +25,9 @@ import story_writing_agents.provider_binding_call_lifetime as provider_binding_c
 from .provider_adapter_generations import (
     AdapterGeneration as _AdapterGeneration,
     ProviderAdapterGenerations,
+)
+from .provider_binding_admission import (
+    prepare_provider_binding_locked as _prepare_provider_binding_locked,
 )
 from .provider_bound_context import (
     BoundContextProvider as _BoundContextProvider,
@@ -1272,18 +1276,9 @@ class AgentBackend:
         )
         try:
             with self._generation_lock:
-                generation = self._adapter_generations.active
-                profile = generation.profiles[agent_id]
-                if profile.provider != definition.backend:
-                    raise BackendProtocolError(
-                        "definition provider does not match the active execution profile"
-                    )
-                adapter = generation.adapters[definition.backend]
-                binding = adapter.bind(definition)
-                if type(binding) is not ProviderBinding:
-                    raise BackendProtocolError(
-                        "provider adapter returned an inconsistent binding"
-                    )
+                generation, profile, binding = _prepare_provider_binding_locked(
+                    self._adapter_generations, definition, agent_id
+                )
                 bound = BoundAgent(
                     self,
                     definition,
@@ -1476,26 +1471,18 @@ class AgentBackend:
         if not self._closed or self._bound_agents or self._close_cleanup_complete:
             return
         self._close_cleanup_complete = True
-        release_failed = False
-        for session, token in tuple(self._access_claim_tokens.items()):
-            try:
-                self._access_transactions.release_access_claim(self.workspace, session, token)
-            except Exception as exc:
-                release_failed = True
-                self._record_debug_error(
-                    DebugOperation.CLEANUP,
-                    exc,
-                    session_id=session,
-                )
-        self._access_claim_tokens.clear()
-        self._thread_locks.clear()
-        self._context_thread_locks.clear()
-        for adapter in self._adapters.values():
-            try:
-                adapter.close()
-            except Exception as exc:
-                release_failed = True
-                self._record_debug_error(DebugOperation.CLEANUP, exc)
+        release_failed = _release_backend_resources(
+            claim_tokens=lambda: self._access_claim_tokens,
+            thread_locks=lambda: self._thread_locks,
+            context_thread_locks=lambda: self._context_thread_locks,
+            active_adapters=lambda: self._adapters.values(),
+            release_access_claim=lambda session, token: self._access_transactions.release_access_claim(
+                self.workspace, session, token
+            ),
+            record_error=lambda exc, **fields: self._record_debug_error(
+                DebugOperation.CLEANUP, exc, **fields
+            ),
+        )
         self._trace_debug(
             DebugOperation.CLEANUP,
             DebugPhase.FAILED if release_failed else DebugPhase.SUCCEEDED,
