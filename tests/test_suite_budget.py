@@ -246,7 +246,8 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
-        execution_profile_current = suite_budget.load_budget()
+        codex_native_outcome_current = suite_budget.load_budget()
+        execution_profile_current = dict(codex_native_outcome_current, max_test_source_lines=158099)
         antigravity_outcome_current = dict(execution_profile_current, max_test_source_lines=158075)
         workspace_authority_current = dict(antigravity_outcome_current, max_test_source_lines=158043)
         startup_options_current = dict(workspace_authority_current, max_test_source_lines=158008)
@@ -812,6 +813,7 @@ class SuiteBudgetTests(unittest.TestCase):
         self._assert_source_limit_neighbors_rejected(workspace_authority_current, startup_options_current)
         self._assert_source_limit_neighbors_rejected(antigravity_outcome_current, workspace_authority_current)
         self._assert_source_limit_neighbors_rejected(execution_profile_current, antigravity_outcome_current)
+        self._assert_source_limit_neighbors_rejected(codex_native_outcome_current, execution_profile_current)
         self.assertIsNone(suite_budget.check_monotonic(invocation_routing_current, direct_structured_current))
         self.assertIsNone(suite_budget.check_monotonic(direct_structured_current, retrieval_loop_current))
         self.assertIsNone(suite_budget.check_monotonic(retrieval_loop_current, bound_logical_current))
@@ -1158,6 +1160,35 @@ class SuiteBudgetTests(unittest.TestCase):
                 sum(generation_release_current["subtest_caps"][cid] for cid in lifecycle_affected),
                 subtest_cap,
             )
+
+        codex_native_outcome = select_impact(real, paths=("src/story_writing_agents/codex_native_outcome.py",))
+        self.assertIsNone(codex_native_outcome["fallback_reason"])
+        codex_focus = codex_native_outcome["focused_manifest"]["ordered_ids"]
+        self.assertEqual(
+            codex_focus,
+            [
+                "tests.test_provider_auth_recovery.AuthClassificationTests.test_codex_completed_failures_keep_diagnostics_and_accounting",
+                "tests.test_provider_auth_recovery.AuthClassificationTests.test_codex_completed_turn_with_historical_401_remains_success",
+            ],
+        )
+        codex_affected = codex_native_outcome["affected_manifest"]["ordered_ids"]
+        self.assertEqual(
+            codex_affected,
+            [
+                "tests.test_codex_adapter_streaming.CodexAdapterStreamingTests.test_codex_adapter_streams_status_reasoning_and_message_events",
+                "tests.test_codex_backend.CodexBackendTestCase.test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread",
+                "tests.test_codex_backend.CodexBackendTestCase.test_structured_decode_failures_taint_existing_thread_once",
+                "tests.test_codex_invocation_files.CodexInvocationFilesTests.test_missing_executable_nonzero_and_malformed_output_fail_cleanly",
+                "tests.test_codex_invocation_files.CodexInvocationFilesTests.test_native_mismatched_thread_is_ambiguous_without_replay_proof",
+                "tests.test_provider_auth_recovery.AuthClassificationTests.test_codex_completed_failures_keep_diagnostics_and_accounting",
+                "tests.test_provider_auth_recovery.AuthClassificationTests.test_codex_completed_turn_with_historical_401_remains_success",
+                "tests.test_provider_auth_recovery.AuthClassificationTests.test_duplicate_nonfinite_and_invalid_native_fields_do_not_create_auth_authority",
+                "tests.test_provider_auth_recovery.AuthClassificationTests.test_generated_text_warnings_and_forbidden_errors_do_not_trigger_auth",
+                "tests.test_provider_auth_recovery.AuthClassificationTests.test_native_401_is_assisted_without_replay",
+            ],
+        )
+        self.assertEqual(sum(codex_native_outcome_current["subtest_caps"][cid] for cid in codex_focus), 3)
+        self.assertEqual(sum(codex_native_outcome_current["subtest_caps"][cid] for cid in codex_affected), 12)
 
         profile_observations = select_impact(real, paths=("src/story_writing_agents/provider_execution_profile_observations.py",))
         self.assertIsNone(profile_observations["fallback_reason"])

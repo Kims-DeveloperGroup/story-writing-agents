@@ -21271,6 +21271,31 @@
       ]
     },
     {
+      "name": "provider.codex-native-outcome",
+      "boundary": "codex-native-outcome",
+      "paths": [
+        "src/story_writing_agents/codex_native_outcome.py"
+      ],
+      "focused_ids": [
+        "tests.test_provider_auth_recovery.AuthClassificationTests.test_codex_completed_failures_keep_diagnostics_and_accounting",
+        "tests.test_provider_auth_recovery.AuthClassificationTests.test_codex_completed_turn_with_historical_401_remains_success"
+      ],
+      "affected_ids": [
+        "tests.test_codex_adapter_streaming.CodexAdapterStreamingTests.test_codex_adapter_streams_status_reasoning_and_message_events",
+        "tests.test_codex_backend.CodexBackendTestCase.test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread",
+        "tests.test_codex_backend.CodexBackendTestCase.test_structured_decode_failures_taint_existing_thread_once",
+        "tests.test_codex_invocation_files.CodexInvocationFilesTests.test_missing_executable_nonzero_and_malformed_output_fail_cleanly",
+        "tests.test_codex_invocation_files.CodexInvocationFilesTests.test_native_mismatched_thread_is_ambiguous_without_replay_proof",
+        "tests.test_provider_auth_recovery.AuthClassificationTests.test_codex_completed_failures_keep_diagnostics_and_accounting",
+        "tests.test_provider_auth_recovery.AuthClassificationTests.test_codex_completed_turn_with_historical_401_remains_success",
+        "tests.test_provider_auth_recovery.AuthClassificationTests.test_duplicate_nonfinite_and_invalid_native_fields_do_not_create_auth_authority",
+        "tests.test_provider_auth_recovery.AuthClassificationTests.test_generated_text_warnings_and_forbidden_errors_do_not_trigger_auth",
+        "tests.test_provider_auth_recovery.AuthClassificationTests.test_native_401_is_assisted_without_replay"
+      ],
+      "depends_on": []
+    },
+
+    {
       "name": "provider.execution-profile-observations",
       "boundary": "provider-execution-profile-observations",
       "paths": [
