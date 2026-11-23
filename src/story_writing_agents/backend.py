@@ -1936,7 +1936,7 @@ def provider_execution_workspace_manager(
                 bound_agent._provider_binding
             )
             with binding.open_ready_resources() as access:
-                access.install_provider_role(role)
+                pass
         except OSError as failure:
             raise BackendProtocolError(
                 "Antigravity session role projection is unavailable"
