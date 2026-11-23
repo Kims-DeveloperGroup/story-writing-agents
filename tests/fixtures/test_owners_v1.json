@@ -21572,6 +21572,28 @@
       "depends_on": []
     },
     {
+      "name": "provider.startup-options",
+      "boundary": "provider-startup-options",
+      "paths": [
+        "src/story_writing_agents/provider_startup_options.py"
+      ],
+      "focused_ids": [
+        "tests.test_codex_backend_defaults.CodexBackendDefaultsTests.test_constructor_validation_diagnostics_are_fixed_and_provider_safe",
+        "tests.test_codex_backend_defaults.CodexBackendDefaultsTests.test_execution_profiles_resolve_every_source_with_nullable_defaults"
+      ],
+      "affected_ids": [
+        "tests.test_antigravity_adapter.AntigravityAdapterTests.test_shared_default_and_explicit_timeouts_keep_native_and_outer_deadlines_distinct",
+        "tests.test_codex_backend_defaults.CodexBackendDefaultsTests.test_agent_model_and_reasoning_precedence_uses_immutable_snapshot",
+        "tests.test_codex_backend_defaults.CodexBackendDefaultsTests.test_constructor_validation_diagnostics_are_fixed_and_provider_safe",
+        "tests.test_codex_backend_defaults.CodexBackendDefaultsTests.test_execution_profiles_resolve_every_source_with_nullable_defaults",
+        "tests.test_codex_backend_defaults.CodexBackendDefaultsTests.test_explicit_model_validation_retains_exact_value_error",
+        "tests.test_codex_backend_defaults.CodexBackendDefaultsTests.test_full_persisted_schema_precedes_explicit_model_validation",
+        "tests.test_codex_backend_defaults.CodexBackendDefaultsTests.test_model_precedence_and_explicit_none_are_exact",
+        "tests.test_codex_backend_defaults.CodexBackendDefaultsTests.test_startup_logs_four_exact_active_execution_profile_snapshots"
+      ],
+      "depends_on": []
+    },
+    {
       "name": "provider.legacy-thread-compatibility",
       "boundary": "legacy-provider-thread-compatibility",
       "paths": [
