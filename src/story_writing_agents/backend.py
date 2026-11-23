@@ -926,11 +926,6 @@ class AgentBackend:
             )
         if not emit_confirmation:
             return
-        self._log_execution_profile_confirmed(
-            profile,
-            thread_disposition=thread_disposition,
-            context_state=("rehydrated" if context_rehydrated else "unavailable"),
-        )
 
     def _logical_thread_disposition(
         self,
