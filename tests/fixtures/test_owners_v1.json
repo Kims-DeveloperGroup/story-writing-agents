@@ -22460,6 +22460,62 @@
         "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_public_definitions_live_in_their_exact_owner_modules",
         "tests.test_lead_evidence_matrix.DurableLeadEvidenceMatrixTests.test_all_sixty_scope_status_kind_cells_are_closed_and_exact"
       ]
+    },
+
+    {
+      "name": "conversations.event_contracts.artifact_apply",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/conversations/event_contracts/artifact_apply.py"
+      ],
+      "depends_on": [
+        "conversations.event_contracts.artifact_reviews"
+      ],
+      "focused_ids": [
+        "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip"
+      ],
+      "affected_ids": [
+        "tests.lead_preparation.test_response_rules.SpecialistRoutingTests.test_scope_and_review_basis_codecs_are_closed_and_round_trip",
+        "tests.test_collaboration_events.CollaborationPackageBoundaryTests.test_leaf_and_facade_exports_identity_metadata_pickle_and_root_omission",
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_public_definitions_live_in_their_exact_owner_modules",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect"
+      ]
+    },
+
+    {
+      "name": "conversations.event_contracts.artifact_reviews",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/conversations/event_contracts/artifact_reviews.py"
+      ],
+      "depends_on": [],
+      "focused_ids": [
+        "tests.test_collaboration_events.CollaborationWireContractTests.test_artifact_public_decoders_clear_content_from_exception_graphs"
+      ],
+      "affected_ids": [
+        "tests.test_collaboration_events.CollaborationPackageBoundaryTests.test_leaf_and_facade_exports_identity_metadata_pickle_and_root_omission",
+        "tests.test_collaboration_events.CollaborationWireContractTests.test_artifact_public_decoders_clear_content_from_exception_graphs",
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_public_definitions_live_in_their_exact_owner_modules",
+        "tests.test_provider_response_mapping.ProviderResponseMappingTests.test_all_wire_values_have_stable_golden_hashes_and_round_trip"
+      ]
+    },
+
+    {
+      "name": "conversations.event_contracts.story_commits",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/conversations/event_contracts/story_commits.py"
+      ],
+      "depends_on": [],
+      "focused_ids": [
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation"
+      ],
+      "affected_ids": [
+        "tests.test_collaboration_events.CollaborationPackageBoundaryTests.test_leaf_and_facade_exports_identity_metadata_pickle_and_root_omission",
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_public_definitions_live_in_their_exact_owner_modules",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation",
+        "tests.test_provider_response_mapping.ProviderResponseMappingTests.test_all_wire_values_have_stable_golden_hashes_and_round_trip"
+      ]
     }
   ],
   "ignored_names": [
