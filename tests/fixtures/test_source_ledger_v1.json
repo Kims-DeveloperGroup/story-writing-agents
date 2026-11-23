@@ -4095,6 +4095,58 @@
         157829,
         157888
       ]
+    },
+    {
+      "issue": 1155,
+      "base": "9289291b3b5638396dd5ac403378e3e2ad866caf",
+      "origin_commit": "9289291b3b5638396dd5ac403378e3e2ad866caf",
+      "origins": [
+        {
+          "source": "tests/test_codex_backend.py",
+          "sha256": "e0e5d5e60c9fd8cfa0138eab83b447979ca39eb8ba8fb299c033c6955be7af76"
+        },
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "09d016a74dc66911700e778c44dd017d92ca05dfac8032bc1786f420488cc3d5"
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "1523238ff6702940438a83600e4b32b2bb3cbdced66c614199f8ba16531c2413"
+        }
+      ],
+      "prior_sources": [
+        {
+          "source": "tests/test_codex_backend.py",
+          "sha256": "e0e5d5e60c9fd8cfa0138eab83b447979ca39eb8ba8fb299c033c6955be7af76"
+        },
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "09d016a74dc66911700e778c44dd017d92ca05dfac8032bc1786f420488cc3d5"
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "1523238ff6702940438a83600e4b32b2bb3cbdced66c614199f8ba16531c2413"
+        }
+      ],
+      "counting": "ordinary tests + registered support + 1550 legacy",
+      "legacy_unresolved_lines": 1550,
+      "approved_source_delta": 67,
+      "planned_raw_delta": 67,
+      "planned_support_delta": 0,
+      "excluded_monotonic_rule_ordinary": 1,
+      "excluded_monotonic_rule_physical": 1,
+      "original_caps_sha256": "0fc8c5e140b56200643f090106395259da9ca23d1e90a0e64738c3bd3f5c5fbe",
+      "expected_caps_sha256": "0fc8c5e140b56200643f090106395259da9ca23d1e90a0e64738c3bd3f5c5fbe",
+      "cost_components": {
+        "tests/test_bound_agent_conversation_contracts.py": 156,
+        "tests/test_codex_backend.py": -130,
+        "tests/test_rag_module_and_packaging_boundary.py": 16,
+        "tests/test_suite_budget.py": 25
+      },
+      "exact_source_pair": [
+        157888,
+        157955
+      ]
     }
   ]
 }
