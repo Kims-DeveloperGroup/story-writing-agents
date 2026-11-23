@@ -415,7 +415,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
         self.assertEqual(len(modules), 371)
-        self.assertEqual(len(edges), 2254)
+        self.assertEqual(len(edges), 2255)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)

@@ -5,6 +5,14 @@ from __future__ import annotations
 from enum import StrEnum
 
 
+CONVERSATION_EVENT_SCHEMA_VERSION = 1
+COLLABORATION_EVENT_SCHEMA_VERSION = 2
+COLLABORATION_ROUND_LIMIT = 2
+COLLABORATION_PHYSICAL_CALL_LIMIT = 12
+COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES = 32_768
+ARTIFACT_REVIEW_SCHEMA_VERSION = 1
+
+
 class CollaborationEventKind(StrEnum):
     """Closed schema-v2 outer event kinds."""
 
