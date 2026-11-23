@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-from ..document_plan import (DocumentPlan, DocumentPlanRef, DocumentNodeBinding, document_value_digest,
+from ..document_plan import (DocumentPlan, DocumentNodeBinding, document_value_digest,
     document_plan_to_dict, document_plan_from_dict,
-    document_node_binding_to_dict, document_node_binding_from_dict, DocumentNodeSelection,
+    document_node_binding_to_dict, document_node_binding_from_dict,
     document_node_selection_to_dict, document_node_selection_from_dict,
     document_plan_ref_to_dict, document_plan_ref_from_dict)
 from ..core_document_readiness import AuthoringTarget
 
 from ..agent_context.group_observation import LeadGroupTrace
-from ..agent_context.accounting import (ProviderCallAccounting, provider_call_accounting_from_object, provider_call_accounting_to_object)
+from ..agent_context.accounting import (provider_call_accounting_from_object, provider_call_accounting_to_object)
 from ..review_contracts import (
     LeadPreliminaryReview, FinalReviewEvidence, ReviewTarget, ReviewTargetKind,
     preliminary_review_to_dict, preliminary_review_from_dict, preliminary_scope_eligible,
@@ -33,28 +33,27 @@ from ..authoring_admission import (
 )
 
 from ..lead_task_transitions import (
-    LeadTaskAction, LeadTaskDecision, LeadTaskTransitionReceipt, LeadMaterialCapture,
+    LeadTaskDecision, LeadTaskTransitionReceipt, LeadMaterialCapture,
     LeadDiscussionReport, LeadPublicResponse, task_value_to_dict,
     task_value_from_dict,
 )
 
 from ..lead_premise_decisions import (
-    PremiseQuestionIntent, PremiseDecisionSpec, PremiseAnalysis, PremiseDecisionReport,
-    PremiseDecisionSelection, PremiseSelectionCapture, PremiseFreshWorkAdmission,
-    PremiseConflict, premise_value_to_dict, premise_question_intent_from_dict,
+    PremiseQuestionIntent, PremiseDecisionSpec, PremiseDecisionReport,
+    premise_value_to_dict, premise_question_intent_from_dict,
     premise_spec_from_dict, premise_analysis_from_dict, premise_report_from_dict,
     premise_selection_from_dict, premise_capture_from_dict, premise_admission_from_dict,
     premise_conflicts_from_dict,
 )
 
 from ..lead_exploration import (
-    LeadInteractionMode, LeadExplorationReport, ExplorationAdoptionCapture,
+    LeadInteractionMode,
     exploration_report_to_dict, exploration_report_from_dict,
     adoption_capture_to_dict, adoption_capture_from_dict,
 )
 
 from ..editorial_state import (
-    EditorialRecordRevision, EditorialRecordRef, editorial_revision_to_dict,
+    EditorialRecordRef, editorial_revision_to_dict,
     editorial_revision_from_dict, editorial_ref_to_dict, editorial_ref_from_dict,
 )
 
@@ -67,10 +66,9 @@ from ..structured_output_validation import (
     raise_validation,
 )
 from dataclasses import asdict, dataclass, field
-from ..agent_context import ProviderUsage
 from enum import StrEnum
 
-from ..agents import LEAD_ORCHESTRATOR, ROSTER, SPECIALIST_IDS
+from ..agents import LEAD_ORCHESTRATOR, SPECIALIST_IDS
 from ..artifact_proposals import (
     ArtifactProposalIntent,
     ArtifactReviewCandidate,
@@ -79,12 +77,10 @@ from ..artifact_proposals import (
     serialize_artifact_review_candidate,
 )
 from ..reply_trace import ReplyTrace
-from ..structured_output_validation import validate_details
 from ..specialist_routing import (
     AuthoringActivity,
     AuthoringIntent,
     AuthoringScope,
-    ReviewBasis,
     SpecialistAssignmentMode,
     required_authoring_domains,
     artifact_domain,
@@ -186,8 +182,45 @@ from .event_contracts.proposal_inputs import (
     decode_profile as _decode_profile,
     input_value as _input_value,
     profile_value as _profile_value,
-    validate_assignment_routing as _validate_assignment_routing,
     validate_scoped_assignments as _validate_scoped_assignments,
+)
+from .event_contracts.authoring_records import (
+    CollaborationEditorialRecordPayload,
+    CollaborationExplorationAdoptionPayload,
+    CollaborationLeadDiscussionPayload,
+    CollaborationLeadExplorationRequestPayload,
+    CollaborationLeadExplorationResultPayload,
+    CollaborationLeadMaterialCapturePayload,
+    CollaborationLeadPublicResponsePayload,
+    CollaborationLeadTaskDecisionPayload,
+    CollaborationLeadTaskTransitionPayload,
+    CollaborationPremiseDecisionPayload,
+    CollaborationPremiseFreshWorkAdmissionPayload,
+    CollaborationPremiseSelectionPayload,
+)
+from .event_contracts.control_records import (
+    CollaborationConfirmationPayload,
+    CollaborationInterruptionPayload,
+    CollaborationProviderCallPayload,
+    CollaborationStepStatePayload,
+    CollaborationTerminalOutcomePayload,
+    decode_provider_usage as _decode_provider_usage,
+)
+from .event_contracts.execution import (
+    CollaborationAssignmentDispatchPayload,
+    CollaborationAssignmentOutcome,
+    CollaborationExecutionResult,
+    CollaborationMessagePayload,
+    CollaborationSpecialistReplyPayload,
+    specialist_assessments_for_mode,
+    decode_result as _decode_result,
+    result_value as _result_value,
+)
+from .event_contracts.lead_outcomes import (
+    authoring_scope_is_view,
+    CollaborationLeadJudgmentPayload,
+    CollaborationLeadOutcomeFailurePayload,
+    LeadAssignmentIntent,
 )
 from .event_vocabulary import (
     CONVERSATION_EVENT_SCHEMA_VERSION,
@@ -210,7 +243,6 @@ from .event_vocabulary import (
     CollaborationConfirmationDecision,
     CollaborationDirection,
     CollaborationEventKind,
-    CollaborationExecutionOutcomeKind,
     CollaborationInputKind,
     CollaborationInputState,
     CollaborationInvocationKind,
@@ -221,7 +253,6 @@ from .event_vocabulary import (
     CollaborationSpecialistAssessment,
     CollaborationStepKind,
     CollaborationStepState,
-    CollaborationSynthesisOutcomeKind,
     CollaborationTerminalScope,
     LeadOutcomeKind,
     LeadOutcomeScope,
@@ -231,88 +262,6 @@ from .event_vocabulary import (
     ArtifactReviewDecision,
     ArtifactReviewFailureCode,
 )
-
-
-@dataclass(frozen=True, slots=True)
-class CollaborationLeadJudgmentPayload:
-    """Visible lead judgment bound to its exact runtime evidence."""
-
-    kind: LeadOutcomeKind
-    message: str
-    evidence: CollaborationLeadEvidence
-    authoring_scope: AuthoringScope | None = None
-    trace: ReplyTrace | None = None
-
-    authoring_admission: AuthoringAdmissionBasis | None = field(default=None, kw_only=True)
-    core_document_readiness: CoreDocumentReadinessBasis | None = field(default=None, kw_only=True)
-
-    provider_invocation_id: str | None = field(default=None, kw_only=True)
-
-    preliminary_review: LeadPreliminaryReview | None = field(default=None, kw_only=True)
-    document_plan: DocumentPlan | None = field(default=None, kw_only=True)
-    document_node: DocumentNodeBinding | None = field(default=None, kw_only=True)
-    planning_target: AuthoringTarget | None = field(default=None, kw_only=True)
-    def __post_init__(self) -> None:
-        _validate_planning_target(self.planning_target, self.kind, self.authoring_scope)
-        if self.document_node is not None and (type(self.document_node) is not DocumentNodeBinding
-                or (self.authoring_scope is not None and
-                    (self.document_node.task_ref.task_id, self.document_node.task_ref.task_revision) !=
-                    (self.authoring_scope.task_id, self.authoring_scope.task_revision))):
-            raise ValueError("document metadata must retain its exact actual task/revision")
-        if self.document_plan is not None and type(self.document_plan) is not DocumentPlan:
-            raise TypeError("planning judgment requires the exact host plan value")
-        if (self.document_plan is not None and self.document_plan.goal_objective_id is None
-                and self.planning_target is not AuthoringTarget.MANUSCRIPT):
-            raise ValueError("unresolved goal requires genuine formal manuscript clarification")
-        if self.preliminary_review is not None:
-            record = self.preliminary_review
-            if (type(record) is not LeadPreliminaryReview or self.kind is not LeadOutcomeKind.ANSWER
-                    or self.authoring_scope is None
-                    or (record.task_id, record.task_revision) !=
-                       (self.authoring_scope.task_id, self.authoring_scope.task_revision)
-                    or not preliminary_scope_eligible(self.authoring_scope.activity.value,
-                                                     self.authoring_scope.target_paths, record.targets)):
-                raise ValueError("preliminary review must bind its current read-only scope and targets")
-        _validate_response_invocation(self.provider_invocation_id)
-        if self.core_document_readiness is not None:
-            if (type(self.core_document_readiness) is not CoreDocumentReadinessBasis
-                    or self.kind is not LeadOutcomeKind.ANSWER or self.authoring_scope is not None
-                    or self.authoring_admission is not None):
-                raise ValueError("readiness judgment cannot carry authoring authority")
-        if self.kind in {LeadOutcomeKind.EXPLORATION, LeadOutcomeKind.DISCUSSION}:
-            raise ValueError("exploration requires its typed request-bound report")
-        _require_enum(self.kind, LeadOutcomeKind, "lead judgment kind")
-        _validate_visible_text(self.message, label="lead judgment message")
-        if type(self.evidence) is not CollaborationLeadEvidence:
-            raise TypeError("lead judgment evidence must be CollaborationLeadEvidence")
-        _validate_lead_evidence_matrix(
-            self.kind, self.evidence, authoring_scope=self.authoring_scope, preliminary_review=self.preliminary_review,
-        )
-        _validate_authoring_evidence_scope(self.authoring_scope, self.evidence.scope)
-        if self.trace is not None and type(self.trace) is not ReplyTrace:
-            raise TypeError("lead judgment trace must be ReplyTrace or None")
-
-
-@dataclass(frozen=True, slots=True)
-class CollaborationLeadOutcomeFailurePayload:
-    """Content-free closure of one read-only Lead attempt, never a success."""
-
-    code: CollaborationLeadOutcomeFailureCode
-    invocation_id: str | None
-    call_id: str | None
-
-    def __post_init__(self) -> None:
-        _require_enum(
-            self.code,
-            CollaborationLeadOutcomeFailureCode,
-            "lead outcome failure code",
-        )
-        if self.code is CollaborationLeadOutcomeFailureCode.REQUEST_NOT_SUBMITTED:
-            if self.invocation_id is not None or self.call_id is not None:
-                raise ValueError("unsubmitted request cannot identify a provider call")
-            return
-        _validate_identifier(self.invocation_id, label="lead failure invocation ID")
-        _validate_identifier(self.call_id, label="lead failure call ID")
 
 
 def _validate_objective_paths(paths: tuple[str, ...]) -> None:
@@ -686,63 +635,6 @@ class LeadSharedPremiseIntent:
             _validate_visible_text(self.selected_premise, label="shared premise choice")
         _validate_identifier_tuple(self.basis_input_ids, label="shared premise input IDs")
         _require_unique(self.basis_input_ids, label="shared premise input IDs")
-
-
-@dataclass(frozen=True, slots=True)
-class LeadAssignmentIntent:
-    """One visible, non-authoritative specialist assignment requested by the lead."""
-
-    agent_id: str
-    instruction: str
-    input_ids: tuple[str, ...]
-    mode: SpecialistAssignmentMode | None = None
-    review_basis: ReviewBasis | None = None
-
-    def __post_init__(self) -> None:
-        if type(self.agent_id) is not str or self.agent_id not in SPECIALIST_IDS:
-            raise validation_failure(
-                ValueError('lead assignment agent ID must be a canonical specialist'),
-                '$.agent_id',
-                'expected one of ' + ', '.join(SPECIALIST_IDS),
-            )
-        if type(self.instruction) is not str:
-            raise validation_failure(
-                TypeError('lead assignment instruction must be exact text'),
-                '$.instruction',
-                'expected text',
-            )
-        validation_call(
-            '$.instruction',
-            _validate_visible_text,
-            self.instruction,
-            label='lead assignment instruction',
-        )
-        if type(self.input_ids) is not tuple or not self.input_ids:
-            raise validation_failure(
-                TypeError('lead assignment input IDs must be a nonempty exact tuple'),
-                '$.input_ids',
-                'expected a nonempty array of input identifiers',
-            )
-        for input_index, input_id in enumerate(self.input_ids):
-            if type(input_id) is not str:
-                raise validation_failure(
-                    TypeError('lead assignment input IDs must be exact text'),
-                    f'$.input_ids[{input_index}]',
-                    'expected text input identifiers',
-                )
-            validation_call(
-                f'$.input_ids[{input_index}]',
-                _validate_identifier,
-                input_id,
-                label='lead assignment input ID',
-            )
-        validation_call(
-            '$.input_ids',
-            _require_unique,
-            self.input_ids,
-            label='lead assignment input IDs',
-        )
-        validation_call('$', _validate_assignment_routing, self.mode, self.input_ids, self.review_basis)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1518,305 +1410,6 @@ class CollaborationProposal:
             document_node=document_node,
             document_plan=document_plan,
         )
-
-
-@dataclass(frozen=True, slots=True)
-class CollaborationAssignmentOutcome:
-    """Authoritative terminal facts for exactly one proposal assignment."""
-
-    assignment_id: str
-    outcome: CollaborationAssignmentOutcomeKind
-    submitted_physical_calls: int
-    reply_event_id: str | None
-
-    def __post_init__(self) -> None:
-        _validate_identifier(self.assignment_id, label="assignment outcome ID")
-        _require_enum(
-            self.outcome,
-            CollaborationAssignmentOutcomeKind,
-            "assignment outcome",
-        )
-        _validate_non_negative_integer(
-            self.submitted_physical_calls,
-            label="assignment submitted physical calls",
-        )
-        if self.outcome is CollaborationAssignmentOutcomeKind.SUCCEEDED:
-            if self.reply_event_id is None:
-                raise ValueError("successful assignment requires a reply event")
-            _validate_identifier(self.reply_event_id, label="assignment reply event ID")
-        elif self.reply_event_id is not None:
-            raise ValueError(
-                "failed or cancelled assignment cannot claim a reply event"
-            )
-
-
-@dataclass(frozen=True, slots=True)
-class CollaborationExecutionResult:
-    """Complete authoritative result for one known execution attempt."""
-
-    proposal_id: str
-    proposal_revision: int
-    proposal_digest: str
-    execution_attempt_id: str
-    assignment_outcomes: tuple[CollaborationAssignmentOutcome, ...]
-    synthesis_outcome: CollaborationSynthesisOutcomeKind
-    synthesis_submitted_physical_calls: int
-    synthesis_result_event_id: str | None
-    overall_outcome: CollaborationExecutionOutcomeKind
-    visible_exchange_event_ids: tuple[str, ...]
-
-    def __post_init__(self) -> None:
-        _validate_identifier(self.proposal_id, label="execution result proposal ID")
-        _validate_positive_integer(
-            self.proposal_revision,
-            label="execution result proposal revision",
-        )
-        _validate_digest(self.proposal_digest, label="execution result proposal digest")
-        _validate_identifier(
-            self.execution_attempt_id,
-            label="execution attempt ID",
-        )
-        _validate_exact_tuple(
-            self.assignment_outcomes,
-            CollaborationAssignmentOutcome,
-            label="assignment outcomes",
-            nonempty=True,
-        )
-        _require_unique(
-            tuple(item.assignment_id for item in self.assignment_outcomes),
-            label="execution-result assignment IDs",
-        )
-        _require_enum(
-            self.synthesis_outcome,
-            CollaborationSynthesisOutcomeKind,
-            "synthesis outcome",
-        )
-        _validate_non_negative_integer(
-            self.synthesis_submitted_physical_calls,
-            label="synthesis submitted physical calls",
-        )
-        if self.synthesis_outcome is CollaborationSynthesisOutcomeKind.SUCCEEDED:
-            if self.synthesis_result_event_id is None:
-                raise ValueError("successful synthesis requires a result event")
-            _validate_identifier(
-                self.synthesis_result_event_id,
-                label="synthesis result event ID",
-            )
-        elif self.synthesis_result_event_id is not None:
-            raise ValueError("non-successful synthesis cannot claim a result event")
-        if (
-            self.synthesis_outcome is CollaborationSynthesisOutcomeKind.NOT_ATTEMPTED
-            and self.synthesis_submitted_physical_calls != 0
-        ):
-            raise ValueError("not-attempted synthesis must submit zero calls")
-        _require_enum(
-            self.overall_outcome,
-            CollaborationExecutionOutcomeKind,
-            "overall execution outcome",
-        )
-        _validate_identifier_tuple(
-            self.visible_exchange_event_ids,
-            label="visible exchange event IDs",
-        )
-        assignments_succeeded = all(
-            item.outcome is CollaborationAssignmentOutcomeKind.SUCCEEDED
-            for item in self.assignment_outcomes
-        )
-        if not assignments_succeeded and self.synthesis_outcome is not (
-            CollaborationSynthesisOutcomeKind.NOT_ATTEMPTED
-        ):
-            raise ValueError("a non-successful assignment prohibits synthesis")
-        if (
-            any(
-                item.outcome is CollaborationAssignmentOutcomeKind.FAILED
-                for item in self.assignment_outcomes
-            )
-            or self.synthesis_outcome is CollaborationSynthesisOutcomeKind.FAILED
-        ):
-            expected_overall = CollaborationExecutionOutcomeKind.FAILED
-        elif (
-            any(
-                item.outcome is CollaborationAssignmentOutcomeKind.CANCELLED
-                for item in self.assignment_outcomes
-            )
-            or self.synthesis_outcome is CollaborationSynthesisOutcomeKind.CANCELLED
-        ):
-            expected_overall = CollaborationExecutionOutcomeKind.CANCELLED
-        elif assignments_succeeded and self.synthesis_outcome in (
-            CollaborationSynthesisOutcomeKind.SUCCEEDED,
-            CollaborationSynthesisOutcomeKind.NOT_ATTEMPTED,
-        ):
-            expected_overall = CollaborationExecutionOutcomeKind.SUCCEEDED
-        else:
-            raise ValueError("execution result terminal outcomes are incomplete")
-        if self.overall_outcome is not expected_overall:
-            raise ValueError(
-                "overall execution outcome disagrees with terminal outcomes"
-            )
-
-
-@dataclass(frozen=True, slots=True)
-class CollaborationMessagePayload:
-    """Bounded visible message with optional diagnostic call correlation."""
-
-    content: str
-    trace: ReplyTrace | None = None
-    validation_details: tuple[str, ...] = ()
-    validation_invocation_id: str | None = None
-    validation_call_id: str | None = None
-
-    provider_invocation_id: str | None = field(default=None, kw_only=True)
-
-    def __post_init__(self) -> None:
-        _validate_response_invocation(self.provider_invocation_id)
-        _validate_visible_text(self.content, label="collaboration message")
-        if self.trace is not None and type(self.trace) is not ReplyTrace:
-            raise TypeError("collaboration message trace must be ReplyTrace or None")
-        validate_details(self.validation_details)
-        if (self.validation_invocation_id is None) != (self.validation_call_id is None):
-            raise ValueError("message validation correlation requires both IDs")
-        if self.validation_invocation_id is not None:
-            if not self.validation_details:
-                raise ValueError("message validation correlation requires details")
-            _validate_identifier(
-                self.validation_invocation_id, label="message validation invocation ID",
-            )
-            _validate_identifier(self.validation_call_id, label="message validation call ID")
-
-
-@dataclass(frozen=True, slots=True)
-class CollaborationAssignmentDispatchPayload:
-    """Exact assignment dispatched for one durable execution attempt."""
-
-    proposal_id: str
-    proposal_revision: int
-    proposal_digest: str
-    execution_attempt_id: str
-    assignment: CollaborationAssignment
-
-    def __post_init__(self) -> None:
-        _validate_identifier(self.proposal_id, label="dispatch proposal ID")
-        _validate_positive_integer(
-            self.proposal_revision, label="dispatch proposal revision"
-        )
-        _validate_digest(self.proposal_digest, label="dispatch proposal digest")
-        _validate_identifier(self.execution_attempt_id, label="dispatch attempt ID")
-        if type(self.assignment) is not CollaborationAssignment:
-            raise TypeError("dispatch assignment must be a CollaborationAssignment")
-
-
-@dataclass(frozen=True, slots=True)
-class CollaborationSpecialistReplyPayload:
-    """Visible specialist reply correlated to its exact dispatch and attempt."""
-
-    proposal_id: str
-    proposal_revision: int
-    proposal_digest: str
-    execution_attempt_id: str
-    assignment_id: str
-    dispatch_event_id: str
-    assessment: CollaborationSpecialistAssessment
-    message: str
-    input_ids: tuple[str, ...]
-    mode: SpecialistAssignmentMode | None = None
-    trace: ReplyTrace | None = None
-    premise_analysis: PremiseAnalysis | None = field(default=None, kw_only=True)
-    premise_conflicts: tuple[PremiseConflict, ...] = field(default=(), kw_only=True)
-
-    provider_invocation_id: str | None = field(default=None, kw_only=True)
-
-    def __post_init__(self) -> None:
-        _validate_response_invocation(self.provider_invocation_id)
-        validation_call(
-            '$.proposal_id',
-            _validate_identifier,
-            self.proposal_id,
-            label='reply proposal ID',
-        )
-        validation_call(
-            '$.proposal_revision',
-            _validate_positive_integer,
-            self.proposal_revision,
-            label='reply proposal revision',
-        )
-        validation_call(
-            '$.proposal_digest',
-            _validate_digest,
-            self.proposal_digest,
-            label='reply proposal digest',
-        )
-        validation_call(
-            '$.execution_attempt_id',
-            _validate_identifier,
-            self.execution_attempt_id,
-            label='reply attempt ID',
-        )
-        validation_call(
-            '$.assignment_id',
-            _validate_identifier,
-            self.assignment_id,
-            label='reply assignment ID',
-        )
-        validation_call(
-            '$.dispatch_event_id',
-            _validate_identifier,
-            self.dispatch_event_id,
-            label='reply dispatch event ID',
-        )
-        validation_call(
-            '$.assessment',
-            _require_enum,
-            self.assessment,
-            CollaborationSpecialistAssessment,
-            'specialist assessment',
-        )
-        validation_call('$.message', _validate_visible_text, self.message, label='specialist reply')
-        validation_call(
-            '$.input_ids',
-            _validate_identifier_tuple,
-            self.input_ids,
-            label='specialist reply input IDs',
-        )
-        if self.mode is not None:
-            validation_call(
-                '$.mode',
-                _require_enum,
-                self.mode,
-                SpecialistAssignmentMode,
-                'specialist reply mode',
-            )
-        if self.mode is SpecialistAssignmentMode.PREMISE_ANALYSIS:
-            if type(self.premise_analysis) is not PremiseAnalysis or self.premise_analysis.assessment != self.assessment.value or self.premise_analysis.message != self.message:
-                raise ValueError("premise analysis must retain the actual specialist result")
-        elif self.premise_analysis is not None:
-            raise ValueError("ordinary specialist reply cannot carry premise analysis")
-        _validate_exact_tuple(self.premise_conflicts, PremiseConflict, label="premise conflicts")
-        if self.premise_conflicts and (self.mode is not SpecialistAssignmentMode.DRAFT or self.assessment is not CollaborationSpecialistAssessment.CONFLICT):
-            raise ValueError("typed premise conflict is only a held dependent draft")
-        if self.assessment not in specialist_assessments_for_mode(self.mode) and not self.premise_conflicts:
-            raise validation_failure(ValueError('specialist result is not offered for its mode'), '$.assessment', 'assessment must match the exact assignment mode')
-        if self.mode is SpecialistAssignmentMode.DRAFT:
-            if not self.premise_conflicts and self.assessment not in {
-                CollaborationSpecialistAssessment.DRAFTED,
-                CollaborationSpecialistAssessment.INSUFFICIENT_EVIDENCE,
-            }:
-                raise validation_failure(
-                    ValueError('draft replies cannot assert review assessments'),
-                    '$.assessment',
-                    'draft replies cannot assert review assessments',
-                )
-        elif self.assessment is CollaborationSpecialistAssessment.DRAFTED:
-            raise validation_failure(
-                ValueError('drafted assessment requires explicit draft mode'),
-                '$.assessment',
-                'drafted assessment requires explicit draft mode',
-            )
-        if self.trace is not None and type(self.trace) is not ReplyTrace:
-            raise validation_failure(
-                TypeError('specialist reply trace must be ReplyTrace or None'),
-                '$.trace',
-                'specialist reply trace must be ReplyTrace or None',
-            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -2869,137 +2462,6 @@ class ArtifactReviewFailurePayload:
 
 
 @dataclass(frozen=True, slots=True)
-class CollaborationStepStatePayload:
-    """One proposal-correlated durable step-state record."""
-
-    state: CollaborationStepState
-    proposal_id: str
-    proposal_revision: int
-    proposal_digest: str
-    confirmation_request_id: str | None = None
-    execution_attempt_id: str | None = None
-    execution_result_event_id: str | None = None
-
-    def __post_init__(self) -> None:
-        _require_enum(self.state, CollaborationStepState, "collaboration step state")
-        _validate_identifier(self.proposal_id, label="step-state proposal ID")
-        _validate_positive_integer(
-            self.proposal_revision,
-            label="step-state proposal revision",
-        )
-        _validate_digest(self.proposal_digest, label="step-state proposal digest")
-        for value, label in (
-            (self.confirmation_request_id, "confirmation request ID"),
-            (self.execution_attempt_id, "execution attempt ID"),
-            (self.execution_result_event_id, "execution result event ID"),
-        ):
-            if value is not None:
-                _validate_identifier(value, label=label)
-        requests = self.state in (
-            CollaborationStepState.AWAITING_CONFIRMATION,
-            CollaborationStepState.RECONFIRMATION_REQUIRED,
-        )
-        if requests is not (self.confirmation_request_id is not None):
-            raise ValueError("confirmation-request state fields are inconsistent")
-        attempt_states = (
-            CollaborationStepState.RUNNING,
-            CollaborationStepState.OUTCOME_UNKNOWN,
-        )
-        if self.state in attempt_states and self.execution_attempt_id is None:
-            raise ValueError("running or outcome-unknown state requires an attempt ID")
-        if self.state not in attempt_states and self.execution_attempt_id is not None:
-            raise ValueError("execution attempt ID is invalid for this step state")
-        result_states = (
-            CollaborationStepState.COMPLETED,
-            CollaborationStepState.FAILED,
-            CollaborationStepState.INTERRUPTED,
-        )
-        if self.state in result_states and self.execution_result_event_id is None:
-            raise ValueError(
-                "terminal executed state requires an execution result event"
-            )
-        if (
-            self.state not in result_states
-            and self.execution_result_event_id is not None
-        ):
-            raise ValueError("execution result event ID is invalid for this step state")
-
-
-@dataclass(frozen=True, slots=True)
-class CollaborationConfirmationPayload:
-    """Single-use durable decision evidence for the exact authoritative request tail."""
-
-    confirmation_request_id: str
-    confirmation_request_event_id: str
-    proposal_id: str
-    proposal_revision: int
-    proposal_digest: str
-    decision: CollaborationConfirmationDecision
-
-    def __post_init__(self) -> None:
-        _validate_identifier(
-            self.confirmation_request_id, label="confirmation request ID"
-        )
-        _validate_identifier(
-            self.confirmation_request_event_id,
-            label="confirmation request event ID",
-        )
-        _validate_identifier(self.proposal_id, label="confirmation proposal ID")
-        _validate_positive_integer(
-            self.proposal_revision,
-            label="confirmation proposal revision",
-        )
-        _validate_digest(self.proposal_digest, label="confirmation proposal digest")
-        _require_enum(
-            self.decision,
-            CollaborationConfirmationDecision,
-            "confirmation decision",
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class CollaborationInterruptionPayload:
-    """Visible, bounded interruption record for an execution attempt."""
-
-    execution_attempt_id: str
-    content: str
-
-    def __post_init__(self) -> None:
-        _validate_identifier(self.execution_attempt_id, label="interruption attempt ID")
-        _validate_visible_text(self.content, label="interruption content")
-
-
-@dataclass(frozen=True, slots=True)
-class CollaborationTerminalOutcomePayload:
-    """Authoritative known terminal fact for an assignment or synthesis invocation."""
-
-    execution_attempt_id: str
-    scope: CollaborationTerminalScope
-    outcome: CollaborationAssignmentOutcomeKind
-    submitted_physical_calls: int
-    assignment_id: str | None = None
-
-    def __post_init__(self) -> None:
-        _validate_identifier(self.execution_attempt_id, label="terminal attempt ID")
-        _require_enum(self.scope, CollaborationTerminalScope, "terminal outcome scope")
-        _require_enum(
-            self.outcome,
-            CollaborationAssignmentOutcomeKind,
-            "terminal outcome",
-        )
-        _validate_non_negative_integer(
-            self.submitted_physical_calls,
-            label="terminal submitted physical calls",
-        )
-        if self.scope is CollaborationTerminalScope.ASSIGNMENT:
-            if self.assignment_id is None:
-                raise ValueError("assignment terminal outcome requires assignment ID")
-            _validate_identifier(self.assignment_id, label="terminal assignment ID")
-        elif self.assignment_id is not None:
-            raise ValueError("synthesis terminal outcome cannot carry assignment ID")
-
-
-@dataclass(frozen=True, slots=True)
 class CollaborationLeadGroupTracePayload:
     """Private non-authorizing trace, absent from ordinary readable content."""
 
@@ -3008,200 +2470,6 @@ class CollaborationLeadGroupTracePayload:
     def __post_init__(self) -> None:
         if type(self.trace) is not LeadGroupTrace:
             raise TypeError("group trace payload requires a typed private trace")
-
-
-@dataclass(frozen=True, slots=True)
-class CollaborationProviderCallPayload:
-    """Content-free durable lifecycle fact for one physical provider call."""
-
-    invocation_id: str
-    call_id: str
-    ordinal: int
-    role: str
-    invocation_kind: CollaborationInvocationKind
-    call_kind: CollaborationProviderCallKind
-    state: CollaborationProviderCallState
-    validation_details: tuple[str, ...] = ()
-    document_node: DocumentNodeBinding | None = field(default=None, kw_only=True)
-    document_goal: DocumentPlanRef | None = field(default=None, kw_only=True)
-    document_budget_task_id: str | None = field(default=None, kw_only=True)
-
-    usage: ProviderUsage | None = field(default=None, kw_only=True)
-    accounting: ProviderCallAccounting | None = field(default=None, kw_only=True, repr=False, compare=False)
-
-    def __post_init__(self) -> None:
-        if self.document_goal is not None and type(self.document_goal) is not DocumentPlanRef:
-            raise TypeError("document call funding requires an exact source plan reference")
-        if self.document_budget_task_id is not None:
-            _validate_identifier(self.document_budget_task_id, label="document budget task")
-            if self.document_goal is None:
-                raise ValueError("document budget task cannot lose its source goal")
-        if self.document_node is not None and type(self.document_node) is not DocumentNodeBinding:
-            raise TypeError("document call requires an exact immutable node binding")
-        if type(self.invocation_id) is not str or type(self.call_id) is not str:
-            raise TypeError("provider invocation and call IDs must be exact text")
-        _validate_identifier(self.invocation_id, label="provider invocation ID")
-        _validate_identifier(self.call_id, label="provider call ID")
-        _validate_positive_integer(self.ordinal, label="provider call ordinal")
-        if type(self.role) is not str or self.role not in ROSTER:
-            raise ValueError("provider call role must be a canonical agent ID")
-        _require_enum(
-            self.invocation_kind,
-            CollaborationInvocationKind,
-            "provider invocation kind",
-        )
-        _require_enum(
-            self.call_kind,
-            CollaborationProviderCallKind,
-            "provider call kind",
-        )
-        _require_enum(
-            self.state,
-            CollaborationProviderCallState,
-            "provider call state",
-        )
-        validate_details(self.validation_details)
-        if self.accounting is not None:
-            if type(self.accounting) is not ProviderCallAccounting:
-                raise TypeError("provider call accounting has an invalid type")
-            if self.accounting.state.value != self.state.value or self.accounting.usage != self.usage:
-                raise ValueError("provider call accounting differs from the actual lifecycle fact")
-        if self.usage is not None:
-            if type(self.usage) is not ProviderUsage:
-                raise TypeError("provider call usage must be ProviderUsage or None")
-            if self.state is not CollaborationProviderCallState.SUBMITTED:
-                raise ValueError("only submitted calls carry provider usage")
-        if self.validation_details and self.state is not CollaborationProviderCallState.SUBMITTED:
-            raise ValueError("only submitted calls may carry validation details")
-        if self.invocation_kind in {
-            CollaborationInvocationKind.LEAD,
-            CollaborationInvocationKind.LEAD_EXPLORATION,
-            CollaborationInvocationKind.LEAD_DISCUSSION,
-            CollaborationInvocationKind.LEAD_SYNTHESIS,
-        }:
-            if self.role != LEAD_ORCHESTRATOR:
-                raise ValueError("lead and synthesis calls require the lead role")
-        elif self.role not in SPECIALIST_IDS:
-            raise ValueError("specialist calls require a canonical specialist role")
-
-
-@dataclass(frozen=True, slots=True)
-class CollaborationLeadTaskDecisionPayload:
-    decision: LeadTaskDecision
-    document_selection: DocumentNodeSelection | None = field(default=None, kw_only=True)
-
-    def __post_init__(self) -> None:
-        if self.document_selection is not None and (type(self.document_selection) is not DocumentNodeSelection
-                or self.decision.action not in {LeadTaskAction.NEW_TASK, LeadTaskAction.RESUME}):
-            raise ValueError("document selection is an intent for an actual new/resumed task only")
-        if type(self.decision) is not LeadTaskDecision:
-            raise TypeError("lead_task_decision requires an exact LeadTaskDecision")
-
-
-@dataclass(frozen=True, slots=True)
-class CollaborationLeadTaskTransitionPayload:
-    receipt: LeadTaskTransitionReceipt
-
-    def __post_init__(self) -> None:
-        if type(self.receipt) is not LeadTaskTransitionReceipt:
-            raise TypeError("lead_task_transition requires an exact LeadTaskTransitionReceipt")
-
-
-@dataclass(frozen=True, slots=True)
-class CollaborationLeadMaterialCapturePayload:
-    capture: LeadMaterialCapture
-
-    def __post_init__(self) -> None:
-        if type(self.capture) is not LeadMaterialCapture:
-            raise TypeError("lead_material_capture requires an exact LeadMaterialCapture")
-
-
-@dataclass(frozen=True, slots=True)
-class CollaborationLeadDiscussionPayload:
-    report: LeadDiscussionReport
-
-    provider_invocation_id: str | None = field(default=None, kw_only=True)
-
-    def __post_init__(self) -> None:
-        _validate_response_invocation(self.provider_invocation_id)
-        if type(self.report) is not LeadDiscussionReport:
-            raise TypeError("lead_discussion requires an exact LeadDiscussionReport")
-
-
-@dataclass(frozen=True, slots=True)
-class CollaborationLeadPublicResponsePayload:
-    response: LeadPublicResponse
-
-    def __post_init__(self) -> None:
-        if type(self.response) is not LeadPublicResponse:
-            raise TypeError("lead_public_response requires an exact LeadPublicResponse")
-
-
-@dataclass(frozen=True, slots=True)
-class CollaborationLeadExplorationRequestPayload:
-    user_event_id: str
-    interaction_mode: LeadInteractionMode = LeadInteractionMode.EXPLORATION
-
-    def __post_init__(self) -> None:
-        _validate_identifier(self.user_event_id, label="exploration user event ID")
-        if self.interaction_mode is not LeadInteractionMode.EXPLORATION:
-            raise ValueError("exploration request requires explicit exploration mode")
-
-
-@dataclass(frozen=True, slots=True)
-class CollaborationLeadExplorationResultPayload:
-    report: LeadExplorationReport
-
-    def __post_init__(self) -> None:
-        if type(self.report) is not LeadExplorationReport:
-            raise TypeError("exploration result requires an exact report")
-
-
-@dataclass(frozen=True, slots=True)
-class CollaborationExplorationAdoptionPayload:
-    capture: ExplorationAdoptionCapture
-
-    def __post_init__(self) -> None:
-        if type(self.capture) is not ExplorationAdoptionCapture:
-            raise TypeError("adoption requires an exact captured selection")
-
-
-@dataclass(frozen=True, slots=True)
-class CollaborationEditorialRecordPayload:
-    """Exact structured USER intake and the resulting immutable revision."""
-
-    record: EditorialRecordRevision
-
-    def __post_init__(self) -> None:
-        if type(self.record) is not EditorialRecordRevision:
-            raise TypeError("editorial record payload is invalid")
-
-
-@dataclass(frozen=True, slots=True)
-class CollaborationPremiseDecisionPayload:
-    selection: PremiseDecisionSelection
-
-    def __post_init__(self) -> None:
-        if type(self.selection) is not PremiseDecisionSelection:
-            raise TypeError("premise decision requires exact USER control")
-
-
-@dataclass(frozen=True, slots=True)
-class CollaborationPremiseSelectionPayload:
-    capture: PremiseSelectionCapture
-
-    def __post_init__(self) -> None:
-        if type(self.capture) is not PremiseSelectionCapture:
-            raise TypeError("premise selection requires exact whole material capture")
-
-
-@dataclass(frozen=True, slots=True)
-class CollaborationPremiseFreshWorkAdmissionPayload:
-    admission: PremiseFreshWorkAdmission
-
-    def __post_init__(self) -> None:
-        if type(self.admission) is not PremiseFreshWorkAdmission:
-            raise TypeError("premise admission requires exact runtime attribution")
 
 
 CollaborationPayload = (
@@ -3578,21 +2846,6 @@ def validate_captured_authoring_basis(proposal: CollaborationProposal) -> None:
                 raise ValueError("dependent author omits captured premise sources")
 
 
-def specialist_assessments_for_mode(mode: SpecialistAssignmentMode | None) -> tuple[CollaborationSpecialistAssessment, ...]:
-    """Closed semantics per mode; legacy absence never gains new responsibilities."""
-    if mode is SpecialistAssignmentMode.PREMISE_ANALYSIS:
-        return (CollaborationSpecialistAssessment.ALTERNATIVES_ASSESSED,
-                CollaborationSpecialistAssessment.CONFLICT,
-                CollaborationSpecialistAssessment.INSUFFICIENT_EVIDENCE)
-    if mode is SpecialistAssignmentMode.DRAFT:
-        return (CollaborationSpecialistAssessment.DRAFTED, CollaborationSpecialistAssessment.INSUFFICIENT_EVIDENCE)
-    if mode is SpecialistAssignmentMode.CONSTRAINT_ASSESSMENT:
-        return (CollaborationSpecialistAssessment.CONSTRAINTS_ASSESSED, CollaborationSpecialistAssessment.CONCERN,
-                CollaborationSpecialistAssessment.CONFLICT, CollaborationSpecialistAssessment.INSUFFICIENT_EVIDENCE)
-    return (CollaborationSpecialistAssessment.SUPPORTS, CollaborationSpecialistAssessment.CONCERN,
-            CollaborationSpecialistAssessment.CONFLICT, CollaborationSpecialistAssessment.INSUFFICIENT_EVIDENCE)
-
-
 def _decode_shared_premise_intent(value: object) -> LeadSharedPremiseIntent:
     item = _object(value, {"slot_id", "selected_premise", "basis_input_ids"}, label="shared premise intent")
     return LeadSharedPremiseIntent(_string(item["slot_id"], label="slot ID"),
@@ -3660,16 +2913,6 @@ def confirmation_task_bindings(events: tuple[CollaborationEvent, ...]) -> dict[s
 
 def confirmed_task_pairs(events: tuple[CollaborationEvent, ...]) -> frozenset[tuple[str, int]]:
     return frozenset(confirmation_task_bindings(events).values())
-
-
-def authoring_scope_is_view(payload: object, pinned: frozenset[tuple[str, int]]) -> bool:
-    if type(payload) is not CollaborationLeadJudgmentPayload or payload.authoring_scope is None:
-        return False
-    if payload.preliminary_review is not None:
-        return True
-    scope = payload.authoring_scope
-    return (payload.kind in {LeadOutcomeKind.ANSWER, LeadOutcomeKind.QUESTION, LeadOutcomeKind.CRITIQUE}
-        and (scope.task_id, scope.task_revision) in pinned)
 
 
 def confirmed_authoring_proposals(
@@ -3878,34 +3121,6 @@ def _proposal_value(
     if include_digest:
         value["proposal_digest"] = proposal.proposal_digest
     return value
-
-
-def _assignment_outcome_value(
-    outcome: CollaborationAssignmentOutcome,
-) -> dict[str, object]:
-    return {
-        "assignment_id": outcome.assignment_id,
-        "outcome": outcome.outcome.value,
-        "reply_event_id": outcome.reply_event_id,
-        "submitted_physical_calls": outcome.submitted_physical_calls,
-    }
-
-
-def _result_value(result: CollaborationExecutionResult) -> dict[str, object]:
-    return {
-        "assignment_outcomes": [
-            _assignment_outcome_value(item) for item in result.assignment_outcomes
-        ],
-        "execution_attempt_id": result.execution_attempt_id,
-        "overall_outcome": result.overall_outcome.value,
-        "proposal_digest": result.proposal_digest,
-        "proposal_id": result.proposal_id,
-        "proposal_revision": result.proposal_revision,
-        "synthesis_outcome": result.synthesis_outcome.value,
-        "synthesis_result_event_id": result.synthesis_result_event_id,
-        "synthesis_submitted_physical_calls": result.synthesis_submitted_physical_calls,
-        "visible_exchange_event_ids": list(result.visible_exchange_event_ids),
-    }
 
 
 def _artifact_candidate_value(candidate: ArtifactReviewCandidate) -> object:
@@ -4505,93 +3720,6 @@ def _decode_proposal(value: object) -> CollaborationProposal:
      stage_plan=(stage_plan_from_dict(item["stage_plan"]) if "stage_plan" in item else None),
         document_node=(document_node_binding_from_dict(item["document_node"]) if "document_node" in item else None),
         document_plan=(document_plan_from_dict(item["document_plan"]) if "document_plan" in item else None))
-
-
-def _decode_assignment_outcome(value: object) -> CollaborationAssignmentOutcome:
-    item = _object(
-        value,
-        {"assignment_id", "outcome", "reply_event_id", "submitted_physical_calls"},
-        label="assignment outcome",
-    )
-    return CollaborationAssignmentOutcome(
-        assignment_id=_string(item["assignment_id"], label="assignment outcome ID"),
-        outcome=_enum(
-            CollaborationAssignmentOutcomeKind,
-            item["outcome"],
-            label="assignment outcome",
-        ),
-        submitted_physical_calls=_integer(
-            item["submitted_physical_calls"],
-            label="assignment submitted calls",
-        ),
-        reply_event_id=_optional_string(
-            item["reply_event_id"],
-            label="assignment reply event ID",
-        ),
-    )
-
-
-def _decode_result(value: object) -> CollaborationExecutionResult:
-    item = _object(
-        value,
-        {
-            "assignment_outcomes",
-            "execution_attempt_id",
-            "overall_outcome",
-            "proposal_digest",
-            "proposal_id",
-            "proposal_revision",
-            "synthesis_outcome",
-            "synthesis_result_event_id",
-            "synthesis_submitted_physical_calls",
-            "visible_exchange_event_ids",
-        },
-        label="execution result",
-    )
-    return CollaborationExecutionResult(
-        proposal_id=_string(item["proposal_id"], label="result proposal ID"),
-        proposal_revision=_integer(
-            item["proposal_revision"],
-            label="result proposal revision",
-        ),
-        proposal_digest=_string(item["proposal_digest"], label="result digest"),
-        execution_attempt_id=_string(
-            item["execution_attempt_id"],
-            label="result attempt ID",
-        ),
-        assignment_outcomes=tuple(
-            _decode_assignment_outcome(outcome)
-            for outcome in _array(
-                item["assignment_outcomes"],
-                label="assignment outcomes",
-            )
-        ),
-        synthesis_outcome=_enum(
-            CollaborationSynthesisOutcomeKind,
-            item["synthesis_outcome"],
-            label="synthesis outcome",
-        ),
-        synthesis_submitted_physical_calls=_integer(
-            item["synthesis_submitted_physical_calls"],
-            label="synthesis submitted calls",
-        ),
-        synthesis_result_event_id=_optional_string(
-            item["synthesis_result_event_id"],
-            label="synthesis result event ID",
-        ),
-        overall_outcome=_enum(
-            CollaborationExecutionOutcomeKind,
-            item["overall_outcome"],
-            label="overall execution outcome",
-        ),
-        visible_exchange_event_ids=tuple(
-            _string(event_id, label="visible exchange event ID")
-            for event_id in _array(
-                item["visible_exchange_event_ids"],
-                label="visible exchange event IDs",
-            )
-        ),
-    )
 
 
 def _decode_artifact_candidate(value: object) -> ArtifactReviewCandidate:
@@ -5973,12 +5101,6 @@ def _validate_collaboration_direction(
         assert isinstance(payload, CollaborationProviderCallPayload)
         if recipient.agent_id != payload.role:
             raise ValueError("provider-call recipient must match its exact role")
-
-
-def _decode_provider_usage(value: object) -> ProviderUsage:
-    item = _object(value, {"input_tokens", "output_tokens", "cached_input_tokens"}, label="provider usage")
-    return ProviderUsage(**{name: None if count is None else _integer(count, label=name)
-                            for name, count in item.items()})
 
 
 __all__ = [

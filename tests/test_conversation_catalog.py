@@ -939,6 +939,39 @@ class ConversationPackageBoundaryTests(unittest.TestCase):
             },
             "event_contracts/evidence.py": {"CollaborationEvidenceReceipt", "CollaborationLeadEvidence"},
             "event_contracts/lead_scope.py": {"lead_outcome_scope_paths"},
+            "event_contracts/authoring_records.py": {
+                "CollaborationEditorialRecordPayload",
+                "CollaborationExplorationAdoptionPayload",
+                "CollaborationLeadDiscussionPayload",
+                "CollaborationLeadExplorationRequestPayload",
+                "CollaborationLeadExplorationResultPayload",
+                "CollaborationLeadMaterialCapturePayload",
+                "CollaborationLeadPublicResponsePayload",
+                "CollaborationLeadTaskDecisionPayload",
+                "CollaborationLeadTaskTransitionPayload",
+                "CollaborationPremiseDecisionPayload",
+                "CollaborationPremiseFreshWorkAdmissionPayload",
+                "CollaborationPremiseSelectionPayload",
+            },
+            "event_contracts/control_records.py": {
+                "CollaborationConfirmationPayload",
+                "CollaborationInterruptionPayload",
+                "CollaborationProviderCallPayload",
+                "CollaborationStepStatePayload",
+                "CollaborationTerminalOutcomePayload",
+            },
+            "event_contracts/execution.py": {
+                "CollaborationAssignmentDispatchPayload",
+                "CollaborationAssignmentOutcome",
+                "CollaborationExecutionResult",
+                "CollaborationMessagePayload",
+                "CollaborationSpecialistReplyPayload",
+            },
+            "event_contracts/lead_outcomes.py": {
+                "CollaborationLeadJudgmentPayload",
+                "CollaborationLeadOutcomeFailurePayload",
+                "LeadAssignmentIntent",
+            },
         }
         moved_definitions = set().union(*contract_definitions.values())
         event_definitions = _EVENT_EXPORTS - vocabulary_constants - moved_definitions

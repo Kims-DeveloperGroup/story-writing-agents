@@ -438,7 +438,7 @@ class SessionLifecycleContractTests(unittest.TestCase):
             ]
         )
         source_files = tuple(source_root.rglob("*.py"))
-        self.assertEqual(len(source_files), 376)
+        self.assertEqual(len(source_files), 380)
         self.assertTrue(
             {
                 source_root / "artifact_proposals.py",
