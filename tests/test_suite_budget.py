@@ -246,7 +246,8 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
-        startup_options_current = suite_budget.load_budget()
+        workspace_authority_current = suite_budget.load_budget()
+        startup_options_current = dict(workspace_authority_current, max_test_source_lines=158008)
         legacy_thread_current = dict(startup_options_current, max_test_source_lines=157985)
         request_validation_current = dict(legacy_thread_current, max_test_source_lines=157955)
         backend_shutdown_current = dict(request_validation_current, max_test_source_lines=157888)
@@ -806,6 +807,7 @@ class SuiteBudgetTests(unittest.TestCase):
         self._assert_source_limit_neighbors_rejected(request_validation_current, backend_shutdown_current)
         self._assert_source_limit_neighbors_rejected(legacy_thread_current, request_validation_current)
         self._assert_source_limit_neighbors_rejected(startup_options_current, legacy_thread_current)
+        self._assert_source_limit_neighbors_rejected(workspace_authority_current, startup_options_current)
         self.assertIsNone(suite_budget.check_monotonic(invocation_routing_current, direct_structured_current))
         self.assertIsNone(suite_budget.check_monotonic(direct_structured_current, retrieval_loop_current))
         self.assertIsNone(suite_budget.check_monotonic(retrieval_loop_current, bound_logical_current))
@@ -1208,6 +1210,17 @@ class SuiteBudgetTests(unittest.TestCase):
         startup_affected = startup_options["affected_manifest"]["ordered_ids"]
         self.assertEqual(len(startup_affected), 8)
         self.assertEqual(sum(generation_release_current["subtest_caps"][cid] for cid in startup_affected), 29)
+        workspace_authority = select_impact(
+            real, paths=("src/story_writing_agents/provider_workspace_authority_lifecycle.py",),
+        )
+        self.assertIsNone(workspace_authority["fallback_reason"])
+        self.assertEqual(workspace_authority["focused_manifest"]["ordered_ids"], [
+            "tests.test_antigravity_parity.AntigravityParityTests.test_contextual_thread_bootstrap_delta_restart_and_scope_isolation_match_codex",
+            "tests.test_antigravity_parity.AntigravityParityTests.test_retrieval_failure_after_observation_taints_and_restarts",
+        ])
+        workspace_affected = workspace_authority["affected_manifest"]["ordered_ids"]
+        self.assertEqual(len(workspace_affected), 7)
+        self.assertEqual(sum(generation_release_current["subtest_caps"][cid] for cid in workspace_affected), 6)
         legacy_thread = select_impact(
             real, paths=("src/story_writing_agents/provider_legacy_thread_compatibility.py",),
             scope="affected", catalogue=owners,

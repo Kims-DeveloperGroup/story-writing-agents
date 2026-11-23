@@ -21594,6 +21594,27 @@
       "depends_on": []
     },
     {
+      "name": "provider.workspace-authority-lifecycle",
+      "boundary": "provider-workspace-authority-lifecycle",
+      "paths": [
+        "src/story_writing_agents/provider_workspace_authority_lifecycle.py"
+      ],
+      "focused_ids": [
+        "tests.test_antigravity_parity.AntigravityParityTests.test_contextual_thread_bootstrap_delta_restart_and_scope_isolation_match_codex",
+        "tests.test_antigravity_parity.AntigravityParityTests.test_retrieval_failure_after_observation_taints_and_restarts"
+      ],
+      "affected_ids": [
+        "tests.test_antigravity_parity.AntigravityParityTests.test_contextual_thread_bootstrap_delta_restart_and_scope_isolation_match_codex",
+        "tests.test_antigravity_parity.AntigravityParityTests.test_reference_read_mixed_batch_preserves_sequence_and_privacy",
+        "tests.test_antigravity_parity.AntigravityParityTests.test_retrieval_failure_after_observation_taints_and_restarts",
+        "tests.test_codex_backend.CodexBackendTestCase.test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread",
+        "tests.test_codex_backend.CodexBackendTestCase.test_contextual_submitted_failure_taints_only_exact_context_thread",
+        "tests.test_codex_backend.CodexBackendTestCase.test_reference_read_retrieval_preserves_action_indices_and_budgets",
+        "tests.test_codex_backend.CodexBackendTestCase.test_retirement_defers_exact_cleanup_for_each_bound_operation"
+      ],
+      "depends_on": []
+    },
+    {
       "name": "provider.legacy-thread-compatibility",
       "boundary": "legacy-provider-thread-compatibility",
       "paths": [

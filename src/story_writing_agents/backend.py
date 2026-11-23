@@ -100,6 +100,10 @@ import story_writing_agents.provider_session_transitions as provider_session_tra
 from .provider_startup_options import (
     validate_provider_startup_options as _validate_provider_startup_options,
 )
+from .provider_workspace_authority_lifecycle import (
+    open_bound_provider_execution_workspace as _open_bound_provider_execution_workspace,
+    prepare_context_reference_handoff as _prepare_context_reference_handoff,
+)
 from .provider_structured_invocation import (
     DEFERRED_DIRECT_CODEX_ACCEPTANCES as _DEFERRED_DIRECT_CODEX_ACCEPTANCES,
     DeferredDirectCodexAcceptance as _DeferredDirectCodexAcceptance,
@@ -1666,30 +1670,23 @@ class AgentBackend:
     ) -> ContextReferencePreludeResult:
         """Run the established exact reference-read action on a scoped thread."""
 
-        reference_request = reference_read.request
-        if (
-            type(reference_request) is not ReferenceReadRequest
-            or reference_request.correlation.operation_id
-            != request.reference_operation_id
-            or reference_request.correlation.agent_id != request.scope.agent_id
-        ):
-            raise ReferenceAuthorizationError(
-                ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH
-            )
-        prelude = await self._load_authorized_reference_context(
-            bound_agent,
-            session_id=request.scope.session_id,
-            prelude_request=request,
-            reference_read=reference_read,
-            execution_workspace=request.execution_workspace,
-            continuation_fingerprint=self._legacy_continuation_fingerprint(
-                bound_agent, request.execution_workspace,
-            ),
-            provider_name=(
-                "Codex" if bound_agent.vendor == "codex" else "Antigravity"
+        return await _prepare_context_reference_handoff(
+            reference_read,
+            request,
+            load_prelude=lambda: self._load_authorized_reference_context(
+                bound_agent,
+                session_id=request.scope.session_id,
+                prelude_request=request,
+                reference_read=reference_read,
+                execution_workspace=request.execution_workspace,
+                continuation_fingerprint=self._legacy_continuation_fingerprint(
+                    bound_agent, request.execution_workspace,
+                ),
+                provider_name=(
+                    "Codex" if bound_agent.vendor == "codex" else "Antigravity"
+                ),
             ),
         )
-        return prelude
 
     def _context_thread_lock(
         self,
@@ -1922,27 +1919,14 @@ def provider_execution_workspace_manager(
         or bound_agent.vendor not in {"codex", "antigravity"}
     ):
         raise BackendProtocolError("provider execution workspace is unavailable")
-    if bound_agent.vendor == "antigravity":
-        try:
-            generation = bound_agent._adapter_generation
-            adapter = (
-                bound_agent.backend._adapter_for("antigravity")
-                if generation is None
-                else generation.adapters["antigravity"]
-            )
-            if type(adapter) is not AntigravityAdapter:
-                raise OSError("Antigravity provider adapter is invalid")
-            role = adapter.session_role_projection(
-                bound_agent._provider_binding
-            )
-            with binding.open_ready_resources() as access:
-                access.install_provider_role(role)
-        except OSError as failure:
-            raise BackendProtocolError(
-                "Antigravity session role projection is unavailable"
-            ) from failure
-    with binding.open_provider_execution_workspace() as workspace:
-        yield workspace
+    yield from _open_bound_provider_execution_workspace(
+        binding,
+        vendor=lambda: bound_agent.vendor,
+        current_generation=lambda: bound_agent._adapter_generation,
+        fallback_adapter=lambda: bound_agent.backend._adapter_for("antigravity"),
+        provider_binding=lambda: bound_agent._provider_binding,
+        antigravity_adapter_type=lambda: AntigravityAdapter,
+    )
 
 
 async def invoke_story_bound_agent(
