@@ -61,6 +61,7 @@ from story_writing_agents import provider_context_invocation, provider_reference
 from story_writing_agents import provider_context_thread_store, provider_manifest_thread_store, provider_session_lifecycle_queries
 from story_writing_agents import provider_configuration_activation, provider_configuration_candidate
 from story_writing_agents import backend_shutdown, provider_binding_admission
+from story_writing_agents import bound_agent_request_validation
 from story_writing_agents import provider_session_lifecycle_operations
 from story_writing_agents import conversation_retrieval_wire, provider_direct_call_wire, provider_execution_profiles, provider_session_transitions
 from story_writing_agents.errors import (
@@ -410,8 +411,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 365)
-        self.assertEqual(len(edges), 2213)
+        self.assertEqual(len(modules), 366)
+        self.assertEqual(len(edges), 2219)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -422,7 +423,18 @@ class RagModuleBoundaryTests(unittest.TestCase):
         conversation_retrieval_owner = "story_writing_agents.provider_conversation_retrieval_loop"
         direct_structured_owner = "story_writing_agents.provider_direct_structured_calls"
         activation_owner = "story_writing_agents.provider_configuration_activation"
+        request_validation_owner = "story_writing_agents.bound_agent_request_validation"
         provider_dependencies = {
+            request_validation_owner: (
+                {
+                    "story_writing_agents.agents",
+                    "story_writing_agents.conversation_retrieval",
+                    "story_writing_agents.errors",
+                    "story_writing_agents.models",
+                    "story_writing_agents.provider_thread_records",
+                },
+                {"story_writing_agents.backend"},
+            ),
             "story_writing_agents.backend_shutdown": (
                 {"story_writing_agents.provider_adapter"}, {"story_writing_agents.backend"},
             ),
@@ -2337,7 +2349,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         )
         self.assertEqual({source for source, target in edges if target == records_owner},
                          {"story_writing_agents.backend", "story_writing_agents.provider_context_invocation",
-                          artifacts_owner, context_store_owner, manifest_store_owner, transitions_owner, logical_invocation_owner})
+                          artifacts_owner, context_store_owner, manifest_store_owner, transitions_owner, logical_invocation_owner,
+                          request_validation_owner})
         self.assertEqual({target for source, target in edges if source == stamps_owner},
                          {"story_writing_agents.errors"})
         self.assertEqual({source for source, target in edges if target == stamps_owner},
@@ -2995,6 +3008,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         self.assertIs(backend_module.provider_thread_records, provider_thread_records)
         self.assertIs(backend_module._prepare_provider_binding_locked, provider_binding_admission.prepare_provider_binding_locked)
         self.assertIs(backend_module._release_backend_resources, backend_shutdown.release_backend_resources)
+        self.assertIs(backend_module._validate_conversation_request, bound_agent_request_validation.validate_conversation_request)
+        self.assertIs(backend_module._validate_conversation_retrieval_request, bound_agent_request_validation.validate_conversation_retrieval_request)
         transitions = provider_session_transitions
         self.assertIs(backend_module.provider_session_transitions, transitions)
         self.assertIs(transitions.provider_session_timestamps, provider_session_timestamps)
@@ -3481,6 +3496,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             "story_writing_agents/provider_configuration_activation.py",
             "story_writing_agents/provider_binding_admission.py",
             "story_writing_agents/backend_shutdown.py",
+            "story_writing_agents/bound_agent_request_validation.py",
             "story_writing_agents/provider_invocation_accounting.py",
             "story_writing_agents/provider_binding_call_lifetime.py",
             "story_writing_agents/provider_bound_context.py",
