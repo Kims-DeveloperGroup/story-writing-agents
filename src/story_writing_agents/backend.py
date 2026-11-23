@@ -97,6 +97,9 @@ from .provider_session_lifecycle_operations import (
     reopen_session_with_access as _reopen_session_with_access,
 )
 import story_writing_agents.provider_session_transitions as provider_session_transitions
+from .provider_startup_options import (
+    validate_provider_startup_options as _validate_provider_startup_options,
+)
 from .provider_structured_invocation import (
     DEFERRED_DIRECT_CODEX_ACCEPTANCES as _DEFERRED_DIRECT_CODEX_ACCEPTANCES,
     DeferredDirectCodexAcceptance as _DeferredDirectCodexAcceptance,
@@ -723,40 +726,18 @@ class AgentBackend:
             DebugOperation.CONFIGURATION,
             DebugPhase.STARTED,
         )
-        try:
-            explicit_model = manager.validate_codex_model(model)
-        except ConfigurationError as exc:
-            failure = ValueError("Codex model must be safe non-empty text or None")
-            self._record_debug_error(DebugOperation.CONFIGURATION, failure)
-            raise failure from exc
-        try:
-            explicit_antigravity_model = manager.validate_antigravity_model(
-                antigravity_model
+        explicit_model, explicit_antigravity_model, explicit_antigravity_effort = (
+            _validate_provider_startup_options(
+                manager,
+                model=model,
+                antigravity_model=antigravity_model,
+                antigravity_effort=antigravity_effort,
+                timeout_seconds=timeout_seconds,
+                record_failure=lambda failure: self._record_debug_error(
+                    DebugOperation.CONFIGURATION, failure
+                ),
             )
-        except ConfigurationError as exc:
-            failure = ValueError(
-                "Antigravity model must be safe non-empty text or None"
-            )
-            self._record_debug_error(DebugOperation.CONFIGURATION, failure)
-            raise failure from exc
-        try:
-            explicit_antigravity_effort = manager.validate_antigravity_effort(
-                antigravity_effort
-            )
-        except ConfigurationError as exc:
-            failure = ValueError(
-                "Antigravity effort must be None or one of: low, medium, high"
-            )
-            self._record_debug_error(DebugOperation.CONFIGURATION, failure)
-            raise failure from exc
-        if (
-            isinstance(timeout_seconds, bool)
-            or not isinstance(timeout_seconds, (int, float))
-            or timeout_seconds <= 0
-        ):
-            failure = ValueError("Codex timeout must be a positive number")
-            self._record_debug_error(DebugOperation.CONFIGURATION, failure)
-            raise failure
+        )
 
         self._configuration_snapshot = configuration
         self.executable = executable
