@@ -61,7 +61,7 @@ from story_writing_agents import provider_context_invocation, provider_reference
 from story_writing_agents import provider_context_thread_store, provider_manifest_thread_store, provider_session_lifecycle_queries
 from story_writing_agents import provider_configuration_activation, provider_configuration_candidate
 from story_writing_agents import backend_shutdown, provider_binding_admission
-from story_writing_agents import bound_agent_request_validation
+from story_writing_agents import bound_agent_request_validation, provider_legacy_thread_compatibility
 from story_writing_agents import provider_session_lifecycle_operations
 from story_writing_agents import conversation_retrieval_wire, provider_direct_call_wire, provider_execution_profiles, provider_session_transitions
 from story_writing_agents.errors import (
@@ -411,8 +411,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 366)
-        self.assertEqual(len(edges), 2219)
+        self.assertEqual(len(modules), 367)
+        self.assertEqual(len(edges), 2225)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -425,6 +425,16 @@ class RagModuleBoundaryTests(unittest.TestCase):
         activation_owner = "story_writing_agents.provider_configuration_activation"
         request_validation_owner = "story_writing_agents.bound_agent_request_validation"
         provider_dependencies = {
+            "story_writing_agents.provider_legacy_thread_compatibility": (
+                {
+                    "story_writing_agents.errors",
+                    "story_writing_agents.models",
+                    "story_writing_agents.provider_adapter_generations",
+                    "story_writing_agents.provider_execution_workspace",
+                    "story_writing_agents.provider_message_catalog",
+                },
+                {"story_writing_agents.backend"},
+            ),
             request_validation_owner: (
                 {
                     "story_writing_agents.agents",
@@ -3005,6 +3015,9 @@ class RagModuleBoundaryTests(unittest.TestCase):
         ):
             self.assertIs(getattr(backend_module, f"_{name}"), getattr(provider_configuration_activation, name))
             self.assertFalse(hasattr(story_writing_agents, name))
+        self.assertIs(backend_module._initial_legacy_thread_disposition, provider_legacy_thread_compatibility.initial_legacy_thread_disposition)
+        self.assertIs(backend_module._build_legacy_continuation_fingerprint, provider_legacy_thread_compatibility.legacy_continuation_fingerprint)
+        self.assertIs(backend_module.provider_manifest_thread_store, provider_manifest_thread_store)
         self.assertIs(backend_module.provider_thread_records, provider_thread_records)
         self.assertIs(backend_module._prepare_provider_binding_locked, provider_binding_admission.prepare_provider_binding_locked)
         self.assertIs(backend_module._release_backend_resources, backend_shutdown.release_backend_resources)
@@ -3497,6 +3510,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             "story_writing_agents/provider_binding_admission.py",
             "story_writing_agents/backend_shutdown.py",
             "story_writing_agents/bound_agent_request_validation.py",
+            "story_writing_agents/provider_legacy_thread_compatibility.py",
             "story_writing_agents/provider_invocation_accounting.py",
             "story_writing_agents/provider_binding_call_lifetime.py",
             "story_writing_agents/provider_bound_context.py",
