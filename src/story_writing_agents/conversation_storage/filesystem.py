@@ -37,8 +37,6 @@ from ..conversations import (
     ConversationMetadata,
     ConversationStatus,
     collaboration_batch_digest,
-    decode_collaboration_event,
-    encode_collaboration_event,
     project_collaboration_history,
     select_bounded_conversation_context,
     validate_collaboration_candidate_batch,
@@ -53,6 +51,10 @@ from ..errors import (
     WorkspaceSecurityError,
 )
 from ..workspace.core import Workspace
+from .filesystem_history_codec import (
+    decode_collaboration_history,
+    encode_collaboration_history,
+)
 
 
 _CONVERSATION_METADATA_FIELDS = frozenset(
@@ -1042,10 +1044,13 @@ class FilesystemCollaborationEventStore:
         if payload is None:
             events: tuple[CollaborationEventV2, ...] = ()
         else:
-            events = self._decode_history(
+            events = decode_collaboration_history(
                 payload,
                 session_id=session_id,
                 conversation_id=conversation_id,
+                logical_artifact=self._logical_artifact(
+                    session_id, conversation_id
+                ),
             )
         try:
             projection = project_collaboration_history(events)
@@ -1103,61 +1108,6 @@ class FilesystemCollaborationEventStore:
         finally:
             self._close_descriptor(descriptor, active_error=active_error)
 
-    def _decode_history(
-        self,
-        payload: bytes,
-        *,
-        session_id: str,
-        conversation_id: str,
-    ) -> tuple[CollaborationEventV2, ...]:
-        """Decode exact canonical event-plus-LF records without accepting v1."""
-
-        logical_artifact = self._logical_artifact(session_id, conversation_id)
-        if not payload:
-            raise WorkspaceFormatError(
-                f"collaboration history is empty: {logical_artifact}"
-            )
-        if not payload.endswith(b"\n"):
-            raise WorkspaceFormatError(
-                f"collaboration history lacks a final newline: {logical_artifact}"
-            )
-        records = payload[:-1].split(b"\n")
-        events: list[CollaborationEventV2] = []
-        for line_number, record in enumerate(records, 1):
-            if not record:
-                raise WorkspaceFormatError(
-                    "collaboration history contains a blank record: "
-                    f"{logical_artifact} at line {line_number}"
-                )
-            try:
-                event = decode_collaboration_event(record)
-            except (
-                AssertionError,
-                KeyError,
-                SessionIdError,
-                TypeError,
-                ValueError,
-            ) as exc:
-                raise WorkspaceFormatError(
-                    "collaboration history contains an invalid canonical event: "
-                    f"{logical_artifact} at line {line_number}"
-                ) from exc
-            if encode_collaboration_event(event) != record:
-                raise WorkspaceFormatError(
-                    "collaboration history contains a noncanonical event: "
-                    f"{logical_artifact} at line {line_number}"
-                )
-            if (
-                event.session_id != session_id
-                or event.conversation_id != conversation_id
-            ):
-                raise WorkspaceFormatError(
-                    "collaboration event does not match its owning path: "
-                    f"{logical_artifact} at line {line_number}"
-                )
-            events.append(event)
-        return tuple(events)
-
     def _write_history(self, events: tuple[CollaborationEventV2, ...]) -> None:
         """Durably replace one complete history with canonical JSON Lines."""
 
@@ -1169,9 +1119,7 @@ class FilesystemCollaborationEventStore:
         )
         target = self.workspace.path(relative)
         parent = self.workspace.path(relative.parent)
-        content = b"".join(
-            encode_collaboration_event(event) + b"\n" for event in events
-        )
+        content = encode_collaboration_history(events)
 
         parent_descriptor = self._open_parent_directory(parent)
         temporary = parent / f".{target.name}.{uuid4().hex}.tmp"

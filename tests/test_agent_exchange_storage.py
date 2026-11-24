@@ -25,6 +25,7 @@ from story_writing_agents.agent_exchanges import (
     WorkspaceAgentExchangeStore,
 )
 from story_writing_agents.agent_exchanges import storage as storage_module
+from story_writing_agents.agent_exchanges import storage_record_codec
 from story_writing_agents.agents import ROSTER
 from story_writing_agents.workspace import Workspace
 
@@ -683,7 +684,7 @@ class AgentExchangeStorageSecurityTests(unittest.TestCase):
                 "global-low",
                 lambda workspace: (
                     _store_directory(workspace) / ".state.json"
-                ).write_bytes(storage_module._global_state_payload(0)),
+                ).write_bytes(storage_record_codec.encode_global_exchange_state(0)),
             ),
             (
                 "stream-low",
@@ -691,13 +692,13 @@ class AgentExchangeStorageSecurityTests(unittest.TestCase):
                     _store_directory(workspace)
                     / "session_1"
                     / f"{ROSTER[0]}.sequence.json"
-                ).write_bytes(storage_module._stream_state_payload(0)),
+                ).write_bytes(storage_record_codec.encode_stream_exchange_state(0)),
             ),
             (
                 "pending-global",
                 lambda workspace: (
                     _store_directory(workspace) / ".state.pending"
-                ).write_bytes(storage_module._global_state_payload(2)),
+                ).write_bytes(storage_record_codec.encode_global_exchange_state(2)),
             ),
             (
                 "pending-stream",
@@ -705,7 +706,7 @@ class AgentExchangeStorageSecurityTests(unittest.TestCase):
                     _store_directory(workspace)
                     / "session_1"
                     / f".{ROSTER[0]}.sequence.pending"
-                ).write_bytes(storage_module._stream_state_payload(2)),
+                ).write_bytes(storage_record_codec.encode_stream_exchange_state(2)),
             ),
         )
         for name, mutation in cases:

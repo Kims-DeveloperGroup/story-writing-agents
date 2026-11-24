@@ -23474,6 +23474,52 @@
       "depends_on": [
         "tests.conversation_rag.store_fixture"
       ]
+    },
+    {
+      "name": "conversation-storage.filesystem-history-codec",
+      "paths": [
+        "src/story_writing_agents/conversation_storage/filesystem_history_codec.py"
+      ],
+      "boundary": "pure",
+      "focused_ids": [
+        "tests.test_filesystem_collaboration_event_store.FilesystemCollaborationEventStorePersistenceTests.test_construction_absent_read_and_first_append_are_exact_and_isolated"
+      ],
+      "affected_ids": [
+        "tests.test_filesystem_collaboration_event_store.FilesystemCollaborationEventStoreCorruptionTests.test_malformed_and_metadata_corruption_fail_closed_without_rewrite",
+        "tests.test_filesystem_collaboration_event_store.FilesystemCollaborationEventStorePersistenceTests.test_construction_absent_read_and_first_append_are_exact_and_isolated"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "conversation-storage.sqlite-row-codec",
+      "paths": [
+        "src/story_writing_agents/conversation_storage/sqlite_row_codec.py"
+      ],
+      "boundary": "pure",
+      "focused_ids": [
+        "tests.test_sqlite_collaboration_event_store.SQLiteCollaborationEventStoreFirstSliceTests.test_fresh_direct_append_persists_exact_rows_and_refreshes_lexical_index"
+      ],
+      "affected_ids": [
+        "tests.test_sqlite_collaboration_event_store.SQLiteCollaborationEventStoreFirstSliceTests.test_corrupt_rows_fail_closed_and_database_constraints_reject_duplicates",
+        "tests.test_sqlite_collaboration_event_store.SQLiteCollaborationEventStoreFirstSliceTests.test_fresh_direct_append_persists_exact_rows_and_refreshes_lexical_index"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "agent-exchanges.storage-record-codec",
+      "paths": [
+        "src/story_writing_agents/agent_exchanges/storage_record_codec.py"
+      ],
+      "boundary": "pure",
+      "focused_ids": [
+        "tests.test_agent_exchange_storage.AgentExchangeStorageBehaviorTests.test_exact_canonical_schema_key_set_and_request_response_correlation"
+      ],
+      "affected_ids": [
+        "tests.test_agent_exchange_storage.AgentExchangeStorageBehaviorTests.test_exact_canonical_schema_key_set_and_request_response_correlation",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageSecurityTests.test_malformed_records_states_sequences_and_metadata_fail_closed",
+        "tests.test_agent_exchange_storage.AgentExchangeStorageSecurityTests.test_state_high_water_below_logs_and_pending_state_are_corrupt"
+      ],
+      "depends_on": []
     }
   ],
   "ignored_names": [
