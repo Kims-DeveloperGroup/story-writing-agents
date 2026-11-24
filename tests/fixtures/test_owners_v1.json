@@ -4391,6 +4391,7 @@
         "lead-fixtures.provider-responses",
         "lead-fixtures.runtime-setup",
         "lead-fixtures.specialist-routing",
+        "tests.interactive_controller_settings_projection_contract",
         "tests.lead_preparation.test_response_rules",
         "tests.test_artifact_objectives",
         "tests.test_collaboration_events"
@@ -23585,6 +23586,51 @@
       ],
       "affected_ids": [
         "tests.agent_context.contracts.test_result_validation.StructuredOutputValidationTests.test_bounded_chunks_preserve_order_and_over_32k_content"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "controller-settings-projection",
+      "paths": [
+        "src/story_writing_agents/interactive_controller/_settings_projection.py"
+      ],
+      "boundary": "pure",
+      "focused_ids": [
+        "tests.test_interactive_controller.ControllerSettingsTests.test_settings_panel_omits_empty_diff_sections"
+      ],
+      "affected_ids": [
+        "tests.test_interactive_controller.ControllerSettingsTests.test_settings_panel_omits_empty_diff_sections",
+        "tests.test_interactive_controller.ControllerSettingsTests.test_settings_panel_qualifies_current_and_pending_provider_routes"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "cli-parser",
+      "paths": [
+        "src/story_writing_agents/cli_parser.py"
+      ],
+      "boundary": "pure",
+      "focused_ids": [
+        "tests.test_conversation_rag_cli.ConversationRagArgparseTests.test_parser_owns_exact_six_action_grammar_and_syntax_errors"
+      ],
+      "affected_ids": [
+        "tests.test_conversation_rag_cli.ConversationRagArgparseTests.test_parser_owns_exact_six_action_grammar_and_syntax_errors",
+        "tests.test_conversation_storage_selection_cli.ConversationStorageSelectionCliTests.test_parser_grammar_and_flag_ownership_are_exact",
+        "tests.test_public_api_and_cli.CliTests.test_bare_chat_and_lifecycle_parser_shapes_have_help"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "tests.interactive_controller_settings_projection_contract",
+      "paths": [
+        "tests/interactive_controller_settings_projection_contract.py"
+      ],
+      "boundary": "test-support",
+      "focused_ids": [
+        "tests.test_interactive_controller.ControllerSettingsTests.test_settings_panel_omits_empty_diff_sections"
+      ],
+      "affected_ids": [
+        "tests.test_interactive_controller.ControllerSettingsTests.test_settings_panel_omits_empty_diff_sections"
       ],
       "depends_on": []
     }

@@ -210,6 +210,7 @@ from ._runtime_policy import (
     validate_debate_inspection,
     validate_session_inspection,
 )
+from ._settings_projection import effective_settings_provider, settings_projection
 from ._session_policy import (
     RECOVERABLE_SESSION_ERROR_CODES,
     SessionTransitionAssessment,
@@ -271,25 +272,6 @@ _SETTINGS_UNARMED = object()
 
 
 _ExceptionState = tuple[BaseException, TracebackType | None]
-
-
-def _effective_settings_provider(
-    state: SettingsState,
-    agent_id: str,
-    *,
-    pending: bool = True,
-    provider_overrides: Mapping[str, str] | None = None,
-) -> str:
-    """Resolve one settings route through agent, workspace, then Codex."""
-
-    configuration = state.pending if pending else state.baseline.configuration
-    agent = configuration.agent_configs[agent_id]
-    return (
-        (provider_overrides or {}).get(agent_id)
-        or agent.backend
-        or configuration.system_defaults.default_backend
-        or "codex"
-    )
 
 
 def _execution_source_label(source: ExecutionValueSource) -> str:
@@ -443,139 +425,6 @@ def _settings_pending_save_notice(state: SettingsState) -> Notice | None:
         role=SemanticRole.WARNING,
         state=ViewState.IDLE,
     )
-
-
-def _settings_projection(
-    state: SettingsState,
-    *,
-    provider_overrides: Mapping[str, str] | None = None,
-) -> tuple[tuple[str, str | None, str, str, str], ...]:
-    """Project ordered root and agent identities with current/pending values."""
-
-    current = state.baseline.configuration
-    pending = state.pending
-    rows: list[tuple[str, str | None, str, str, str]] = [
-        (
-            "language",
-            None,
-            "Language",
-            current.system_defaults.language,
-            pending.system_defaults.language,
-        ),
-        (
-            "persona",
-            None,
-            "Persona",
-            current.system_defaults.persona,
-            pending.system_defaults.persona,
-        ),
-        (
-            "max_debate_rounds",
-            None,
-            "Maximum debate rounds",
-            str(current.system_defaults.max_debate_rounds),
-            str(pending.system_defaults.max_debate_rounds),
-        ),
-        (
-            "conversation_storage",
-            None,
-            "Conversation storage",
-            current.system_defaults.conversation_storage_backend or "filesystem",
-            pending.system_defaults.conversation_storage_backend or "filesystem",
-        ),
-        (
-            "conversation_rag_provider",
-            None,
-            "Conversation RAG Provider",
-            (
-                "Local"
-                if current.system_defaults.conversation_rag_provider == "local"
-                else "Disabled"
-            ),
-            (
-                "Local"
-                if pending.system_defaults.conversation_rag_provider == "local"
-                else "Disabled"
-            ),
-        ),
-        (
-            "conversation_rag_automatic",
-            None,
-            "Conversation RAG Automatic",
-            "On" if current.system_defaults.conversation_rag_automatic else "Off",
-            "On" if pending.system_defaults.conversation_rag_automatic else "Off",
-        ),
-        (
-            "show_message_details",
-            None,
-            "Message details",
-            "On" if current.system_defaults.show_message_details else "Off",
-            "On" if pending.system_defaults.show_message_details else "Off",
-        ),
-    ]
-    for agent_id in ROSTER:
-        display_name = AGENT_SPECS[agent_id].display_name
-        current_agent = current.agent_configs[agent_id]
-        pending_agent = pending.agent_configs[agent_id]
-        current_provider = _effective_settings_provider(
-            state,
-            agent_id,
-            pending=False,
-            provider_overrides=provider_overrides,
-        )
-        pending_provider = _effective_settings_provider(
-            state,
-            agent_id,
-            provider_overrides=provider_overrides,
-        )
-        rows.extend(
-            (
-                (
-                    "providers",
-                    agent_id,
-                    f"{display_name} Provider",
-                    (
-                        current_provider
-                        if current_agent.backend is not None
-                        else f"{current_provider} (default)"
-                    ),
-                    (
-                        pending_provider
-                        if pending_agent.backend is not None
-                        else f"{pending_provider} (default)"
-                    ),
-                ),
-                (
-                    "providers",
-                    agent_id,
-                    f"{display_name} Codex model",
-                    current_agent.codex_model or "inherit",
-                    pending_agent.codex_model or "inherit",
-                ),
-                (
-                    "providers",
-                    agent_id,
-                    f"{display_name} Codex reasoning",
-                    current_agent.codex_reasoning_effort or "inherit",
-                    pending_agent.codex_reasoning_effort or "inherit",
-                ),
-                (
-                    "providers",
-                    agent_id,
-                    f"{display_name} Antigravity model",
-                    current_agent.antigravity_model or "inherit",
-                    pending_agent.antigravity_model or "inherit",
-                ),
-                (
-                    "providers",
-                    agent_id,
-                    f"{display_name} Antigravity effort",
-                    current_agent.antigravity_effort or "inherit",
-                    pending_agent.antigravity_effort or "inherit",
-                ),
-            )
-        )
-    return tuple(rows)
 
 
 def _remember_first_process_control(
@@ -2532,7 +2381,7 @@ class InteractiveController:
         top_highlight: str | None = "language"
         while True:
             dirty = state.pending != state.baseline.configuration
-            projection = _settings_projection(
+            projection = settings_projection(
                 state,
                 provider_overrides=self._backend.backend_overrides,
             )
@@ -3223,14 +3072,14 @@ class InteractiveController:
         while True:
             provider = next(
                 (
-                    _effective_settings_provider(
+                    effective_settings_provider(
                         state,
                         agent_id,
                         provider_overrides=self._backend.backend_overrides,
                     )
                     for agent_id in ROSTER
                     if not snapshot.is_authenticated(
-                        _effective_settings_provider(
+                        effective_settings_provider(
                             state,
                             agent_id,
                             provider_overrides=self._backend.backend_overrides,
@@ -4047,7 +3896,7 @@ class InteractiveController:
         notice: Notice | None = None
         armed_value: object = _SETTINGS_UNARMED
         while True:
-            current = _effective_settings_provider(
+            current = effective_settings_provider(
                 state,
                 agent_id,
                 provider_overrides=self._backend.backend_overrides,
@@ -4093,7 +3942,7 @@ class InteractiveController:
             if armed_value == provider:
                 return state, False
             state = update_agent_backend(state, agent_id, provider)
-            armed_value = _effective_settings_provider(
+            armed_value = effective_settings_provider(
                 state,
                 agent_id,
                 provider_overrides=self._backend.backend_overrides,
@@ -4116,7 +3965,7 @@ class InteractiveController:
         armed_value: object = _SETTINGS_UNARMED
         while True:
             snapshot = self._run_auth_probe(coordinator)
-            current = _effective_settings_provider(
+            current = effective_settings_provider(
                 state,
                 agent_id,
                 provider_overrides=self._backend.backend_overrides,
@@ -4160,7 +4009,7 @@ class InteractiveController:
                 if armed_value == provider:
                     return state, False
                 state = update_agent_backend(state, agent_id, provider)
-                armed_value = _effective_settings_provider(
+                armed_value = effective_settings_provider(
                     state,
                     agent_id,
                     provider_overrides=self._backend.backend_overrides,
@@ -4194,7 +4043,7 @@ class InteractiveController:
                 if armed_value == provider:
                     return state, False
                 state = update_agent_backend(state, agent_id, provider)
-                armed_value = _effective_settings_provider(
+                armed_value = effective_settings_provider(
                     state,
                     agent_id,
                     provider_overrides=self._backend.backend_overrides,
@@ -4268,7 +4117,7 @@ class InteractiveController:
         if self._settings_field_is_launch_masked(state, agent_id, "model"):
             self._write_settings_launch_override_mask("Model")
             return state, False
-        provider = _effective_settings_provider(
+        provider = effective_settings_provider(
             state,
             agent_id,
             provider_overrides=self._backend.backend_overrides,
@@ -4491,7 +4340,7 @@ class InteractiveController:
             return state, False
         agent = state.pending.agent_configs[agent_id]
         defaults = state.pending.system_defaults
-        provider = _effective_settings_provider(
+        provider = effective_settings_provider(
             state,
             agent_id,
             provider_overrides=self._backend.backend_overrides,
@@ -4741,7 +4590,7 @@ class InteractiveController:
 
         changed_rows = tuple(
             row
-            for row in _settings_projection(
+            for row in settings_projection(
                 state,
                 provider_overrides=provider_overrides,
             )
