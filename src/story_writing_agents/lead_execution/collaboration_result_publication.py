@@ -13,6 +13,13 @@ from ..collaboration_execution_results import (
     LeadSynthesisResult,
     required_synthesis_result,
 )
+from ..agent_context.sources.session_history import SessionHistorySourceAdapter
+from ..conversations.reducers.synchronization_history import derive_absence_origins
+from ..artifact_transactions.synchronization_publication import (
+    synchronization_current_drafts,
+    synchronization_review_drafts,
+)
+from ..writing_artifacts.change_sets import artifact_state_digest
 from ..conversation_storage.contracts import ConversationStorageServices
 from ..conversations import (
     ArtifactProposalState,
@@ -293,6 +300,7 @@ class CollaborationResultPublication:
         synthesis_draft: CollaborationEventDraft | None = None
         recommended_action: LeadRecommendedAction | None = None
         artifact_synthesis_draft: CollaborationEventDraft | None = None
+        synchronization_drafts: tuple[CollaborationEventDraft, ...] = ()
         synthesis_outcome = CollaborationSynthesisOutcomeKind.NOT_ATTEMPTED
         synthesis_calls = 0
         synthesis_event_id: str | None = None
@@ -350,6 +358,15 @@ class CollaborationResultPublication:
                         recipient=event_journal.USER_ACTOR,
                         payload=artifact_value,
                     )
+                    if artifact_candidate is not None and type(value) is ArtifactSynthesisResult:
+                        synchronization_drafts = synchronization_review_drafts(
+                            current_events, proposal, artifact_candidate, artifact_synthesis_draft,
+                            value, tuple(replies),
+                        )
+                elif type(value) is LeadSynthesisResult and value.synchronization_material is not None:
+                    synchronization_drafts = self._current_synchronization_drafts(
+                        current_events, proposal, synthesis_draft, synthesis_result, value, tuple(replies),
+                    )
             elif isinstance(synthesis_result.failure, asyncio.CancelledError):
                 synthesis_outcome = CollaborationSynthesisOutcomeKind.CANCELLED
             else:
@@ -401,6 +418,7 @@ class CollaborationResultPublication:
                     if artifact_synthesis_draft is not None
                     else ()
                 ),
+                *synchronization_drafts,
                 *terminals,
             )
         )
@@ -430,6 +448,7 @@ class CollaborationResultPublication:
         result_drafts = (
             *replies, *((synthesis_draft,) if synthesis_draft is not None else ()),
             *((artifact_synthesis_draft,) if artifact_synthesis_draft is not None else ()),
+            *synchronization_drafts,
             *terminals, result,
         )
         if recommended_action is not None and not (
@@ -471,6 +490,37 @@ class CollaborationResultPublication:
             batch_id=event_journal.deterministic_id("b", attempt_id, "result"),
             append_batch=append_batch,
         )
+
+    def _current_synchronization_drafts(
+        self,
+        events: tuple[CollaborationEvent, ...],
+        proposal: CollaborationProposal,
+        synthesis: CollaborationEventDraft,
+        result: CollaborationInvocationResult,
+        value: LeadSynthesisResult,
+        replies: tuple[CollaborationEventDraft, ...],
+    ) -> tuple[CollaborationEventDraft, ...]:
+        material = value.synchronization_material
+        binding = result.artifact_binding
+        if material is None or binding is None or material.current_state_digest is None:
+            return ()
+        with binding.open_ready_resources() as access:
+            actual = {item.path: item.content for item in access.repository.capture_complete_state()}
+            if artifact_state_digest(actual) != material.current_state_digest:
+                return ()
+            snapshot = SessionHistorySourceAdapter(
+                self._storage.catalog, self._storage.event_store, synthesis.session_id,
+            ).capture()
+            origins = derive_absence_origins(snapshot.events(), material.selected_conditions, material.census.documents)
+            original = {(item.receipt_id, item.detected_by, item.candidate) for item in material.absence_origins}
+            refreshed = {(item.receipt_id, item.detected_by, item.candidate) for item in origins}
+            if original != refreshed:
+                return ()
+            history = snapshot.synchronization()
+            value = replace(value, synchronization_material=replace(material, absence_origins=origins))
+            return synchronization_current_drafts(
+                events, proposal, synthesis, value, replies, history.obligations,
+            )
 
     def _terminal_outcome_draft(
         self,

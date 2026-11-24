@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ..event_contracts.synchronization import SynchronizationPayload
 from ..event_contracts.artifact_apply import (
     ArtifactApplicationDecisionPayload,
     ArtifactApplicationRequestPayload,
@@ -127,6 +128,13 @@ def project_artifact_operation_history(
         StoryCommitOutcomeKind.COMMITTED, StoryCommitOutcomeKind.REJECTED,
         StoryCommitOutcomeKind.SUPERSEDED, StoryCommitOutcomeKind.STALE,
     }
+    control_predecessors: dict[int, int | None] = {}
+    previous = None
+    for event in events:
+        if type(event.payload) is SynchronizationPayload:
+            continue
+        control_predecessors[event.sequence] = previous
+        previous = event.sequence
     for event in events:
         payload = event.payload
         if type(payload) is ArtifactReviewedProposal:
@@ -156,7 +164,7 @@ def project_artifact_operation_history(
             if (
                 request is None or request_event is None or decision is not None
                 or (
-                    event.sequence != request_event.sequence + 1
+                    control_predecessors[event.sequence] != request_event.sequence
                     and not _closed_pure_discussion_control_gap_is_safe(
                         request_event, event, _control_history,
                     )
@@ -179,7 +187,7 @@ def project_artifact_operation_history(
             if (
                 request is None or decision is None or decision_event is None
                 or result is not None
-                or event.sequence != decision_event.sequence + 1
+                or control_predecessors[event.sequence] != decision_event.sequence
                 or event.step_id != decision_event.step_id
                 or payload.decision_event_id != decision_event.event_id
                 or payload.confirmation_request_id != request.confirmation_request_id
@@ -208,7 +216,7 @@ def project_artifact_operation_history(
                 result is None
                 or result_event is None
                 or predecessor is None
-                or event.sequence != predecessor.sequence + 1
+                or control_predecessors[event.sequence] != predecessor.sequence
                 or event.step_id != result_event.step_id
                 or payload.application_result_event_id != result_event.event_id
                 or result.result is None
@@ -237,7 +245,7 @@ def project_artifact_operation_history(
                 commit_request is None or commit_request_event is None
                 or commit_decision is not None
                 or (
-                    event.sequence != commit_request_event.sequence + 1
+                    control_predecessors[event.sequence] != commit_request_event.sequence
                     and not _closed_pure_discussion_control_gap_is_safe(
                         commit_request_event, event, _control_history,
                     )
@@ -255,7 +263,7 @@ def project_artifact_operation_history(
             if (
                 commit_request is None or commit_decision is None
                 or commit_decision_event is None or commit_result is not None
-                or event.sequence != commit_decision_event.sequence + 1
+                or control_predecessors[event.sequence] != commit_decision_event.sequence
                 or event.step_id != commit_decision_event.step_id
                 or payload.decision_event_id != commit_decision_event.event_id
                 or payload.confirmation_request_id != commit_request.confirmation_request_id

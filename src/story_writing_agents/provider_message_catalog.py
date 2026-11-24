@@ -11,7 +11,8 @@ BUILTIN_RESULT_CONTRACT_IDS = frozenset({
     "lead-response-v7", "specialist-assignment-response-v4",
     "lead-response-v8", "lead-response-v9", "lead-discussion-response-v1", "specialist-assignment-response-v5",
     "premise-analysis-response-v1", "premise-decision-summary-v1",
-    "consultation-summary-v4", "artifact-review-summary-v4",
+    "consultation-summary-v4", "consultation-synchronization-summary-v1",
+    "artifact-review-summary-v4", "artifact-review-summary-v5",
 })
 SOURCE_TYPES = {
     "writing_artifact": "story_document", "conversation": "conversation_history",
@@ -327,6 +328,24 @@ _catalog(
     "drafting-consultation preparation, never current execution proof or artifact authority.",
 )
 _catalog("used_evidence_ids", "Exact qualified READ receipt IDs actually used by this read-only discussion. An empty list claims no artifact facts.")
+_catalog("synchronization_findings", "Lead semantic impact findings grounded in the exact state under review and delivered source material, pending runtime qualification.")
+_catalog("synchronization", "Host-projected semantic impact scope, document identities, and existing repair conditions for this review.")
+_catalog("changes", "Exact canonical paths affected by the changes under review.")
+_catalog("projected_candidate_source_id", "Candidate source identifier for exact projected changes, when a candidate exists.")
+_catalog("projected_digest", "Content digest of the target in the state under review. A digest supplies identity, not document content.")
+_catalog("current_read_available", "Whether guarded READ can retrieve the current physical source.")
+_catalog("construction", "Whether this missing target remains initial document construction work.")
+_catalog("obligations", "Existing synchronization condition records with their responsible domains, required changes, and resolution criteria.")
+_catalog("current_review_evidence", "References to prior qualified reads available in the current review. Cite only the relevant delivered evidence.")
+_catalog("absence_evidence condition_id", "Exact current absence proof and the repair condition it addresses.")
+_catalog("id", "Exact host-provided identity of the enclosing condition or evidence record.")
+_catalog("instructions", "Host instructions for performing this semantic impact review within the existing authority and budget.")
+_catalog("changed_path target_path", "Exact canonical path pair from the disclosed artifact impact scope.")
+_catalog("judgment", "Semantic consistency, applicability, repair need, or uncertainty for one exact path pair.")
+_catalog("evidence_ids review_event_ids", "Exact delivered source receipt IDs and relevant specialist reply event IDs supporting this impact judgment.")
+_catalog("resolution", "Observable condition for verifying that an identified semantic discrepancy is resolved.")
+_catalog("abstraction", "The affected document's level of detail and the reason the changed information does not belong there.")
+_catalog("resolves", "Exact disclosed synchronization condition IDs assessed as satisfied in this candidate.")
 _catalog("discussion_control_event_id", "Runtime-provided exact USER discussion-control origin; copy it only as context, never as execution authority.")
 _catalog("associated_task", "Read-only task association for discussion; no goal, scope, revision or completion change is authorized.")
 _catalog("discussion_rule", "Host-selected discussion boundary and artifact-evidence requirements; provider output cannot change the interaction mode.")
@@ -551,7 +570,10 @@ ENUM_MEANINGS.update({
     "revise": "The user requested a revised proposal requiring fresh confirmation",
     "story_specific": "This judgment concerns story content and needs the applicable evidence",
     "workflow_meta": "This judgment concerns only conversation or runtime mechanics",
-    "not_applicable": "Story evidence is not required for this workflow-only judgment",
+    "not_applicable": "The criterion does not apply in this context. For semantic impact, explain why the affected document does not retain this detail.",
+    "no_change": "The evidence supports semantic consistency without modifying the affected document.",
+    "needs_change": "A semantic inconsistency requires correction and revalidation.",
+    "unknown": "The available evidence does not establish the semantic relationship.",
     "verified": "Required source evidence has been verified by the runtime",
     "missing": "A required source is absent", "empty": "A required source has no content",
     "incomplete": "Available evidence does not cover every required source",
@@ -769,9 +791,10 @@ ENUM_MEANINGS.update({
     "propose_change_task": "Offer an explicit task change for the user to decide; do not silently change direction.",
 })
 _catalog("availability source_status source_manifest_digest", "Host-issued source availability/status facts. Unread metadata is not content, an inspected source, or final-review evidence.")
-DYNAMIC_CHOICE_FIELDS = DYNAMIC_CHOICE_FIELDS | frozenset({"source_input_ids", "required_condition_ids"})
+DYNAMIC_CHOICE_FIELDS = DYNAMIC_CHOICE_FIELDS | frozenset({"source_input_ids", "required_condition_ids", "review_event_ids"})
 _catalog("planning_target", "Semantic document kind for a genuine formal-writing clarification only. Null for freeform, workflow, review and already-targeted work; not a path, task, readiness or write authority.")
 DYNAMIC_CHOICE_FIELDS = DYNAMIC_CHOICE_FIELDS | frozenset({"planning_target"})
+STRUCTURED_INPUT_FIELDS = STRUCTURED_INPUT_FIELDS | frozenset({"synchronization", "obligations", "current_review_evidence", "absence_evidence"})
 _catalog("document_node", "Host-bound document node and scoped predecessor-candidate input permissions. Exact plan, node and source correlations are context, never task selection, canonical readiness, execution, final review, Apply or Commit authority.")
 _catalog("document_selection", "Document-node or remaining-target selection intent with optional predecessor-candidate input intent. Host validation and a fresh exact proposal Confirm remain required; selection alone authorizes no specialist execution or write.")
 _catalog("plan_candidate_material", "Literal same-plan predecessor candidate material supplied only for the disclosed coverage and purpose. Input use establishes no canonical prerequisite completion, current READ, final review or Apply authority.")

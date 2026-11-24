@@ -243,6 +243,7 @@ def validate_collaboration_execution_result(
             CollaborationEventKindV2.SPECIALIST_REPLY,
             CollaborationEventKindV2.LEAD_SYNTHESIS,
             CollaborationEventKindV2.ARTIFACT_REVIEW_SYNTHESIS,
+            CollaborationEventKindV2.SYNCHRONIZATION,
             CollaborationEventKindV2.TERMINAL_OUTCOME,
         ):
             continue

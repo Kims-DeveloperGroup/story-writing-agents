@@ -7,6 +7,8 @@ from dataclasses import (
     field,
 )
 
+from .synchronization_history import SynchronizationHistory
+
 from ..event_contracts.artifact_apply import (
     ArtifactApplicationRequestPayload,
     ArtifactApplicationResultPayload,
@@ -102,6 +104,7 @@ class CollaborationHistoryProjection:
     selectable_materials: tuple[LeadMaterialChoice, ...] = ()
     public_responses: tuple[LeadPublicResponseView, ...] = ()
     discussion_context: LeadTaskTransitionReceipt | None = None
+    synchronization: SynchronizationHistory = SynchronizationHistory()
 
     def __post_init__(self) -> None:
         _validate_non_negative_integer(self.last_sequence, label="last sequence")

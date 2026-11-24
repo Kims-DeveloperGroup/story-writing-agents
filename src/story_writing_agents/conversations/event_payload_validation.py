@@ -196,6 +196,9 @@ def validate_collaboration_direction(
         CollaborationEventKind.ARTIFACT_APPLICATION_RESULT: {
             (CollaborationActorKind.ARTIFACT, CollaborationActorKind.USER),
         },
+        CollaborationEventKind.SYNCHRONIZATION: {
+            (CollaborationActorKind.RUNTIME, CollaborationActorKind.USER),
+        },
         CollaborationEventKind.STORY_COMMIT_REQUEST: {
             (CollaborationActorKind.LEAD, CollaborationActorKind.USER),
         },

@@ -145,6 +145,16 @@ class LeadEditorialCaptureTests(RecommendationCase):
         self.assertIsNotNone(reviewed.artifact_application_request, reviewed)
         self.assertEqual(len(self.backend.calls) - source_positive_call_start, 12)
         review = self.projection(conversation_id).current_reviewed_artifact_proposal
+        synchronization = self.runtime.inspect_semantic_synchronization(self.session_id).assessment_for_review(review)
+        self.assertTrue(synchronization.ready)
+        self.assertEqual(synchronization.census.changes, (path,))
+        expected_sources = prepared.proposal.basis.core_document_readiness.prior_assessment_refs
+        target_reads = tuple(read for finding in synchronization.findings for read in finding.reads
+                             if read.document.path == finding.target_path)
+        self.assertEqual({read.document.path for read in target_reads},
+                         {path for path, _ in preparation_data.LEAD_FIXTURE_READINESS_DOCUMENTS})
+        self.assertEqual({f"{self.session_id}/{read.source.conversation_id}/{read.source.event_id}"
+                          for read in target_reads}, set(expected_sources))
         self.assertEqual([item.assessment.value for item in review.reviews], ["supports", "supports", "concern"])
         self.assertEqual(review.unresolved_input_ids, prepared.proposal.assignments[-1].input_ids)
         self.assertEqual(self.payload_events(conversation_id, c.ArtifactReviewSynthesisPayload)[-1].payload.message, account)
@@ -235,6 +245,15 @@ class LeadEditorialCaptureTests(RecommendationCase):
         unchanged_payload = replace(satisfied.payload, outcome=c.ArtifactApplicationOutcomeKind.UNCHANGED,
                                     result=replace(satisfied.payload.result, state=ArtifactApplicationState.UNCHANGED))
         unchanged_history = objectives.rewrite_history(self.history(conversation_id), satisfied.event_id, payload=unchanged_payload)
+        unchanged_result = next(event for event in unchanged_history if event.event_id == satisfied.event_id)
+        report = next(event for event in unchanged_history if type(event.payload) is c.SynchronizationPayload
+                      and event.payload.assessment is not None and event.payload.assessment.basis.application is not None)
+        with self.assertRaisesRegex(ValueError, "reference is missing, changed, or not yet recorded"):
+            c.project_collaboration_history(unchanged_history)
+        assessed = report.payload.assessment
+        unchanged_application = replace(assessed.basis.application, result=c.synchronization_event_ref(unchanged_result))
+        report_payload = c.SynchronizationPayload(assessment=replace(assessed, basis=replace(assessed.basis, application=unchanged_application)))
+        unchanged_history = objectives.rewrite_history(unchanged_history, report.event_id, payload=report_payload)
         self.assertIs(next(item for item in c.project_collaboration_history(unchanged_history).artifact_objectives
             if item.facts.objective_id == objective.facts.objective_id).state, c.ArtifactObjectiveState.SATISFIED)
         other_case = objectives.ObjectiveCase()

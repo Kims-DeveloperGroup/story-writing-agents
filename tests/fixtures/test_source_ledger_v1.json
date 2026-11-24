@@ -37,6 +37,7 @@
     "tests/provider_response_contract_fixture.py",
     "tests/provider_session_lifecycle_artifacts_fixture.py",
     "tests/recommendation_fixture.py",
+    "tests/synchronization_contract_fixture.py",
     "tests/terminal_input_fixture.py",
     "tests/terminal_startup_welcome_contract.py"
   ],

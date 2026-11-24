@@ -246,6 +246,13 @@ class HistoricalMaterialWorkflowTests(SpecialistRoutingRuntimeCase):
         final = await self.runtime.decide_lead_step(lead_confirmation_decision(fresh_review, c.CollaborationConfirmationDecision.CONFIRM))
         self.assertIsNotNone(final.turn.artifact_proposal, final)
         self.assertIs(final.turn.artifact_proposal.state, c.ArtifactProposalState.REVIEWED, final.turn)
+        self.assertIsNotNone(final.turn.artifact_application_request, final.turn)
+        synchronization = self.runtime.inspect_semantic_synchronization(self.session_id).assessment_for_review(
+            c.project_collaboration_history(self.history(prior)).current_reviewed_artifact_proposal)
+        self.assertTrue(synchronization.ready)
+        self.assertTrue(synchronization.findings)
+        self.assertTrue(all(finding.judgment.value == "initial" and not finding.reads
+                            for finding in synchronization.findings))
         self.assertEqual(self.artifact_bytes(), before)
         pending_view = self.runtime.inspect_lead_collaboration(self.session_id, prior)
         protected = next(item for item in pending_view.available_tasks if item.ref.task_id == fresh_scope.task_id)

@@ -331,6 +331,11 @@ def project_artifact_change_set(
     )
 
 
+def artifact_state_digest(state: Mapping[str, bytes]) -> str:
+    """Identify an exact canonical document inventory using the change-set digest policy."""
+    return _state_digest(_normalize_state(state))
+
+
 def serialize_artifact_change_set(change_set: ArtifactChangeSet) -> bytes:
     """Return the one strict JSON encoding that intentionally exposes edit text."""
 

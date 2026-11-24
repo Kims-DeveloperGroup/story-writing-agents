@@ -415,8 +415,18 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 428)
-        self.assertEqual(len(edges), 2646)
+        self.assertEqual(len(modules), 438)
+        self.assertEqual(len(edges), 2740)
+        assessment_owner = "story_writing_agents.synchronization_assessment"
+        obligations_owner = "story_writing_agents.synchronization_obligations"
+        semantic_dependencies = {
+            "story_writing_agents.specialist_routing",
+            "story_writing_agents.writing_artifacts.catalog",
+        }
+        self.assertEqual({target for source, target in edges if source == assessment_owner},
+                         semantic_dependencies)
+        self.assertEqual({target for source, target in edges if source == obligations_owner},
+                         {*semantic_dependencies, assessment_owner})
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -853,6 +863,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.conversations.payload_codec",
                 "story_writing_agents.conversations.event_contracts.artifact_apply",
                 "story_writing_agents.conversations.event_contracts.artifact_reviews",
+                "story_writing_agents.conversations.event_contracts.synchronization",
                 "story_writing_agents.conversations.event_contracts.story_commits",
                 "story_writing_agents.conversations.event_contracts.authoring_records",
                 "story_writing_agents.conversations.event_contracts.control_records",
@@ -870,6 +881,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.reply_trace",
                 "story_writing_agents.specialist_routing",
                 "story_writing_agents.structured_output_validation",
+                "story_writing_agents.synchronization_assessment",
                 "story_writing_agents.agents",
                 "story_writing_agents.artifact_proposals",
                 "story_writing_agents.conversations.event_value_validation",
@@ -912,6 +924,9 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 )
         publication = "story_writing_agents.lead_execution.collaboration_result_publication"
         self.assertEqual({target for source, target in edges if source == publication}, {
+            "story_writing_agents.conversations.reducers.synchronization_history",
+            "story_writing_agents.agent_context.sources.session_history",
+            "story_writing_agents.artifact_transactions.synchronization_publication",
             "story_writing_agents.collaboration_execution_results",
             "story_writing_agents.conversation_storage.contracts",
             "story_writing_agents.conversations",
@@ -923,6 +938,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             "story_writing_agents.runtime_resources",
             "story_writing_agents.runtime_resources.collaboration_event_journal",
             "story_writing_agents.runtime_resources.generation_pin_cleanup",
+            "story_writing_agents.writing_artifacts.change_sets",
         })
         self.assertEqual({source for source, target in edges if target == publication}, {"story_writing_agents.orchestrator"})
         workspace_dependencies = {
@@ -1645,7 +1661,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         self.assertIn("story_writing_agents.document_plan", modules)
         self.assertEqual({target for source, target in edges if source == "story_writing_agents.document_plan"}, {
             "story_writing_agents.core_document_readiness", "story_writing_agents.editorial_scope",
-            "story_writing_agents.lead_task_transitions", "story_writing_agents.specialist_routing"})
+            "story_writing_agents.lead_task_transitions", "story_writing_agents.specialist_routing",
+            "story_writing_agents.synchronization_obligations"})
         self.assertEqual({source for source, target in edges if target == "story_writing_agents.document_plan"}, {
             'story_writing_agents.conversations.payload_codec',
             'story_writing_agents.conversations.event_contracts.authoring_records',
@@ -1735,6 +1752,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             'story_writing_agents.runtime_resources.collaboration_event_journal',
         })
         self.assertEqual({source for source, target in edges if target == lead_material_inputs}, {
+            'story_writing_agents.artifact_transactions.synchronization_review',
             'story_writing_agents.lead_preparation.current_lead_evidence',
             'story_writing_agents.lead_preparation.current_lead_inputs',
             'story_writing_agents.lead_preparation.lead_source_qualification',
@@ -2237,6 +2255,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 'story_writing_agents.lead_provider_contracts',
                 'story_writing_agents.lead_exploration',
                 'story_writing_agents.lead_preparation.response_rules',
+                'story_writing_agents.lead_preparation.synchronization_review_response',
                 'story_writing_agents.lead_task_transitions',
                 'story_writing_agents.conversations',
                 'story_writing_agents.specialist_routing',
@@ -2253,6 +2272,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 'story_writing_agents.lead_preparation.outcome_decoding',
                 'story_writing_agents.lead_preparation.proposal_basis_values',
                 'story_writing_agents.lead_preparation.reply_contract_values',
+                'story_writing_agents.lead_preparation.synchronization_review_response',
                 'story_writing_agents.lead_provider_contracts',
                 'story_writing_agents.specialist_routing',
                 'story_writing_agents.structured_output_validation',
@@ -2867,13 +2887,24 @@ class RagModuleBoundaryTests(unittest.TestCase):
         self.assertIs(provider_request_policy.ArtifactProposalState, conversations.ArtifactProposalState)
         self.assertIs(authoring_qualification.admission_digest, authoring_admission.admission_digest)
         for owner, function_name, parameter_names, keyword_names, defaults, postponed in (
-            (collaboration_response_decoding, 'decode_artifact_synthesis', ('answer', 'proposal', 'attempt_id', 'reply_event_ids', 'replies', 'candidate'), ('proposal', 'attempt_id', 'reply_event_ids', 'replies', 'candidate'), {}, False),
+            (collaboration_response_decoding, 'decode_artifact_synthesis',
+             ('answer', 'proposal', 'attempt_id', 'reply_event_ids', 'replies', 'candidate', 'synchronization_required'),
+             ('proposal', 'attempt_id', 'reply_event_ids', 'replies', 'candidate', 'synchronization_required'),
+             {'synchronization_required': False}, False),
             (collaboration_response_decoding, 'decode_specialist_reply', ('answer', 'proposal', 'attempt_id', 'assignment', 'dispatch_event_id', 'premise_dependencies'), ('proposal', 'attempt_id', 'assignment', 'dispatch_event_id', 'premise_dependencies'), {'premise_dependencies': ()}, False),
-            (collaboration_response_decoding, 'decode_lead_synthesis', ('answer', 'proposal', 'attempt_id', 'reply_event_ids', 'replies', 'review_candidate_ids'), ('proposal', 'attempt_id', 'reply_event_ids', 'replies', 'review_candidate_ids'), {}, False),
+            (collaboration_response_decoding, 'decode_lead_synthesis',
+             ('answer', 'proposal', 'attempt_id', 'reply_event_ids', 'replies', 'review_candidate_ids',
+              'synchronization_required'),
+             ('proposal', 'attempt_id', 'reply_event_ids', 'replies', 'review_candidate_ids',
+              'synchronization_required'), {'synchronization_required': False}, False),
             (collaboration_response_decoding, 'required_unresolved_input_ids', ('replies',), (), {}, False),
             (collaboration_response_decoding, 'decode_continuation_intent', ('value', 'authoring_scope', 'review_candidate_ids', 'shared_premises'), ('authoring_scope', 'review_candidate_ids', 'shared_premises'), {'shared_premises': ()}, False),
             (collaboration_response_contracts, 'specialist_result_contract', ('assignment', 'premise_dependencies'), ('premise_dependencies',), {'premise_dependencies': ()}, False),
-            (collaboration_response_contracts, 'lead_synthesis_result_contract', ('evidence', 'input_ids', 'reply_event_ids', 'allow_next_intent', 'artifact_review', 'authoring_scope', 'constraints'), ('evidence', 'input_ids', 'reply_event_ids', 'allow_next_intent', 'artifact_review', 'authoring_scope', 'constraints'), {'constraints': None}, False),
+            (collaboration_response_contracts, 'lead_synthesis_result_contract',
+             ('evidence', 'input_ids', 'reply_event_ids', 'allow_next_intent', 'artifact_review', 'authoring_scope',
+              'constraints', 'synchronization_required'),
+             ('evidence', 'input_ids', 'reply_event_ids', 'allow_next_intent', 'artifact_review', 'authoring_scope',
+              'constraints', 'synchronization_required'), {'constraints': None, 'synchronization_required': False}, False),
             (artifact_revision_sources, 'artifact_revision_source', ('receipt', 'original', 'history'), (), {}, False),
             (lead_material_inputs, 'specialist_assignment_material', ('proposal', 'assignment', 'input_events', 'events'), (), {}, True),
             (lead_material_inputs, 'synthesis_constraints', ('proposal', 'replies', 'reply_event_ids', 'current_projection', 'conversation_id'), (), {}, True),
@@ -3692,6 +3723,16 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             "story_writing_agents/artifact_transactions/pending_story_commits.py",
             "story_writing_agents/artifact_transactions/prepared_story_commit.py",
             "story_writing_agents/artifact_transactions/story_commit_decisions.py",
+                "story_writing_agents/artifact_transactions/synchronization_control.py",
+                "story_writing_agents/artifact_transactions/synchronization_material.py",
+                "story_writing_agents/artifact_transactions/synchronization_publication.py",
+                "story_writing_agents/artifact_transactions/synchronization_review.py",
+                "story_writing_agents/conversations/event_contracts/synchronization.py",
+                "story_writing_agents/conversations/reducers/synchronization_history.py",
+                "story_writing_agents/conversations/reducers/synchronization_absence_history.py",
+                "story_writing_agents/lead_preparation/synchronization_review_response.py",
+                "story_writing_agents/synchronization_assessment.py",
+                "story_writing_agents/synchronization_obligations.py",
             "story_writing_agents/collaboration_execution_results.py",
             "story_writing_agents/lead_control_events.py",
             "story_writing_agents/runtime_resources/generation_pin_cleanup.py",
@@ -3975,8 +4016,8 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 import story_writing_agents.workspace.core as workspace_core
                 from story_writing_agents.agent_exchanges import AgentExchangeScopeKind
                 assert len(story_writing_agents.__all__) == 106
-                assert len(conversations.__all__) == 235
-                assert len(conversation_events.__all__) == 97
+                assert len(conversations.__all__) == 237
+                assert len(conversation_events.__all__) == 99
                 assert len(conversation_context.__all__) == 37
                 assert conversations.CollaborationProposal is conversation_events.CollaborationProposal
                 assert conversations.CollaborationEventStore is conversation_context.CollaborationEventStore
@@ -4246,8 +4287,8 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 import story_writing_agents.conversations.context as context
                 import story_writing_agents.conversations.events as events
                 assert len(story_writing_agents.__all__) == 106
-                assert len(conversations.__all__) == 235
-                assert len(events.__all__) == 97
+                assert len(conversations.__all__) == 237
+                assert len(events.__all__) == 99
                 assert len(context.__all__) == 37
                 assert catalog.ConversationCatalog is conversations.ConversationCatalog
                 assert events.ConversationEvent is conversations.ConversationEvent

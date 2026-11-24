@@ -143,7 +143,7 @@ search/storage contracts without owning persistence.
 fresh delivery is complete, while compatible continuation carries unseen facts. `conversation_search` owns shared search values, literal match coordinates, and the existing transcript services. `collaboration_history_search` owns ordered schema-v2 readable field search. `collaboration_history` owns the scoped history service and delegates catalog and event access to its existing collaborators. Search implementations must return public
 search/retrieval contracts rather than expose storage internals. Conversation events and
 retrieval may carry bounded validation details associated with the physical provider call; Private group trace는 일반 readable/context/search 및 task authority에서 제외되며 명시적 읽기 전용 조회만 제공한다.
-older records without them remain valid. The `conversations` facade exports the additive structured Commit preparation request; prose cannot authorize Commit.
+`synchronization_assessment` owns canonical impact coverage and evidence, `synchronization_obligations` owns causal repair conditions, and the conversation synchronization reducer projects typed event history across archived and active conversations. Artifact transaction owners qualify current READ, candidate and Apply facts, while Lead preparation owns the closed provider judgment contract. older records without them remain valid. The `conversations` facade exports the additive structured Commit preparation request; prose cannot authorize Commit.
 
 ### Conversation storage
 

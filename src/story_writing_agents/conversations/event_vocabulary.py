@@ -50,6 +50,7 @@ class CollaborationEventKind(StrEnum):
     ARTIFACT_APPLICATION_REQUEST = "artifact_application_request"
     ARTIFACT_APPLICATION_DECISION = "artifact_application_decision"
     ARTIFACT_APPLICATION_RESULT = "artifact_application_result"
+    SYNCHRONIZATION = "synchronization"
     STORY_COMMIT_REQUEST = "story_commit_request"
     STORY_COMMIT_DECISION = "story_commit_decision"
     STORY_COMMIT_RESULT = "story_commit_result"

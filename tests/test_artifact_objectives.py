@@ -14,6 +14,7 @@ from story_writing_agents import conversations as c
 from story_writing_agents.agents import LEAD_ORCHESTRATOR, PLOT_ARCHITECT
 from story_writing_agents.workspace.session_resources import provision_session_resources
 from story_writing_agents.writing_artifacts.repository import WritingArtifactRepository
+from story_writing_agents.writing_artifacts.catalog import CORE_ARTIFACT_PATHS
 from tests.lead_fixtures import preparation_data, provider_responses, runtime_setup
 from story_writing_agents.specialist_routing import AuthoringActivity
 from tests.provider_wire_fixture import FixedBusinessFactory as _SourceOnlyFactory, selection_plan
@@ -239,12 +240,15 @@ class ObjectiveCase(runtime_setup.LeadOrchestrationTestCase):
             (len(result.proposal.participants) + 1) * (1 + int(attached)), 12)
         return result
 
-    async def review(self, proposed):
+    async def review(self, proposed, *, expect_apply=True):
         for assignment in proposed.proposal.assignments:
             self.backend.enqueue_for(assignment.specialist_id, preparation_data.lead_specialist_outcome("supports"))
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, artifact._artifact_synthesis_outcome("propose"))
         result = await self.runtime.decide_lead_step(preparation_data.lead_confirmation_decision(proposed, c.CollaborationConfirmationDecision.CONFIRM))
-        self.assertIsNotNone(result.turn.artifact_application_request, result.turn)
+        if expect_apply:
+            self.assertIsNotNone(result.turn.artifact_application_request, result.turn)
+        else:
+            self.assertIsNone(result.turn.artifact_application_request, result.turn)
         return result.turn
 
     async def apply(self, reviewed, kind=c.ArtifactApplicationDecisionKind.APPLY):
@@ -252,6 +256,15 @@ class ObjectiveCase(runtime_setup.LeadOrchestrationTestCase):
 
     async def reject_commit(self, applied):
         return await self.runtime.decide_story_commit(commit._commit_decision(applied, commit.StoryCommitDecision.REJECT))
+
+    def assert_unbuilt_outline_targets(self, conversation_id):
+        projection = self.projection(conversation_id)
+        assessment = projection.synchronization.assessment_for_review(projection.current_reviewed_artifact_proposal)
+        self.assertIsNotNone(assessment)
+        self.assertTrue(assessment.ready)
+        self.assertEqual({(finding.changed_path, finding.target_path, finding.judgment.value, finding.reads)
+                          for finding in assessment.findings},
+                         {(OUTLINE, path, "initial", ()) for path in CORE_ARTIFACT_PATHS if path != OUTLINE})
 
 
 class ArtifactObjectiveContractTests(ObjectiveCase):
@@ -367,6 +380,7 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
         for event in syntheses:
             self.assertEqual(source_by_id[event.event_id].content_digest, digest(event.payload.message))
         self.assertIsNotNone(reviewed.artifact_application_request)
+        self.assert_unbuilt_outline_targets(conversation_id)
         self.assertNotIn(prepared.turn_id, source_by_id)
 
     async def test_empty_continuation_retains_selection_and_cancel_is_terminal(self):
@@ -457,6 +471,7 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
         self.assertIs(satisfied.state, c.ArtifactObjectiveState.SATISFIED)
         await self.reject_commit(applied)
         next_review = await self.review(await self.prepare(conversation_id, new=True, attached=True, text=DRAFT + "Second revision.\n"))
+        self.assert_unbuilt_outline_targets(conversation_id)
         await self.apply(next_review, c.ArtifactApplicationDecisionKind.REJECT)
         self.assertEqual(self.projection(conversation_id).artifact_objectives[0], satisfied)
         self.assertIs(self.objective(conversation_id).state, c.ArtifactObjectiveState.OPEN)

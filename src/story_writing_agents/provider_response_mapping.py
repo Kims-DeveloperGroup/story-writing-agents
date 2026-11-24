@@ -36,9 +36,16 @@ def normalize_result(value: object, contract_id: str) -> object:
         reverse = {wire: old for old, wire in RESULT_FIELDS.items()}
         for name, child in item.items():
             if root and name == "response_type":
-                expected_type = {"premise-analysis-response-v1": "premise_analysis_result", "premise-decision-summary-v1": "premise_decision_summary"}.get(family)
+                expected_type = {
+                    "premise-analysis-response-v1": "premise_analysis_result",
+                    "premise-decision-summary-v1": "premise_decision_summary",
+                }.get(family)
                 if expected_type is not None and child != expected_type:
                     raise ValueError("unexpected premise response type")
+                if family == "artifact-review-summary-v5" and child != "artifact_review_summary":
+                    raise ValueError("unexpected artifact review response type")
+                if family == "consultation-synchronization-summary-v1" and child != "consultation_summary":
+                    raise ValueError("unexpected synchronization consultation response type")
                 if family == "lead-exploration-response-v1":
                     if child != "lead_exploration":
                         raise ValueError("unexpected exploration response type")
@@ -204,7 +211,8 @@ def recover_lead_public_response(
     if contract_id not in {
         "lead-response-v6", "lead-response-v7", "lead-response-v8",
         "lead-response-v9", "lead-discussion-response-v1",
-        "lead-exploration-response-v1", "consultation-summary-v4", "artifact-review-summary-v4",
+        "lead-exploration-response-v1", "consultation-summary-v4", "consultation-synchronization-summary-v1",
+        "artifact-review-summary-v4", "artifact-review-summary-v5",
         "premise-decision-summary-v1", "premise-analysis-response-v1",
     } or type(response_text) is not str:
         return None

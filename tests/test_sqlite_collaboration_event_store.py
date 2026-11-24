@@ -38,6 +38,7 @@ from story_writing_agents.conversations import (
     encode_collaboration_batch,
     encode_collaboration_event,
     project_collaboration_history,
+    synchronization_event_ref,
 )
 from story_writing_agents.conversation_storage import sqlite as sqlite_module
 from story_writing_agents.conversation_storage import (
@@ -61,6 +62,7 @@ from tests.sqlite_conversation_storage_fixture import (
     raw_connection,
     storage_snapshot,
 )
+from tests.synchronization_contract_fixture import synchronization_unread_batch
 
 
 _SQLITE_EXPORTS = (
@@ -598,6 +600,32 @@ class SQLiteCollaborationEventStoreFirstSliceTests(unittest.TestCase):
                     self.store.append_batch(candidate)
                 self.assertIs(raised.exception.failure, expected)
                 self.assertEqual(self.collaboration_rows(self.workspace), committed)
+
+        catalog = compose_sqlite_conversation_storage(self.workspace).catalog
+        conversation = catalog.create("session_a", "Unread synchronization target").conversation_id
+        rejected = synchronization_unread_batch(conversation, stale_request=True)
+        with self.assertRaises(CollaborationAppendError) as raised:
+            self.store.append_batch(rejected)
+        self.assertIs(raised.exception.failure, CollaborationAppendFailure.INVALID_TRANSITION)
+        self.assertEqual(self.collaboration_rows(self.workspace), committed)
+        batch = synchronization_unread_batch(conversation)
+        receipt = self.store.append_batch(batch)
+        self.assertIs(receipt.status, CollaborationAppendStatus.APPENDED)
+
+        restored = SQLiteCollaborationEventStore(self.workspace)
+        history = restored.read("session_a", conversation)
+        self.assertEqual(tuple(event.to_draft() for event in history), batch.events)
+        assessment = history[-1].payload.assessment
+        self.assertEqual(assessment.basis.request, synchronization_event_ref(history[0]))
+        self.assertFalse(assessment.ready)
+        self.assertTrue(any(reason.endswith("unread") for reason in assessment.blockers))
+        projection = restored.read_context("session_a", conversation)
+        self.assertEqual(projection, project_collaboration_history(history))
+        self.assertEqual(projection.synchronization.assessments,
+                         ((synchronization_event_ref(history[-1]), assessment),))
+        unchanged = self.collaboration_rows(self.workspace)
+        self.assertEqual(restored.append_batch(batch).status, CollaborationAppendStatus.ALREADY_COMMITTED)
+        self.assertEqual(self.collaboration_rows(self.workspace), unchanged)
 
     def test_corrupt_rows_fail_closed_and_database_constraints_reject_duplicates(
         self,

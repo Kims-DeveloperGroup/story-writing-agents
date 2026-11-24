@@ -35,6 +35,7 @@ def project_document_plan_views(
     views: tuple[DocumentPlanView, ...],
     readiness: CoreDocumentReadiness | CoreDocumentReadinessNeeded,
 ) -> tuple[DocumentPlanView, ...]:
+    synchronization = snapshot.synchronization().obligations
     facts = {record.payload.facts.objective_id: record.payload.facts for row in snapshot.conversations
              for record in row.records if type(record.payload) in {ArtifactObjectivePayload, ArtifactObjectivePayloadV2}}
     result = []
@@ -54,8 +55,14 @@ def project_document_plan_views(
             own = None if basis is None else next((item for item in basis.assessment.document_judgments
                                                    if item.document_path == node.target_path), None)
             prerequisite_paths = {target.value for target in DEPENDENCIES[node.target_kind]}
-            row = replace(row, prerequisite_sources=() if basis is None else tuple(source for source in basis.sources
-                if source.document_path in prerequisite_paths and source.kind is AdmissionSourceKind.READ))
+            row = replace(
+                row, prerequisite_sources=() if basis is None else tuple(source for source in basis.sources
+                    if source.document_path in prerequisite_paths and source.kind is AdmissionSourceKind.READ),
+                synchronization_conditions=tuple(
+                    state for head in synchronization.heads for state in head.conditions
+                    if node.target_path in {state.condition.changed_path, state.condition.target_path}
+                ),
+            )
             decision_ids = set() if own is None else (set(own.remaining_author_decision_ids) |
                 {identity for finding in own.criteria_findings if finding.criterion_judgment != "criteria_satisfied"
                  for identity in finding.depends_on_author_decision_ids})

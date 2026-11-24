@@ -107,6 +107,8 @@ from .document_plan_views import (
 from .editorial_event_evidence import (
     validate_editorial_event_headers as _validate_editorial_event_headers,
 )
+from .synchronization_history import project_synchronization_history
+from ..event_contracts.synchronization import SynchronizationPayload
 from .execution_batch_history import (
     validate_collaboration_co_batch as _validate_collaboration_co_batch,
     validate_collaboration_execution_result as _validate_collaboration_execution_result,
@@ -179,6 +181,9 @@ def project_collaboration_history(
                 raise ValueError("collaboration history changed an existing task intent")
             task_intents[scope.task_id] = scope.intent
     projection = _project_validated_collaboration_history(events)
+    synchronization = project_synchronization_history((events,), session_complete=False)
+    if synchronization.assessments or synchronization.obligations.heads or not synchronization.complete:
+        projection = replace(projection, synchronization=synchronization)
     if any(type(event.payload) in {CollaborationLeadJudgmentPayload, ArtifactObjectivePayload,
             ArtifactObjectivePayloadV2, CollaborationProposal} and event.payload.document_plan is not None for event in events):
         return replace(projection, document_plans=project_document_plan_views(events, projection.artifact_objectives))
@@ -758,6 +763,7 @@ def _project_validated_collaboration_history(
                 ArtifactReviewedProposal,
                 ArtifactProposalStatePayload,
                 ArtifactReviewFailurePayload,
+                SynchronizationPayload,
                 ArtifactApplicationRequestPayload,
                 ArtifactApplicationDecisionPayload,
                 ArtifactApplicationResultPayload,
@@ -1282,7 +1288,8 @@ def _project_validated_collaboration_history(
     )
     artifact_objectives, offered_draft_sources = _project_artifact_objective_history(events)
     operation_next_action = _artifact_operation_next_action(
-        events[-1], application_request, application_result, commit_request, commit_result,
+        next((event for event in reversed(events) if type(event.payload) is not SynchronizationPayload), events[-1]),
+        application_request, application_result, commit_request, commit_result,
     )
     recommendation_next_action = None
     if recommendation_state is LeadRecommendationState.PENDING:

@@ -134,6 +134,12 @@ from .event_contracts.artifact_reviews import (
     decode_artifact_proposal_state_payload,
     decode_artifact_review_failure_payload,
 )
+from ..synchronization_assessment import SynchronizationEventRef
+from .event_contracts.synchronization import (
+    SynchronizationPayload,
+    decode_synchronization_payload,
+    synchronization_payload_value,
+)
 from .event_contracts.story_commits import (
     StoryCommitDecisionPayload,
     StoryCommitRequestPayload,
@@ -1630,6 +1636,7 @@ CollaborationPayload = (
     | ArtifactApplicationRequestPayload
     | ArtifactApplicationDecisionPayload
     | ArtifactApplicationResultPayload
+    | SynchronizationPayload
     | StoryCommitRequestPayload
     | StoryCommitDecisionPayload
     | StoryCommitResultPayload
@@ -2055,6 +2062,19 @@ def decode_collaboration_proposal(payload: bytes) -> CollaborationProposal:
     return _decode_proposal(root["proposal"])
 
 
+def synchronization_event_ref(
+    event: CollaborationEventDraft | CollaborationEvent,
+) -> SynchronizationEventRef:
+    """Bind an event's exact content before and after storage assigns order."""
+    if type(event) is CollaborationEvent:
+        event = event.to_draft()
+    if type(event) is not CollaborationEventDraft:
+        raise TypeError("synchronization evidence needs an exact collaboration event")
+    return SynchronizationEventRef(
+        event.conversation_id, event.event_id, _digest_value(_event_draft_value(event)),
+    )
+
+
 def encode_collaboration_event_draft(event: CollaborationEventDraft) -> bytes:
     """Encode one caller-owned event as strict canonical UTF-8 JSON."""
 
@@ -2293,6 +2313,8 @@ def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
         return artifact_application_decision_payload_value(payload)
     if type(payload) is ArtifactApplicationResultPayload:
         return artifact_application_result_payload_value(payload)
+    if type(payload) is SynchronizationPayload:
+        return synchronization_payload_value(payload)
     if type(payload) is StoryCommitRequestPayload:
         return story_commit_request_payload_value(payload)
     if type(payload) is StoryCommitDecisionPayload:
@@ -2712,6 +2734,8 @@ def _decode_payload(value: object) -> CollaborationPayload:
         return decode_artifact_application_decision_payload(value)
     if payload_type == "artifact_application_result":
         return decode_artifact_application_result_payload(value)
+    if payload_type == "synchronization":
+        return decode_synchronization_payload(value)
     if payload_type == "story_commit_request":
         return decode_story_commit_request_payload(value)
     if payload_type == "story_commit_decision":
@@ -2851,6 +2875,7 @@ def _validate_collaboration_payload(
         CollaborationEventKind.ARTIFACT_APPLICATION_RESULT: (
             ArtifactApplicationResultPayload,
         ),
+        CollaborationEventKind.SYNCHRONIZATION: (SynchronizationPayload,),
         CollaborationEventKind.STORY_COMMIT_REQUEST: (StoryCommitRequestPayload,),
         CollaborationEventKind.STORY_COMMIT_DECISION: (StoryCommitDecisionPayload,),
         CollaborationEventKind.STORY_COMMIT_RESULT: (StoryCommitResultPayload,),
@@ -2884,6 +2909,8 @@ __all__ = [
     "ArtifactApplicationDecisionPayload",
     "ArtifactApplicationRequestPayload",
     "ArtifactApplicationResultPayload",
+    "SynchronizationPayload",
+    "synchronization_event_ref",
     "StoryCommitDecisionPayload",
     "StoryCommitRequestPayload",
     "StoryCommitResultPayload",

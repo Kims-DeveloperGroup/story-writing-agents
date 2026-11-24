@@ -294,6 +294,7 @@ class CollaborationValueContractTests(unittest.TestCase):
                 "artifact_application_request",
                 "artifact_application_decision",
                 "artifact_application_result",
+                "synchronization",
                 "story_commit_request",
                 "story_commit_decision",
                 "story_commit_result",
@@ -907,6 +908,19 @@ class CollaborationValueContractTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             make_draft("trace_type", CollaborationEventKind.LEAD_GROUP_TRACE, RUNTIME, LEAD, payload)
 
+        from tests.collaboration_contract_fixture import CONVERSATION_ID
+        from tests.synchronization_contract_fixture import synchronization_unread_batch
+
+        synchronization = synchronization_unread_batch(CONVERSATION_ID).events[-1]
+        for sender in actors.values():
+            for recipient in actors.values():
+                if sender == RUNTIME and recipient == USER:
+                    self.assertEqual(replace(synchronization, sender=sender, recipient=recipient),
+                                     synchronization)
+                else:
+                    with self.assertRaises(ValueError):
+                        replace(synchronization, sender=sender, recipient=recipient)
+
     def test_proposal_closure_budget_and_advisory_invariants_fail_closed(self) -> None:
         proposal = make_proposal()
         with self.assertRaises(ValueError):
@@ -1241,6 +1255,27 @@ class CollaborationWireContractTests(unittest.TestCase):
         self.assertIs(type(decoded.payload), CollaborationExecutionResult)
         self.assertEqual(decoded.payload, expected)
 
+        from tests.collaboration_contract_fixture import CONVERSATION_ID
+        from tests.synchronization_contract_fixture import synchronization_unread_batch
+
+        request, draft = synchronization_unread_batch(CONVERSATION_ID).events
+        payload = draft.payload
+        self.assertIs(type(payload), conversations.SynchronizationPayload)
+        self.assertEqual(payload.assessment.basis.request, conversations.synchronization_event_ref(request))
+        self.assertNotEqual(conversations.synchronization_event_ref(request),
+                            conversations.synchronization_event_ref(
+                                replace(request, payload=CollaborationMessagePayload("A changed request."))))
+        encoded = events_owner.encode_collaboration_event_draft(draft)
+        self.assertEqual(events_owner.decode_collaboration_event_draft(encoded), draft)
+        tampered = json.loads(encoded)
+        tampered["payload"]["assessment"]["census"]["unqualified"] = True
+        with self.assertRaises(ValueError):
+            events_owner.decode_collaboration_event_draft(
+                json.dumps(tampered, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+            )
+        with self.assertRaises(ValueError):
+            conversations.SynchronizationPayload()
+
     def test_every_proposal_dimension_and_order_changes_the_digest(self) -> None:
         base = make_proposal(
             side_effects=(CollaborationSideEffect.PROVIDER_INVOCATION, CollaborationSideEffect.ARTIFACT_MUTATION,)
@@ -1501,7 +1536,10 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
         self.assertEqual(tuple(events_owner.__all__), expected_event_exports)
         self.assertEqual(tuple(vocabulary_owner.__all__), COLLABORATION_VOCABULARY_EXPORTS)
         self.assertEqual(tuple(context_owner.__all__), expected_context_exports)
-        self.assertEqual(len(conversations.__all__), 235)
+        self.assertEqual(len(conversations.__all__), 237)
+        self.assertIs(conversations.SynchronizationPayload, events_owner.SynchronizationPayload)
+        self.assertIs(conversations.synchronization_event_ref, events_owner.synchronization_event_ref)
+        self.assertFalse(hasattr(story_writing_agents, "SynchronizationPayload"))
         self.assertNotIn("__getattr__", vars(events_owner))
         self.assertNotIn("__getattr__", vars(vocabulary_owner))
         self.assertNotIn("__getattr__", vars(context_owner))
@@ -1633,8 +1671,10 @@ import story_writing_agents
 import story_writing_agents.conversations as facade
 import story_writing_agents.conversations.context as context
 import story_writing_agents.conversations.events as events
-assert len(facade.__all__) == 235
-assert len(events.__all__) == 97
+assert len(facade.__all__) == 237
+assert len(events.__all__) == 99
+assert facade.SynchronizationPayload is events.SynchronizationPayload
+assert facade.synchronization_event_ref is events.synchronization_event_ref
 assert "CollaborationLeadGroupTracePayload" in events.__all__
 assert "CollaborationLeadGroupTracePayload" not in facade.__all__
 assert not hasattr(facade, "CollaborationLeadGroupTracePayload")

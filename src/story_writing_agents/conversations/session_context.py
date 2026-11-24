@@ -633,6 +633,22 @@ class SessionHistorySnapshot:
                     for ref in record.payload.core_document_readiness.prior_assessment_refs}
         return tuple(record for record in records if self.readiness_ref(record) not in consumed)
 
+    def synchronization(self):
+        """Replay session obligations including their archived conversation history."""
+        from .reducers.synchronization_history import project_synchronization_history
+
+        return project_synchronization_history(
+            tuple(row._events() for row in self.conversations), session_complete=True,
+        )
+
+    def previously_applied_paths(self) -> frozenset[str]:
+        """Retain which identities have already participated in a successful application."""
+        return frozenset(
+            path for row in self.conversations for event in row.records
+            if type(event.payload) is ArtifactApplicationResultPayload and event.payload.result is not None
+            for path in event.payload.result.affected_paths
+        )
+
     def validate_readiness_use(self, basis) -> None:
         """Verify a workflow's exact captured assessment and its original causal prefix."""
         captured = {self.readiness_ref(record): record for record in self.readiness_assessments()}

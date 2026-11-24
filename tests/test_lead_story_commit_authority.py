@@ -27,6 +27,7 @@ from story_writing_agents.agents import LEAD_ORCHESTRATOR
 from story_writing_agents.conversations import (
     ArtifactApplicationDecision,
     ArtifactApplicationDecisionKind,
+    ArtifactApplicationOutcomeKind,
     ArtifactApplicationResultPayload,
     CollaborationConfirmationDecision,
     CollaborationNextAction,
@@ -36,9 +37,11 @@ from story_writing_agents.conversations import (
     StoryCommitOutcomeKind,
     StoryCommitRequestPayload,
     StoryCommitResultPayload,
+    SynchronizationPayload,
     decode_collaboration_event,
     encode_collaboration_event,
     project_collaboration_history,
+    synchronization_event_ref,
 )
 from story_writing_agents.git.process import GitProcessRunner
 from story_writing_agents.git.story_commit_contracts import (
@@ -54,6 +57,7 @@ from tests.provider_wire_fixture import selection_plan, lead_fixture_result, lea
 from tests.lead_fixtures.artifact_review import (
     ARTIFACT_FIXTURE_RULES_PATH,
     artifact_review_outcome,
+    artifact_synthesis_with_current_reads,
     _artifact_synthesis_outcome,
     _reference_ids,
 )
@@ -178,13 +182,29 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
                 assignment.specialist_id,
                 lead_specialist_outcome("supports"),
             )
-        self.backend.enqueue_for(
-            LEAD_ORCHESTRATOR,
-            _artifact_synthesis_outcome("propose"),
+        related_reads = (
+            ("core_documents/global_outline.md", "blocked bridge"),
+            ("core_documents/part_outlines.md", "tests ownership"),
+            ("core_documents/character_sheets.md", "role is courier"),
+            ("manuscript/part-01/opening.md", "Opening one"),
         )
+        responses = (artifact_synthesis_with_current_reads(related_reads) if readiness
+                     else (_artifact_synthesis_outcome("propose"),))
+        if readiness:
+            self.assertGreaterEqual(proposed.proposal.budget.synthesis_max_physical_calls, len(responses))
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, *responses)
         reviewed = await self.runtime.decide_lead_step(
             lead_confirmation_decision(proposed, CollaborationConfirmationDecision.CONFIRM)
         )
+        if readiness:
+            history = self.runtime.inspect_semantic_synchronization(self.session_id)
+            assessment = history.assessments[-1][1]
+            self.assertTrue(assessment.basis.projected)
+            self.assertTrue(assessment.ready, assessment.blockers)
+            self.assertEqual({finding.target_path for finding in assessment.findings},
+                             {path for path, _ in related_reads})
+            self.assertEqual({read.document.path for finding in assessment.findings for read in finding.reads
+                              if read.receipt_id.startswith("read_")}, {path for path, _ in related_reads})
         return reviewed.turn
 
     def session_root(self):
@@ -215,7 +235,8 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
         applied = await self.runtime.decide_artifact_application(
             lead_artifact_application_tests._application_decision(turn, ArtifactApplicationDecisionKind.APPLY)
         )
-        self.assertIsNotNone(applied.commit_request)
+        self.assertIsNotNone(applied.commit_request,
+                             (applied.outcome.outcome, applied.outcome.next_action, applied.message))
         return applied
 
     def pending_commit(self, applied, captured):
@@ -282,6 +303,18 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
             event for event in events if type(event.payload) is StoryCommitRequestPayload
         ]
         self.assertEqual((len(application_results), len(commit_requests)), (1, 1))
+        application_result = application_results[0]
+        self.assertIs(application_result.payload.outcome, ArtifactApplicationOutcomeKind.APPLIED)
+        applied_assessment, = (
+            event for event in events
+            if type(event.payload) is SynchronizationPayload and event.payload.assessment is not None
+            and event.payload.assessment.basis.application is not None
+        )
+        synchronization = applied_assessment.payload.assessment
+        self.assertEqual(synchronization.basis.application.result, synchronization_event_ref(application_result))
+        self.assertEqual(synchronization.basis.application.application_id, application_result.payload.application_id)
+        self.assertEqual(synchronization.basis.candidate.candidate_digest, applied.request.reviewed_proposal.candidate.candidate_digest)
+        self.assertEqual(applied_assessment.batch_id, application_result.batch_id)
         self.assertEqual(
             (application_results[0].batch_id, application_results[0].event_id),
             (
@@ -292,9 +325,9 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
         self.assertEqual(
             tuple(
                 (event.batch_ordinal, event.batch_size)
-                for event in (application_results[0], commit_requests[0])
+                for event in (application_result, commit_requests[0], applied_assessment)
             ),
-            ((0, 2), (1, 2)),
+            ((0, 3), (1, 3), (2, 3)),
         )
         before_files = self.artifact_snapshot()
         before_git = self.session_git_snapshot()

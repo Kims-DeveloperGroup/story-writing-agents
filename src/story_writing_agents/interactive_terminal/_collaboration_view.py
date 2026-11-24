@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ..document_plan import DocumentPlanView, DocumentNodeState
+from ..conversations.event_contracts.synchronization import SynchronizationPayload
 
 from ..review_contracts import LeadPreliminaryReview
 from ..specialist_routing import SpecialistStagePlan
@@ -42,6 +43,7 @@ from ..conversations import (
     ArtifactApplicationRequestPayload,
     ArtifactApplicationResultPayload,
     ArtifactProposalStatePayload,
+    ArtifactProposalState,
     ArtifactReviewCandidatePayload,
     ArtifactReviewedProposal,
     ArtifactReviewFailurePayload,
@@ -731,6 +733,9 @@ def project_lead_turn_result(
         items.append(
             Field("Artifact proposal", result.artifact_proposal.state.value)
         )
+    if (result.artifact_proposal is not None
+            and result.artifact_proposal.state is ArtifactProposalState.AWAITING_CONSULTATION_CONFIRMATION):
+        items.append(Field("Semantic impact review", "Other core documents and potentially related manuscripts"))
     if result.artifact_application_request is not None:
         items.extend(
             _payload_items(result.artifact_application_request, {}, {}, {})
@@ -1474,6 +1479,22 @@ def _payload_items(
             Field("Git index", "not staged"),
             Notice("Artifact application is separate from Git staging and commit.", label="boundary"),
         )
+    if type(payload) is SynchronizationPayload:
+        if payload.read_evidence is not None:
+            return (Field("Synchronization READ evidence", str(len(payload.read_evidence.receipts))),)
+        assessment = payload.assessment
+        if assessment is not None:
+            return (
+                Field("Synchronization", "projected" if assessment.basis.projected else "current evidence"),
+                Field("Changed paths", _joined(assessment.census.changes)),
+                *(Field("Blocker", reason) for reason in assessment.blockers),
+            )
+        return (
+            Field("Obligation", payload.transition.obligation_id),
+            Field("Version", str(payload.transition.version)),
+            *(Field(state.condition.target_path, f"{state.status.value}: {state.reason}")
+              for state in payload.transition.conditions),
+        )
     if type(payload) is StoryCommitRequestPayload:
         return (
             Field("Artifact state", "applied"),
@@ -2152,6 +2173,9 @@ def _document_plan_items(view: DocumentPlanView) -> tuple:
     node = by_id[next_row.node_id]
     required = tuple(dict.fromkeys(text for row in view.nodes for text in row.required_inputs))
     blockers = tuple(dict.fromkeys(text for row in view.nodes for text in row.blocking_conditions))
+    synchronization = tuple(dict.fromkeys(
+        state for row in view.nodes for state in row.synchronization_conditions
+    ))
     return (Section("Document work plan", (
         Notice("Planning and provisional input are separate from final review, Apply and Commit authority."),
         Field("Original goal", view.goal_text or plan.goal_objective_id or plan.planning_goal.user_event_id),
@@ -2165,6 +2189,9 @@ def _document_plan_items(view: DocumentPlanView) -> tuple:
         Field("Target decision", "Exact manuscript target still required; original goal is incomplete."
               if plan.unresolved_target else "Exact active targets retained"),
         Field("Blocking conditions", _joined(blockers)),
+        *(Field("Synchronization", f"{state.condition.target_path}: {state.status.value}. "
+                f"{state.condition.domain.value}: {state.condition.action}. {state.condition.resolution}")
+          for state in synchronization),
         Field("Next recommended work", f"{node.target_path}: {next_row.next_action.value}"),
         Field("Required input / decisions", _joined(required) if required else _joined(next_row.blocking_conditions)),
         Field("Responsible participants", _joined(tuple(f"{agent}: {mode.value}" for agent, mode in node.scope_rule.assignment_modes))),
