@@ -416,7 +416,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
         self.assertEqual(len(modules), 445)
-        self.assertEqual(len(edges), 2828)
+        self.assertEqual(len(edges), 2831)
         assessment_owner = "story_writing_agents.synchronization_assessment"
         obligations_owner = "story_writing_agents.synchronization_obligations"
         semantic_dependencies = {

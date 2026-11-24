@@ -10,9 +10,8 @@ from ..conversations.event_contracts.artifact_apply import (
     ConditionalArtifactApplicationIssue,
 )
 from ..conversations.event_contracts.artifact_reviews import ArtifactReviewedProposal
-from ..conversations.event_contracts.execution import CollaborationSpecialistReplyPayload
-from ..conversations.event_vocabulary import CollaborationSpecialistAssessment
 from ..conversations.events import CollaborationEvent
+from ..conversations.reducers.story_commit_review_coverage import conditional_reviews_are_covered
 from ..conversations.reducers.synchronization_history import SynchronizationHistory
 from ..conversations.reducers.synchronization_repair_history import (
     has_blocking_applied_synchronization,
@@ -37,11 +36,6 @@ _UNVERIFIED_FINDINGS = frozenset({
     SynchronizationJudgment.MISSING,
     SynchronizationJudgment.UNDECIDED,
 })
-_NONBLOCKING_REVIEW = frozenset({
-    CollaborationSpecialistAssessment.SUPPORTS,
-    CollaborationSpecialistAssessment.CONSTRAINTS_ASSESSED,
-    CollaborationSpecialistAssessment.ALTERNATIVES_ASSESSED,
-})
 
 
 class SynchronizationApplyBlocked(ValueError):
@@ -54,38 +48,6 @@ def require_previous_write_outcomes(
     """Block a new write when the same session still has an uncertain one."""
     if has_unsettled_synchronization_write(events, active_application_decision=active_apply):
         raise SynchronizationApplyBlocked("Inspect or recover the previous write outcome before applying changes.")
-
-
-def _require_exact_conditional_reviews(
-    reviewed: ArtifactReviewedProposal,
-    events: tuple[CollaborationEvent, ...],
-    repair_findings: tuple[SynchronizationFinding, ...],
-) -> None:
-    cited = {
-        finding.review.event_id for finding in repair_findings
-        if finding.review is not None and finding.review.conversation_id == reviewed.conversation_id
-    }
-    replies = {
-        event.event_id: event.payload for event in events
-        if event.conversation_id == reviewed.conversation_id
-        and type(event.payload) is CollaborationSpecialistReplyPayload
-    }
-    covered = set()
-    for reply in reviewed.reviews:
-        if reply.assessment in _NONBLOCKING_REVIEW:
-            continue
-        source = replies.get(reply.reply_event_id)
-        if (
-            source is None or reply.reply_event_id not in cited
-            or source.assessment is not reply.assessment or source.assignment_id != reply.assignment_id
-            or reply.assessment not in {
-                CollaborationSpecialistAssessment.CONCERN, CollaborationSpecialistAssessment.CONFLICT,
-            }
-        ):
-            raise SynchronizationApplyBlocked("The final specialist review has unresolved inputs outside the disclosed synchronization issues.")
-        covered.update(source.input_ids)
-    if covered != set(reviewed.unresolved_input_ids):
-        raise SynchronizationApplyBlocked("The final specialist review has unresolved inputs outside the disclosed synchronization issues.")
 
 
 def _known_condition(
@@ -216,9 +178,10 @@ def qualify_synchronization_apply(
         _require_related_repair(current_history, events, assessment_ref, assessment, active_apply)
     if {finding.pair for finding in repairs} != detected_pairs:
         raise SynchronizationApplyBlocked("A reviewed synchronization discrepancy lacks its exact outstanding obligation.")
+    if not conditional_reviews_are_covered(reviewed, events, repairs):
+        raise SynchronizationApplyBlocked("The final specialist review has unresolved inputs outside the disclosed synchronization issues.")
     if not disclosed:
         return assessment, None
-    _require_exact_conditional_reviews(reviewed, events, repairs)
     return assessment, ConditionalArtifactApplication(
         assessment_ref, tuple(sorted(disclosed, key=lambda issue: issue.condition.condition_id)),
     )

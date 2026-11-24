@@ -18,6 +18,7 @@ from unittest import mock
 from story_writing_agents import StoryRuntime
 from story_writing_agents.agents import EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR, PLOT_ARCHITECT
 from story_writing_agents.conversations import (
+    CollaborationSpecialistAssessment,
     ArtifactApplicationDecision, ArtifactApplicationDecisionKind,
     ArtifactApplicationNextAction, ArtifactApplicationOutcomeKind,
     ArtifactApplicationResultPayload, CollaborationConfirmationDecision, CollaborationNextAction,
@@ -168,12 +169,13 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         self.workspace.path(ARTIFACT_FIXTURE_RULES_PATH).write_text("Use omniscient narration.\n", encoding="utf-8")
         self._commit_fixture_baseline("Seed exact synchronization baseline")
 
-    async def _reviewed_discrepancy(self, subject: str, *, unread=False):
+    async def _reviewed_discrepancy(self, subject: str, *, unread=False, concern=False):
         return await seed_reviewed_artifact(
             self, self.conversation(subject), (("replace", ARTIFACT_FIXTURE_RULES_PATH, _REVISED_RULE),),
             extra_core_evidence=(_OUTLINE, _PART_OUTLINES, _CHARACTERS, _OPENING),
             discrepancy_pair=(ARTIFACT_FIXTURE_RULES_PATH, _OUTLINE),
             unread_pair=(ARTIFACT_FIXTURE_RULES_PATH, _CHARACTERS) if unread else None,
+            concern_specialist=PLOT_ARCHITECT if concern else None,
         )
 
     async def _assert_read_only_repair_can_reprepare(self) -> None:
@@ -304,7 +306,7 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         self,
     ) -> None:
         self._seed_synchronization_baseline()
-        turn = await self._reviewed_discrepancy("Free-form conditional approval")
+        turn = await self._reviewed_discrepancy("Free-form conditional approval", concern=True)
         request = turn.artifact_application_request
         assert request is not None
         before = self.artifact_snapshot()
@@ -357,6 +359,10 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         conditional = request.conditional
         self.assertIsNotNone(conditional, turn.message)
         issue, = conditional.issues
+        concerns = [review for review in request.reviewed_proposal.reviews
+                    if review.assessment is CollaborationSpecialistAssessment.CONCERN]
+        self.assertEqual(len(concerns), 1)
+        self.assertTrue(request.reviewed_proposal.unresolved_input_ids)
         self.assertEqual((issue.condition.changed_path, issue.condition.target_path), (ARTIFACT_FIXTURE_RULES_PATH, _OUTLINE))
         self.assertIs(issue.status, SynchronizationStatus.OPEN)
         self.assertTrue(issue.condition.discrepancy and issue.condition.action and issue.condition.resolution)
@@ -513,6 +519,10 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         commit = repaired.commit_request
         self.assertIsNotNone(commit, repaired.message)
         self.assertEqual(commit.candidate.application_ids, (applied.outcome.application_id, repaired.outcome.application_id))
+        self._assert_sibling_repair_links(
+            restarted, selection, repaired.outcome.application_id,
+            request.application_request.change_set.base_state_digest, repair_assessment.census.documents,
+        )
         result = await restarted.decide_story_commit(StoryCommitDecisionRequest(
             session_id=self.session_id, conversation_id=reviewed.conversation_id, step_id=reviewed.step_id,
             confirmation_request_id=commit.confirmation_request_id,
@@ -527,6 +537,29 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         read_case.setUp()
         self.addCleanup(read_case.doCleanups)
         await read_case._assert_read_only_repair_can_reprepare()
+
+    def _assert_sibling_repair_links(self, runtime, selection, application_id, baseline_digest, documents):
+        from story_writing_agents.conversations.reducers.story_commit_history import (
+            _linked_work, qualify_story_commit_history,
+        )
+        from story_writing_agents.synchronization_obligations import SynchronizationObligations
+
+        qualified = qualify_story_commit_history(
+            self.session_id, runtime.capture_editorial_snapshot(self.session_id).events(),
+            application_id=application_id, baseline_state_digest=baseline_digest, current_documents=documents,
+        )
+        self.assertEqual(qualified.blockers, ())
+        original, repair = qualified.applications
+        self.assertIsNone(original.repair_selection)
+        self.assertEqual(repair.repair_selection, selection)
+        second_selection = replace(selection, condition_id="other_condition", repair_path=_CHARACTERS)
+        distinct_basis = replace(repair.actual.basis, task_id="other_repair_task", request=original.actual.basis.request)
+        second_repair = replace(repair, repair_selection=second_selection, actual=replace(repair.actual, basis=distinct_basis))
+        self.assertNotEqual(repair.actual.basis.request, second_repair.actual.basis.request)
+        obligations = SynchronizationObligations(())
+        self.assertTrue(_linked_work(repair, second_repair, obligations, {}))
+        unlinked = replace(second_repair, repair_selection=replace(second_selection, application=repair.decision_ref))
+        self.assertFalse(_linked_work(repair, unlinked, obligations, {}))
 
     async def test_reject_and_revise_are_structured_zero_write_terminals(self) -> None:
         for kind, expected, revision in (
@@ -729,6 +762,13 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         self.addCleanup(pending_case.doCleanups)
         pending_case._seed_synchronization_baseline()
         pending_before, pending_git = pending_case.artifact_snapshot(), pending_case.git_snapshot()
+        ordinary_concern = await seed_reviewed_artifact(
+            pending_case, pending_case.conversation("Ordinary unsupported concern"),
+            (("replace", ARTIFACT_FIXTURE_RULES_PATH, _REVISED_RULE),),
+            extra_core_evidence=(_OUTLINE, _PART_OUTLINES, _CHARACTERS, _OPENING),
+            concern_specialist=PLOT_ARCHITECT,
+        )
+        self.assertIsNone(ordinary_concern.artifact_application_request)
         pending_turn = await seed_reviewed_artifact(
             pending_case, pending_case.conversation("Keep ordinary approval unanswered"),
             (("replace", ARTIFACT_FIXTURE_RULES_PATH, _REVISED_RULE),),

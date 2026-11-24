@@ -8,6 +8,7 @@ from ...lead_task_transitions import LeadTaskAction
 from ...synchronization_assessment import (
     SynchronizationAssessment,
     SynchronizationEventRef,
+    SynchronizationFinding,
     SynchronizationJudgment,
 )
 from ...synchronization_obligations import (
@@ -479,7 +480,7 @@ def has_verified_synchronization_review_after(
 
 def _resolved_conditions(
     obligations: SynchronizationObligations,
-    assessments: dict[SynchronizationEventRef, SynchronizationAssessment] | None = None,
+    assessments: dict[SynchronizationEventRef, SynchronizationAssessment],
 ) -> frozenset[SynchronizationCondition]:
     forked = obligations.forked_conditions
     closed: set[SynchronizationCondition] = set()
@@ -488,43 +489,38 @@ def _resolved_conditions(
             condition, judgment = state.condition, _RESOLVED_REPAIR.get(state.status)
             if condition.condition_id in forked or judgment is None or state.evidence is None:
                 continue
-            proof = None if assessments is None else assessments.get(state.evidence)
-            if assessments is None or (
-                proof is not None and not proof.basis.projected and any(
-                    finding.judgment is judgment and finding.domain is condition.domain
-                    and set(finding.pair) == {condition.changed_path, condition.target_path}
-                    and condition.condition_id in finding.resolves
-                    for finding in proof.findings
-                )
+            proof = assessments.get(state.evidence)
+            if proof is not None and not proof.basis.projected and any(
+                finding.judgment is judgment and finding.domain is condition.domain
+                and set(finding.pair) == {condition.changed_path, condition.target_path}
+                and condition.condition_id in finding.resolves
+                for finding in proof.findings
             ):
                 closed.add(condition)
     return frozenset(closed)
 
 
-def discharged_conditional_blockers(
+def resolved_conditional_findings(
     request: CollaborationEvent,
     projected_ref: SynchronizationEventRef,
     assessment: SynchronizationAssessment,
     obligations: SynchronizationObligations,
+    assessments: dict[SynchronizationEventRef, SynchronizationAssessment],
     events: _EventIndex,
-) -> tuple[str, ...] | None:
-    """Remove only historically disclosed discrepancy rows with exact current resolution."""
+) -> tuple[SynchronizationFinding, ...] | None:
+    """Find historically disclosed discrepancies with exact current resolution."""
 
     issues = _disclosed_issues(request, projected_ref, events)
     if issues is None:
         return None
-    closed = _resolved_conditions(obligations)
-    if any(issue.condition not in closed for issue in issues):
-        return ()
-    return tuple(
-        f"{finding.changed_path} → {finding.target_path}: {finding.judgment.value}"
-        for finding in assessment.findings
-        if finding.judgment is SynchronizationJudgment.NEEDS_CHANGE
-        and any(
-            issue.condition.detected_by == projected_ref
-            and issue.condition == SynchronizationCondition.from_finding(
-                issue.condition.condition_id, projected_ref, finding,
-            )
-            for issue in issues
-        )
-    )
+    disclosed = {issue.condition for issue in issues}
+    matching = {
+        finding: condition
+        for finding in assessment.findings if finding.judgment is SynchronizationJudgment.NEEDS_CHANGE
+        for condition in disclosed
+        if condition == SynchronizationCondition.from_finding(condition.condition_id, projected_ref, finding)
+    }
+    if set(matching.values()) != disclosed:
+        return None
+    closed = _resolved_conditions(obligations, assessments)
+    return tuple(finding for finding, condition in matching.items() if condition in closed)

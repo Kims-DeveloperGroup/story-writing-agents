@@ -1735,7 +1735,7 @@ assert tuple(relationship_policy.__all__) == tuple(sys.argv[2].split(','))
 
         modules, edges = module_graph(_SOURCE_ROOT, runtime_nodes=runtime_nodes)
         self.assertEqual(len(modules), 445)
-        self.assertEqual(len(edges), 2828)
+        self.assertEqual(len(edges), 2831)
         relationship_name = "story_writing_agents.writing_artifacts.relationship_policy"
         lead = 'story_writing_agents.lead_provider_contracts'
         self.assertIn((lead, 'story_writing_agents.writing_artifacts.change_sets'), edges)

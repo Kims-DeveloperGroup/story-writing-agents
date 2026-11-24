@@ -39,10 +39,14 @@ from ..events import (
     CollaborationProposal,
     synchronization_event_ref,
 )
-from .story_commit_review_coverage import StoryCommitReviewCoverage, qualify_story_commit_documents
+from .story_commit_review_coverage import (
+    StoryCommitReviewCoverage,
+    conditional_reviews_are_covered,
+    qualify_story_commit_documents,
+)
 from .synchronization_history import project_synchronization_history
 from .synchronization_repair_history import (
-    discharged_conditional_blockers,
+    resolved_conditional_findings,
     recorded_synchronization_repair_condition,
     synchronization_repair_selection_for_task,
 )
@@ -211,7 +215,7 @@ def _applied_evidence(
         != (reviewed.conversation_id, reviewed.synthesis_event_id)
         or (actual.basis.task_id, actual.basis.task_revision) != (review.task_id, review.task_revision)
         or not set(reviewed.mandatory_specialist_ids).issubset(review.reviewer_ids)
-        or reviewed.unresolved_input_ids
+        or (reviewed.unresolved_input_ids and request.conditional is None)
     ):
         return f"{name}: exact final specialist review, source, or USER conditions are missing or changed."
     selection = synchronization_repair_selection_for_task(
@@ -228,6 +232,7 @@ def _applied_evidence(
         synchronization_event_ref(decision_event), result_ref, projected_ref, actual_ref,
         projected_assessment, actual, synchronization_event_ref(consultation_event),
         consultation_event.payload,
+        repair_selection=selection,
     )
 
 
@@ -494,18 +499,25 @@ def qualify_story_commit_history(
             scope = event.payload.authoring_scope
             if scope is not None and scope.task_id in revisions and scope.task_revision > revisions[scope.task_id]:
                 blockers.append(f"Task {scope.task_id}: verify the advanced task revision before committing.")
+        assessments = dict(synchronization.assessments)
         for item in applications:
-            discharged: tuple[str, ...] | None = ()
+            resolved = ()
             if item.request.conditional is not None:
-                discharged = discharged_conditional_blockers(
+                resolved = resolved_conditional_findings(
                     index[(item.request_ref.conversation_id, item.request_ref.event_id)],
-                    item.projected_ref, item.actual, coverage.obligations, index,
+                    item.projected_ref, item.actual, coverage.obligations, assessments, index,
                 )
-                if discharged is None:
+                if resolved is None:
                     blockers.append(f"Apply {item.application_id}: exact conditional disclosure is unavailable.")
+                elif not conditional_reviews_are_covered(item.request.reviewed_proposal, events, resolved):
+                    blockers.append(f"Apply {item.application_id}: final specialist concerns lack exact current resolution.")
+            discharged = {
+                f"{finding.changed_path} → {finding.target_path}: {finding.judgment.value}"
+                for finding in resolved or ()
+            }
             blockers.extend(
                 f"Apply {item.application_id}: {reason}"
-                for reason in item.actual.blockers if reason not in (discharged or ())
+                for reason in item.actual.blockers if reason not in discharged
             )
         ids = {item.application_id for item in applications}
         state_digests = {

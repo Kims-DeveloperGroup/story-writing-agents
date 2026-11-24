@@ -7,10 +7,15 @@ from ...synchronization_assessment import (
     SynchronizationAssessment,
     SynchronizationDocument,
     SynchronizationEventRef,
+    SynchronizationFinding,
     SynchronizationJudgment,
 )
 from ...synchronization_obligations import SynchronizationObligations
 from ...writing_artifacts.change_sets import ArtifactChangeSet, ArtifactRenameOperation
+from ..event_contracts.artifact_reviews import ArtifactReviewedProposal
+from ..event_contracts.execution import CollaborationSpecialistReplyPayload
+from ..event_vocabulary import CollaborationSpecialistAssessment
+from ..events import CollaborationEvent, synchronization_event_ref
 from .synchronization_history import SynchronizationHistory
 
 
@@ -37,6 +42,57 @@ _REVIEWED = {
     SynchronizationJudgment.NO_CHANGE,
     SynchronizationJudgment.NOT_APPLICABLE,
 }
+
+
+_REVIEW_WITHOUT_DISCREPANCY = frozenset({
+    CollaborationSpecialistAssessment.SUPPORTS,
+    CollaborationSpecialistAssessment.CONSTRAINTS_ASSESSED,
+    CollaborationSpecialistAssessment.ALTERNATIVES_ASSESSED,
+})
+_DISCREPANCY_REVIEWS = frozenset({
+    CollaborationSpecialistAssessment.CONCERN,
+    CollaborationSpecialistAssessment.CONFLICT,
+})
+
+
+def conditional_reviews_are_covered(
+    reviewed: ArtifactReviewedProposal,
+    events: tuple[CollaborationEvent, ...],
+    findings: tuple[SynchronizationFinding, ...],
+) -> bool:
+    """Allow only exact specialist concerns covered by the supplied known discrepancies."""
+
+    cited = {
+        finding.review for finding in findings
+        if finding.judgment is SynchronizationJudgment.NEEDS_CHANGE and finding.review is not None
+    }
+    replies = {
+        event.event_id: event for event in events
+        if event.conversation_id == reviewed.conversation_id
+        and type(event.payload) is CollaborationSpecialistReplyPayload
+    }
+    proposal = (
+        reviewed.consultation_proposal_id, reviewed.consultation_proposal_revision,
+        reviewed.consultation_proposal_digest,
+    )
+    covered: set[str] = set()
+    for reply in reviewed.reviews:
+        if reply.assessment in _REVIEW_WITHOUT_DISCREPANCY:
+            continue
+        event = replies.get(reply.reply_event_id)
+        if event is None or synchronization_event_ref(event) not in cited:
+            return False
+        source = event.payload
+        if (
+            reply.assessment not in _DISCREPANCY_REVIEWS
+            or source.assessment is not reply.assessment
+            or source.assignment_id != reply.assignment_id
+            or event.sender.agent_id != reply.specialist_id
+            or (source.proposal_id, source.proposal_revision, source.proposal_digest) != proposal
+        ):
+            return False
+        covered.update(source.input_ids)
+    return covered == set(reviewed.unresolved_input_ids)
 
 
 def _document_matches(
