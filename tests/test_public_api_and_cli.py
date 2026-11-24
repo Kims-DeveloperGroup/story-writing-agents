@@ -2801,6 +2801,9 @@ class CliTests(unittest.TestCase):
                 resolve_workspace.assert_not_called()
 
     def test_changed_cli_callables_have_specification_docstrings(self) -> None:
+        from story_writing_agents.cli_parser import build_parser as owned_build_parser
+
+        self.assertIs(cli_module.build_parser, owned_build_parser)
         names = (
             "build_parser",
             "_parse_backend_overrides",

@@ -57,8 +57,8 @@ CLI / interactive shell
 
 ### Public facade, entry points, and operational commands
 
-Responsibility: expose APIs and CLI context through `__init__`, `__main__`, `cli`, `cli_context`, and provider-free `smoke`.
-CLI adapters compose runtime, storage, interactive, and workspace facades; those owners never depend on CLI adapters.
+Responsibility: expose APIs and CLI context through `__init__`, `__main__`, `cli`, `cli_parser`, `cli_context`, and provider-free `smoke`.
+CLI adapters compose runtime, storage, interactive, and workspace facades; those owners never depend on CLI adapters. `cli_parser` owns argument grammar without dispatch. `cli.build_parser` remains its existing import path.
 Standalone stdlib-only `tools/evaluate_lead_editorial.py` owns bounded offline capture validation, deterministic blinding, blinded participant grading with packet-bound reviews,
 and descriptive paired reports without runtime imports, provider execution, or workflow authority.
 
@@ -250,8 +250,9 @@ exchange, lead, session, and runtime concerns in focused private policy modules.
 - `interactive_controller`, `interactive_controller._core`
 - `interactive_controller._conversation_policy`, `interactive_controller._exchange_policy`
 - `interactive_controller._exchange_projection`, `interactive_controller._exchange_viewer`, `interactive_controller._lead_policy`
-- `interactive_controller._runtime_policy`, `interactive_controller._session_policy`
+- `interactive_controller._runtime_policy`, `interactive_controller._session_policy`, `interactive_controller._settings_projection`
 
+`_settings_projection` derives current and pending settings rows and effective provider labels. The controller owns edits, confirmation, and saves.
 Only `_core` composes the private policies. Other subsystems must not import those policies;
 the controller may depend on runtime/storage/terminal facades, never the reverse.
 The existing `_lead_policy` to `interactive_terminal._collaboration_view` and `_exchange_viewer` to `interactive_terminal._external_view` imports are narrow presentation bridges. `_exchange_projection` derives pure Story facts from exact source lines and typed history without authority re-evaluation; the lazy `_exchange_viewer` alone maps bounded inert descriptors to the pinned four-export generic viewer. `_core` owns history reads and terminal preparation; metadata overflow retains the whole raw source. Transcript paging preserves immutable store snapshots and raw event-sequence anchors.

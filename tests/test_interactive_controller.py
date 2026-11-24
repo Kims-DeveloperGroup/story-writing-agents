@@ -137,6 +137,9 @@ from story_writing_agents.workspace import (
 from tests.collaboration_contract_fixture import STEP_ID, contract_batches, make_proposal, measured_batch, make_batch, make_draft, store_batch, RUNTIME, USER, LEAD
 from tests.helpers import pristine_initialized_workspace
 from story_writing_agents.core_document_readiness import CoreDocumentReadinessNeeded
+from tests.interactive_controller_settings_projection_contract import (
+    verify_settings_panel_omits_empty_diff_sections,
+)
 
 
 _SESSION_DIRECTORY = "agent_states/orchestrator_state/provider_sessions"
@@ -1449,6 +1452,7 @@ class ControllerContractTests(ControllerTestCase):
                 "interactive_controller._lead_policy",
                 "interactive_controller._runtime_policy",
                 "interactive_controller._session_policy",
+                "interactive_controller._settings_projection",
                 "interactive_terminal",
                 "lead_exploration",
                 "orchestrator",
@@ -1748,8 +1752,8 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 424)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 2498)
+        self.assertEqual(len(modules), 426)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 2503)
         self.assertTrue(
             {
                 "story_writing_agents.artifact_proposals",
@@ -2230,39 +2234,9 @@ class ControllerSettingsTests(ControllerTestCase):
                     ],
                 )
 
-    def test_settings_panel_omits_empty_diff_sections(self) -> None:
-        workspace = self.make_workspace()
-        state = settings_module.load_settings_state(workspace)
-        self.assertEqual(
-            InteractiveController._settings_panel(state),
-            terminal_module.Panel(
-                "Settings",
-                (
-                    terminal_module.Notice(
-                        "No pending settings changes.",
-                        label="no changes",
-                        role=terminal_module.SemanticRole.MUTED,
-                    ),
-                ),
-                state=terminal_module.ViewState.OPEN,
-            ),
-        )
-
-        changed = settings_module.update_agent_codex_model(
-            state,
-            PLOT_ARCHITECT,
-            "codex-model",
-        )
-        changed = settings_module.update_agent_antigravity_model(
-            changed,
-            PLOT_ARCHITECT,
-            "agy-model",
-        )
-        panel = InteractiveController._settings_panel(changed)
-        self.assertEqual(panel, self.expected_panel(changed))
-        rendered = render_plain(panel, width=120).text
-        self.assertIn("Plot & Structure Architect Codex model", rendered)
-        self.assertIn('Plot & Structure Architect Antigravity model', rendered)
+    test_settings_panel_omits_empty_diff_sections = (
+        verify_settings_panel_omits_empty_diff_sections
+    )
 
     def test_top_level_pending_notice_tracks_actual_diff_and_full_revert(
         self,

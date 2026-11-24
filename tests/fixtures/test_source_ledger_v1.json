@@ -23,6 +23,7 @@
     "tests/conversation_retrieval_wire_fixture.py",
     "tests/feedback_probe.py",
     "tests/id_moves.py",
+    "tests/interactive_controller_settings_projection_contract.py",
     "tests/known_result_finalization_fixture.py",
     "tests/lead_fixtures/__init__.py",
     "tests/lead_fixtures/artifact_review.py",
@@ -4846,6 +4847,86 @@
         "tests/test_workspace_session_history.py": 0,
         "tests/test_suite_budget.py": 3,
         "tests/agent_context/contracts/validation_findings_contract.py": 37
+      },
+      "counting": "ordinary tests + registered support + 1550 legacy"
+    },
+    {
+      "issue": 976,
+      "origin_commit": "4e52c075cef1299dc1d14d6ed7667acf84f46d45",
+      "origins": [
+        {
+          "source": "tests/test_artifact_application_contracts.py",
+          "sha256": "7ae9b0eeb7de4e0451ff12b1947bf7483b78544d18ffd8eff89208e0eabe043e"
+        },
+        {
+          "source": "tests/test_artifact_application_store_recovery.py",
+          "sha256": "946d8ed85e3b9f0f4cb142085b0ed44b21101cb0ade9b60c73452ac660261a60"
+        },
+        {
+          "source": "tests/test_artifact_relationship_policy.py",
+          "sha256": "1078d84e222a82fdd3baac111111526600b8c69cee324024fd2b22b8a9ddf13b"
+        },
+        {
+          "source": "tests/test_git_external_operation_inspection.py",
+          "sha256": "88e84d96703d266c55aba8954fab4be2ed7e5123f6dee573f37c3e8edec78af8"
+        },
+        {
+          "source": "tests/test_interactive_controller.py",
+          "sha256": "c2d8de0d0d015a0f642e70137f3337e2d4faf17f0236da33f8a2cf6f286f0c4c"
+        },
+        {
+          "source": "tests/test_public_api_and_cli.py",
+          "sha256": "77542661c553284f3293782f139819fa9324c62e0a56142c41adbd2a2f47d57d"
+        },
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "bb15915fecfbbd4a1df0dbbebdab4f54b716b6d0f1363eb09eaa3fb559bb12c5"
+        },
+        {
+          "source": "tests/test_session_lifecycle.py",
+          "sha256": "66b23c0e58e38aa555629b166b188c841c326e6ebb63f075257fd07d1a4257a6"
+        },
+        {
+          "source": "tests/test_session_recovery_contracts.py",
+          "sha256": "67013922efc2a8678e8b3497c6cdfd9455aff786f57f1da7f52f34d935d8522a"
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "e88f89e04ad4fa0090c45bf7c6cbdf5da283d2f6223396df035fdb32836cada4"
+        },
+        {
+          "source": "tests/test_workspace_session_history.py",
+          "sha256": "0c66831f1671afd0ae3e63e33e0e812d8648e0c5c6942f282366e34046fad6f1"
+        }
+      ],
+      "approved_source_delta": 28,
+      "planned_raw_delta": -10,
+      "planned_support_delta": 38,
+      "legacy_unresolved_lines": 1550,
+      "exact_source_pair": [
+        158560,
+        158588
+      ],
+      "original_caps_sha256": "20f8f0a9d510ad325f82fb32d14d7b3a73f372647aa85ed4cd0c60fc3d5124c6",
+      "expected_caps_sha256": "20f8f0a9d510ad325f82fb32d14d7b3a73f372647aa85ed4cd0c60fc3d5124c6",
+      "counted_support_paths": [
+        "tests/interactive_controller_settings_projection_contract.py"
+      ],
+      "excluded_monotonic_rule_ordinary": 1,
+      "excluded_monotonic_rule_physical": 1,
+      "cost_components": {
+        "tests/test_artifact_application_contracts.py": 0,
+        "tests/test_artifact_application_store_recovery.py": 0,
+        "tests/test_artifact_relationship_policy.py": 0,
+        "tests/test_git_external_operation_inspection.py": 0,
+        "tests/test_interactive_controller.py": -25,
+        "tests/test_public_api_and_cli.py": 2,
+        "tests/test_rag_module_and_packaging_boundary.py": 10,
+        "tests/test_session_lifecycle.py": 0,
+        "tests/test_session_recovery_contracts.py": 0,
+        "tests/test_workspace_session_history.py": 0,
+        "tests/test_suite_budget.py": 3,
+        "tests/interactive_controller_settings_projection_contract.py": 38
       },
       "counting": "ordinary tests + registered support + 1550 legacy"
     }
