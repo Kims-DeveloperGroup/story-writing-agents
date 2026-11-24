@@ -382,6 +382,7 @@ assert all(name not in package.__all__ for name in literal_owner.__all__)
                 "errors",
                 "workspace.core",
                 "sqlite_database",
+                "sqlite_row_codec",
                 "sqlite_search_index",
                 "composition",
                 "contracts",

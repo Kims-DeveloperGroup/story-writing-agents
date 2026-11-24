@@ -4641,6 +4641,10 @@
           "sha256": "829ffe6363ed0a6a0af53e8f62fd205e5df8eea3ef1aeaa3805f492909170258"
         },
         {
+          "source": "tests/test_sqlite_conversation_storage.py",
+          "sha256": "05ee2cd5c4e6665baac2f18bffcaabb0f46b63b3da60a5959c52bc45b15a4e5b"
+        },
+        {
           "source": "tests/test_suite_budget.py",
           "sha256": "545a31b84f955701936291f9439bc49bcce09e9b1d623ae24360a3be5ed829df"
         },
@@ -4649,13 +4653,13 @@
           "sha256": "1ff54cd6680b86a2a24dc5602c4acaf82a36028ed3c4ec39a7c867ada8464b90"
         }
       ],
-      "approved_source_delta": 26,
-      "planned_raw_delta": 26,
+      "approved_source_delta": 27,
+      "planned_raw_delta": 27,
       "planned_support_delta": 0,
       "legacy_unresolved_lines": 1550,
       "exact_source_pair": [
         158461,
-        158487
+        158488
       ],
       "original_caps_sha256": "20f8f0a9d510ad325f82fb32d14d7b3a73f372647aa85ed4cd0c60fc3d5124c6",
       "expected_caps_sha256": "20f8f0a9d510ad325f82fb32d14d7b3a73f372647aa85ed4cd0c60fc3d5124c6",
@@ -4672,6 +4676,7 @@
         "tests/test_rag_module_and_packaging_boundary.py": 21,
         "tests/test_session_lifecycle.py": 0,
         "tests/test_session_recovery_contracts.py": 0,
+        "tests/test_sqlite_conversation_storage.py": 1,
         "tests/test_suite_budget.py": 3,
         "tests/test_workspace_session_history.py": 0
       },
