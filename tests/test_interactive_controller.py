@@ -6766,7 +6766,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
 
     def test_pending_commit_redisclosure_reuses_exact_picker_without_apply(self):
         digest = "sha256:" + "a" * 64
-        request = SimpleNamespace(confirmation_request_id="pending-commit", application_result_event_id="applied-event", candidate=SimpleNamespace(candidate_id="b" * 64, branch="session-test", paths=(SimpleNamespace(path="manuscript/chapter.md"),), proposed_message="Apply reviewed candidate"), request_digest=digest)
+        request = SimpleNamespace(confirmation_request_id="pending-commit", application_result_event_id="applied-event", candidate=SimpleNamespace(candidate_id="b" * 64, branch="session-test", paths=(SimpleNamespace(path="manuscript/chapter.md"),), proposed_message="Apply reviewed candidate", qualification_digest=None, remaining_paths=()), request_digest=digest)
         turn = self._terminal_turn(CollaborationStepState.COMPLETED)
         object.__setattr__(turn, "next_action", CollaborationNextAction.SUBMIT_COMMIT_DECISION)
         object.__setattr__(turn, "story_commit_request", request)
@@ -6837,7 +6837,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
         commit_request = SimpleNamespace(
             confirmation_request_id="commit-confirmation",
             application_result_event_id="application-event",
-            candidate=SimpleNamespace(candidate_id=candidate_id, branch="session-test", paths=(SimpleNamespace(path="manuscript/part-01/chapter.md"),), proposed_message="Apply reviewed candidate"),
+            candidate=SimpleNamespace(candidate_id=candidate_id, branch="session-test", paths=(SimpleNamespace(path="manuscript/part-01/chapter.md"),), proposed_message="Apply reviewed candidate", qualification_digest=None, remaining_paths=()),
             request_digest=digest,
         )
         session = RuntimeSession.__new__(RuntimeSession)
