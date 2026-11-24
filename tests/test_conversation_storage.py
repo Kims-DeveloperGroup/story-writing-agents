@@ -1653,6 +1653,7 @@ class ConversationStorageBoundaryTests(unittest.TestCase):
             archive_module: {"conversations", "errors"},
             contracts_module: {"conversation_search", "conversations", "errors"},
             composition_module: {
+                "collaboration_history_search",
                 "conversation_search",
                 "workspace.core",
                 "filesystem",

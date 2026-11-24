@@ -1433,6 +1433,7 @@ class ControllerContractTests(ControllerTestCase):
                 "agents",
                 "backend",
                 "cli_context",
+                "collaboration_history",
                 "conversation_search",
                 "conversation_storage.contracts",
                 "conversation_storage.selection",

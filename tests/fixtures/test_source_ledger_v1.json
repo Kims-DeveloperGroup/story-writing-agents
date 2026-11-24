@@ -4480,13 +4480,13 @@
           "sha256": "b1a150949fba9960bf297a2d208e0bcb6ca31e5f5f1c2511c4741ffe730c5002"
         }
       ],
-      "approved_source_delta": 31,
-      "planned_raw_delta": 27,
+      "approved_source_delta": 33,
+      "planned_raw_delta": 29,
       "planned_support_delta": 4,
       "legacy_unresolved_lines": 1550,
       "exact_source_pair": [
         158347,
-        158378
+        158380
       ],
       "original_caps_sha256": "0fc8c5e140b56200643f090106395259da9ca23d1e90a0e64738c3bd3f5c5fbe",
       "expected_caps_sha256": "20f8f0a9d510ad325f82fb32d14d7b3a73f372647aa85ed4cd0c60fc3d5124c6",
@@ -4500,9 +4500,9 @@
         "tests/test_artifact_application_store_recovery.py": 0,
         "tests/test_artifact_relationship_policy.py": 0,
         "tests/test_conversation_search.py": -35,
-        "tests/test_conversation_storage.py": 0,
+        "tests/test_conversation_storage.py": 1,
         "tests/test_git_external_operation_inspection.py": 0,
-        "tests/test_interactive_controller.py": -2,
+        "tests/test_interactive_controller.py": -1,
         "tests/test_rag_module_and_packaging_boundary.py": 3,
         "tests/test_session_lifecycle.py": 0,
         "tests/test_session_recovery_contracts.py": 0,
