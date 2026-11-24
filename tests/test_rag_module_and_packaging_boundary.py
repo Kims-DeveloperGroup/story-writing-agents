@@ -415,8 +415,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 422)
-        self.assertEqual(len(edges), 2622)
+        self.assertEqual(len(modules), 423)
+        self.assertEqual(len(edges), 2625)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -766,10 +766,18 @@ class RagModuleBoundaryTests(unittest.TestCase):
                     'story_writing_agents.provider_context_invocation',
                     'story_writing_agents.lead_preparation.reply_contract_values',
                     'story_writing_agents.lead_provider_contracts',
+                    'story_writing_agents.lead_schema_choice_compilation',
                     'story_writing_agents.orchestrator',
                     'story_writing_agents.conversation_retrieval_wire',
                     'story_writing_agents.provider_direct_call_wire',
                 },
+            ),
+            "story_writing_agents.lead_schema_choice_compilation": (
+                {
+                    "story_writing_agents.provider_schema_projection",
+                    "story_writing_agents.structured_output_validation",
+                },
+                {"story_writing_agents.lead_provider_contracts"},
             ),
         }
         for owner, model, sources in (
@@ -3682,6 +3690,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             'story_writing_agents/provider_message_catalog.py',
             'story_writing_agents/provider_request_mapping.py',
             'story_writing_agents/provider_response_mapping.py',
+            'story_writing_agents/lead_schema_choice_compilation.py',
             'story_writing_agents/provider_schema_projection.py',
             "story_writing_agents/lead_preparation/recommendation_preparation.py",
             "story_writing_agents/lead_preparation/recommendation_requests.py",

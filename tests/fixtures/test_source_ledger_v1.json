@@ -30,6 +30,7 @@
     "tests/lead_fixtures/provider_responses.py",
     "tests/lead_fixtures/runtime_setup.py",
     "tests/lead_fixtures/specialist_routing.py",
+    "tests/lead_preparation/schema_choice_factory_contract.py",
     "tests/module_graph_fixture.py",
     "tests/provider_response_contract_fixture.py",
     "tests/provider_session_lifecycle_artifacts_fixture.py",
@@ -4679,6 +4680,91 @@
         "tests/test_sqlite_conversation_storage.py": 1,
         "tests/test_suite_budget.py": 3,
         "tests/test_workspace_session_history.py": 0
+      },
+      "counting": "ordinary tests + registered support + 1550 legacy"
+    },
+    {
+      "issue": 1034,
+      "origin_commit": "179b7d41951a400bf901213da7c8681b2efa8b4b",
+      "origins": [
+        {
+          "source": "tests/agent_context/contracts/test_result_validation.py",
+          "sha256": "0c76a9fbc92bc69b00b43d29f14b543742c50448b522aee1a329236f79d73f42"
+        },
+        {
+          "source": "tests/lead_preparation/test_response_rules.py",
+          "sha256": "9e629cc38ada85974cba24ddbd5fa8419fee79ceae765ec3f86f4d31f1de1b53"
+        },
+        {
+          "source": "tests/test_artifact_application_contracts.py",
+          "sha256": "5a35c6fd19b194a05b3ad8f121baa810e3e12f9765d404ca743162124594084e"
+        },
+        {
+          "source": "tests/test_artifact_application_store_recovery.py",
+          "sha256": "7bda596e21ea8dc21ae74ffbacd14da33289f7cf2d14331d8852bfdd3acecf65"
+        },
+        {
+          "source": "tests/test_artifact_relationship_policy.py",
+          "sha256": "4e1af7cd8d8b5776eedf463a5c833c73d56a92aaa3ce328b2e7631448d40878e"
+        },
+        {
+          "source": "tests/test_git_external_operation_inspection.py",
+          "sha256": "715b717bb19e06c1797b57d68998fa78162b9c0c36d51fa6ef1845006c38482d"
+        },
+        {
+          "source": "tests/test_interactive_controller.py",
+          "sha256": "bf12202b35c9a7e9b13eb3d652f55559069eb586c9d0101afa6830467fd9d504"
+        },
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "a86bc2d48d1cd2688d2887081883a7820a3878d854a8e37bde5c5da9da2b6d22"
+        },
+        {
+          "source": "tests/test_session_lifecycle.py",
+          "sha256": "d4a45b9ec90563c8b9ba43540857867fcc4bf54c6663104f0f06de1f584089a7"
+        },
+        {
+          "source": "tests/test_session_recovery_contracts.py",
+          "sha256": "30078569fff27d0c24ff474c7c4b2261fb96c18afae0a2074b3e906416093539"
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "13dba8d3a5ae1cba7b0111c786aafd1b95ee75d8302d97fe628a74fcc2d89cd8"
+        },
+        {
+          "source": "tests/test_workspace_session_history.py",
+          "sha256": "e1eb348ff7d3532953cbe29f418964f1fda7ddeafb16ff24c584959a0d4eef37"
+        }
+      ],
+      "approved_source_delta": 25,
+      "planned_raw_delta": -20,
+      "planned_support_delta": 45,
+      "legacy_unresolved_lines": 1550,
+      "exact_source_pair": [
+        158488,
+        158513
+      ],
+      "original_caps_sha256": "20f8f0a9d510ad325f82fb32d14d7b3a73f372647aa85ed4cd0c60fc3d5124c6",
+      "expected_caps_sha256": "20f8f0a9d510ad325f82fb32d14d7b3a73f372647aa85ed4cd0c60fc3d5124c6",
+      "counted_support_paths": [
+        "tests/lead_preparation/schema_choice_factory_contract.py"
+      ],
+      "excluded_monotonic_rule_ordinary": 1,
+      "excluded_monotonic_rule_physical": 1,
+      "cost_components": {
+        "tests/agent_context/contracts/test_result_validation.py": 3,
+        "tests/lead_preparation/test_response_rules.py": -35,
+        "tests/test_artifact_application_contracts.py": 0,
+        "tests/test_artifact_application_store_recovery.py": 0,
+        "tests/test_artifact_relationship_policy.py": 0,
+        "tests/test_git_external_operation_inspection.py": 0,
+        "tests/test_interactive_controller.py": 0,
+        "tests/test_rag_module_and_packaging_boundary.py": 9,
+        "tests/test_session_lifecycle.py": 0,
+        "tests/test_session_recovery_contracts.py": 0,
+        "tests/test_workspace_session_history.py": 0,
+        "tests/test_suite_budget.py": 3,
+        "tests/lead_preparation/schema_choice_factory_contract.py": 45
       },
       "counting": "ordinary tests + registered support + 1550 legacy"
     }

@@ -285,7 +285,10 @@ class StructuredOutputValidationTests(unittest.TestCase):
         # End independent diagnostic oracles.
         from story_writing_agents.structured_output_validation import (
             SchemaRules, schema_rule_fingerprint as single, schema_rule_fingerprints as plural)
-        from story_writing_agents.lead_provider_contracts import _compile_closed_choices; import sys
+        import sys
+        from story_writing_agents.lead_schema_choice_compilation import (
+            compile_closed_lead_choices as _compile_closed_choices,
+        )
         leaf = {"type": "string", "enum": ["draft"]}
         graph = {"type": "integer", "enum": [1], "$defs": {"choice": leaf}}
         draft_id = hashlib.sha256(b'{"enum":["draft"],"type":"string"}').hexdigest()
