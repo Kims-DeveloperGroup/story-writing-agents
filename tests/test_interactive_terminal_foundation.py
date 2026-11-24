@@ -31,6 +31,11 @@ from story_writing_agents.interactive_terminal._core import _STARTUP_WELCOME_SEQ
 from story_writing_agents.interactive_terminal._driver import AdvisoryProgressError, RawTerminalDriver, detect_terminal_capabilities
 from story_writing_agents.interactive_terminal._model import CapabilityProfile, Choice, ComposerState, ControlOutcome, ControlOutcomeKind, Field, KeyEvent, KeyKind, LineInputState, ListView, MainInputControlState, MainInputHistoryState, Message, MessagePresentation, Notice, Panel, Picker, Prompt, Record, RenderedFrame, RenderedInputFrame, Section, SemanticRole, SpeakerAccent, StartupWelcome, StartupWelcomeStage, SuggestionPalette, TerminalCapabilities, ViewState, display_character_width
 from story_writing_agents.interactive_terminal._render import render_advisory_progress_frame, render_component, render_input_prompt, render_plain, render_startup_welcome_frame, strip_decorative_sgr
+from tests.terminal_startup_welcome_contract import (
+    capability,
+    physical_width,
+    verify_plain_stage_snapshots_are_exact_prefix_free_and_legible,
+)
 
 
 
@@ -319,31 +324,6 @@ def fake_os(
         environ=environment,
         get_terminal_size=get_terminal_size,
     )
-
-
-def capability(
-    profile: CapabilityProfile,
-    *,
-    width: int = 80,
-) -> TerminalCapabilities:
-    """Build one internally consistent render-capability value."""
-
-    raw = profile is not CapabilityProfile.LINE
-    return TerminalCapabilities(
-        profile,
-        width,
-        input_tty=raw,
-        output_tty=raw,
-        raw_mode=raw,
-        cursor_controls=raw,
-        decorative_sgr=profile is CapabilityProfile.ANSI,
-    )
-
-
-def physical_width(text: str) -> int:
-    """Measure sanitized unstyled text using the foundation cell rule."""
-
-    return sum(display_character_width(character) for character in text)
 
 
 class PublicCompatibilityFoundationTests(unittest.TestCase):
@@ -2630,43 +2610,9 @@ class StartupPresentationFoundationTests(unittest.TestCase):
                         80,
                     )
 
-    def test_plain_stage_snapshots_are_exact_prefix_free_and_legible(self) -> None:
-        """Lock every cumulative meaning in every responsive plain tier."""
-
-        for physical, expected_snapshots in self.PLAIN_STAGE_SNAPSHOTS.items():
-            capabilities = capability(CapabilityProfile.LINE, width=physical)
-            actual_snapshots: list[str] = []
-            for index, welcome in enumerate(_STARTUP_WELCOME_SEQUENCE):
-                with self.subTest(physical=physical, stage=welcome.stage.value):
-                    frame = self.render_startup_frame(
-                        index,
-                        capabilities,
-                        physical,
-                    )
-                    expected = expected_snapshots[index]
-                    self.assertEqual(frame.text, expected)
-                    self.assertEqual(frame.line_count, len(expected.split("\n")))
-                    actual_snapshots.append(frame.text)
-                    for label in self.FORBIDDEN_WELCOME_CHROME:
-                        self.assertNotIn(label, frame.text)
-                    self.assertNotRegex(frame.text, r"[-=]{20,}")
-            self.assertEqual(tuple(actual_snapshots), expected_snapshots)
-
-        final = self.render_startup_frame(
-            3,
-            capability(CapabilityProfile.LINE, width=80),
-            80,
-        )
-        self.assertEqual(final.text, self.WIDE_FINAL)
-        self.assertEqual(final.line_count, 9)
-        self.assertEqual(len(final.text.split("\n")), 9)
-        self.assertEqual(max(map(physical_width, final.text.split("\n"))), 44)
-        self.assertTrue(
-            all(
-                character == "\n" or 32 <= ord(character) <= 126
-                for character in final.text
-            )
-        )
+    test_plain_stage_snapshots_are_exact_prefix_free_and_legible = (
+        verify_plain_stage_snapshots_are_exact_prefix_free_and_legible
+    )
 
     def test_every_frame_and_tier_uses_fixed_colors_without_text_changes(
         self,
@@ -3304,6 +3250,11 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
         repository_root = Path(__file__).resolve().parents[1]
         package_root = repository_root / "src" / "story_writing_agents"
         terminal_root = package_root / "interactive_terminal"
+        from story_writing_agents.interactive_terminal._ansi import strip_decorative_sgr as strip_owned
+        from story_writing_agents.interactive_terminal._startup_welcome_render import render_startup_welcome_frame as render_owned
+
+        self.assertIs(strip_decorative_sgr, strip_owned)
+        self.assertIs(render_startup_welcome_frame, render_owned)
         expected_dependencies = {
             '__init__.py': {'._advisory_progress', '._core'},
             '_advisory_progress.py': {'..agent_context.actions', '..agent_context.progress', '..agent_context.contracts.events', '._progress_process'},
@@ -3319,7 +3270,9 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
             '_progress_process.py': set(),
             '_controls.py': {'._input_text', '._model'},
             '_input_text.py': {'._model'},
-            '_render.py': {'._metadata_text', '._advisory_progress', '._box', '._markdown', '._model'},
+            '_render.py': {'._metadata_text', '._advisory_progress', '._ansi', '._box', '._markdown', '._model', '._startup_welcome_render'},
+            '_startup_welcome_render.py': {'._ansi', '._model'},
+            '_ansi.py': set(),
             '_viewer_model.py': set(),
             '_pointer.py': set(),
             '_output_history.py': {'._box', '._controls', '._model', '._pointer', '._render', '._viewer_render'},
@@ -3347,7 +3300,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
                 if isinstance(node, ast.ImportFrom) and node.level
             }
             # Keep the frozen subtest count; each new dependency set is still checked exactly.
-            if filename in {"_metadata_text.py", "_box.py", "_markdown.py", "_response_usage.py", "_transcript_view.py", "_pointer.py", "_output_history.py", "_input_sources.py", "_input_sources_linux.py", "_input_sources_macos.py", "_input_text.py", "_progress_process.py"}:
+            if filename in {"_ansi.py", "_startup_welcome_render.py", "_metadata_text.py", "_box.py", "_markdown.py", "_response_usage.py", "_transcript_view.py", "_pointer.py", "_output_history.py", "_input_sources.py", "_input_sources_linux.py", "_input_sources_macos.py", "_input_text.py", "_progress_process.py"}:
                 self.assertEqual(dependencies, expected)
                 continue
             with self.subTest(filename=filename):

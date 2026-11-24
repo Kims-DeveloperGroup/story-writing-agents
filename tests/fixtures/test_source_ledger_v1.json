@@ -37,7 +37,8 @@
     "tests/provider_response_contract_fixture.py",
     "tests/provider_session_lifecycle_artifacts_fixture.py",
     "tests/recommendation_fixture.py",
-    "tests/terminal_input_fixture.py"
+    "tests/terminal_input_fixture.py",
+    "tests/terminal_startup_welcome_contract.py"
   ],
   "origins": {
     "test_git_external_operation_inspection.py": {
@@ -4927,6 +4928,86 @@
         "tests/test_workspace_session_history.py": 0,
         "tests/test_suite_budget.py": 3,
         "tests/interactive_controller_settings_projection_contract.py": 38
+      },
+      "counting": "ordinary tests + registered support + 1550 legacy"
+    },
+    {
+      "issue": 977,
+      "origin_commit": "a58e94f7ef21787c70664cb3e295297c55ef7b1c",
+      "origins": [
+        {
+          "source": "tests/test_artifact_application_contracts.py",
+          "sha256": "6a0d1bba402e3da22216f9c0e96bd5a3d191708c76144b8135125959cb6fe373"
+        },
+        {
+          "source": "tests/test_artifact_application_store_recovery.py",
+          "sha256": "e032cad5f497c2472a9953a40363983e8cecba7de9a4bc6274d0d276a1354821"
+        },
+        {
+          "source": "tests/test_artifact_relationship_policy.py",
+          "sha256": "0be7f4a3abc3771a92686d1c2c8cccabee6d5087ac55cda284f9809db87c1442"
+        },
+        {
+          "source": "tests/test_git_external_operation_inspection.py",
+          "sha256": "db8adad8233de6257ef3d209331a15a9c3aeceac8584359de2d6cfdc248e68f1"
+        },
+        {
+          "source": "tests/test_interactive_controller.py",
+          "sha256": "6de028a8331576fc57d84281f281cbeab6699796ed1c0945fdf4e11eca94d76a"
+        },
+        {
+          "source": "tests/test_interactive_terminal_foundation.py",
+          "sha256": "eddc8b2ef339c3199ba8648754ec148d3de620f96d88c37b3858764d2835af10"
+        },
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "08272dd886b94c9625b33504a9854f89f58de490a97b0f3da38dc1a1e7b87b26"
+        },
+        {
+          "source": "tests/test_session_lifecycle.py",
+          "sha256": "1914c7b1d5f3c5a5737896f79975a9b354f4f2b97854dcb821e5c71f2fe87637"
+        },
+        {
+          "source": "tests/test_session_recovery_contracts.py",
+          "sha256": "bbf6dbaf03b756d4f92f40b9830e5e679c6aded15a89efab83c8618d27b3d14e"
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "1a841ce59ed13b6f4f76040c0d178bc03bb10e1e3bdcb606b659c9ddec1e5282"
+        },
+        {
+          "source": "tests/test_workspace_session_history.py",
+          "sha256": "c5fc51d1c61e58c1e81f7bf26a6844510fc3b8c55750615dc3af35cf961a36da"
+        }
+      ],
+      "approved_source_delta": 35,
+      "planned_raw_delta": -27,
+      "planned_support_delta": 62,
+      "legacy_unresolved_lines": 1550,
+      "exact_source_pair": [
+        158588,
+        158623
+      ],
+      "original_caps_sha256": "20f8f0a9d510ad325f82fb32d14d7b3a73f372647aa85ed4cd0c60fc3d5124c6",
+      "expected_caps_sha256": "20f8f0a9d510ad325f82fb32d14d7b3a73f372647aa85ed4cd0c60fc3d5124c6",
+      "counted_support_paths": [
+        "tests/terminal_startup_welcome_contract.py"
+      ],
+      "excluded_monotonic_rule_ordinary": 1,
+      "excluded_monotonic_rule_physical": 1,
+      "cost_components": {
+        "tests/test_artifact_application_contracts.py": 0,
+        "tests/test_artifact_application_store_recovery.py": 0,
+        "tests/test_artifact_relationship_policy.py": 0,
+        "tests/test_git_external_operation_inspection.py": 0,
+        "tests/test_interactive_controller.py": 0,
+        "tests/test_interactive_terminal_foundation.py": -40,
+        "tests/test_rag_module_and_packaging_boundary.py": 10,
+        "tests/test_session_lifecycle.py": 0,
+        "tests/test_session_recovery_contracts.py": 0,
+        "tests/test_workspace_session_history.py": 0,
+        "tests/test_suite_budget.py": 3,
+        "tests/terminal_startup_welcome_contract.py": 62
       },
       "counting": "ordinary tests + registered support + 1550 legacy"
     }
