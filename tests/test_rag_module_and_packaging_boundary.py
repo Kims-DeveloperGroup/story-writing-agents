@@ -415,8 +415,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 441)
-        self.assertEqual(len(edges), 2779)
+        self.assertEqual(len(modules), 445)
+        self.assertEqual(len(edges), 2828)
         assessment_owner = "story_writing_agents.synchronization_assessment"
         obligations_owner = "story_writing_agents.synchronization_obligations"
         semantic_dependencies = {
@@ -1659,6 +1659,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             "story_writing_agents.authoring_task_lifecycle", "story_writing_agents.conversations", "story_writing_agents.conversations.views.lead_results",
             "story_writing_agents.conversations.reducers.story_commit_history",
             "story_writing_agents.conversations.reducers.story_commit_review_coverage",
+            "story_writing_agents.conversations.reducers.synchronization_history",
             "story_writing_agents.conversations.events", "story_writing_agents.interactive_terminal._collaboration_view",
             "story_writing_agents.artifact_transactions.artifact_application_authority", "story_writing_agents.lead_preparation.outcome_decoding",
             "story_writing_agents.lead_execution.known_result_finalization",
@@ -2068,6 +2069,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
         self.assertEqual({source for source, target in edges if target == premise_preparation_owner}, {"story_writing_agents.orchestrator"})
         lead_task_control_owner = 'story_writing_agents.lead_preparation.lead_task_control'
         self.assertEqual({target for source, target in edges if source == lead_task_control_owner}, {
+            'story_writing_agents.synchronization_repair',
             'story_writing_agents.conversations',
             'story_writing_agents.conversations.events',
             'story_writing_agents.document_plan',
@@ -3732,6 +3734,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             "story_writing_agents/artifact_transactions/story_commit_qualification.py",
             "story_writing_agents/artifact_transactions/story_commit_decisions.py",
                 "story_writing_agents/artifact_transactions/synchronization_control.py",
+                "story_writing_agents/artifact_transactions/synchronization_apply_qualification.py",
                 "story_writing_agents/artifact_transactions/synchronization_material.py",
                 "story_writing_agents/artifact_transactions/synchronization_publication.py",
                 "story_writing_agents/artifact_transactions/synchronization_review.py",
@@ -3739,10 +3742,13 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 "story_writing_agents/conversations/reducers/story_commit_history.py",
                 "story_writing_agents/conversations/reducers/story_commit_review_coverage.py",
                 "story_writing_agents/conversations/reducers/synchronization_history.py",
+                "story_writing_agents/conversations/reducers/synchronization_repair_history.py",
                 "story_writing_agents/conversations/reducers/synchronization_absence_history.py",
                 "story_writing_agents/lead_preparation/synchronization_review_response.py",
+                "story_writing_agents/lead_preparation/synchronization_repair_control.py",
                 "story_writing_agents/synchronization_assessment.py",
                 "story_writing_agents/synchronization_obligations.py",
+                "story_writing_agents/synchronization_repair.py",
             "story_writing_agents/collaboration_execution_results.py",
             "story_writing_agents/lead_control_events.py",
             "story_writing_agents/runtime_resources/generation_pin_cleanup.py",

@@ -63,6 +63,7 @@ from story_writing_agents.conversation_storage.selection import (
 from story_writing_agents.conversations import (
     ArtifactApplicationDecisionKind,
     ArtifactApplicationDecisionResult,
+    ArtifactApplicationNextAction,
     CollaborationConfirmationDecision,
     CollaborationNextAction,
     CollaborationStepState,
@@ -1752,8 +1753,8 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 441)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 2638)
+        self.assertEqual(len(modules), 445)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 2686)
         self.assertTrue(
             {
                 "story_writing_agents.artifact_proposals",
@@ -6861,6 +6862,10 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
             return self._raw(
                 ArtifactApplicationDecisionResult,
                 commit_request=commit_tail,
+                outcome=SimpleNamespace(next_action=(
+                    ArtifactApplicationNextAction.REQUEST_COMMIT_CONFIRMATION
+                    if commit_tail is not None else ArtifactApplicationNextAction.CONTINUE_WITH_LEAD
+                )),
             )  # type: ignore[return-value]
 
         async def commit_decision(

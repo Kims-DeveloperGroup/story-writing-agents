@@ -494,7 +494,33 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
         plans_before = self.projection(conversation_id).document_plans
         self.assertTrue(plans_before)
         self.assertEqual(plans_before[-1].plan, self.objective(conversation_id).document_plan)
-        archive = archive_from_conversations(archive_conversation(session_id=self.session_id, conversation_id=conversation_id, events=before))
+        from story_writing_agents.interactive_terminal._collaboration_view import project_lead_confirmation
+        from tests.known_result_finalization_fixture import seed_reviewed_artifact
+
+        rules_path = artifact.ARTIFACT_FIXTURE_RULES_PATH
+        self.workspace.path(rules_path).write_text("Use omniscient narration.\n", encoding="utf-8")
+        repair_conversation = self.conversation("Retain conditional Apply history")
+        decision_turn = await seed_reviewed_artifact(
+            self, repair_conversation, (("replace", rules_path, "Use close-third narration.\n"),),
+            extra_core_evidence=tuple(CORE_ARTIFACT_PATHS),
+            discrepancy_pair=(rules_path, OUTLINE),
+        )
+        self.assertIsNotNone(decision_turn.artifact_application_request, decision_turn.message)
+        disclosed, = decision_turn.artifact_application_request.conditional.issues
+        summary = project_lead_confirmation(decision_turn)["summary"]
+        field, = (item for item in summary if item.label == f"{rules_path} → {OUTLINE}")
+        self.assertIn(disclosed.condition.discrepancy, field.value)
+        self.assertIn(disclosed.condition.action, field.value)
+        accepted = await self.apply(decision_turn)
+        self.assertIs(accepted.outcome.outcome, c.ArtifactApplicationOutcomeKind.APPLIED)
+        self.assertIsNone(accepted.commit_request)
+        repair_events = self.history(repair_conversation)
+        expected_work = self.runtime.inspect_synchronization_repair(self.session_id)
+        self.assertEqual(len(expected_work), 1)
+        archive = archive_from_conversations(
+            archive_conversation(session_id=self.session_id, conversation_id=conversation_id, events=before),
+            archive_conversation(session_id=self.session_id, conversation_id=repair_conversation, events=repair_events),
+        )
         wire = serialize_conversation_archive(archive)
         self.assertEqual(serialize_conversation_archive(deserialize_conversation_archive(wire)), wire)
         coordinator = WorkspaceConversationStorageMutationCoordinator(self.control_workspace)
@@ -512,6 +538,14 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
         self.assertEqual(restored.document_plans, plans_before)
         self.assertEqual(restored.current_story_commit_request, request)
         self.assertEqual(restored.current_story_commit_result, rejected.outcome)
+        after_repair = services.event_store.read(self.session_id, repair_conversation)
+        self.assertEqual(after_repair, repair_events)
+        restarted = StoryRuntime(self.control_workspace, self.backend, conversation_storage_services=services)
+        self.assertEqual(restarted.inspect_synchronization_repair(self.session_id), expected_work)
+        restored_repair = restarted.inspect_lead_collaboration(self.session_id, repair_conversation)
+        self.assertIs(restored_repair.next_safe_action, c.CollaborationNextAction.CONTINUE_SYNCHRONIZATION_REPAIR)
+        self.assertEqual(restored_repair.current_artifact_application_request.conditional, accepted.request.conditional)
+        self.assertEqual(restored_repair.current_artifact_application_result, accepted.outcome)
 
     async def test_readable_and_session_context_include_objectives_without_new_records(self):
         from story_writing_agents.agent_context.sources.session_history import SessionHistorySourceAdapter

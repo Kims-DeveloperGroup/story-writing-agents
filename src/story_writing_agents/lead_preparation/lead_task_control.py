@@ -7,6 +7,7 @@ from ..conversations.events import CollaborationExplorationAdoptionPayload
 from ..conversations import CollaborationHistoryProjection
 from ..conversations.events import CollaborationLeadExplorationRequestPayload
 from ..conversations import CollaborationLeadMaterialCapturePayload
+from ..synchronization_repair import SynchronizationRepairSelection
 from ..conversations import CollaborationLeadTaskDecisionPayload
 from ..conversations import CollaborationLeadTaskTransitionPayload
 from ..conversations import CollaborationMessagePayload
@@ -50,6 +51,8 @@ def prepare_task_transition(
     events: tuple[CollaborationEvent, ...],
     projection: CollaborationHistoryProjection,
     materials: tuple[str, ...],
+    *,
+    synchronization_repair: SynchronizationRepairSelection | None = None,
 ) -> tuple[str, str, CollaborationEventDraft, CollaborationEventDraft | None, tuple[CollaborationEventDraft, ...], CollaborationEventDraft]:
     turn_id = event_journal.new_id("t")
     step_id = event_journal.new_id("s")
@@ -69,7 +72,9 @@ def prepare_task_transition(
         session_id=session_id, conversation_id=conversation_id,
         turn_id=turn_id, step_id=step_id, kind=CollaborationEventKind.LEAD_TASK_DECISION,
         sender=event_journal.USER_ACTOR, recipient=event_journal.RUNTIME_ACTOR,
-        payload=CollaborationLeadTaskDecisionPayload(decision, document_selection=document_selection),
+        payload=CollaborationLeadTaskDecisionPayload(
+            decision, document_selection=document_selection, synchronization_repair=synchronization_repair,
+        ),
     ), event_id=decision.request_id)
     message = None if decision.text is None else event_journal.draft(
         session_id=session_id, conversation_id=conversation_id,

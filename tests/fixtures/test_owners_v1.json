@@ -5,6 +5,91 @@
   ],
   "owners": [
     {
+      "name": "artifact-transactions.synchronization_apply_qualification",
+      "boundary": "authority",
+      "paths": [
+        "src/story_writing_agents/artifact_transactions/synchronization_apply_qualification.py"
+      ],
+      "focused_ids": [
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority"
+      ],
+      "affected_ids": [
+        "tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_objective_history_round_trips_through_filesystem_sqlite_and_archive",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority"
+      ],
+      "affected_full": true,
+      "depends_on": [
+        "conversations.reducers.synchronization_repair_history",
+        "conversations.event_contracts.artifact_apply"
+      ]
+    },
+    {
+      "name": "conversations.reducers.synchronization_repair_history",
+      "boundary": "authority",
+      "paths": [
+        "src/story_writing_agents/conversations/reducers/synchronization_repair_history.py"
+      ],
+      "focused_ids": [
+        "tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_objective_history_round_trips_through_filesystem_sqlite_and_archive",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority"
+      ],
+      "affected_ids": [
+        "tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_objective_history_round_trips_through_filesystem_sqlite_and_archive",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority"
+      ],
+      "affected_full": true,
+      "depends_on": [
+        "synchronization-repair",
+        "conversations.event_contracts.artifact_apply"
+      ]
+    },
+    {
+      "name": "lead-preparation.synchronization_repair_control",
+      "boundary": "authority",
+      "paths": [
+        "src/story_writing_agents/lead_preparation/synchronization_repair_control.py"
+      ],
+      "focused_ids": [
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority"
+      ],
+      "affected_ids": [
+        "tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_objective_history_round_trips_through_filesystem_sqlite_and_archive",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority"
+      ],
+      "affected_full": true,
+      "depends_on": [
+        "synchronization-repair"
+      ]
+    },
+    {
+      "name": "synchronization-repair",
+      "boundary": "contract",
+      "paths": [
+        "src/story_writing_agents/synchronization_repair.py"
+      ],
+      "focused_ids": [
+        "tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_objective_history_round_trips_through_filesystem_sqlite_and_archive",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority"
+      ],
+      "affected_ids": [
+        "tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_objective_history_round_trips_through_filesystem_sqlite_and_archive",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority"
+      ],
+      "affected_full": true,
+      "depends_on": []
+    },
+    {
       "name": "runner",
       "boundary": "transport",
       "paths": [
@@ -1398,6 +1483,7 @@
       ],
       "depends_on": [
         "context-execution-fixture",
+        "known-result-finalization-fixture",
         "lead-fixtures.artifact-review",
         "lead-fixtures.material-values",
         "lead-fixtures.preparation-data",
@@ -5540,10 +5626,15 @@
         "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_restart_cannot_reconstruct_apply_authority"
       ],
       "depends_on": [
+        "context-execution-fixture",
         "known-result-finalization-fixture",
         "lead-fixtures.artifact-review",
+        "lead-fixtures.material-values",
+        "lead-fixtures.preparation-data",
         "lead-fixtures.provider-responses",
         "lead-fixtures.runtime-setup",
+        "lead-fixtures.specialist-routing",
+        "tests.test_artifact_objectives",
         "tests.test_collaboration_events"
       ]
     },

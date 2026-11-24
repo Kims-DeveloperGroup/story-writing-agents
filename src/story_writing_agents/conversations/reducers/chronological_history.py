@@ -89,6 +89,10 @@ from ..events import (
 from .artifact_objective_history import (
     project_artifact_objective_history as _project_artifact_objective_history,
 )
+from .synchronization_repair_history import (
+    has_started_synchronization_repair,
+    has_verified_synchronization_review_after,
+)
 from .artifact_operation_history import (
     artifact_operation_next_action as _artifact_operation_next_action,
     project_artifact_operation_history as _project_artifact_operation_history,
@@ -1287,9 +1291,15 @@ def _project_validated_collaboration_history(
         result_pair[1] if result_pair is not None else None
     )
     artifact_objectives, offered_draft_sources = _project_artifact_objective_history(events)
+    repair_history = _control_history or events
+    control_tail = next((event for event in reversed(events) if type(event.payload) is not SynchronizationPayload), events[-1])
     operation_next_action = _artifact_operation_next_action(
-        next((event for event in reversed(events) if type(event.payload) is not SynchronizationPayload), events[-1]),
+        control_tail,
         application_request, application_result, commit_request, commit_result,
+        repair_continuation_started=has_started_synchronization_repair(repair_history, application_result),
+        repair_review_finished=has_verified_synchronization_review_after(
+            repair_history, application_result, control_tail=control_tail,
+        ),
     )
     recommendation_next_action = None
     if recommendation_state is LeadRecommendationState.PENDING:

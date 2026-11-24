@@ -896,6 +896,12 @@ class InteractiveController:
                 "Review the exact local commit request and submit "
                 "its separate Commit decision."
             ),
+            CollaborationNextAction.REPREPARE_COMMIT_REQUEST: (
+                "Recheck the current Git tree and prepare a separate Commit request."
+            ),
+            CollaborationNextAction.CONTINUE_SYNCHRONIZATION_REPAIR: (
+                "Select a related document to review or repair a known synchronization issue."
+            ),
             CollaborationNextAction.SUBMIT_RECOMMENDATION_DECISION: (
                 "Review the exact Lead preparation and choose Confirm, "
                 "Reject, or Revise."

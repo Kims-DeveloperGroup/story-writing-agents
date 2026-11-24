@@ -246,7 +246,10 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
-        commit_bundle_current = suite_budget.load_budget()
+        conditional_apply_current = suite_budget.load_budget()
+        commit_bundle_current = dict(conditional_apply_current, max_test_source_lines=159552)
+        self.assertIsNone(suite_budget.check_monotonic(conditional_apply_current, commit_bundle_current))
+        self._assert_source_limit_neighbors_rejected(conditional_apply_current, commit_bundle_current)
         synchronization_current = dict(commit_bundle_current, max_test_source_lines=159338)
         self.assertIsNone(suite_budget.check_monotonic(commit_bundle_current, synchronization_current))
         self._assert_source_limit_neighbors_rejected(commit_bundle_current, synchronization_current)

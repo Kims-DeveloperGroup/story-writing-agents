@@ -5,10 +5,14 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import (
+    asdict,
     dataclass,
     field,
 )
 
+from ...specialist_routing import ArtifactReviewDomain
+from ...synchronization_assessment import SynchronizationEventRef, require_synchronization_tuple
+from ...synchronization_obligations import SynchronizationCondition, SynchronizationStatus
 from ...writing_artifacts import (
     ArtifactApplicationRequest,
     ArtifactApplicationResult,
@@ -48,6 +52,55 @@ from .artifact_reviews import (
 
 
 @dataclass(frozen=True, slots=True)
+class ConditionalArtifactApplicationIssue:
+    """One known discrepancy and the exact outstanding obligation head."""
+
+    head: SynchronizationEventRef
+    condition: SynchronizationCondition
+    status: SynchronizationStatus
+
+    def __post_init__(self) -> None:
+        if type(self.head) is not SynchronizationEventRef or type(self.condition) is not SynchronizationCondition:
+            raise TypeError("conditional Apply issue needs an exact obligation")
+        if type(self.status) is not SynchronizationStatus or self.status not in {
+            SynchronizationStatus.OPEN, SynchronizationStatus.IN_PROGRESS,
+        }:
+            raise ValueError("conditional Apply requires a currently known outstanding issue")
+
+
+@dataclass(frozen=True, slots=True)
+class ConditionalArtifactApplication:
+    """Review evidence and complete disclosure for a fresh conditional decision."""
+
+    assessment: SynchronizationEventRef
+    issues: tuple[ConditionalArtifactApplicationIssue, ...]
+
+    def __post_init__(self) -> None:
+        if type(self.assessment) is not SynchronizationEventRef:
+            raise TypeError("conditional Apply requires its exact candidate assessment")
+        require_synchronization_tuple(self.issues, ConditionalArtifactApplicationIssue)
+        ids = tuple(issue.condition.condition_id for issue in self.issues)
+        if not ids or ids != tuple(sorted(set(ids))):
+            raise ValueError("conditional Apply disclosure needs distinct, ordered issue identities")
+
+
+def artifact_application_request_digest(
+    request: ArtifactApplicationRequest,
+    conditional: ConditionalArtifactApplication | None = None,
+) -> str:
+    """Bind structured consent to the physical request and its disclosed issues."""
+    encoded = serialize_artifact_application_request(request)
+    if conditional is not None:
+        if type(conditional) is not ConditionalArtifactApplication:
+            raise TypeError("conditional Apply disclosure must be exact")
+        encoded = _canonical_json({
+            "application_request": json.loads(encoded),
+            "conditional": asdict(conditional),
+        })
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
 class ArtifactApplicationRequestPayload:
     """Durable, fully inspectable request for one reviewed candidate."""
 
@@ -59,6 +112,7 @@ class ArtifactApplicationRequestPayload:
     choices: tuple[ArtifactApplicationDecisionKind, ...]
     side_effects: tuple[CollaborationSideEffect, ...]
     prohibited_side_effects: tuple[CollaborationSideEffect, ...]
+    conditional: ConditionalArtifactApplication | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         _validate_identifier(
@@ -87,8 +141,11 @@ class ArtifactApplicationRequestPayload:
             or request.relationship_validation_digest
             != _artifact_relationship_digest(candidate.relationship_validation)
             or self.application_request_digest
-            != "sha256:"
-            + hashlib.sha256(serialize_artifact_application_request(request)).hexdigest()
+            != artifact_application_request_digest(request, self.conditional)
+            or (
+                self.conditional is not None
+                and self.conditional.assessment.conversation_id != self.reviewed_proposal.conversation_id
+            )
         ):
             raise ValueError("artifact application request drifted from review")
         expected_choices = (
@@ -220,6 +277,7 @@ class ArtifactApplicationResultPayload:
                 not in {
                     ArtifactApplicationNextAction.REQUEST_COMMIT_CONFIRMATION,
                     ArtifactApplicationNextAction.REPREPARE_COMMIT_REQUEST,
+                    ArtifactApplicationNextAction.CONTINUE_SYNCHRONIZATION_REPAIR,
                 }
             ):
                 raise ValueError("artifact application terminal result is inconsistent")
@@ -248,7 +306,7 @@ class ArtifactApplicationResultPayload:
 def artifact_application_request_payload_value(
     payload: ArtifactApplicationRequestPayload,
 ) -> dict[str, object]:
-    return {
+    value: dict[str, object] = {
         "application_request": json.loads(
             serialize_artifact_application_request(payload.application_request)
         ),
@@ -265,6 +323,9 @@ def artifact_application_request_payload_value(
         ),
         "side_effects": [item.value for item in payload.side_effects],
     }
+    if payload.conditional is not None:
+        value["conditional"] = asdict(payload.conditional)
+    return value
 
 
 def artifact_application_decision_payload_value(
@@ -308,15 +369,57 @@ def artifact_application_result_payload_value(
     }
 
 
+def _decode_synchronization_ref(value: object) -> SynchronizationEventRef:
+    item = _object(value, {"conversation_id", "event_id", "digest"}, label="synchronization reference")
+    return SynchronizationEventRef(
+        _string(item["conversation_id"], label="synchronization conversation ID"),
+        _string(item["event_id"], label="synchronization event ID"),
+        _string(item["digest"], label="synchronization reference digest"),
+    )
+
+
+def _decode_conditional_issue(value: object) -> ConditionalArtifactApplicationIssue:
+    item = _object(value, {"head", "condition", "status"}, label="conditional Apply issue")
+    condition = _object(item["condition"], {
+        "condition_id", "detected_by", "changed_path", "target_path", "domain",
+        "discrepancy", "action", "resolution",
+    }, label="conditional Apply condition")
+    return ConditionalArtifactApplicationIssue(
+        _decode_synchronization_ref(item["head"]),
+        SynchronizationCondition(
+            condition_id=_string(condition["condition_id"], label="synchronization condition ID"),
+            detected_by=_decode_synchronization_ref(condition["detected_by"]),
+            changed_path=_string(condition["changed_path"], label="changed artifact path"),
+            target_path=_string(condition["target_path"], label="related artifact path"),
+            domain=_enum(ArtifactReviewDomain, condition["domain"], label="synchronization specialist domain"),
+            discrepancy=_string(condition["discrepancy"], label="synchronization discrepancy"),
+            action=_string(condition["action"], label="synchronization action"),
+            resolution=_string(condition["resolution"], label="synchronization resolution"),
+        ),
+        _enum(SynchronizationStatus, item["status"], label="synchronization status"),
+    )
+
+
+def _decode_conditional_application(value: object) -> ConditionalArtifactApplication:
+    item = _object(value, {"assessment", "issues"}, label="conditional Apply disclosure")
+    return ConditionalArtifactApplication(
+        _decode_synchronization_ref(item["assessment"]),
+        tuple(_decode_conditional_issue(issue) for issue in _array(item["issues"], label="conditional Apply issues")),
+    )
+
+
 def decode_artifact_application_request_payload(
     value: object,
 ) -> ArtifactApplicationRequestPayload:
-    item = _object(value, {
+    fields = {
         "application_request", "application_request_digest",
         "base_tail_sequence", "choices", "confirmation_request_id",
         "payload_type", "prohibited_side_effects", "reviewed_proposal",
         "side_effects",
-    }, label="artifact application request payload")
+    }
+    if type(value) is dict and "conditional" in value:
+        fields.add("conditional")
+    item = _object(value, fields, label="artifact application request payload")
     return ArtifactApplicationRequestPayload(
         confirmation_request_id=_string(item["confirmation_request_id"], label="confirmation request ID"),
         reviewed_proposal=_decode_artifact_reviewed_proposal(
@@ -338,6 +441,9 @@ def decode_artifact_application_request_payload(
         prohibited_side_effects=tuple(
             _enum(CollaborationSideEffect, value, label="prohibited side effect")
             for value in _array(item["prohibited_side_effects"], label="prohibited side effects")
+        ),
+        conditional=(
+            _decode_conditional_application(item["conditional"]) if "conditional" in item else None
         ),
     )
 

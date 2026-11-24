@@ -13,6 +13,10 @@ from ...synchronization_assessment import (
     SynchronizationJudgment,
 )
 from ...synchronization_obligations import SynchronizationObligations
+from ...synchronization_repair import (
+    SynchronizationRepairSelection,
+    synchronization_repair_selection_to_dict,
+)
 from ..event_contracts.artifact_apply import (
     ArtifactApplicationDecisionPayload,
     ArtifactApplicationRequestPayload,
@@ -37,6 +41,11 @@ from ..events import (
 )
 from .story_commit_review_coverage import StoryCommitReviewCoverage, qualify_story_commit_documents
 from .synchronization_history import project_synchronization_history
+from .synchronization_repair_history import (
+    discharged_conditional_blockers,
+    recorded_synchronization_repair_condition,
+    synchronization_repair_selection_for_task,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +64,7 @@ class StoryCommitHistoryApplication:
     actual: SynchronizationAssessment = field(repr=False)
     consultation_ref: SynchronizationEventRef
     consultation: CollaborationProposal = field(repr=False)
+    repair_selection: SynchronizationRepairSelection | None = None
 
     @property
     def application_id(self) -> str:
@@ -127,6 +137,7 @@ def _applied_evidence(
     decisions: dict[tuple[str, str], CollaborationEvent],
     assessments: _SynchronizationAssessments,
     consultations: dict[tuple[str, str, int, str], CollaborationEvent],
+    events: dict[tuple[str, str], CollaborationEvent],
 ) -> StoryCommitHistoryApplication | str:
     payload = event.payload
     assert type(payload) is ArtifactApplicationResultPayload and payload.result is not None
@@ -203,6 +214,15 @@ def _applied_evidence(
         or reviewed.unresolved_input_ids
     ):
         return f"{name}: exact final specialist review, source, or USER conditions are missing or changed."
+    selection = synchronization_repair_selection_for_task(
+        tuple(events.values()), event.conversation_id,
+        actual.basis.task_id, before_sequence=consultation_event.sequence,
+    )
+    if selection is not None and (
+        actual.census.changes != (selection.repair_path,)
+        or recorded_synchronization_repair_condition(selection, events) is None
+    ):
+        return f"{name}: exact synchronization repair authorization is missing or changed."
     return StoryCommitHistoryApplication(
         request, decision, payload, synchronization_event_ref(request_event),
         synchronization_event_ref(decision_event), result_ref, projected_ref, actual_ref,
@@ -219,6 +239,14 @@ def _linked_work(
 ) -> bool:
     previous_basis = previous.actual.basis
     current_basis = current.actual.basis
+    if current.repair_selection is not None and (
+        current.repair_selection.application == previous.result_ref
+        or (
+            previous.repair_selection is not None
+            and current.repair_selection.application == previous.repair_selection.application
+        )
+    ):
+        return True
     if previous_basis.task_id == current_basis.task_id:
         return previous_basis.task_revision <= current_basis.task_revision
     if previous_basis.request == current_basis.request or _linked_plan(previous, current, plans):
@@ -332,16 +360,19 @@ def _basis_digest(
     def document_values(documents: tuple[SynchronizationDocument, ...]) -> list[tuple[str, str | None, str | None, str | None]]:
         return sorted((item.path, item.digest, item.revision, item.absence) for item in documents)
 
+    def application_row(item: StoryCommitHistoryApplication) -> tuple:
+        references = tuple(map(ref, (
+            item.request_ref, item.decision_ref, item.result_ref, item.consultation_ref,
+            item.projected_ref, item.actual_ref,
+        )))
+        if item.repair_selection is None:
+            return references
+        return (*references, synchronization_repair_selection_to_dict(item.repair_selection))
+
     return review_digest({
         "session": session_id,
         "baseline": baseline_state_digest,
-        "applications": [
-            tuple(map(ref, (
-                item.request_ref, item.decision_ref, item.result_ref,
-                item.consultation_ref, item.projected_ref, item.actual_ref,
-            )))
-            for item in applications
-        ],
+        "applications": [application_row(item) for item in applications],
         "obligations": sorted(ref(item.ref) for item in obligations.heads),
         "supporting_assessments": sorted(map(ref, supporting_assessments)),
         "current": document_values(current),
@@ -372,6 +403,7 @@ def qualify_story_commit_history(
         or len(identities) != len(events) or len(positions) != len(events)
     ):
         raise ValueError("story commit history must be one exact session event set")
+    index = {(item.conversation_id, item.event_id): item for item in events}
     histories: dict[str, list[CollaborationEvent]] = {}
     for item in events:
         histories.setdefault(item.conversation_id, []).append(item)
@@ -411,7 +443,7 @@ def qualify_story_commit_history(
         predecessor = triggers[0]
         used: set[str] = set()
         while True:
-            evidence = _applied_evidence(predecessor, requests, decisions, synchronization.assessments, consultations)
+            evidence = _applied_evidence(predecessor, requests, decisions, synchronization.assessments, consultations, index)
             if isinstance(evidence, str):
                 blockers.append(evidence)
                 break
@@ -463,7 +495,18 @@ def qualify_story_commit_history(
             if scope is not None and scope.task_id in revisions and scope.task_revision > revisions[scope.task_id]:
                 blockers.append(f"Task {scope.task_id}: verify the advanced task revision before committing.")
         for item in applications:
-            blockers.extend(f"Apply {item.application_id}: {reason}" for reason in item.actual.blockers)
+            discharged: tuple[str, ...] | None = ()
+            if item.request.conditional is not None:
+                discharged = discharged_conditional_blockers(
+                    index[(item.request_ref.conversation_id, item.request_ref.event_id)],
+                    item.projected_ref, item.actual, coverage.obligations, index,
+                )
+                if discharged is None:
+                    blockers.append(f"Apply {item.application_id}: exact conditional disclosure is unavailable.")
+            blockers.extend(
+                f"Apply {item.application_id}: {reason}"
+                for reason in item.actual.blockers if reason not in (discharged or ())
+            )
         ids = {item.application_id for item in applications}
         state_digests = {
             digest for item in applications

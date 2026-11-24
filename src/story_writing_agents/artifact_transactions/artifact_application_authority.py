@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from ..review_contracts import FinalReviewQualification
-import hashlib
 import uuid
 from dataclasses import replace
 from typing import (
@@ -14,9 +13,15 @@ from ..agent_context.sources.session_history import SessionHistorySourceAdapter
 from ..conversations.session_context import SessionHistorySnapshot
 from .synchronization_publication import synchronization_apply_drafts
 from .synchronization_material import matches_projected_documents
+from .synchronization_apply_qualification import (
+    SynchronizationApplyBlocked,
+    qualify_synchronization_apply,
+    require_previous_write_outcomes,
+)
 from ..artifact_proposals import ArtifactReviewCandidate
 from ..conversation_storage.contracts import ConversationStorageServices
-from ..conversations.events import CollaborationExplorationAdoptionPayload
+from ..conversations.events import CollaborationExplorationAdoptionPayload, synchronization_event_ref
+from ..conversations.event_contracts.artifact_apply import artifact_application_request_digest
 from ..conversations.views.decision_results import StoryCommitQualificationBlocked
 from ..errors import (
     BackendProtocolError,
@@ -37,7 +42,6 @@ from ..writing_artifacts import (
     ArtifactReviewReason,
     build_artifact_application_request,
     project_artifact_change_set,
-    serialize_artifact_application_request,
     validate_artifact_relationships,
 )
 from ..runtime_resources import collaboration_event_journal as event_journal
@@ -236,6 +240,7 @@ class ArtifactApplicationAuthority:
             application_result = None
             synchronization_blockers: tuple[str, ...] = ()
             synchronization = None
+            resolve_synchronization = False
             artifact_binding: SessionArtifactBinding | None = None
             generation_pin: SessionArtifactGenerationPin | None = None
             key = (decision.session_id, decision.conversation_id, decision.step_id)
@@ -295,6 +300,11 @@ class ArtifactApplicationAuthority:
                     else:
                         repository_execution_started = False
                         try:
+                            try:
+                                snapshot = capture_editorial_snapshot(decision.session_id)
+                            except ValueError as exc:
+                                synchronization_blockers = ("Current synchronization evidence could not be verified.",)
+                                raise ArtifactApplicationError(ArtifactApplicationErrorCode.DRIFT) from exc
                             consultation = next((event.payload for event in persisted
                                 if type(event.payload) is CollaborationProposal
                                 and event.payload.proposal_id == reviewed.consultation_proposal_id
@@ -316,18 +326,7 @@ class ArtifactApplicationAuthority:
                                 consultation=consultation, events=persisted)
                             if not qualification.eligible:
                                 raise ArtifactApplicationError(ArtifactApplicationErrorCode.CORRELATION_MISMATCH)
-                            try:
-                                history = capture_editorial_snapshot(decision.session_id).synchronization()
-                                assessment = history.assessment_for_review(reviewed)
-                                synchronization_blockers = (
-                                    ("No current synchronization assessment covers this exact candidate.",)
-                                    if assessment is None else history.blockers_after(assessment)
-                                )
-                            except ValueError as exc:
-                                synchronization_blockers = ("Current synchronization evidence could not be verified.",)
-                                raise ArtifactApplicationError(ArtifactApplicationErrorCode.DRIFT) from exc
-                            if synchronization_blockers:
-                                raise ArtifactApplicationError(ArtifactApplicationErrorCode.DRIFT)
+                            active_apply = synchronization_event_ref(tail)
                             reviewed.__post_init__()
                             reviewed.candidate.__post_init__()
                             artifact_binding = compose_session_artifact_binding(
@@ -344,6 +343,25 @@ class ArtifactApplicationAuthority:
                                 expected_state = project_artifact_change_set(
                                     base_state, application.change_set
                                 )
+                                try:
+                                    session_events = snapshot.events()
+                                    require_previous_write_outcomes(session_events, active_apply=active_apply)
+                                    history = snapshot.synchronization()
+                                    assessment, conditional = qualify_synchronization_apply(
+                                        history, reviewed, session_events,
+                                        {item.path: item.source.source_sha256 for item in snapshots},
+                                        active_apply=active_apply,
+                                    )
+                                    if conditional != request.conditional:
+                                        raise SynchronizationApplyBlocked(
+                                            "Disclosed synchronization issues changed. Review a fresh Apply request."
+                                        )
+                                except ValueError as exc:
+                                    synchronization_blockers = (
+                                        str(exc) if isinstance(exc, SynchronizationApplyBlocked)
+                                        else "Current synchronization evidence could not be verified.",
+                                    )
+                                    raise ArtifactApplicationError(ArtifactApplicationErrorCode.DRIFT) from exc
                                 if not matches_projected_documents(assessment, expected_state):
                                     synchronization_blockers = ("The complete document inventory changed.",)
                                     raise ArtifactApplicationError(ArtifactApplicationErrorCode.DRIFT)
@@ -361,12 +379,17 @@ class ArtifactApplicationAuthority:
                                         ArtifactApplicationErrorCode.DRIFT
                                     )
                                 try:
-                                    observed_history = capture_editorial_snapshot(decision.session_id).synchronization()
+                                    observed_snapshot = capture_editorial_snapshot(decision.session_id)
+                                    if observed_snapshot != snapshot:
+                                        raise SynchronizationApplyBlocked(
+                                            "Synchronization or review authority changed during Apply preparation."
+                                        )
                                 except ValueError as exc:
+                                    synchronization_blockers = (
+                                        str(exc) if isinstance(exc, SynchronizationApplyBlocked)
+                                        else "Current synchronization evidence could not be verified.",
+                                    )
                                     raise ArtifactApplicationError(ArtifactApplicationErrorCode.DRIFT) from exc
-                                if observed_history != history:
-                                    synchronization_blockers = ("Synchronization obligations changed during Apply preparation.",)
-                                    raise ArtifactApplicationError(ArtifactApplicationErrorCode.DRIFT)
                                 access.require_ready()
                                 repository_execution_started = True
                                 application_result = (
@@ -382,8 +405,8 @@ class ArtifactApplicationAuthority:
                                         observed_history = capture_editorial_snapshot(decision.session_id).synchronization()
                                     except ValueError:
                                         observed_history = None
-                                    if history == observed_history:
-                                        synchronization = (assessment, history.obligations)
+                                    synchronization = (assessment, history.obligations)
+                                    resolve_synchronization = observed_history == history
                         except (
                             SessionArtifactBindingError,
                             WorkspaceFormatError,
@@ -473,16 +496,21 @@ class ArtifactApplicationAuthority:
                                 generation_pin = None
                             raise
                         else:
-                            outcome = ArtifactApplicationOutcomeKind(
-                                application_result.state.value
-                            )
-                            next_action = (
-                                ArtifactApplicationNextAction.REQUEST_COMMIT_CONFIRMATION
-                            )
+                            outcome = ArtifactApplicationOutcomeKind(application_result.state.value)
+                            next_action = ArtifactApplicationNextAction.REQUEST_COMMIT_CONFIRMATION
                             message = (
                                 "The exact reviewed artifact changes were applied "
                                 "atomically. No Git staging or commit occurred."
                             )
+                            if request.conditional is not None:
+                                next_action = ArtifactApplicationNextAction.CONTINUE_SYNCHRONIZATION_REPAIR
+                    message = (
+                                    "The artifact result is recorded. Continue with the disclosed "
+                                    "synchronization repairs before preparing Commit."
+                                    if synchronization is not None
+                                    else "The artifact result is recorded. Verify the current "
+                                    "synchronization evidence before continuing."
+                                )
 
             commit_request: StoryCommitRequestPayload | None = None
             pending_commit: PreparedStoryCommit | None = None
@@ -530,10 +558,12 @@ class ArtifactApplicationAuthority:
                         ArtifactApplicationOutcomeKind.APPLIED, ArtifactApplicationOutcomeKind.UNCHANGED,
                     }:
                         return ()
-                    return synchronization_apply_drafts(*synchronization, result)
+                    return synchronization_apply_drafts(
+                        *synchronization, result, resolve_conditions=resolve_synchronization,
+                    )
 
                 actual_drafts = synchronization_drafts(result_draft)
-                if application_result is not None:
+                if application_result is not None and request.conditional is None:
                     assert artifact_binding is not None
                     assert generation_pin is not None
                     try:
@@ -855,23 +885,35 @@ class ArtifactApplicationAuthority:
                         reviewed_proposal = None
                         state = ArtifactProposalState.STALE
                         message = "The final review basis is stale; no application authority was prepared."
+                    blockers: tuple[str, ...] = ()
+                    conditional = None
                     if reviewed_proposal is not None:
                         try:
-                            history = SessionHistorySourceAdapter(
+                            snapshot = SessionHistorySourceAdapter(
                                 self.conversation_storage_services.catalog,
                                 self.conversation_storage_services.event_store,
                                 session_id,
-                            ).capture().synchronization()
-                            assessment = history.assessment_for_review(reviewed_proposal)
-                            blockers = (("No current synchronization assessment covers this exact candidate.",)
-                                        if assessment is None else history.blockers_after(assessment))
-                            if assessment is not None and not matches_projected_documents(assessment, expected_state):
-                                blockers += ("The complete document inventory changed.",)
-                        except ValueError:
-                            blockers = ("Current synchronization evidence could not be verified.",)
-                        if blockers:
+                            ).capture()
+                            session_events = snapshot.events()
+                            require_previous_write_outcomes(session_events)
+                            assessment, conditional = qualify_synchronization_apply(
+                                snapshot.synchronization(), reviewed_proposal, session_events,
+                                {item.path: item.source.source_sha256 for item in snapshots},
+                            )
+                            if not matches_projected_documents(assessment, expected_state):
+                                raise SynchronizationApplyBlocked("The complete document inventory changed.")
+                        except ValueError as exc:
+                            blockers = (
+                                str(exc) if isinstance(exc, SynchronizationApplyBlocked)
+                                else "Current synchronization evidence could not be verified.",
+                            )
                             message += " Apply is blocked by semantic synchronization. " + blockers[0]
                     if reviewed_proposal is not None and not blockers:
+                        if conditional is not None:
+                            message += (
+                                " Known synchronization issues remain. A separate Apply decision "
+                                "must approve the disclosed issues and this exact candidate."
+                            )
                         attached_core_paths = tuple(
                             sorted(
                                 {
@@ -905,14 +947,10 @@ class ArtifactApplicationAuthority:
                             ),
                             reviewed_proposal=reviewed_proposal,
                             application_request=application_request,
-                            application_request_digest=(
-                                "sha256:"
-                                + hashlib.sha256(
-                                    serialize_artifact_application_request(
-                                        application_request
-                                    )
-                                ).hexdigest()
+                            application_request_digest=artifact_application_request_digest(
+                                application_request, conditional,
                             ),
+                            conditional=conditional,
                             base_tail_sequence=projection.last_sequence,
                             choices=(
                                 ArtifactApplicationDecisionKind.APPLY,

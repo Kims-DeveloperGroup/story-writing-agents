@@ -61,6 +61,7 @@ from ..errors import (
     WorkspaceSecurityError,
 )
 from ..lead_control_events import (
+    effective_lead_control_events,
     has_unstarted_lead_request,
     unmatched_lead_call_state,
 )
@@ -719,8 +720,12 @@ class ConfirmedStepExecution:
                 "A discussion call has no known durable closure. Inspect its exact history before controls or calls.",
                 step_id=projection.current_step_id, turn_id=projection.current_turn_id,
             )
+        operation_events = effective_lead_control_events(events) if projection.next_safe_action in {
+            CollaborationNextAction.REPREPARE_COMMIT_REQUEST,
+            CollaborationNextAction.CONTINUE_SYNCHRONIZATION_REPAIR,
+        } else events
         operation_result = pending_artifact_operation_result(
-            session_id, conversation_id, events, projection,
+            session_id, conversation_id, operation_events, projection,
         )
         if operation_result is not None:
             return operation_result
@@ -787,7 +792,7 @@ class ConfirmedStepExecution:
                 turn_id=projection.current_turn_id,
             )
         operation_result = pending_artifact_operation_result(
-            session_id, conversation_id, events, projection,
+            session_id, conversation_id, operation_events, projection,
         )
         if operation_result is not None:
             return operation_result

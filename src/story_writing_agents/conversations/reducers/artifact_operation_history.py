@@ -16,6 +16,7 @@ from ..event_contracts.story_commits import (
 )
 from ..event_vocabulary import (
     ArtifactApplicationDecisionKind,
+    ArtifactApplicationNextAction,
     ArtifactApplicationOutcomeKind,
     StoryCommitNextAction,
     StoryCommitOutcomeKind,
@@ -24,6 +25,12 @@ from ..events import CollaborationEvent as CollaborationEventV2
 from .lead_control_gaps import (
     closed_pure_discussion_control_gap_is_safe as _closed_pure_discussion_control_gap_is_safe,
 )
+from .synchronization_repair_history import (
+    has_started_synchronization_repair,
+    has_verified_synchronization_review_after,
+    synchronization_repair_selection_for_task,
+)
+from ...writing_artifacts.change_sets import ArtifactRenameOperation
 from ..views.collaboration_history_values import CollaborationNextAction
 from ...git.story_commit_contracts import StoryCommitDecision
 
@@ -34,6 +41,9 @@ def artifact_operation_next_action(
     application_result: ArtifactApplicationResultPayload | None,
     commit_request: StoryCommitRequestPayload | None,
     commit_result: StoryCommitResultPayload | None,
+    *,
+    repair_continuation_started: bool = False,
+    repair_review_finished: bool = False,
 ) -> CollaborationNextAction | None:
     if (
         application_result is not None
@@ -62,6 +72,10 @@ def artifact_operation_next_action(
         ArtifactApplicationOutcomeKind.UNCHANGED,
     }:
         if commit_request is None:
+            if application_result.next_action is ArtifactApplicationNextAction.CONTINUE_SYNCHRONIZATION_REPAIR:
+                if repair_continuation_started and not repair_review_finished:
+                    return None
+                return CollaborationNextAction.CONTINUE_SYNCHRONIZATION_REPAIR
             return (
                 CollaborationNextAction.REPREPARE_COMMIT_REQUEST
                 if type(tail.payload) is ArtifactApplicationResultPayload
@@ -141,9 +155,23 @@ def project_artifact_operation_history(
         if type(payload) is ArtifactReviewedProposal:
             reviewed[event.step_id] = payload
         elif type(payload) is ArtifactApplicationRequestPayload:
+            history_prefix = tuple(item for item in (_control_history or events) if item.sequence < event.sequence)
+            task = payload.reviewed_proposal.final_review_evidence
+            selection = synchronization_repair_selection_for_task(
+                history_prefix, event.conversation_id, task.task_id, before_sequence=event.sequence,
+            )
+            if selection is not None and any(
+                type(operation) is ArtifactRenameOperation or operation.path != selection.repair_path
+                for operation in payload.application_request.change_set.operations
+            ):
+                raise ValueError("artifact application changes exceed the exact synchronization repair path")
             if (
                 (request is not None and (
                     result is None or result.outcome not in application_terminals
+                    or (
+                        result.next_action is ArtifactApplicationNextAction.CONTINUE_SYNCHRONIZATION_REPAIR
+                        and not has_started_synchronization_repair(history_prefix, result)
+                    )
                 ))
                 or (commit_request is not None and (
                     commit_result is None or commit_result.outcome not in commit_terminals
@@ -208,16 +236,32 @@ def project_artifact_operation_history(
                         ArtifactApplicationOutcomeKind.REJECTED,
                         ArtifactApplicationOutcomeKind.SUPERSEDED,
                     })
+                or (
+                    payload.result is not None
+                    and (payload.next_action is ArtifactApplicationNextAction.CONTINUE_SYNCHRONIZATION_REPAIR)
+                    != (request.conditional is not None)
+                )
             ):
                 raise ValueError("artifact application result does not match decision")
             result, result_event = payload, event
         elif type(payload) is StoryCommitRequestPayload:
             predecessor = result_event if commit_request is None else commit_result_event
+            control_tail = next((item for item in events if item.sequence == control_predecessors[event.sequence]), None)
             if (
                 result is None
                 or result_event is None
                 or predecessor is None
-                or control_predecessors[event.sequence] != predecessor.sequence
+                or (
+                    control_predecessors[event.sequence] != predecessor.sequence
+                    and not (
+                        commit_request is None
+                        and control_tail is not None
+                        and has_verified_synchronization_review_after(
+                            tuple(item for item in (_control_history or events) if item.sequence < event.sequence),
+                            result, control_tail=control_tail,
+                        )
+                    )
+                )
                 or event.step_id != result_event.step_id
                 or payload.application_result_event_id != result_event.event_id
                 or result.result is None

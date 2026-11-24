@@ -369,7 +369,7 @@ def validate_user_task_selection(
     receipt: LeadTaskTransitionReceipt,
     source_review_revision: bool,
     source_artifact_revision: bool,
-    selected_document_review_path: str | None,
+    selected_review_paths: tuple[str, ...],
     task_material_events: tuple[CollaborationEvent, ...],
 ) -> None:
     if (
@@ -389,9 +389,9 @@ def validate_user_task_selection(
     ):
         raise reply_contract_values.LeadOutcomeValidationError("task planning changed the exact USER-selected task pair")
 
-    selected_review = bool(selected_document_review_path is not None
+    selected_review = bool(selected_review_paths
         and scope.activity is AuthoringActivity.REVIEW
-        and scope.target_paths == (selected_document_review_path,)
+                           and set(scope.target_paths) == set(selected_review_paths)
         and decoded.kind is LeadOutcomeKind.PROPOSAL
         and ((scope.intent is AuthoringIntent.REVIEW_ONLY and decoded.proposal is not None)
              or (scope.intent is AuthoringIntent.AUTHORING and decoded.artifact_intent is not None)))

@@ -126,6 +126,7 @@ class LeadTurnResult:
                 CollaborationNextAction.SUBMIT_APPLICATION_DECISION,
                 CollaborationNextAction.SUBMIT_COMMIT_DECISION,
                 CollaborationNextAction.REPREPARE_COMMIT_REQUEST,
+                CollaborationNextAction.CONTINUE_SYNCHRONIZATION_REPAIR,
             }:
                 raise ValueError("discussion must retain exact pending control priority")
             application = self.artifact_application_request
@@ -314,7 +315,10 @@ class LeadTurnResult:
         if (
             self.story_commit_preparation_request is not None
             and self.next_action
-            is not CollaborationNextAction.REPREPARE_COMMIT_REQUEST
+            not in {
+                CollaborationNextAction.REPREPARE_COMMIT_REQUEST,
+                CollaborationNextAction.CONTINUE_SYNCHRONIZATION_REPAIR,
+            }
         ):
             raise ValueError("commit preparation requires reprepare action")
         if self.recommendation_request is not None:
@@ -402,21 +406,25 @@ class LeadTurnResult:
                 )
         elif self.artifact_application_request is not None or self.story_commit_request is not None or self.recommendation_request is not None:
             pass
-        elif self.next_action is CollaborationNextAction.REPREPARE_COMMIT_REQUEST:
+        elif self.next_action in {
+            CollaborationNextAction.REPREPARE_COMMIT_REQUEST,
+            CollaborationNextAction.CONTINUE_SYNCHRONIZATION_REPAIR,
+        }:
+            preparation = self.story_commit_preparation_request
             if (
                 self.kind is not LeadOutcomeKind.RECOMMENDATION
                 or self.state is not CollaborationStepState.COMPLETED
                 or self.proposal is not None
                 or self.artifact_application_request is not None
                 or self.story_commit_request is not None
-                or type(self.story_commit_preparation_request)
-                is not StoryCommitPreparationRequest
-                or self.story_commit_preparation_request.session_id != self.session_id
-                or self.story_commit_preparation_request.conversation_id
-                != self.conversation_id
-                or self.story_commit_preparation_request.step_id != self.step_id
+                or (preparation is None and self.next_action is CollaborationNextAction.REPREPARE_COMMIT_REQUEST)
+                or (preparation is not None and (
+                    type(preparation) is not StoryCommitPreparationRequest
+                    or (preparation.session_id, preparation.conversation_id, preparation.step_id)
+                    != (self.session_id, self.conversation_id, self.step_id)
+                ))
             ):
-                raise ValueError("commit reprepare result is inconsistent")
+                raise ValueError("Apply continuation requires its exact known result")
         elif self.premise_report is not None and self.next_action is CollaborationNextAction.CHOOSE_PREMISE:
             if self.state not in {None, CollaborationStepState.COMPLETED, CollaborationStepState.FAILED,
                                   CollaborationStepState.INTERRUPTED}:

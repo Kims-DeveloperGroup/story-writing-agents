@@ -19,6 +19,7 @@ from ...lead_premise_decisions import (
     PremiseFreshWorkAdmission,
     PremiseSelectionCapture,
 )
+from ...synchronization_repair import SynchronizationRepairSelection
 from ...lead_task_transitions import (
     LeadDiscussionReport,
     LeadMaterialCapture,
@@ -37,6 +38,7 @@ from ..event_value_validation import (
 class CollaborationLeadTaskDecisionPayload:
     decision: LeadTaskDecision
     document_selection: DocumentNodeSelection | None = field(default=None, kw_only=True)
+    synchronization_repair: SynchronizationRepairSelection | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         if self.document_selection is not None and (type(self.document_selection) is not DocumentNodeSelection
@@ -44,6 +46,12 @@ class CollaborationLeadTaskDecisionPayload:
             raise ValueError("document selection is an intent for an actual new/resumed task only")
         if type(self.decision) is not LeadTaskDecision:
             raise TypeError("lead_task_decision requires an exact LeadTaskDecision")
+        if self.synchronization_repair is not None and (
+            type(self.synchronization_repair) is not SynchronizationRepairSelection
+            or self.decision.action is not LeadTaskAction.NEW_TASK
+            or self.document_selection is not None
+        ):
+            raise ValueError("synchronization repair requires one explicit new scoped task")
 
 
 @dataclass(frozen=True, slots=True)

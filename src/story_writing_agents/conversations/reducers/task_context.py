@@ -32,6 +32,7 @@ from ..event_contracts.lead_outcomes import (
     CollaborationLeadOutcomeFailurePayload,
     authoring_scope_is_view,
 )
+from ..event_contracts.synchronization import SynchronizationPayload
 from ..event_vocabulary import (
     ArtifactApplicationOutcomeKind,
     CollaborationActorKind,
@@ -59,6 +60,7 @@ from ..events import (
     authoring_capture_identity,
     confirmation_task_bindings,
     confirmed_authoring_proposals,
+    synchronization_event_ref,
 )
 from .history_projection import CollaborationHistoryProjection
 from .readiness_history import validate_readiness_owner_prefix
@@ -430,19 +432,45 @@ def project_task_context(
                             and len(new_candidates) == 1
                         )
                 control = prior.get(planning.origin_event_id)
-                selection = (control.payload.document_selection if control is not None
-                    and type(control.payload) is CollaborationLeadTaskDecisionPayload else None)
+                decision = (
+                    control.payload if control is not None
+                    and type(control.payload) is CollaborationLeadTaskDecisionPayload else None
+                )
+                selection = decision.document_selection if decision is not None else None
+                repair = decision.synchronization_repair if decision is not None else None
+                if repair is not None:
+                    targets = set(scope.target_paths)
+                    read_only = scope.intent is AuthoringIntent.REVIEW_ONLY
+                    if (read_only and (len(targets) != 2 or repair.repair_path not in targets)) or (
+                        not read_only and scope.target_paths != (repair.repair_path,)
+                    ):
+                        raise ValueError("task proposal exceeds the exact synchronization repair scope")
+                    if repair.head.conversation_id == event.conversation_id:
+                        head = (_authoring_source_prior(event) if _source_history else prior).get(repair.head.event_id)
+                        condition = next((
+                            state.condition for state in head.payload.transition.conditions
+                            if state.condition.condition_id == repair.condition_id
+                        ), None) if (
+                            head is not None and synchronization_event_ref(head) == repair.head
+                            and type(head.payload) is SynchronizationPayload and head.payload.transition is not None
+                        ) else None
+                        if (
+                            condition is None or condition.domain not in scope.domains
+                            or repair.repair_path not in {condition.changed_path, condition.target_path}
+                            or (read_only and targets != {condition.changed_path, condition.target_path})
+                        ):
+                            raise ValueError("task proposal changed the selected synchronization condition")
                 selected_node = payload.document_node
-                selected_review = bool(scope.schema_version == 3 and scope.activity is AuthoringActivity.REVIEW
-                    and planning.origin_kind == "task_decision"
-                    and planning.action in {LeadTaskAction.NEW_TASK, LeadTaskAction.RESUME}
-                    and selection is not None and selected_node is not None
-                    and (scope.task_id, scope.task_revision) == (planning.target_task_id, planning.target_task_revision)
+                selected_document = bool(selection is not None and selected_node is not None
                     and (selection.plan_ref == selected_node.plan_ref or (payload.document_plan is not None
                         and selection.plan_ref.plan_id == selected_node.plan_ref.plan_id))
                     and ((selection.node_id is not None and selection.node_id == selected_node.node_id)
-                         or (selection.target_path is not None and scope.target_paths == (selection.target_path,)))
-                    and len(scope.target_paths) == 1)
+                        or (selection.target_path is not None and scope.target_paths == (selection.target_path,))))
+                selected_repair = repair is not None and planning.action is LeadTaskAction.NEW_TASK
+                selected_review = bool(scope.schema_version == 3 and scope.activity is AuthoringActivity.REVIEW
+                    and planning.origin_kind == "task_decision" and planning.action in {LeadTaskAction.NEW_TASK, LeadTaskAction.RESUME}
+                    and (scope.task_id, scope.task_revision) == (planning.target_task_id, planning.target_task_revision)
+                    and (selected_repair or (selected_document and len(scope.target_paths) == 1)))
                 if selected_review and scope.intent is AuthoringIntent.AUTHORING:
                     message = prior.get(planning.origin_message_event_id)
                     # Existing admission validation qualifies actual USER bytes. A real
@@ -461,7 +489,13 @@ def project_task_context(
                                 ((op.source_path, op.destination_path) if type(op) is ArtifactRenameOperation else (op.path,))} == set(scope.target_paths)
                             for item in events))
                 elif selected_review:
-                    selected_review = scope.intent is AuthoringIntent.REVIEW_ONLY
+                    selected_review = scope.intent is AuthoringIntent.REVIEW_ONLY and (
+                        not selected_repair or not any(
+                            type(item.payload) is ArtifactReviewCandidatePayload
+                            and item.batch_id == event.batch_id and item.step_id == event.step_id
+                            for item in events
+                        )
+                    )
                 if (not selected_review and (scope.schema_version != 3 or scope.intent is not AuthoringIntent.AUTHORING
                         or (scope.activity not in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}
                             and not (source_review_revision or source_artifact_revision) and not prepared_final_review))):

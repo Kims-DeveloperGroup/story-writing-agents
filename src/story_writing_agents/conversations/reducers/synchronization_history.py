@@ -1,9 +1,11 @@
 """Replay the exact synchronization evidence and causal heads in session history."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 
 from ...agents import LEAD_ORCHESTRATOR
+from ...core_document_readiness import AuthoringTarget
+from ...review_contracts import review_digest
 from ...synchronization_assessment import (
     SynchronizationAbsence, SynchronizationAssessment, SynchronizationCandidate, SynchronizationCensus,
     SynchronizationDocument, SynchronizationEventRef, SynchronizationFinding,
@@ -50,8 +52,14 @@ class SynchronizationHistory:
     applied_candidates: frozenset[SynchronizationCandidate] = frozenset()
 
     def assessment_for_review(self, reviewed) -> SynchronizationAssessment | None:
+        entry = self.assessment_entry_for_review(reviewed)
+        return None if entry is None else entry[1]
+
+    def assessment_entry_for_review(
+        self, reviewed,
+    ) -> tuple[SynchronizationEventRef, SynchronizationAssessment] | None:
         matches = tuple(
-            assessment for _, assessment in self.assessments
+            (ref, assessment) for ref, assessment in self.assessments
             if assessment.basis.projected and assessment.basis.review_synthesis is not None
             and assessment.basis.review_synthesis.conversation_id == reviewed.conversation_id
             and assessment.basis.review_synthesis.event_id == reviewed.synthesis_event_id
@@ -59,25 +67,38 @@ class SynchronizationHistory:
         )
         return matches[0] if len(matches) == 1 else None
 
-    def blockers_after(self, assessment: SynchronizationAssessment) -> tuple[str, ...]:
-        if not self.complete:
-            return ("Synchronization history requires complete session evidence.",)
+    def prospective_obligations(self, assessment: SynchronizationAssessment) -> SynchronizationObligations:
+        """Project the observed obligation heads against the reviewed document state."""
         obligations = revalidate_synchronization_obligations(
             self.obligations, dict(self.assessments), assessment.census,
             conditions_digest=assessment.basis.conditions_digest,
             rules_digest=assessment.basis.rules_digest,
             task_id=assessment.basis.task_id,
         )
-        obligations = reopen_applied_absences(obligations, dict(self.assessments), self.applied_candidates)
+        return reopen_applied_absences(obligations, dict(self.assessments), self.applied_candidates)
+
+    def resolution_blockers(
+        self, assessment: SynchronizationAssessment, obligations: SynchronizationObligations,
+    ) -> tuple[str, ...]:
+        """Check that the reviewed resolutions address their claimed causal conditions."""
         conditions = {state.condition.condition_id: state.condition
                       for head in obligations.heads for state in head.conditions}
-        invalid = tuple(
+        return tuple(
             f"{condition_id}: resolution does not match an existing obligation"
             for finding in assessment.findings for condition_id in finding.resolves
             if condition_id not in conditions or finding.domain is not conditions[condition_id].domain
             or set(finding.pair) != {conditions[condition_id].changed_path, conditions[condition_id].target_path}
         )
-        return (*assessment.blockers, *invalid, *obligations.blockers_after(assessment))
+
+    def blockers_after(self, assessment: SynchronizationAssessment) -> tuple[str, ...]:
+        if not self.complete:
+            return ("Synchronization history requires complete session evidence.",)
+        obligations = self.prospective_obligations(assessment)
+        return (
+            *assessment.blockers,
+            *self.resolution_blockers(assessment, obligations),
+            *obligations.blockers_after(assessment),
+        )
 
     def with_current_documents(
         self, documents: tuple[SynchronizationDocument, ...], *, rules_digest: str,
@@ -92,6 +113,18 @@ class SynchronizationHistory:
         )
         obligations = reopen_applied_absences(obligations, dict(self.assessments), self.applied_candidates)
         return replace(self, obligations=obligations)
+
+    def with_current_artifact_digests(self, current: Mapping[str, str]) -> "SynchronizationHistory":
+        """Revalidate retained resolution evidence against the complete observed inventory."""
+        paths = set(current)
+        paths.update(item.path for _, assessment in self.assessments for item in assessment.census.documents)
+        documents = tuple(
+            SynchronizationDocument(path, current[path]) if path in current
+            else SynchronizationDocument(path, None, absence=SynchronizationAbsence.ABSENT)
+            for path in sorted(paths)
+        )
+        rules_digest = "sha256:" + review_digest(current.get(AuthoringTarget.NARRATIVE_RULES.value))
+        return self.with_current_documents(documents, rules_digest=rules_digest)
 
 
 _EventLookup = Callable[[SynchronizationEventRef], CollaborationEvent | None]

@@ -429,7 +429,7 @@ class SynchronizationAssessment:
                 raise ValueError("synchronization READ does not describe the exact current documents")
 
     @property
-    def blockers(self) -> tuple[str, ...]:
+    def coverage_blockers(self) -> tuple[str, ...]:
         blockers = [] if self.census.complete else ["Document inventory is incomplete."]
         documents = {item.path: item for item in self.census.documents}
         deleted = {item.path for item in self.census.prior_documents if item.digest is not None}
@@ -443,12 +443,14 @@ class SynchronizationAssessment:
         expected = len(self.census.changes) * (len(self.census.coverage_paths) - 1)
         if expected > len(self.findings):
             blockers.append(f"Required impact checks without an assessment: {expected - len(self.findings)}.")
-        blockers.extend(
-            f"{finding.changed_path} → {finding.target_path}: {finding.judgment.value}"
-            for finding in self.findings
-            if finding.judgment not in _FINISHED
-        )
         return tuple(blockers)
+
+    @property
+    def blockers(self) -> tuple[str, ...]:
+        return self.coverage_blockers + tuple(
+            f"{finding.changed_path} → {finding.target_path}: {finding.judgment.value}"
+            for finding in self.findings if finding.judgment not in _FINISHED
+        )
 
     @property
     def ready(self) -> bool:
