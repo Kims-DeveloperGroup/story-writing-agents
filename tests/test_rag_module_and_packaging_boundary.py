@@ -415,8 +415,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 426)
-        self.assertEqual(len(edges), 2642)
+        self.assertEqual(len(modules), 428)
+        self.assertEqual(len(edges), 2646)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -429,6 +429,14 @@ class RagModuleBoundaryTests(unittest.TestCase):
         activation_owner = "story_writing_agents.provider_configuration_activation"
         request_validation_owner = "story_writing_agents.bound_agent_request_validation"
         provider_dependencies = {
+            "story_writing_agents.interactive_terminal._startup_welcome_render": (
+                {"story_writing_agents.interactive_terminal._ansi", "story_writing_agents.interactive_terminal._model"},
+                {"story_writing_agents.interactive_terminal._render"},
+            ),
+            "story_writing_agents.interactive_terminal._ansi": (
+                set(),
+                {"story_writing_agents.interactive_terminal._render", "story_writing_agents.interactive_terminal._startup_welcome_render"},
+            ),
             "story_writing_agents.cli_parser": (
                 {"story_writing_agents.provider_adapter"},
                 {"story_writing_agents.cli"},
@@ -3732,6 +3740,8 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             'story_writing_agents/validation_findings.py',
             'story_writing_agents/cli_parser.py',
             'story_writing_agents/interactive_controller/_settings_projection.py',
+            'story_writing_agents/interactive_terminal/_startup_welcome_render.py',
+            'story_writing_agents/interactive_terminal/_ansi.py',
             'story_writing_agents/provider_schema_projection.py',
             "story_writing_agents/lead_preparation/recommendation_preparation.py",
             "story_writing_agents/lead_preparation/recommendation_requests.py",

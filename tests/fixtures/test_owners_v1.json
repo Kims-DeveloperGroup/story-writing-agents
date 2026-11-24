@@ -5093,7 +5093,9 @@
         "tests.test_interactive_terminal_foundation.StartupPresentationFoundationTests.test_static_fallback_destinations_use_full_available_width",
         "tests.test_interactive_terminal_foundation.StartupPresentationFoundationTests.test_static_profiles_render_once_without_delay_or_terminal_mutation"
       ],
-      "depends_on": []
+      "depends_on": [
+        "tests.terminal_startup_welcome_contract"
+      ]
     },
     {
       "name": "tests.test_interactive_terminal_history",
@@ -23631,6 +23633,54 @@
       ],
       "affected_ids": [
         "tests.test_interactive_controller.ControllerSettingsTests.test_settings_panel_omits_empty_diff_sections"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "terminal-startup-welcome-render",
+      "paths": [
+        "src/story_writing_agents/interactive_terminal/_startup_welcome_render.py"
+      ],
+      "boundary": "pure",
+      "focused_ids": [
+        "tests.test_interactive_terminal_foundation.StartupPresentationFoundationTests.test_plain_stage_snapshots_are_exact_prefix_free_and_legible"
+      ],
+      "affected_ids": [
+        "tests.test_interactive_terminal_foundation.StartupPresentationFoundationTests.test_callback_welcome_uses_width_aware_final_layout_without_sleep",
+        "tests.test_interactive_terminal_foundation.StartupPresentationFoundationTests.test_every_frame_and_tier_uses_fixed_colors_without_text_changes",
+        "tests.test_interactive_terminal_foundation.StartupPresentationFoundationTests.test_live_welcome_fits_every_physical_width_and_tier_boundary",
+        "tests.test_interactive_terminal_foundation.StartupPresentationFoundationTests.test_plain_stage_snapshots_are_exact_prefix_free_and_legible",
+        "tests.test_interactive_terminal_foundation.StartupPresentationFoundationTests.test_startup_resize_reselects_layouts_and_clears_variable_heights"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "terminal-ansi",
+      "paths": [
+        "src/story_writing_agents/interactive_terminal/_ansi.py"
+      ],
+      "boundary": "pure",
+      "focused_ids": [
+        "tests.test_interactive_terminal_foundation.RenderingFoundationTests.test_plain_and_ansi_are_one_sanitized_structure_with_local_fixed_sgr"
+      ],
+      "affected_ids": [
+        "tests.test_interactive_terminal_foundation.RenderingFoundationTests.test_plain_and_ansi_are_one_sanitized_structure_with_local_fixed_sgr",
+        "tests.test_interactive_terminal_foundation.StartupPresentationFoundationTests.test_every_frame_and_tier_uses_fixed_colors_without_text_changes",
+        "tests.test_interactive_terminal_foundation.StartupPresentationFoundationTests.test_live_welcome_fits_every_physical_width_and_tier_boundary"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "tests.terminal_startup_welcome_contract",
+      "paths": [
+        "tests/terminal_startup_welcome_contract.py"
+      ],
+      "boundary": "test-support",
+      "focused_ids": [
+        "tests.test_interactive_terminal_foundation.StartupPresentationFoundationTests.test_plain_stage_snapshots_are_exact_prefix_free_and_legible"
+      ],
+      "affected_ids": [
+        "tests.test_interactive_terminal_foundation.StartupPresentationFoundationTests.test_plain_stage_snapshots_are_exact_prefix_free_and_legible"
       ],
       "depends_on": []
     }
