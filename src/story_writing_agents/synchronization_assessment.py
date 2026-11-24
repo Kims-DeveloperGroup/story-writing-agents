@@ -115,10 +115,11 @@ class SynchronizationBasis:
             type(self.application) is not SynchronizationApplication or self.candidate is None
         ):
             raise ValueError("synchronization application needs an exact candidate")
-        if self.review_synthesis is not None and (
-            type(self.review_synthesis) is not SynchronizationEventRef or self.candidate is None
-        ):
-            raise ValueError("synchronization synthesis must identify a candidate review")
+        if self.review_synthesis is not None:
+            if type(self.review_synthesis) is not SynchronizationEventRef:
+                raise ValueError("synchronization synthesis must be an exact review reference")
+            if self.candidate is None and self.base_state_digest != self.result_state_digest:
+                raise ValueError("current-state synchronization review cannot change the document state")
 
     @property
     def projected(self) -> bool:

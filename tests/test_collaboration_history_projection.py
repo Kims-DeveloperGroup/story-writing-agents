@@ -16,7 +16,10 @@ from story_writing_agents.conversations import (
     CollaborationMessagePayload,
     CollaborationNextAction,
     CollaborationStepState,
+    SynchronizationPayload,
+    decode_collaboration_event_draft,
     encode_collaboration_event,
+    encode_collaboration_event_draft,
     project_collaboration_history,
     project_editorial_state,
 )
@@ -48,6 +51,7 @@ from tests.collaboration_contract_fixture import (
     ATTEMPT_ID,
     CONVERSATION_ID,
     LEAD,
+    RUNTIME,
     SESSION_ID,
     USER,
     executed_history,
@@ -173,11 +177,27 @@ class CollaborationHistoryProjectionTests(unittest.TestCase):
         self.assertTrue(projected.ready)
         self.assertEqual(first.blockers_after(projected), ())
         self.assertTrue(first.blockers)
+        current_basis = replace(
+            complete.basis, result_state_digest=complete.basis.base_state_digest,
+            review_synthesis=ref("current_review"),
+        )
+        current = replace(complete, basis=current_basis, findings=(corrected,))
+        report = make_draft("current_repair", CollaborationEventKind.SYNCHRONIZATION,
+                            RUNTIME, USER, SynchronizationPayload(assessment=current))
+        self.assertEqual(decode_collaboration_event_draft(encode_collaboration_event_draft(report)), report)
+        self.assertFalse(current.basis.projected)
+        with self.assertRaisesRegex(ValueError, "cannot change the document state"):
+            replace(current_basis, result_state_digest="9" * 64)
         projected_at = ref("projected")
         repair = SynchronizationConditionState(condition, SynchronizationStatus.RESOLVED,
                                                "Matching repair reviewed.", projected_at)
         resolved = SynchronizationTransition("motive_issue", 2, (original,), (repair,), "Repair reviewed.")
         resolved_at = ref("resolved", "successor_conversation")
+        current_at = ref("current_repair")
+        direct = replace(resolved, conditions=(replace(repair, evidence=current_at),))
+        self.assertEqual(project_synchronization_obligations(
+            {original: root, ref("direct_resolution"): direct}, {**assessments, current_at: current},
+        ).blockers, ())
         with self.assertRaises(ValueError):
             project_synchronization_obligations({resolved_at: resolved, original: root},
                                                 {**assessments, projected_at: projected})
