@@ -1,6 +1,7 @@
 """Existing Lead runtime setup fixtures with explicit ownership."""
 from __future__ import annotations
 import copy
+import hashlib
 import json
 import subprocess
 import tempfile
@@ -17,6 +18,7 @@ from story_writing_agents.agents import (
     LEAD_ORCHESTRATOR,
 )
 from story_writing_agents.conversations import (
+    CollaborationEvidenceAcquisition,
     CollaborationLeadJudgmentPayload,
     LeadOutcomeKind,
     CollaborationAssignmentDispatchPayload,
@@ -127,7 +129,8 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
     def history(self, conversation_id: str):
         return self.runtime.conversation_storage_services.event_store.read(self.session_id, conversation_id,)
 
-    async def record_book_readiness(self, *, seed_before_capture=False, preserve_documents=False):
+    async def record_book_readiness(self, *, seed_before_capture=False, preserve_documents=False,
+                                    additional_read_paths: tuple[str, ...] = ()):
         documents = tuple((path, self.workspace.path(path).read_text(encoding="utf-8"))
                           for path, _ in LEAD_FIXTURE_READINESS_DOCUMENTS) if preserve_documents else LEAD_FIXTURE_READINESS_DOCUMENTS
         for path, content in documents:
@@ -144,13 +147,26 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
                                           offered_inputs=provider.callback_payload(call)["task_input"]["available_input_sources"])
 
         self.backend.enqueue(assess, control_plan=selection_plan("readiness.core_documents"))
-        user = READINESS_USER + " " + " ".join("${" + path + "}" for path, _ in LEAD_FIXTURE_READINESS_DOCUMENTS)
+        disclosed = (*documents, *((path, self.workspace.path(path).read_text(encoding="utf-8"))
+                                   for path in additional_read_paths))
+        user = READINESS_USER + " " + " ".join("${" + path + "}" for path, _ in disclosed)
         result = await self.runtime.lead_turn(self.session_id, conversation_id, user)
         self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
         self.assertIsNone(result.proposal)
         self.assertEqual((len(self.backend.calls) - call_count, len(self.backend.reference_calls) - read_count), (2, 1))
         self.assertEqual(tuple(item["content"] for item in self.backend.reference_contexts[-1]),
-                         tuple(content for _, content in documents))
+                         tuple(content for _, content in disclosed))
+        if additional_read_paths:
+            judgment = next(payload for payload in event_payloads(self.history(conversation_id), CollaborationLeadJudgmentPayload)
+                            if payload.core_document_readiness is not None)
+            exact = {receipt.locator: receipt for receipt in judgment.evidence.receipts
+                     if receipt.acquisition is CollaborationEvidenceAcquisition.ATTACHED_REFERENCE}
+            for path in additional_read_paths:
+                receipt = exact["${" + path + "}"]
+                current = self.workspace.path(path).read_bytes()
+                digest = "sha256:" + hashlib.sha256(current).hexdigest()
+                self.assertEqual((receipt.revision_digest, receipt.content_digest, receipt.start_line,
+                                  receipt.end_line, receipt.utf8_bytes), (digest, digest, None, None, len(current)))
         readiness = self.runtime.inspect_core_document_readiness(self.session_id)
         self.assertEqual(readiness.complete_documents, tuple(path for path, _ in LEAD_FIXTURE_READINESS_DOCUMENTS),
             (result.kind, result.next_action, result.state, result.validation_details,

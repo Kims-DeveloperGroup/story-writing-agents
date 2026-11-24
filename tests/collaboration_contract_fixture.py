@@ -97,6 +97,8 @@ COLLABORATION_EVENT_EXPORTS = (
     'ArtifactApplicationDecisionPayload',
     'ArtifactApplicationRequestPayload',
     'ArtifactApplicationResultPayload',
+    'SynchronizationPayload',
+    'synchronization_event_ref',
     'StoryCommitDecisionPayload',
     'StoryCommitRequestPayload',
     'StoryCommitResultPayload',

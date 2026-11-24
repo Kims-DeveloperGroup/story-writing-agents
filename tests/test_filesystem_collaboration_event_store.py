@@ -43,6 +43,7 @@ from story_writing_agents.conversations import (
     encode_collaboration_batch,
     encode_collaboration_event,
     project_collaboration_history,
+    synchronization_event_ref,
 )
 from story_writing_agents.errors import WorkspaceFormatError, WorkspaceSecurityError
 from story_writing_agents.workspace.core import Workspace
@@ -53,6 +54,7 @@ from tests.collaboration_contract_fixture import (
     measured_batch,
 )
 from tests.helpers import pristine_initialized_workspace
+from tests.synchronization_contract_fixture import synchronization_unread_batch
 
 
 def _object_effect_patch(target, attribute, value):
@@ -309,6 +311,32 @@ class FilesystemCollaborationEventStorePersistenceTests(unittest.TestCase):
                         value.store.append_batch(candidate)
                     self.assertIs(raised.exception.failure, expected)
                     self.assertEqual(value.history_path.read_bytes(), committed)
+
+            conversation = value.catalog.create(SESSION_ID, "Unread synchronization target").conversation_id
+            rejected = synchronization_unread_batch(conversation, stale_request=True)
+            with self.assertRaises(CollaborationAppendError) as raised:
+                value.store.append_batch(rejected)
+            self.assertIs(raised.exception.failure, CollaborationAppendFailure.INVALID_TRANSITION)
+            sync_path = value.history_path.parent.parent / conversation / value.history_path.name
+            self.assertFalse(sync_path.exists())
+            batch = synchronization_unread_batch(conversation)
+            receipt = value.store.append_batch(batch)
+            self.assertIs(receipt.status, CollaborationAppendStatus.APPENDED)
+
+            restored = FilesystemCollaborationEventStore(value.workspace, catalog=value.catalog)
+            history = restored.read(SESSION_ID, conversation)
+            self.assertEqual(tuple(event.to_draft() for event in history), batch.events)
+            assessment = history[-1].payload.assessment
+            self.assertEqual(assessment.basis.request, synchronization_event_ref(history[0]))
+            self.assertFalse(assessment.ready)
+            self.assertTrue(any(reason.endswith("unread") for reason in assessment.blockers))
+            projection = restored.read_context(SESSION_ID, conversation)
+            self.assertEqual(projection, project_collaboration_history(history))
+            self.assertEqual(projection.synchronization.assessments,
+                             ((synchronization_event_ref(history[-1]), assessment),))
+            self.assertEqual(restored.append_batch(batch).status, CollaborationAppendStatus.ALREADY_COMMITTED)
+            self.assertEqual(sync_path.read_bytes(), _encode_history(history))
+            self.assertEqual(value.history_path.read_bytes(), committed)
 
     def test_all_required_co_batches_append_and_split_forms_are_atomic(
         self,

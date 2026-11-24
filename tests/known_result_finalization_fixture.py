@@ -57,6 +57,74 @@ def finalize_known_result(runtime, session_id, events, projection):
     )
 
 
+def _synchronization_fixture_assessment(
+    material, proposal, candidate, request, judgment, candidate_draft, synthesis, reviewer,
+):
+    """Bind pre-seeded reviewer facts to captured workspace and projected candidate bytes."""
+    from hashlib import sha256
+
+    from story_writing_agents.conversations import authoring_scope_to_dict, synchronization_event_ref
+    from story_writing_agents.conversations.event_value_validation import canonical_json
+    from story_writing_agents.synchronization_assessment import (
+        SynchronizationAbsence,
+        SynchronizationAssessment,
+        SynchronizationBasis,
+        SynchronizationCandidate,
+        SynchronizationFinding,
+        SynchronizationJudgment,
+        SynchronizationRead,
+    )
+
+    documents = {row.path: row for row in material.census.documents}
+    prior = {row.path: row for row in material.census.prior_documents}
+    receipts = {row.locator.removeprefix("${").removesuffix("}"): row
+                for row in judgment.payload.evidence.receipts}
+    changed_paths = frozenset(material.census.changes)
+
+    def read(path: str):
+        current = documents[path]
+        if path in changed_paths and current.digest is not None:
+            return SynchronizationRead(current, synchronization_event_ref(candidate_draft), "candidate")
+        document = prior.get(path, current)
+        receipt = receipts.get(path)
+        if receipt is None or receipt.revision_digest != f"sha256:{document.digest}":
+            return None
+        return SynchronizationRead(document, synchronization_event_ref(judgment), receipt.evidence_id,
+                                   receipt.start_line, receipt.end_line,
+                                   selection_digest=receipt.content_digest,
+                                   source_revision=receipt.revision_digest)
+
+    findings = []
+    for changed, target in material.census.required_pairs:
+        if documents[target].absence is SynchronizationAbsence.INITIAL:
+            finding = SynchronizationFinding(changed, target, SynchronizationJudgment.INITIAL,
+                                             "The fixture user leaves later initial construction open.")
+        else:
+            reads = (read(changed), read(target))
+            if any(item is None for item in reads):
+                continue
+            finding = SynchronizationFinding(
+                changed, target, SynchronizationJudgment.NO_CHANGE,
+                "The fixture review found no change needed for the demonstrated material.",
+                reads, synchronization_event_ref(reviewer),
+            )
+        findings.append(finding)
+    conditions = authoring_scope_to_dict(proposal.authoring_scope)
+    conditions["editorial_context"] = proposal.basis.editorial_context_digest
+    rules = documents["core_documents/narrative_rules.md"]
+    basis = SynchronizationBasis(
+        proposal.authoring_scope.task_id, proposal.authoring_scope.task_revision,
+        synchronization_event_ref(request),
+        "sha256:" + sha256(canonical_json(conditions)).hexdigest(),
+        "sha256:" + sha256(canonical_json(rules.digest)).hexdigest(),
+        candidate.change_set.base_state_digest, candidate.change_set.projected_state_digest,
+        SynchronizationCandidate(candidate.candidate_id, candidate.candidate_revision,
+                                 candidate.candidate_digest, candidate.change_set.change_set_digest),
+        review_synthesis=synchronization_event_ref(synthesis),
+    )
+    return SynchronizationAssessment(basis, material.census, tuple(findings))
+
+
 async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_core_evidence=(),
                                  editorial_refs=(), editorial_context_digest=None):
     """Publish a real reviewed candidate without unrelated provider authoring."""
@@ -65,6 +133,8 @@ async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_cor
     from dataclasses import fields, is_dataclass
 
     from story_writing_agents import artifact_proposals as artifacts
+    from story_writing_agents.artifact_transactions.synchronization_material import capture_synchronization_material
+    from story_writing_agents.conversations import SynchronizationPayload
     from story_writing_agents.runtime_resources import collaboration_event_journal as event_journal
     from tests.recommendation_fixture import task_assessment
     from story_writing_agents.conversations import events as payloads, event_vocabulary as vocabulary
@@ -73,6 +143,8 @@ async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_cor
         AuthoringActivity, AuthoringScope, ReviewBasis, SpecialistAssignmentMode,
         AuthoringContribution, AuthoringContributionRole,
     )
+
+    from story_writing_agents.writing_artifacts.catalog import CORE_ARTIFACT_PATHS
 
     runtime, session_id = case.runtime, case.session_id
     prefix = event_journal.new_id("fixture")
@@ -99,10 +171,14 @@ async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_cor
             artifacts.ArtifactRenameIntent(by_path[path], value)
             for kind, path, value in operations
         )
+        read_evidence = (*evidence, *(artifacts.ArtifactIntentEvidence(
+            evidence_id=f"{prefix}_sync_{index}", path=path, source_digest=digest(content),
+            boundary_digest=digest(content), start_line=None, end_line=None,
+        ) for index, (path, content) in enumerate(base.items()) if path not in by_path))
         candidate = artifacts.build_artifact_review_candidate(
             candidate_id=prefix + "_candidate", candidate_revision=1,
-            intent=artifacts.ArtifactProposalIntent(intents), evidence=evidence,
-            grounding_evidence_ids=tuple(item.evidence_id for item in evidence), base_state=base,
+            intent=artifacts.ArtifactProposalIntent(intents), evidence=read_evidence,
+            grounding_evidence_ids=tuple(item.evidence_id for item in read_evidence), base_state=base,
             attached_core_paths=tuple(sorted({item.path for item in evidence if item.evidence_id.startswith("reference_") and item.path.startswith("core_documents/")}, key=lambda path: path.encode("utf-8"))),
         )
         manifest = digest(json.dumps(
@@ -120,9 +196,11 @@ async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_cor
             utf8_bytes=len(base[item.path]), boundary_start=1,
             boundary_end=max(1, len(base[item.path].splitlines())), start_line=1,
             end_line=max(1, len(base[item.path].splitlines())), ordinal=index + 1,
-        ) for index, item in enumerate(evidence))
+        ) for index, item in enumerate(read_evidence))
         template_evidence = CollaborationLeadEvidence(
-            LeadOutcomeScope.STORY_SPECIFIC, LeadEvidenceStatus.VERIFIED if any(base[item.path] for item in evidence) else LeadEvidenceStatus.EMPTY, receipts,
+            LeadOutcomeScope.STORY_SPECIFIC,
+            LeadEvidenceStatus.VERIFIED if any(base[item.path] for item in read_evidence) else LeadEvidenceStatus.EMPTY,
+            receipts,
         )
         live_evidence = replace(template_evidence, receipts=tuple(replace(
             receipt, operation_id=f"lead_{turn_id}", result_correlation_id=f"outcome_{turn_id}",
@@ -150,6 +228,13 @@ async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_cor
             review_basis=ReviewBasis((input_id,), "Review the exact candidate.", 1),
         ) for item in assignments)
         user_text = ("Review exact supplied operations. You may give bounded artifact review judgments; preserve supplied " "facts and paths. Execution requires separate confirmation.\nOperations: " + json.dumps(operations))
+        initial_construction = all(kind == "create" and path in CORE_ARTIFACT_PATHS
+                                   for kind, path, _ in operations)
+        if initial_construction:
+            user_text += "\nTreat remaining unbuilt core documents as unfinished initial construction."
+        synchronization_material = capture_synchronization_material(
+            base, candidate.change_set, requested_paths=scope.target_paths, initial_construction=initial_construction,
+        )
         proposal = replace_proposal(
             generic, step_id=prefix + "_step", assignments=live_assignments,
             basis=qualify_fixture_basis(replace(generic.basis, inputs=(make_input(
@@ -221,10 +306,14 @@ async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_cor
             batches[-1][1].append(record)
         batches.append((result.batch_id, list(result.events)))
         sequence = 0
+        request_draft = event_journal.draft(
+            session_id=session_id, conversation_id=conversation_id, turn_id=turn_id,
+            step_id=proposal.step_id, kind=CollaborationEventKind.MESSAGE,
+            sender=USER, recipient=LEAD, payload=CollaborationMessagePayload(user_text),
+        )
+        judgment_draft = candidate_draft = None
         for _, batch in batches:
-            drafts = [event_journal.draft(session_id=session_id, conversation_id=conversation_id,
-                turn_id=turn_id, step_id=proposal.step_id, kind=CollaborationEventKind.MESSAGE,
-                sender=USER, recipient=LEAD, payload=CollaborationMessagePayload(user_text))] if sequence == 0 else []
+            drafts = [request_draft] if sequence == 0 else []
             for record in batch:
                 payload = remap(record.payload)
                 kind = record.kind
@@ -235,7 +324,7 @@ async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_cor
                     identities[TURN_ID], proposal.step_id, kind, record.sender, record.recipient, payload,
                 ))
                 if type(payload) is CollaborationLeadSynthesisPayload:
-                    drafts.append(event_journal.draft(
+                    synthesis_draft = event_journal.draft(
                         session_id=session_id, conversation_id=conversation_id,
                         turn_id=turn_id, step_id=proposal.step_id,
                         kind=vocabulary.CollaborationEventKind.ARTIFACT_REVIEW_SYNTHESIS,
@@ -248,14 +337,28 @@ async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_cor
                             "Apply only the disclosed paths.", "Fixture review has no provider activity.",
                             payload.reply_event_ids, payload.unresolved_input_ids,
                         ),
+                    )
+                    drafts.append(synthesis_draft)
+                    assert judgment_draft is not None and candidate_draft is not None
+                    reviewer = next(item for item in drafts if item.event_id == payload.reply_event_ids[0])
+                    assessment = _synchronization_fixture_assessment(
+                        synchronization_material, proposal, candidate, request_draft, judgment_draft,
+                        candidate_draft, synthesis_draft, reviewer,
+                    )
+                    drafts.append(event_journal.draft(
+                        session_id=session_id, conversation_id=conversation_id, turn_id=turn_id,
+                        step_id=proposal.step_id, kind=CollaborationEventKind.SYNCHRONIZATION,
+                        sender=RUNTIME, recipient=USER, payload=SynchronizationPayload(assessment=assessment),
                     ))
                 if type(payload) is CollaborationLeadJudgmentPayload:
-                    drafts.append(event_journal.draft(
+                    judgment_draft = drafts[-1]
+                    candidate_draft = event_journal.draft(
                         session_id=session_id, conversation_id=conversation_id,
                         turn_id=identities[TURN_ID], step_id=proposal.step_id,
                         kind=vocabulary.CollaborationEventKind.ARTIFACT_REVIEW_CANDIDATE,
                         sender=RUNTIME, recipient=USER, payload=candidate_payload,
-                    ))
+                    )
+                    drafts.append(candidate_draft)
                 if type(payload) is CollaborationStepStatePayload and payload.state in {
                     CollaborationStepState.AWAITING_CONFIRMATION, CollaborationStepState.RUNNING,
                 }:

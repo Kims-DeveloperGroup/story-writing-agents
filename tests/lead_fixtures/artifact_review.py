@@ -191,13 +191,84 @@ def _artifact_synthesis_outcome(
     *,
     malformed: str | None = None,
     message: str = "The exact candidate review is complete.",
+    current_reads: dict[str, str] | None = None,
 ):
     def respond(call, _provider):
         value = { "decision": decision, "message": message, }
+        if call.payload["response_contract"]["result_contract_id"] == "artifact-review-summary-v5":
+            material = _live_material(call)["synchronization"]
+            current = {item["path"]: item["id"] for item in material["current_review_evidence"]}
+            changed = set(material["changes"])
+            projected = {item["path"] for item in material["targets"]
+                         if item["path"] in changed and item["projected_digest"] is not None}
+            source_ids = {**current, **(current_reads or {}), **dict.fromkeys(projected, "candidate")}
+            value["synchronization_findings"] = [
+                {"changed_path": source, "target_path": target, "judgment": "no_change",
+                 "reason": "This fixture's disclosed document content requires no related edit.",
+                 "evidence_ids": list(dict.fromkeys((source_ids[source], source_ids[target]))),
+                 "review_event_ids": [], "domain": None, "action": None, "resolution": None,
+                 "abstraction": None, "resolves": []}
+                for source in sorted(changed & source_ids.keys())
+                for target in sorted(source_ids) if source != target and decision == "propose"
+            ]
         if malformed == "omit_rationale": value.pop("message")
         return _provider_envelope(call, value)
 
     return respond
+
+
+def artifact_synthesis_with_current_reads(read_queries: tuple[tuple[str, str], ...]):
+    """Exercise the synthesis invocation's real SEARCH and READ before its v5 result."""
+    from tests.provider_wire_fixture import (
+        finite_fixture_read_selection,
+        indexed_response,
+        offered_fixture_bindings,
+    )
+
+    expected = {path.removeprefix("manuscript/"): path for path, _ in read_queries}
+    selected: dict[str, str] = {}
+
+    def search(call, provider):
+        assert call.payload["response_contract"]["result_contract_id"] == "artifact-review-summary-v5"
+        material = _live_material(call)["synchronization"]
+        assert set(expected.values()) <= {
+            row["path"] for row in material["targets"] if row["current_read_available"]
+        }
+        outer, inner = offered_fixture_bindings(call, action_type="search_context", response_type=None, family=0)
+        return indexed_response({
+            "action_type": "search_context",
+            "queries": [{"search_text": query, "source_types": {"story_document": True}}
+                        for _, query in read_queries],
+        }, outer_schema_id=outer, inner_schema_id=inner, contract=call.contract)
+
+    def read(call, provider):
+        frame = provider.callback_payload(call)["context_observation"]
+        assert frame["observation_type"] == "context_search_results"
+        for row in frame["search_results"]:
+            locator = row["provenance"]["source_locator"]
+            if locator in expected:
+                selected.setdefault(locator, row["read_handle"])
+        assert selected.keys() == expected.keys()
+        handles = finite_fixture_read_selection(call.contract.offers.issued_handle_aliases, tuple(selected.values()))
+        outer, inner = offered_fixture_bindings(call, action_type="read_context", response_type=None, family=0)
+        return indexed_response({"action_type": "read_context", "read_handles": handles},
+                                outer_schema_id=outer, inner_schema_id=inner, contract=call.contract)
+
+    def submit(call, provider):
+        frame = provider.callback_payload(call)["context_observation"]
+        assert frame["observation_type"] == "context_read_results"
+        receipts = {}
+        for row in frame["read_results"]:
+            locator = row["provenance"]["source_locator"]
+            assert row["read_handle"] == selected[locator]
+            assert row["source"]["source_type"] == "story_document"
+            assert row["provenance"]["authority_type"] == "writing_artifact_repository"
+            receipts[expected[locator]] = row["evidence_id"]
+        assert set(receipts) == set(expected.values())
+        return _artifact_synthesis_outcome(current_reads=receipts)(call, provider)
+
+    return search, read, submit
+
 
 class ArtifactReviewFixture:
     def artifact_events(self, conversation_id: str, payload_type: type) -> tuple:

@@ -435,7 +435,16 @@ def project_result_schema(schema: Mapping, contract_id: str) -> dict:
                 types = [("core_document_readiness_assessment" if "core_document_assessment" in node["properties"] else
                           ("artifact_change_proposal" if "artifact_intent" in node["properties"] else "specialist_consultation_proposal") if kind == "proposal" else LEAD_RESPONSES[kind]) for kind in kinds]
             else:
-                types = [{"lead-exploration-response-v1": "lead_exploration", "specialist-assignment-response-v3": "specialist_assignment_result", "consultation-summary-v4": "consultation_summary", "artifact-review-summary-v4": "artifact_review_summary", "premise-analysis-response-v1": "premise_analysis_result", "premise-decision-summary-v1": "premise_decision_summary"}[family]]
+                types = [{
+                    "lead-exploration-response-v1": "lead_exploration",
+                    "specialist-assignment-response-v3": "specialist_assignment_result",
+                    "consultation-summary-v4": "consultation_summary",
+                    "consultation-synchronization-summary-v1": "consultation_summary",
+                    "artifact-review-summary-v4": "artifact_review_summary",
+                    "artifact-review-summary-v5": "artifact_review_summary",
+                    "premise-analysis-response-v1": "premise_analysis_result",
+                    "premise-decision-summary-v1": "premise_decision_summary",
+                }[family]]
             properties = {"response_type": {"type": "string", "enum": types}, **properties}
         result["properties"] = properties
         result["required"] = (["response_type"] if root and known else []) + [

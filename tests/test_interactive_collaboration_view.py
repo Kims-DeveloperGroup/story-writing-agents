@@ -46,6 +46,7 @@ from story_writing_agents.conversations import (
     CollaborationExecutionResult,
     CollaborationSpecialistAssessment,
     CollaborationSpecialistReplyPayload,
+    SynchronizationPayload,
     project_collaboration_history,
 )
 from story_writing_agents.git.story_commit_contracts import StoryCommitDecision
@@ -76,6 +77,13 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
                 if event in calls else event for event in events)
             rendered_artifact = render_component(_collaboration_view.project_collaboration_event(artifact, history_events=measured), _capability(CapabilityProfile.LINE, width=120)).text
             self.assertIn(f"Input tokens: 0 | Output tokens: {2 * len(calls)}", rendered_artifact)
+            reports = tuple(event for event in events if type(event.payload) is SynchronizationPayload
+                            and event.payload.assessment is not None)
+            self.assertEqual(tuple(event.payload.assessment.basis.projected for event in reports), (True, False))
+            rendered_sync = tuple(render_component(_collaboration_view.project_collaboration_event(
+                event, history_events=events), _capability(CapabilityProfile.LINE, width=120)).text for event in reports)
+            self.assertIn("projected", rendered_sync[0])
+            self.assertIn("current evidence", rendered_sync[1])
             services = case.runtime.conversation_storage_services
             metadata = services.catalog.create(case.session_id, "Measured host finalization")
             batches = contract_batches(metadata.conversation_id)

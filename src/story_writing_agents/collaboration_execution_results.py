@@ -6,6 +6,9 @@ from dataclasses import (
     dataclass,
     field,
 )
+from typing import TYPE_CHECKING
+
+from .agent_context.actions import ContextEvidenceReceipt
 from .reply_trace import ReplyTrace
 from .workspace.session_artifact_binding import (
     SessionArtifactBinding,
@@ -30,7 +33,11 @@ from .conversations import (
     StoryCommitPreparationRequest,
 )
 from .errors import BackendProtocolError
+from .lead_preparation.synchronization_review_response import SynchronizationReviewFinding
 from .runtime_resources import collaboration_event_journal as event_journal
+
+if TYPE_CHECKING:
+    from .artifact_transactions.synchronization_material import SynchronizationMaterial
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,12 +69,18 @@ class ArtifactSynthesisResult:
 
     collaboration: CollaborationLeadSynthesisPayload
     artifact: ArtifactReviewSynthesisPayload
+    synchronization_findings: tuple[SynchronizationReviewFinding, ...] = field(default=(), kw_only=True, repr=False)
+    synchronization_material: SynchronizationMaterial | None = field(default=None, kw_only=True, repr=False)
+    synchronization_reads: tuple[ContextEvidenceReceipt, ...] = field(default=(), kw_only=True, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
 class LeadSynthesisResult:
     collaboration: CollaborationLeadSynthesisPayload
     recommended_action: LeadRecommendedAction | None
+    synchronization_findings: tuple[SynchronizationReviewFinding, ...] = field(default=(), kw_only=True, repr=False)
+    synchronization_material: SynchronizationMaterial | None = field(default=None, kw_only=True, repr=False)
+    synchronization_reads: tuple[ContextEvidenceReceipt, ...] = field(default=(), kw_only=True, repr=False)
 
 
 def blocking_lead_result(
@@ -134,6 +147,7 @@ def pending_artifact_operation_result(
     events: tuple[CollaborationEvent, ...],
     projection: CollaborationHistoryProjection,
 ) -> LeadTurnResult | None:
+    events = tuple(event for event in events if event.kind is not CollaborationEventKind.SYNCHRONIZATION)
     if projection.current_artifact_application_request is None:
         return None
     action = projection.next_safe_action

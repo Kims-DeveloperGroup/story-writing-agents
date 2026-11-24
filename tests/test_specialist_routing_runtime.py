@@ -62,7 +62,10 @@ from tests.lead_fixtures.preparation_data import (
 from tests.provider_wire_fixture import answer as wire_answer, contract_id as wire_contract_id
 from tests.recommendation_fixture import DRAFT, action, recommendation, decision as recommendation_decision, task_assessment
 from story_writing_agents.conversations.events import shared_premises_to_dict
-from tests.lead_fixtures.artifact_review import artifact_review_outcome, _artifact_synthesis_outcome, artifact_evidence_status_id
+from tests.lead_fixtures.artifact_review import (
+    artifact_review_outcome, _artifact_synthesis_outcome, artifact_evidence_status_id,
+    artifact_synthesis_with_current_reads,
+)
 
 from tests.lead_fixtures.preparation_data import (
     OUTLINE,
@@ -75,6 +78,7 @@ from tests.lead_fixtures.specialist_routing import SpecialistRoutingRuntimeCase,
 from tests.lead_preparation.test_specialist_advisory_scope import SpecialistAdvisoryScopeCases
 
 CHARACTER = "core_documents/character_sheets.md"
+_OPENING_PATH = "manuscript/part-01/opening.md"
 
 
 _ADOPTION_DIRECTION = (
@@ -111,6 +115,8 @@ class SpecialistRoutingRuntimeTests(SpecialistRoutingRuntimeCase):
         self.assertEqual((rejected.proposal, rejected.recommendation_request, rejected.artifact_application_request,
             rejected.story_commit_request, rejected.confirmation_request_id), (None,) * 5)
         self.workspace.path(OUTLINE).write_bytes(b"")
+        self.workspace.path("core_documents/part_outlines.md").write_text("Departure establishes the route.\n", encoding="utf-8")
+        self.workspace.path("core_documents/narrative_rules.md").write_text("Restrained tone and close viewpoint.\n", encoding="utf-8")
         conversation = self.conversation()
         assessment = admission.assessment_to_dict(_fixture_assessment())
         before = self.artifact_bytes(); self._synthesis_checks = []
@@ -148,8 +154,14 @@ class SpecialistRoutingRuntimeTests(SpecialistRoutingRuntimeCase):
         self.assertIs(review.proposal.assignments[0].mode, SpecialistAssignmentMode.REVIEW)
         self.assertEqual(review.proposal.budget.rounds_spent, 1)
         self.backend.enqueue_for(PLOT_ARCHITECT, lead_specialist_outcome("supports"))
-        self.backend.enqueue_for(LEAD_ORCHESTRATOR, _artifact_synthesis_outcome())
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, *artifact_synthesis_with_current_reads((
+            ("core_documents/part_outlines.md", "Departure establishes"),
+            (CHARACTER, "Mara wants"),
+            ("core_documents/narrative_rules.md", "Restrained tone"),
+            (_OPENING_PATH, "Opening one"),
+        )))
         reviewed = await self.runtime.decide_lead_step(lead_confirmation_decision(review, c.CollaborationConfirmationDecision.CONFIRM))
+        self.assertIsNotNone(reviewed.turn.artifact_application_request, reviewed.turn.message)
         await self.runtime.decide_artifact_application(_application_decision(reviewed.turn, c.ArtifactApplicationDecisionKind.REJECT))
         prefix = self.history(conversation)
         completed = c.project_collaboration_history(prefix)
@@ -159,7 +171,8 @@ class SpecialistRoutingRuntimeTests(SpecialistRoutingRuntimeCase):
         self.assertIs(memory.status, editorial.EditorialRecordStatus.RECORDED)
         unchanged = c.project_collaboration_history(self.history(conversation))
         self.assertEqual((unchanged.rounds_spent, unchanged.physical_calls_spent), (completed.rounds_spent, completed.physical_calls_spent))
-        self.assertGreaterEqual(12 - completed.physical_calls_spent, 4)
+        self.assertEqual(completed.physical_calls_spent, 9)
+        self.assertGreaterEqual(12 - completed.physical_calls_spent, 2)
         self.assertEqual(self.artifact_bytes(), before)
         before_blocked = len(self.backend.calls)
         blocked = await self.runtime.lead_turn(self.session_id, conversation, _ADMISSION_BRIEF)
@@ -304,7 +317,7 @@ class SpecialistRoutingRuntimeTests(SpecialistRoutingRuntimeCase):
         self.assertIs(rejected.turn.state, c.CollaborationStepState.REJECTED)
         single = await self.proposal_for(self.conversation())
         self.assertEqual(single.proposal.participants, (PLOT_ARCHITECT,))
-        readiness = await self.record_book_readiness()
+        readiness = await self.record_book_readiness(additional_read_paths=(_OPENING_PATH,))
         from story_writing_agents.agent_context.sources.session_history import SessionHistorySourceAdapter
         expected_snapshots = []
         def mixed_with_snapshot(call, provider):
@@ -1065,7 +1078,7 @@ class SpecialistRoutingRuntimeTests(SpecialistRoutingRuntimeCase):
         self.assertEqual(len(_submitted_calls(self.history(extra.conversation_id))), failed_calls + 2)
         self.assertNotEqual(c.project_collaboration_history(self.history(extra.conversation_id)).next_safe_action,
                             c.CollaborationNextAction.RETRY_LEAD_TURN)
-        await self.record_book_readiness(seed_before_capture=True)
+        await self.record_book_readiness(seed_before_capture=True, additional_read_paths=(_OPENING_PATH,))
         conversation = self.conversation()
         before = self.artifact_bytes()
         premise = "Synthetic tidal city 한글\r\nKeep the stated limit.  "
@@ -1168,7 +1181,7 @@ class SpecialistRoutingRuntimeTests(SpecialistRoutingRuntimeCase):
         adopted_inputs = [item for actor, call in self.backend.call_records if actor in ROSTER for item in _workflow_material(call.payload)["inputs"] if item["input_id"] == "adopted_idea"]
         self.assertEqual([item["conversation_event"]["capture"]["selected_text"].encode("utf-8") for item in adopted_inputs], [premise.encode("utf-8")] * (2 * len(ROSTER)))
         self.assertEqual(self.artifact_bytes(),before)
-        self.assertIsNotNone(reviewed.turn.artifact_application_request)
+        self.assertIsNotNone(reviewed.turn.artifact_application_request, reviewed.turn.message)
         self.assertEqual(self.history(conversation)[:len(draft_prefix)],draft_prefix)
         final_proposal = reviewed.turn.artifact_proposal.reviewed_proposal
         from tests.test_agent_exchange_viewer import _assert_typed_history_phase
@@ -1245,6 +1258,8 @@ class SpecialistRoutingRuntimeTests(SpecialistRoutingRuntimeCase):
         with self.assertRaisesRegex(ValueError, "latest"):
             await restarted.lead_turn(self.session_id, new_owner, "Do not reuse the old choice.", adoption=selection)
         self.assertEqual((self.history(conversation), len(self.backend.calls)), (owner_history, calls))
+        # The later rule review must also account for the manuscript this test just applied.
+        await self.record_book_readiness(preserve_documents=True, additional_read_paths=(_OPENING_PATH, path))
         fresh_path = "core_documents/narrative_rules.md"
         rule_path = "core_documents/narrative_rules.md"
         rule_locator = "${core_documents/narrative_rules.md}"
@@ -1314,6 +1329,7 @@ class SpecialistRoutingRuntimeTests(SpecialistRoutingRuntimeCase):
         current_review = await self.runtime.decide_lead_step(lead_confirmation_decision(prepared,
                              c.CollaborationConfirmationDecision.CONFIRM))
         self.assertIs(current_review.turn.artifact_proposal.state, c.ArtifactProposalState.REVIEWED)
+        self.assertIsNotNone(current_review.turn.artifact_application_request, current_review.turn.message)
         current_frames = [_workflow_material(call.payload) for actor, call in self.backend.call_records
                           if actor in ROSTER][-len(late_roster):]
         current_candidates = [next(item["artifact_candidate"] for item in frame["inputs"]
@@ -1401,7 +1417,7 @@ class SpecialistRoutingRuntimeTests(SpecialistRoutingRuntimeCase):
         from story_writing_agents.conversations import session_context as session_context_module
         self.enterContext(mock.patch.object(session_context_module, "MAX_SESSION_CONTEXT_UTF8_BYTES", 512 * 1024))
         from story_writing_agents import ReplyTraceOrigin
-        readiness = await self.record_book_readiness()
+        readiness = await self.record_book_readiness(additional_read_paths=(_OPENING_PATH,))
         from story_writing_agents.agent_context.sources.session_history import SessionHistorySourceAdapter
         services = self.runtime.conversation_storage_services
         readiness_snapshot = SessionHistorySourceAdapter(services.catalog, services.event_store, self.session_id).capture()

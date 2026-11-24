@@ -7,6 +7,7 @@ import hashlib
 import json
 
 from .core_document_readiness import AuthoringTarget, DEPENDENCIES, targets_for_paths, ReadinessSource
+from .synchronization_obligations import SynchronizationConditionState
 from .editorial_scope import (EditorialScopeCoverage, EditorialScopeKind,
     editorial_coverage_to_dict, editorial_scope_from_dict, editorial_scope_target_from_dict)
 from .lead_task_transitions import LeadTaskRef, task_value_to_dict, task_value_from_dict
@@ -287,10 +288,15 @@ class DocumentNodeView:
     next_action: DocumentNodeNextAction
     candidate_refs: tuple[DocumentCandidateRef, ...] = field(default=(), kw_only=True)
     prerequisite_sources: tuple[ReadinessSource, ...] = field(default=(), kw_only=True)
+    synchronization_conditions: tuple[SynchronizationConditionState, ...] = field(default=(), kw_only=True)
 
     def __post_init__(self) -> None:
         if type(self.prerequisite_sources) is not tuple or any(type(x) is not ReadinessSource for x in self.prerequisite_sources):
             raise TypeError("prerequisite sources must be current typed READ facts")
+        if type(self.synchronization_conditions) is not tuple or any(
+            type(item) is not SynchronizationConditionState for item in self.synchronization_conditions
+        ):
+            raise TypeError("plan synchronization conditions must be typed")
         if type(self.candidate_refs) is not tuple or any(type(x) is not DocumentCandidateRef for x in self.candidate_refs):
             raise TypeError("candidate offers must be exact read-only references")
         _text(self.node_id)

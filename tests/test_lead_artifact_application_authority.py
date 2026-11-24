@@ -406,7 +406,8 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         self.assertIsNone(prepared.commit_request)
         self.assertEqual(self.git_snapshot(), git_before)
         prepared_events = self.history(turn.conversation_id)
-        self.assertIs(type(prepared_events[-1].payload), ArtifactApplicationResultPayload)
+        prepared_result = next(event for event in reversed(prepared_events)
+                               if type(event.payload) is ArtifactApplicationResultPayload)
         self.assertFalse(
             any(type(event.payload) is StoryCommitRequestPayload for event in prepared_events)
         )
@@ -420,7 +421,7 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         assert reprepare is not None
         self.assertEqual(
             (reprepare.application_result_event_id, reprepare.tail_event_id),
-            (prepared_events[-1].event_id,) * 2,
+            (prepared_result.event_id,) * 2,
         )
         self.assertEqual(
             (reprepare.application_id, reprepare.application_request_digest),
@@ -429,7 +430,7 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         self.assertEqual(restarted_backend.calls, [])
         self.assertEqual(self.git_snapshot(), git_before)
         renewed = await restarted.reprepare_story_commit(reprepare)
-        self.assertEqual(renewed.application_result_event_id, prepared_events[-1].event_id)
+        self.assertEqual(renewed.application_result_event_id, prepared_result.event_id)
         self.assertIs(type(self.history(turn.conversation_id)[-1].payload), StoryCommitRequestPayload)
         with self.assertRaises(ValueError):
             await restarted.reprepare_story_commit(reprepare)
@@ -505,7 +506,7 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         self.assertIsNone(absent.commit_request)
         self.assertEqual(self.git_snapshot(), git_before)
         absent_events = self.history(turn.conversation_id)
-        self.assertIs(type(absent_events[-1].payload), ArtifactApplicationResultPayload)
+        self.assertEqual(project_collaboration_history(absent_events).current_artifact_application_result, absent.outcome)
         self.assertFalse(
             any(type(event.payload) is StoryCommitRequestPayload for event in absent_events)
         )

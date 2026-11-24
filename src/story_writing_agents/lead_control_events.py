@@ -29,6 +29,7 @@ from .conversations import (
 from .conversations.events import (
     CollaborationLeadExplorationResultPayload,
     CollaborationPremiseDecisionPayload,
+    SynchronizationPayload,
 )
 from .lead_premise_decisions import PremiseDecisionAction
 
@@ -68,7 +69,8 @@ def effective_lead_control_events(
                     and event.event_id != receipt.origin_message_event_id):
                 continue
             excluded.add(event.event_id)
-    return tuple(event for event in events if event.event_id not in excluded)
+    return tuple(event for event in events
+                 if event.event_id not in excluded and type(event.payload) is not SynchronizationPayload)
 
 
 def terminal_state_draft(

@@ -18,6 +18,7 @@ from ..lead_provider_contracts import (
 )
 from ..specialist_routing import (
     AuthoringActivity,
+    AuthoringIntent,
     AuthoringScope,
     SpecialistAssignmentMode,
 )
@@ -30,6 +31,7 @@ from ..conversations.event_vocabulary import LeadProposalRelation
 from ..lead_task_transitions import LeadTaskTransitionReceipt
 from typing import Mapping
 from . import response_rules
+from .synchronization_review_response import synchronization_findings_schema
 from ..conversations import CollaborationEvent
 from ..lead_task_transitions import LeadTaskAction
 
@@ -110,6 +112,7 @@ def lead_synthesis_result_contract(
     artifact_review: bool,
     authoring_scope: AuthoringScope,
     constraints: LeadProviderConstraints | None = None,
+    synchronization_required: bool = False,
 ) -> LeadResultRuleSeed:
     del evidence
     allow_next_intent = allow_next_intent and not (authoring_scope.schema_version == 3 and authoring_scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE})
@@ -130,6 +133,26 @@ def lead_synthesis_result_contract(
         "Rejecting a remedy never erases its concern. Reviewed or completed does not mean "
         "unanimous support, publication, or satisfaction of a pending document-change request."
     )
+    synchronization = (
+        {"synchronization_findings": synchronization_findings_schema(reply_event_ids)}
+        if synchronization_required else {}
+    )
+    if synchronization_required and not artifact_review:
+        if (authoring_scope.intent is not AuthoringIntent.REVIEW_ONLY
+                or authoring_scope.activity is not AuthoringActivity.REVIEW):
+            raise ValueError("current synchronization findings require review-only authority")
+        return reply_contract_values.lead_result_rule_seed(
+            "consultation-synchronization-summary-v1",
+            reply_contract_values.closed_result_object(
+                {**message, **synchronization},
+                description=(
+                    "Review the exact current documents against the disclosed synchronization conditions. "
+                    "Report which conditions the delivered READs and specialist findings support. Preserve "
+                    "unknowns and unresolved concerns. This consultation evaluates actual files and grants "
+                    "no drafting, Apply, or Commit authority. " + synthesis_guidance
+                ),
+            ),
+        )
     contract_id = "consultation-summary-v4"
     if not artifact_review:
         variants = [reply_contract_values.closed_result_object(message,
@@ -179,7 +202,7 @@ def lead_synthesis_result_contract(
                 + synthesis_guidance
             ),
         })
-    contract_id = "artifact-review-summary-v4"
+    contract_id = "artifact-review-summary-v5" if synchronization_required else "artifact-review-summary-v4"
     return reply_contract_values.lead_result_rule_seed(
         contract_id,
         reply_contract_values.closed_result_object({
@@ -188,6 +211,7 @@ def lead_synthesis_result_contract(
                 "type": "string",
             },
             **message,
+            **synchronization,
         },
             description=(
                 "Integrate all reviews of the exact immutable candidate: "

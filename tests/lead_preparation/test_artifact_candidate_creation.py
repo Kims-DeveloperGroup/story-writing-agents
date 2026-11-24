@@ -133,6 +133,11 @@ class ArtifactCandidateCreationDefinitions:
             (reviewed,), )
         projection = project_collaboration_history(self.history(conversation_id))
         self.assertEqual(projection.current_reviewed_artifact_proposal, reviewed)
+        synchronization = projection.synchronization.assessment_for_review(reviewed)
+        self.assertIsNotNone(synchronization)
+        self.assertIsNone(projection.current_artifact_application_request)
+        self.assertIn(ARTIFACT_FIXTURE_RULES_PATH, synchronization.census.changes)
+        self.assertTrue(synchronization.blockers)
         readable = project_collaboration_readable_history(self.history(conversation_id))
         readable_keys = {field.key.value for record in readable for field in record.fields}
         self.assertTrue({

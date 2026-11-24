@@ -26,7 +26,7 @@ from ..conversations.events import (
 from ..errors import BackendProtocolError
 from ..lead_premise_decisions import premise_conflicts_from_dict
 from ..lead_provider_contracts import PremiseDecisionConstraints, canonical_assignments
-from ..specialist_routing import AuthoringIntent, AuthoringScope, SpecialistAssignmentMode
+from ..specialist_routing import AuthoringActivity, AuthoringIntent, AuthoringScope, SpecialistAssignmentMode
 from ..structured_output_validation import (
     carry_validation,
     remap_validation,
@@ -34,6 +34,7 @@ from ..structured_output_validation import (
     validation_failure,
 )
 from . import outcome_decoding, proposal_basis_values, reply_contract_values
+from .synchronization_review_response import decode_synchronization_findings
 from ..lead_provider_contracts import LeadContractError
 from ..lead_provider_contracts import LeadProviderConstraints
 from ..authoring_task_lifecycle import TaskBindingPlan
@@ -49,9 +50,13 @@ def decode_artifact_synthesis(
     reply_event_ids: tuple[str, ...],
     replies: tuple[CollaborationSpecialistReplyPayload, ...],
     candidate: ArtifactReviewCandidatePayload,
+    synchronization_required: bool = False,
 ) -> ArtifactSynthesisResult:
     try:
-        value = outcome_decoding.strict_json_object(answer, {"decision", "message"})
+        keys = {"decision", "message"}
+        if synchronization_required:
+            keys.add("synchronization_findings")
+        value = outcome_decoding.strict_json_object(answer, keys)
         message = value["message"]
         evidence = proposal.basis.evidence
         if type(message) is not str or type(evidence) is not CollaborationLeadEvidence:
@@ -95,7 +100,16 @@ def decode_artifact_synthesis(
             reply_event_ids=reply_event_ids,
             unresolved_input_ids=unresolved,
         )
-        return ArtifactSynthesisResult(collaboration, artifact)
+        findings = (
+            validation_call(
+                "$.synchronization_findings",
+                decode_synchronization_findings,
+                value["synchronization_findings"],
+                reply_event_ids=reply_event_ids,
+            )
+            if synchronization_required else ()
+        )
+        return ArtifactSynthesisResult(collaboration, artifact, synchronization_findings=findings)
     except (KeyError, TypeError, UnicodeError, ValueError) as exc:
         raise carry_validation(
             BackendProtocolError('lead returned a noncanonical artifact review synthesis'),
@@ -179,15 +193,31 @@ def decode_lead_synthesis(
     reply_event_ids: tuple[str, ...],
     replies: tuple[CollaborationSpecialistReplyPayload, ...],
     review_candidate_ids: tuple[str, ...],
+    synchronization_required: bool = False,
 ) -> LeadSynthesisResult:
     try:
-        value = outcome_decoding.strict_json_object(
-            answer,
-            (
+        result_fields = (
+            {"message", "synchronization_findings"} if synchronization_required else (
                 frozenset({"message"}),
                 frozenset({"message", "next_intent"}),
                 frozenset({"message", "recommended_action"}),
-            ),
+            )
+        )
+        value = outcome_decoding.strict_json_object(answer, result_fields)
+        scope = proposal.authoring_scope
+        if synchronization_required and (
+            scope is None or scope.intent is not AuthoringIntent.REVIEW_ONLY
+            or scope.activity is not AuthoringActivity.REVIEW
+        ):
+            raise ValueError("current synchronization findings require review-only authority")
+        findings = (
+            validation_call(
+                "$.synchronization_findings",
+                decode_synchronization_findings,
+                value["synchronization_findings"],
+                reply_event_ids=reply_event_ids,
+            )
+            if synchronization_required else ()
         )
         message = value["message"]
         evidence = proposal.basis.evidence
@@ -269,7 +299,7 @@ def decode_lead_synthesis(
             evidence=evidence,
             next_intent=intent,
             authoring_scope=proposal.authoring_scope,
-        ), action)
+        ), action, synchronization_findings=findings)
     except (KeyError, TypeError, UnicodeError, ValueError) as exc:
         raise carry_validation(
             BackendProtocolError('lead returned a noncanonical synthesis'),

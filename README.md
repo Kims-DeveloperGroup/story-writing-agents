@@ -63,6 +63,19 @@ confirmation, sends every reviewer the same immutable candidate. A successful
 lead `propose` synthesis records a reviewed proposal whose Apply/write/Git
 flags are all false.
 
+Before offering Apply, the Lead checks the candidate's semantic impact on the
+other core documents and potentially related manuscripts. Findings cite the
+exact candidate and current read evidence. Missing coverage and open repair
+obligations are shown in the collaboration history. A reviewed candidate can
+be offered for Apply when its projected changes satisfy the current obligations.
+Applying it still requires a separate decision. Python callers can inspect the
+session's recorded findings and obligations with `inspect_semantic_synchronization()`.
+For a manual repair, ask for a review of both affected documents and confirm
+the disclosed specialist consultation. Resolution requires current reads of the
+two documents and the responsible specialist's assessment. Python callers can
+reconcile concurrent versions or mark work in progress with
+`control_semantic_synchronization()` using the exact heads returned by inspection.
+
 The Lead can assign drafting to one required specialist and constraint assessment
 to others. Shared premises and sources are disclosed before Confirm and remain
 fixed for that task revision. Every affected specialist still reviews the same

@@ -12,6 +12,7 @@ from ..event_contracts.artifact_apply import (
     ArtifactApplicationRequestPayload,
     ArtifactApplicationResultPayload,
 )
+from ..event_contracts.synchronization import SynchronizationPayload
 from ..event_contracts.artifact_reviews import (
     ArtifactProposalStatePayload,
     ArtifactReviewCandidatePayload,
@@ -711,6 +712,7 @@ def collaboration_readable_fields(
         StoryCommitRequestPayload,
         StoryCommitDecisionPayload,
         StoryCommitResultPayload,
+        SynchronizationPayload,
     }:
         return ()
     if type(payload) in {CollaborationLeadExplorationRequestPayload, CollaborationLeadExplorationResultPayload, CollaborationExplorationAdoptionPayload}:

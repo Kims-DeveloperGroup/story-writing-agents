@@ -26,6 +26,20 @@ from .conversations.context import project_lead_group_traces
 from .conversations import build_final_review_evidence
 from .conversations.events import authoring_scope_is_view, confirmation_task_bindings
 from .review_contracts import FinalReviewQualification
+from .artifact_transactions.synchronization_material import (
+    SynchronizationMaterial,
+    capture_current_synchronization_material,
+    capture_synchronization_material,
+    current_review_conditions,
+)
+from .artifact_transactions.synchronization_control import (
+    SynchronizationControlAction,
+    prepare_synchronization_control,
+)
+from .artifact_transactions.synchronization_review import retain_current_review_reads
+from .conversations.reducers.synchronization_history import SynchronizationHistory, derive_absence_origins
+from .synchronization_assessment import SynchronizationAbsence, SynchronizationDocument, SynchronizationEventRef
+from .conversations.event_contracts.synchronization import SynchronizationPayload
 
 from .agent_context.actions import ContextCallReadFact, ContextSourceStatusReceipt
 from .review_contracts import (ReviewTarget, ReviewTargetKind, ReviewTargetAvailability, LeadPreliminaryReview,
@@ -2213,6 +2227,46 @@ class StoryRuntime:
         services = self.conversation_storage_services
         return SessionHistorySourceAdapter(services.catalog, services.event_store, session_id).capture()
 
+    def inspect_semantic_synchronization(self, session_id: str) -> SynchronizationHistory:
+        """Inspect session synchronization history against current physical documents."""
+        history = self.capture_editorial_snapshot(session_id).synchronization()
+        if not history.assessments:
+            return history
+        binding = self.bind_session_artifacts(session_id)
+        with binding.open_ready_resources() as access:
+            current = {item.path: item.source.source_sha256 for item in access.repository.capture_complete_state()}
+        paths = set(current)
+        paths.update(item.path for _, assessment in history.assessments for item in assessment.census.documents)
+        documents = tuple(
+            SynchronizationDocument(path, current[path]) if path in current
+            else SynchronizationDocument(path, None, absence=SynchronizationAbsence.ABSENT)
+            for path in sorted(paths)
+        )
+        rules_digest = f"sha256:{hashlib.sha256(json.dumps(current.get(AuthoringTarget.NARRATIVE_RULES.value)).encode()).hexdigest()}"
+        return history.with_current_documents(documents, rules_digest=rules_digest)
+
+    async def control_semantic_synchronization(
+        self, session_id: str, conversation_id: str, *, action: SynchronizationControlAction,
+        obligation_id: str, parents: tuple[SynchronizationEventRef, ...], reason: str,
+    ) -> CollaborationAppendReceipt:
+        """Start repair or reconcile exact heads without granting write or resolution authority."""
+        self.validate_lead_identity(session_id, conversation_id)
+        lock = self._session_execution_scopes.conversation_lock(session_id, conversation_id)
+        async with lock:
+            projection = self.read_collaboration_context(session_id, conversation_id)
+            history = self.capture_editorial_snapshot(session_id).synchronization()
+            transition = prepare_synchronization_control(history.obligations, action, obligation_id, parents, reason)
+            draft = event_journal.draft(
+                session_id=session_id, conversation_id=conversation_id,
+                turn_id=event_journal.new_id("t"), step_id=event_journal.new_id("s"),
+                kind=CollaborationEventKind.SYNCHRONIZATION,
+                sender=event_journal.RUNTIME_ACTOR, recipient=event_journal.USER_ACTOR,
+                payload=SynchronizationPayload(transition=transition),
+            )
+            return event_journal.append_drafts(
+                projection.last_sequence, (draft,), append_batch=self.append_collaboration_event_batch,
+            )
+
     def inspect_core_document_readiness(self, session_id: str):
         """Project retained semantic judgments against independently current physical bytes."""
         snapshot = self.capture_editorial_snapshot(session_id)
@@ -3387,6 +3441,25 @@ class StoryRuntime:
         selected, value, dependencies = lead_material_inputs.specialist_assignment_material(
             proposal, assignment, input_events, events,
         )
+        synchronization = None
+        scope = proposal.authoring_scope
+        if (scope is not None and scope.intent is AuthoringIntent.REVIEW_ONLY
+                and assignment.mode is SpecialistAssignmentMode.REVIEW):
+            history = self.inspect_semantic_synchronization(session_id)
+            conditions = tuple(
+                condition for condition in current_review_conditions(history.obligations, scope.target_paths)
+                if assignment.specialist_id in specialists_for_domains((condition.domain,))
+            )
+            if conditions:
+                binding = self.bind_session_artifacts(session_id)
+                with binding.open_ready_resources() as access:
+                    current = {item.path: item.content for item in access.repository.capture_complete_state()}
+                synchronization = capture_current_synchronization_material(current, conditions)
+                snapshot = self.capture_editorial_snapshot(session_id)
+                synchronization = replace(synchronization, absence_origins=derive_absence_origins(
+                    snapshot.events(), conditions, synchronization.census.documents,
+                ))
+                value = {**value, "synchronization": synchronization.provider_input(history.obligations)}
         def decode(
             answer: str,
             _artifact_binding: SessionArtifactBinding,
@@ -3440,6 +3513,7 @@ class StoryRuntime:
             editorial_refs=proposal.basis.editorial_refs, editorial_context_digest=proposal.basis.editorial_context_digest,
             evidence=proposal.basis.evidence,
             authoring_basis=proposal.basis, authoring_scope=proposal.authoring_scope,
+            synchronization=synchronization,
         )
 
     async def _run_lead_synthesis(
@@ -3474,6 +3548,40 @@ class StoryRuntime:
             proposal, replies, events, input_events, conversation_id,
             reply_event_ids, constraints, artifact_candidate,
         )
+        synchronization = None
+        scope = proposal.authoring_scope
+        if scope is not None and (artifact_candidate is not None or scope.intent is AuthoringIntent.REVIEW_ONLY):
+            obligations = self.inspect_semantic_synchronization(session_id).obligations
+            selected_conditions = current_review_conditions(obligations, scope.target_paths) if artifact_candidate is None else ()
+        else:
+            selected_conditions = ()
+        if scope is not None and (artifact_candidate is not None or selected_conditions):
+            binding = self.bind_session_artifacts(session_id)
+            with binding.open_ready_resources() as access:
+                base_state = {item.path: item.content for item in access.repository.capture_complete_state()}
+            if artifact_candidate is not None:
+                snapshot = self.capture_editorial_snapshot(session_id)
+                readiness = proposal.basis.core_document_readiness
+                readiness_origin = None
+                if readiness is not None:
+                    snapshot.validate_readiness_use(readiness)
+                    readiness_origin = next((event for event in snapshot.events()
+                                             if snapshot.readiness_ref(event) in readiness.prior_assessment_refs), None)
+                synchronization = capture_synchronization_material(
+                    base_state, artifact_candidate.candidate.change_set,
+                    requested_paths=scope.target_paths, initial_construction=proposal.document_node is not None,
+                    previously_applied_paths=snapshot.previously_applied_paths() if proposal.document_node is not None else frozenset(),
+                )
+                synchronization = retain_current_review_reads(
+                    synchronization, base_state, events, artifact_candidate, readiness_origin,
+                )
+            else:
+                synchronization = capture_current_synchronization_material(base_state, selected_conditions)
+                current_history = self.capture_editorial_snapshot(session_id)
+                synchronization = replace(synchronization, absence_origins=derive_absence_origins(
+                    current_history.events(), selected_conditions, synchronization.census.documents,
+                ))
+            value = {**value, "synchronization": synchronization.provider_input(obligations)}
 
         def decode(
             answer: str,
@@ -3487,6 +3595,7 @@ class StoryRuntime:
                     reply_event_ids=reply_event_ids,
                     replies=replies,
                     candidate=artifact_candidate,
+                    synchronization_required=synchronization is not None,
                 )
             decoded = collaboration_response_decoding.decode_lead_synthesis(
                 answer,
@@ -3495,6 +3604,7 @@ class StoryRuntime:
                 reply_event_ids=reply_event_ids,
                 replies=replies,
                     review_candidate_ids=constraints.review_candidate_ids,
+                synchronization_required=synchronization is not None,
             )
             if decoded.recommended_action is not None:
                 current_events = self.conversation_storage_services.event_store.read(session_id, conversation_id)
@@ -3551,6 +3661,7 @@ class StoryRuntime:
                 artifact_review=artifact_candidate is not None,
                 authoring_scope=proposal.authoring_scope,
                 constraints=constraints,
+                synchronization_required=synchronization is not None,
             ),
             constraints=constraints,
             physical_call_limit=proposal.budget.synthesis_max_physical_calls,
@@ -3561,15 +3672,18 @@ class StoryRuntime:
                     {
                         "decision": ArtifactReviewDecision.REJECT.value,
                         "message": _SAFE_STRUCTURED_FALLBACK_MESSAGE,
+                        **({"synchronization_findings": []} if synchronization is not None else {}),
                     }
                     if artifact_candidate is not None
-                    else {"message": _SAFE_STRUCTURED_FALLBACK_MESSAGE}
+                    else {"message": _SAFE_STRUCTURED_FALLBACK_MESSAGE,
+                          **({"synchronization_findings": []} if synchronization is not None else {})}
                 ),
                 separators=(",", ":"),
             ),
             action_progress_sink=action_progress_sink,
             editorial_refs=proposal.basis.editorial_refs, editorial_context_digest=proposal.basis.editorial_context_digest,
             authoring_basis=proposal.basis, authoring_scope=proposal.authoring_scope,
+            synchronization=synchronization,
         )
 
     async def _run_premise_assignment(
@@ -3711,6 +3825,7 @@ class StoryRuntime:
         editorial_refs: tuple[EditorialRecordRef, ...] = (),
         editorial_context_digest: str | None = None,
         evidence: CollaborationLeadEvidence | None = None,
+        synchronization: SynchronizationMaterial | None = None,
     ) -> CollaborationInvocationResult:
         session_history: SessionHistorySnapshot | None = None
         artifact_inputs = tuple(
@@ -3828,7 +3943,7 @@ class StoryRuntime:
                 scope,
                 allowed_paths=frozenset(
                     proof.reference.path for proof in reference_operation.reference_proofs
-                ),
+                ) | (frozenset() if synchronization is None else synchronization.read_paths),
             )
             if evidence is not None:
                 lead_proposal_inputs.materialize_lead_evidence_inputs(
@@ -3889,6 +4004,9 @@ class StoryRuntime:
                 reference_failure: BaseException | None = None,
             ) -> CollaborationInvocationResult:
                 nonlocal bound_agent, generation_pin
+                if type(value) in {ArtifactSynthesisResult, LeadSynthesisResult} and result is not None and synchronization is not None:
+                    value = replace(value, synchronization_material=synchronization,
+                                    synchronization_reads=result.authorization.used_evidence)
                 if reference_failure is None:
                     reference_registry.finish_reference_operation(self.workspace, reference_operation)
                 else:
@@ -7572,6 +7690,18 @@ class RuntimeSession:
 
     def inspect_document_plans(self) -> tuple[DocumentPlanView, ...]:
         return self.runtime.inspect_document_plans(self.session_id)
+
+    def inspect_semantic_synchronization(self) -> SynchronizationHistory:
+        return self.runtime.inspect_semantic_synchronization(self.session_id)
+
+    async def control_semantic_synchronization(
+        self, conversation_id: str, *, action: SynchronizationControlAction,
+        obligation_id: str, parents: tuple[SynchronizationEventRef, ...], reason: str,
+    ) -> CollaborationAppendReceipt:
+        return await self.runtime.control_semantic_synchronization(
+            self.session_id, conversation_id, action=action, obligation_id=obligation_id,
+            parents=parents, reason=reason,
+        )
 
     def __init__(self, runtime: StoryRuntime, session_id: str) -> None:
         self.runtime = runtime

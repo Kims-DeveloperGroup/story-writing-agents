@@ -145,6 +145,16 @@ class LeadEditorialCaptureTests(RecommendationCase):
         self.assertIsNotNone(reviewed.artifact_application_request, reviewed)
         self.assertEqual(len(self.backend.calls) - source_positive_call_start, 12)
         review = self.projection(conversation_id).current_reviewed_artifact_proposal
+        synchronization = self.runtime.inspect_semantic_synchronization(self.session_id).assessment_for_review(review)
+        self.assertTrue(synchronization.ready)
+        self.assertEqual(synchronization.census.changes, (path,))
+        expected_sources = prepared.proposal.basis.core_document_readiness.prior_assessment_refs
+        target_reads = tuple(read for finding in synchronization.findings for read in finding.reads
+                             if read.document.path == finding.target_path)
+        self.assertEqual({read.document.path for read in target_reads},
+                         {path for path, _ in preparation_data.LEAD_FIXTURE_READINESS_DOCUMENTS})
+        self.assertEqual({f"{self.session_id}/{read.source.conversation_id}/{read.source.event_id}"
+                          for read in target_reads}, set(expected_sources))
         self.assertEqual([item.assessment.value for item in review.reviews], ["supports", "supports", "concern"])
         self.assertEqual(review.unresolved_input_ids, prepared.proposal.assignments[-1].input_ids)
         self.assertEqual(self.payload_events(conversation_id, c.ArtifactReviewSynthesisPayload)[-1].payload.message, account)

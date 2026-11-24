@@ -7,6 +7,10 @@ import json
 import unittest
 from dataclasses import replace
 from story_writing_agents import editorial_scope as scopes
+from story_writing_agents.artifact_transactions.synchronization_control import (
+    SynchronizationControlAction,
+    prepare_synchronization_control,
+)
 from story_writing_agents.conversations import (
     CollaborationEventKind,
     CollaborationMessagePayload,
@@ -15,6 +19,30 @@ from story_writing_agents.conversations import (
     encode_collaboration_event,
     project_collaboration_history,
     project_editorial_state,
+)
+from story_writing_agents.specialist_routing import ArtifactReviewDomain
+from story_writing_agents.synchronization_assessment import (
+    SynchronizationAbsence,
+    SynchronizationAbsenceOrigin,
+    SynchronizationAbsenceProof,
+    SynchronizationApplication,
+    SynchronizationAssessment,
+    SynchronizationBasis,
+    SynchronizationCandidate,
+    SynchronizationCensus,
+    SynchronizationDocument,
+    SynchronizationEventRef,
+    SynchronizationFinding,
+    SynchronizationJudgment,
+    SynchronizationRead,
+)
+from story_writing_agents.synchronization_obligations import (
+    SynchronizationCondition,
+    SynchronizationConditionState,
+    SynchronizationStatus,
+    SynchronizationTransition,
+    project_synchronization_obligations,
+    revalidate_synchronization_obligations,
 )
 from tests.collaboration_contract_fixture import (
     ATTEMPT_ID,
@@ -36,7 +64,232 @@ from tests.test_collaboration_events import (
 
 
 class CollaborationHistoryProjectionTests(unittest.TestCase):
+    def _assert_semantic_synchronization_assessment(self) -> None:
+        global_outline = "core_documents/global_outline.md"
+        part_outline = "core_documents/part_outlines.md"
+        character = "core_documents/character_sheets.md"
+        rules = "core_documents/narrative_rules.md"
+        chapter = "manuscript/part-01/chapter-03.md"
+        distant = "manuscript/part-09/chapter-21.md"
+        paths = (global_outline, part_outline, character, rules, chapter, distant)
+        by_path = {path: SynchronizationDocument(path, hashlib.sha256(path.encode()).hexdigest())
+                   for path in paths}
+        expected_targets = {
+            global_outline: (part_outline, character, rules, chapter, distant),
+            part_outline: (global_outline, character, rules, chapter, distant),
+            character: (global_outline, part_outline, rules, chapter, distant),
+            rules: (global_outline, part_outline, character, chapter, distant),
+            chapter: (global_outline, part_outline, character, rules, distant),
+        }
+        for changed_path, targets in expected_targets.items():
+            census = SynchronizationCensus((changed_path,), tuple(by_path.values()), True)
+            self.assertEqual(set(census.required_pairs), {(changed_path, target) for target in targets})
+
+        digest = "sha256:" + "1" * 64
+        source = SynchronizationEventRef(CONVERSATION_ID, "exact_read", digest)
+        review = SynchronizationEventRef(CONVERSATION_ID, "exact_review", digest)
+        request = SynchronizationEventRef(CONVERSATION_ID, "user_sync_request", digest)
+        basis = SynchronizationBasis("motive_task", 1, request, digest, digest, "2" * 64, "3" * 64)
+
+        def exact_finding(target: str) -> SynchronizationFinding:
+            reads = tuple(SynchronizationRead(by_path[path], source, f"read_{index}")
+                          for index, path in enumerate((chapter, target)))
+            return SynchronizationFinding(chapter, target, SynchronizationJudgment.NO_CHANGE,
+                                          "Current documents support the same story facts.", reads, review)
+
+        by_path[part_outline] = SynchronizationDocument(part_outline, None, absence=SynchronizationAbsence.INITIAL)
+        census = SynchronizationCensus((chapter,), tuple(by_path.values()), True)
+        initial = SynchronizationFinding(chapter, part_outline, SynchronizationJudgment.INITIAL,
+                                         "The requested initial part outline remains to be written.")
+        no_copy = replace(exact_finding(global_outline), judgment=SynchronizationJudgment.NOT_APPLICABLE,
+                          reason="The scene's sound detail leaves the story's event and motive unchanged.",
+                          abstraction="The global outline records events and causes without sensory detail.")
+        required = (no_copy, initial, *(exact_finding(path) for path in (character, rules, distant)))
+        complete = SynchronizationAssessment(basis, census, required)
+        self.assertTrue(complete.ready)
+        self.assertEqual(complete.findings[0].abstraction, no_copy.abstraction)
+        self.assertFalse(replace(complete, census=replace(census, complete=False)).ready)
+        self.assertFalse(replace(complete, findings=required[:-1]).ready)
+        unread = SynchronizationFinding(chapter, distant, SynchronizationJudgment.UNREAD,
+                                         "The distant manuscript has no qualified READ yet.")
+        self.assertFalse(replace(complete, findings=(*required[:-1], unread)).ready)
+        with self.assertRaises(ValueError):
+            replace(no_copy, abstraction=None)
+        with self.assertRaises(ValueError):
+            replace(no_copy, review=None)
+        stale_documents = tuple(replace(item, digest="a" * 64) if item.path == global_outline else item
+                                for item in census.documents)
+        with self.assertRaises(ValueError):
+            replace(complete, census=replace(census, documents=stale_documents))
+        with self.assertRaises(ValueError):
+            replace(complete, findings=(no_copy, replace(initial, target_path=rules)))
+
+        self._assert_causal_synchronization_obligations(complete)
+
+    def _assert_causal_synchronization_obligations(self, complete: SynchronizationAssessment) -> None:
+        outline, initial, character, rules, distant = complete.findings
+        digest = "sha256:" + "4" * 64
+
+        def ref(event_id: str, conversation_id: str = CONVERSATION_ID) -> SynchronizationEventRef:
+            return SynchronizationEventRef(conversation_id, event_id, digest)
+
+        discrepancy = replace(character, judgment=SynchronizationJudgment.NEEDS_CHANGE,
+                              domain=ArtifactReviewDomain.CHARACTER_WORLD,
+                              reason="The current scene and character sheet disagree on the motive.",
+                              action="Reconcile the motive in the character sheet.",
+                              resolution="Independent review confirms the exact motive in both documents.")
+        distant_conflict = replace(discrepancy, target_path=distant.target_path, reads=distant.reads,
+                                   reason="The distant chapter retains the earlier motive.")
+        detected_at = ref("detected")
+        found = replace(complete, findings=(outline, initial, discrepancy, rules, distant_conflict))
+        assessments = {detected_at: found}
+        condition = SynchronizationCondition.from_finding("motive", detected_at, discrepancy)
+        other = SynchronizationCondition.from_finding("distant_motive", detected_at, distant_conflict)
+        open_motive = SynchronizationConditionState(condition, SynchronizationStatus.OPEN, "Repair required.")
+        open_other = SynchronizationConditionState(other, SynchronizationStatus.OPEN, "Repair required.")
+        original, other_issue = ref("open"), ref("other")
+        root = SynchronizationTransition("motive_issue", 1, (), (open_motive,), "Original obligation.")
+        isolated = SynchronizationTransition("distant_issue", 1, (), (open_other,), "Related obligation.")
+        first = project_synchronization_obligations({original: root}, assessments)
+
+        candidate = SynchronizationCandidate("motive_candidate", 1, digest, "5" * 64)
+        absence = SynchronizationAbsenceProof(
+            SynchronizationAbsenceOrigin(character.changed_path, condition.condition_id,
+                                         detected_at, candidate, ref("candidate_tail")),
+            ref("absence_receipt"),
+        )
+        not_applicable = replace(
+            character, judgment=SynchronizationJudgment.NOT_APPLICABLE,
+            abstraction="No proposed source entered the current story.",
+            reads=tuple(read for read in character.reads if read.document.path == character.target_path),
+            domain=condition.domain, resolves=(condition.condition_id,), absences=(absence,),
+        )
+        self.assertEqual(not_applicable.absences[0].origin.path, character.changed_path)
+        with self.assertRaisesRegex(ValueError, "absence evidence"):
+            replace(not_applicable, judgment=SynchronizationJudgment.NO_CHANGE, abstraction=None)
+        corrected = replace(character, domain=condition.domain, resolves=(condition.condition_id,))
+        projected = replace(complete, basis=replace(complete.basis, candidate=candidate),
+                            findings=(outline, initial, corrected, rules, distant))
+        self.assertTrue(projected.ready)
+        self.assertEqual(first.blockers_after(projected), ())
+        self.assertTrue(first.blockers)
+        projected_at = ref("projected")
+        repair = SynchronizationConditionState(condition, SynchronizationStatus.RESOLVED,
+                                               "Matching repair reviewed.", projected_at)
+        resolved = SynchronizationTransition("motive_issue", 2, (original,), (repair,), "Repair reviewed.")
+        resolved_at = ref("resolved", "successor_conversation")
+        with self.assertRaises(ValueError):
+            project_synchronization_obligations({resolved_at: resolved, original: root},
+                                                {**assessments, projected_at: projected})
+        persisted_at = ref("applied_assessment", "successor_conversation")
+        application = SynchronizationApplication("motive_application", ref("application", "successor_conversation"))
+        applied = replace(projected, basis=replace(projected.basis, application=application))
+        assessments[persisted_at] = applied
+        repaired = replace(repair, evidence=persisted_at)
+        resolved = replace(resolved, conditions=(repaired,))
+        resolved_history = {resolved_at: resolved, original: root}
+        current = project_synchronization_obligations(resolved_history, assessments)
+        self.assertEqual(current.blockers, ())
+
+        moved = ref("in_progress", "another_conversation")
+        working = prepare_synchronization_control(
+            first, SynchronizationControlAction.START_REPAIR, "motive_issue",
+            (original,), "I will reconcile the motive.",
+        )
+        self.assertEqual((working.version, working.parents, working.conditions[0].status),
+                         (2, (original,), SynchronizationStatus.IN_PROGRESS))
+        working_projection = project_synchronization_obligations({original: root, moved: working}, assessments)
+        self.assertEqual(working_projection.blockers, ("motive: in_progress",))
+        with self.assertRaisesRegex(ValueError, "heads moved"):
+            prepare_synchronization_control(working_projection, SynchronizationControlAction.REVALIDATE,
+                                            "motive_issue", (original,), "The presentation changed.")
+        rebased = prepare_synchronization_control(
+            working_projection, SynchronizationControlAction.REVALIDATE,
+            "motive_issue", (moved,), "The character sheet changed.",
+        )
+        self.assertEqual((rebased.version, rebased.parents, rebased.conditions[0].status),
+                         (3, (moved,), SynchronizationStatus.REVALIDATE))
+        fork = {moved: working, **resolved_history, other_issue: isolated}
+        forked = project_synchronization_obligations(fork, assessments)
+        self.assertEqual({head.ref for head in forked.heads}, {moved, resolved_at, other_issue})
+        self.assertEqual(forked.forked_conditions, frozenset({"motive"}))
+        self.assertEqual(project_synchronization_obligations(dict(reversed(tuple(fork.items()))), assessments), forked)
+        with self.assertRaises(ValueError):
+            forked.require_parents(replace(working, parents=(moved,), version=3))
+        with self.assertRaisesRegex(ValueError, "every currently observed related head"):
+            prepare_synchronization_control(forked, SynchronizationControlAction.REVALIDATE,
+                                            "motive_issue", (moved,), "Preserve the active branch.")
+        reconciled = prepare_synchronization_control(
+            forked, SynchronizationControlAction.RECONCILE, "motive_issue",
+            (moved, resolved_at, other_issue), "Reconcile all observed repair conditions.",
+        )
+        self.assertEqual(reconciled.condition_ids, {"motive", "distant_motive"})
+        self.assertEqual({state.condition.condition_id: state.status for state in reconciled.conditions},
+                         {"motive": SynchronizationStatus.REVALIDATE, "distant_motive": SynchronizationStatus.OPEN})
+        merge = SynchronizationTransition("combined_issue", 3, (moved, resolved_at, other_issue),
+                                          (open_motive, open_other), "Preserve both repair conditions.")
+        merged_at = ref("merged", "another_conversation")
+        with self.assertRaises(ValueError):
+            project_synchronization_obligations({merged_at: replace(merge, conditions=(open_motive,)), **fork},
+                                                assessments)
+        needs_check = replace(open_motive, status=SynchronizationStatus.REVALIDATE)
+        merged = project_synchronization_obligations({merged_at: replace(merge, conditions=(needs_check, open_other)),
+                                                       **fork}, assessments)
+        self.assertEqual(merged.heads[0].transition.condition_ids, {"motive", "distant_motive"})
+
+        def revalidate(census: SynchronizationCensus, rules_digest: str):
+            return revalidate_synchronization_obligations(current, assessments, census,
+                                                         applied.basis.conditions_digest, rules_digest)
+
+        unchanged = revalidate(applied.census, applied.basis.rules_digest)
+        self.assertEqual(unchanged.heads[0].conditions, current.heads[0].conditions)
+        self.assertEqual(unchanged.blockers, ())
+        unrelated_edit = tuple(replace(item, digest="7" * 64) if item.path == distant.target_path else item
+                               for item in applied.census.documents)
+        self.assertEqual(revalidate(replace(applied.census, documents=unrelated_edit),
+                                    applied.basis.rules_digest).blockers, ())
+        changed_documents = tuple(replace(item, digest="6" * 64) if item.path == character.target_path else item
+                                  for item in applied.census.documents)
+        drifted = revalidate(replace(applied.census, documents=changed_documents), applied.basis.rules_digest)
+        self.assertEqual(drifted.heads[0].transition, resolved)
+        self.assertIs(drifted.heads[0].conditions[0].status, SynchronizationStatus.REVALIDATE)
+        self.assertTrue(revalidate(applied.census, digest).blockers)
+
+    def _assert_archived_synchronization_origin(self) -> None:
+        from story_writing_agents.conversations import (
+            ConversationMetadata,
+            ConversationStatus,
+            project_collaboration_readable_history,
+            synchronization_event_ref,
+        )
+        from story_writing_agents.conversations.catalog import CONVERSATION_METADATA_SCHEMA_VERSION
+        from story_writing_agents.conversations.session_context import SessionConversationHistory, SessionHistorySnapshot
+        from tests.synchronization_contract_fixture import synchronization_unread_batch
+
+        request, draft = synchronization_unread_batch("sync_archived").events
+        assessment_draft = replace(draft, conversation_id="sync_successor")
+        origin = store_batch((), make_batch((), "archived_request", request))
+        successor = store_batch((), make_batch((), "active_assessment", assessment_draft))
+
+        def row(events, status: ConversationStatus) -> SessionConversationHistory:
+            metadata = ConversationMetadata(
+                CONVERSATION_METADATA_SCHEMA_VERSION, SESSION_ID, events[0].conversation_id,
+                "Synchronization", 1, status, events[0].timestamp, events[-1].timestamp,
+            )
+            return SessionConversationHistory(metadata, project_collaboration_readable_history(events))
+
+        archived = row(origin, ConversationStatus.ARCHIVED)
+        active = row(successor, ConversationStatus.ACTIVE)
+        snapshot = SessionHistorySnapshot(SESSION_ID, (archived, active))
+        self.assertIsNone(project_collaboration_history(successor).current_artifact_application_request)
+        self.assertEqual(snapshot.synchronization().assessments,
+                         ((synchronization_event_ref(successor[0]), successor[0].payload.assessment),))
+        with self.assertRaisesRegex(ValueError, "synchronization evidence reference is missing"):
+            SessionHistorySnapshot(SESSION_ID, (active,)).synchronization()
+
     def test_projection_is_deterministic_ordered_typed_and_history_only(self) -> None:
+        self._assert_semantic_synchronization_assessment()
+        self._assert_archived_synchronization_origin()
         history, proposal, result = executed_history()
         first = project_collaboration_history(history)
         second = project_collaboration_history(tuple(history))
@@ -110,8 +363,10 @@ class CollaborationHistoryProjectionTests(unittest.TestCase):
                 "selectable_materials",
                 "public_responses",
                 "discussion_context",
+                "synchronization",
             ),
         )
+        self.assertEqual(first.synchronization.assessments, ())
 
         for kind in (editorial.EditorialRecordKind.DIRECTION, editorial.EditorialRecordKind.PROTECTED_AMBIGUITY, editorial.EditorialRecordKind.SETUP_OBLIGATION):
             memory = editorial_history(kind)
