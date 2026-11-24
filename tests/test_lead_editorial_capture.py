@@ -11,7 +11,7 @@ from story_writing_agents import StoryRuntime, conversations as c, editorial_sco
 from story_writing_agents.agents import EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR, PLOT_ARCHITECT
 from story_writing_agents.lead_preparation import call_rule_factory
 from story_writing_agents.specialist_routing import AuthoringActivity
-from tests import test_lead_artifact_application_authority as application, test_lead_story_commit_authority as commit, test_artifact_objectives as objectives
+from tests import test_lead_artifact_application_authority as application, test_artifact_objectives as objectives
 from tests.lead_fixtures import preparation_data, provider_responses
 from tests.provider_wire_fixture import scenario_input, selection_plan
 from tests.recommendation_fixture import (
@@ -215,9 +215,13 @@ class LeadEditorialCaptureTests(RecommendationCase):
                          (pending_plan.physical_calls_spent, pending_plan.rounds_spent))
         self.assertEqual(self.workspace.path(path).read_bytes(), text.encode())
         self.assertEqual(self.snapshots()[1:], pristine[1:])
-        self.assertIsNotNone(applied.commit_request)
-        rejected = await self.runtime.decide_story_commit(commit._commit_decision(applied, commit.StoryCommitDecision.REJECT))
-        self.assertIs(rejected.outcome.outcome, commit.StoryCommitOutcomeKind.REJECTED)
+        self.assertIsNone(applied.commit_request)
+        self.assertIs(applied.outcome.next_action, c.ArtifactApplicationNextAction.REPREPARE_COMMIT_REQUEST)
+        self.assertIn(f"Apply {satisfied.payload.application_id}: exact final specialist review", applied.message)
+        applied_projection = self.projection(conversation_id)
+        self.assertEqual(applied_projection.current_artifact_application_result, satisfied.payload)
+        self.assertIsNone(applied_projection.current_story_commit_request)
+        self.assertEqual(self.payload_events(conversation_id, c.StoryCommitResultPayload), ())
         facts = self.runtime.inspect_editorial_state(self.session_id).applied_facts
         self.assertEqual(len(facts), 1)
         fact = facts[0]
