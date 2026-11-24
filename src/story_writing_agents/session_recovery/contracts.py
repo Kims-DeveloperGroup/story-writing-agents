@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field, fields, is_dataclass
+from dataclasses import astuple, dataclass, field, fields, is_dataclass
 from enum import StrEnum
 from typing import NoReturn
 
@@ -14,6 +14,7 @@ from ..conversations import (
     CollaborationHistoryProjection,
     CollaborationNextAction,
     CollaborationStepState,
+    StoryCommitNextAction,
     StoryCommitOutcomeKind,
 )
 from ..git import (
@@ -28,6 +29,8 @@ from ..git.session_contracts import (
     GitSessionResourceState,
 )
 from ..git.session_history_contracts import (
+    GitSessionCandidatePath,
+    GitSessionCandidatePathOperation,
     GitSessionCandidateRecord,
     GitSessionCheckpointOperationRecord,
     GitSessionCommitOperationRecord,
@@ -462,6 +465,14 @@ def reconcile_session_recovery(
         )
 
     if commit is not None and commit.state is GitSessionHistoryState.COMMITTED:
+        candidate = evidence.story_commit_candidate
+        if candidate is not None and candidate.remaining_paths:
+            return _result(
+                evidence,
+                SessionRecoveryState.APPLIED_NOT_COMMITTED,
+                SessionRecoveryOwner.STORY_COMMIT,
+                SessionRecoveryFailureCode.NONE,
+            )
         return _result(
             evidence,
             SessionRecoveryState.COMMITTED,
@@ -527,6 +538,7 @@ def _recovery_failure(
     commit = evidence.story_commit_operation
     checkpoint = evidence.checkpoint_operation
     metadata = evidence.branch_commit_metadata
+    request = history.current_story_commit_request
 
     if resources.state is GitSessionResourceState.RECOVERY_REQUIRED:
         return (
@@ -750,14 +762,41 @@ def _recovery_failure(
             )
             or candidate.worktree_identity_sha256 != evidence.worktree_identity_digest
             or candidate.candidate_id not in evidence.session_history.candidate_ids
-            or _candidate_paths(candidate)
-            != set(application.application_result.affected_paths)
+            or (
+                candidate.qualification_digest is None
+                and _candidate_paths(candidate) != set(application.application_result.affected_paths)
+            )
         ):
             return (
                 SessionRecoveryFailureCode.CORRELATION_MISMATCH,
                 SessionRecoveryOwner.STORY_COMMIT,
             )
 
+    if request is not None and request.candidate.qualification_digest is not None:
+        if candidate is None:
+            return (
+                SessionRecoveryFailureCode.MISSING_PREDECESSOR,
+                SessionRecoveryOwner.STORY_COMMIT,
+            )
+        if not matches_qualified_commit_request(candidate, history):
+            return (
+                SessionRecoveryFailureCode.CORRELATION_MISMATCH,
+                SessionRecoveryOwner.STORY_COMMIT,
+            )
+        if (
+            commit is None
+            and history.current_story_commit_result is not None
+            and history.current_story_commit_result.result is not None
+        ):
+            return (
+                SessionRecoveryFailureCode.MISSING_PREDECESSOR,
+                SessionRecoveryOwner.STORY_COMMIT,
+            )
+    elif candidate is not None and candidate.qualification_digest is not None:
+        return (
+            SessionRecoveryFailureCode.MISSING_PREDECESSOR,
+            SessionRecoveryOwner.STORY_COMMIT,
+        )
     if commit is not None:
         assert candidate is not None
         matching_commit_operations = tuple(
@@ -769,6 +808,10 @@ def _recovery_failure(
             commit.candidate_id != candidate.candidate_id
             or commit.expected_branch_tip != candidate.branch_tip
             or matching_commit_operations != ((commit.operation_id, commit.state),)
+            or (
+                candidate.qualification_digest is not None
+                and not matches_qualified_commit_operation(candidate, commit, history)
+            )
         ):
             return (
                 SessionRecoveryFailureCode.CORRELATION_MISMATCH,
@@ -1056,6 +1099,12 @@ def _repository_failure(evidence: SessionRecoveryEvidence) -> bool:
         for entry in status.entries
     ):
         return True
+    if candidate is not None and candidate.qualification_digest is not None:
+        if commit is not None and commit.state is GitSessionHistoryState.COMMITTED:
+            return not _qualified_status_matches(status, (), candidate.remaining_paths)
+        if commit is not None and commit.state is GitSessionHistoryState.STAGED:
+            return not _qualified_status_matches(status, candidate.paths, candidate.remaining_paths)
+        return not _qualified_status_matches(status, (), candidate.paths + candidate.remaining_paths)
     if commit is not None and commit.state is GitSessionHistoryState.COMMITTED:
         return not status.clean
     if commit is not None and commit.state is GitSessionHistoryState.STAGED:
@@ -1143,7 +1192,15 @@ def _result(
     next_action = _NEXT_ACTION[state]
     if (
         state is SessionRecoveryState.APPLIED_NOT_COMMITTED
-        and history.next_safe_action is CollaborationNextAction.REPREPARE_COMMIT_REQUEST
+        and (
+            history.next_safe_action is CollaborationNextAction.REPREPARE_COMMIT_REQUEST
+            or (
+                candidate is not None
+                and candidate.remaining_paths
+                and commit is not None
+                and commit.state is GitSessionHistoryState.COMMITTED
+            )
+        )
     ):
         next_action = SessionRecoveryNextAction.REPREPARE_COMMIT_REQUEST
     confirmation_request_id = (
@@ -1195,6 +1252,125 @@ def _result(
 
 def _candidate_paths(candidate: GitSessionCandidateRecord) -> set[str]:
     return {path.path for path in candidate.paths}
+
+
+def matches_qualified_commit_request(
+    record: GitSessionCandidateRecord,
+    history: CollaborationHistoryProjection,
+) -> bool:
+    """Cross-check the qualified Git record against the replayed Commit request."""
+    request = history.current_story_commit_request
+    if request is None or record.qualification_digest is None:
+        return False
+    candidate = request.candidate
+    identity_fields = (
+        "candidate_id",
+        "session_id",
+        "branch",
+        "branch_tip",
+        "expected_tree",
+        "worktree_identity_sha256",
+        "application_id",
+        "proposal_id",
+        "correlation_id",
+        "proposed_message",
+        "impact_boundary",
+        "qualification_digest",
+        "bundle_base_branch_tip",
+        "application_ids",
+    )
+    return (
+        all(getattr(record, name) == getattr(candidate, name) for name in identity_fields)
+        and record.author_identity_source.value == candidate.author_identity_source.value
+        and record.committer_identity_source.value == candidate.committer_identity_source.value
+        and all(
+            tuple(map(astuple, expected)) == tuple(map(astuple, actual))
+            for expected, actual in (
+                (record.paths, candidate.paths),
+                (record.remaining_paths, candidate.remaining_paths),
+            )
+        )
+    )
+
+
+def matches_qualified_commit_operation(
+    candidate: GitSessionCandidateRecord,
+    operation: GitSessionCommitOperationRecord,
+    history: CollaborationHistoryProjection,
+) -> bool:
+    """Bind terminal Git evidence to the same durable collaboration result."""
+    if (
+        operation.session_id != candidate.session_id
+        or operation.correlation_id != candidate.correlation_id
+        or operation.candidate_id != candidate.candidate_id
+        or operation.expected_branch_tip != candidate.branch_tip
+    ):
+        return False
+    payload = history.current_story_commit_result
+    if payload is not None:
+        request = history.current_story_commit_request
+        if (
+            request is None
+            or payload.candidate_id != candidate.candidate_id
+            or payload.confirmation_request_id != request.confirmation_request_id
+            or payload.request_digest != request.request_digest
+        ):
+            return False
+    result = payload.result if payload is not None else None
+    if result is None:
+        return (
+            history.next_safe_action is not CollaborationNextAction.SUBMIT_COMMIT_DECISION
+            and operation.state in {
+                GitSessionHistoryState.RUNNING,
+                GitSessionHistoryState.STAGED,
+                GitSessionHistoryState.OUTCOME_UNKNOWN,
+            }
+        )
+    assert payload is not None
+    return (
+        result.operation_id == operation.operation_id
+        and result.session_id == operation.session_id
+        and result.candidate_id == operation.candidate_id
+        and result.correlation_id == operation.correlation_id
+        and result.branch == candidate.branch
+        and result.branch_tip == operation.expected_branch_tip
+        and result.state.value == operation.state.value
+        and result.commit_id == operation.commit_id
+        and (
+            operation.state is not GitSessionHistoryState.COMMITTED
+            or bool(candidate.remaining_paths)
+            == (payload.next_action is StoryCommitNextAction.REPREPARE)
+        )
+    )
+
+
+def _qualified_status_matches(
+    status: GitStatus,
+    staged: tuple[GitSessionCandidatePath, ...],
+    unstaged: tuple[GitSessionCandidatePath, ...],
+) -> bool:
+    changes = {
+        GitSessionCandidatePathOperation.CREATE: GitChangeKind.ADDED,
+        GitSessionCandidatePathOperation.UPDATE: GitChangeKind.MODIFIED,
+        GitSessionCandidatePathOperation.DELETE: GitChangeKind.DELETED,
+    }
+    expected = {item.path: (changes[item.operation], None) for item in staged}
+    expected.update({
+        item.path: (
+            None,
+            GitChangeKind.UNTRACKED
+            if item.operation is GitSessionCandidatePathOperation.CREATE
+            else changes[item.operation],
+        )
+        for item in unstaged
+    })
+    return (
+        len(status.entries) == len(expected)
+        and all(entry.previous_path is None for entry in status.entries)
+        and {
+            entry.path: (entry.index_change, entry.worktree_change) for entry in status.entries
+        } == expected
+    )
 
 
 def _status_paths(status: GitStatus) -> set[str]:

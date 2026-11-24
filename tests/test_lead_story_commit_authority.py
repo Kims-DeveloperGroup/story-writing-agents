@@ -43,6 +43,7 @@ from story_writing_agents.conversations import (
     project_collaboration_history,
     synchronization_event_ref,
 )
+from story_writing_agents.conversations.views.decision_results import StoryCommitQualificationBlocked
 from story_writing_agents.git.process import GitProcessRunner
 from story_writing_agents.git.story_commit_contracts import (
     StoryCommitDecision,
@@ -456,11 +457,36 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
     ) -> None:
         with mock.patch.object(PreparedStoryCommit, "__init__", autospec=True, side_effect=PreparedStoryCommit.__init__) as captured:
             self.addCleanup(captured.reset_mock)
-            applied = await self.applied_create("Exact commit", readiness=True)
+            first = await self.applied_create("First reviewed change", readiness=True)
+            first_head, first_index, _ = self.session_git_snapshot()
+            rejected = await self.runtime.decide_story_commit(
+                _commit_decision(first, StoryCommitDecision.REJECT, confirmation_id="first_commit_reject")
+            )
+            self.assertIs(rejected.outcome.outcome, StoryCommitOutcomeKind.REJECTED)
+            self.assertEqual(self.session_git_snapshot()[:2], (first_head, first_index))
+            opening = "manuscript/part-01/opening.md"
+            rules_text = "Use restrained close-third narration throughout the scene.\n"
+            opening_text = "Opening revised with the reviewed narrative voice.\n"
+            first_review = first.request.reviewed_proposal.final_review_evidence
+            turn = await seed_reviewed_artifact(
+                self, self.conversation("Second reviewed change"),
+                (("replace", ARTIFACT_FIXTURE_RULES_PATH, rules_text), ("replace", opening, opening_text)),
+                review_task=(first_review.task_id, first_review.task_revision + 1),
+            )
+            applied = await self.runtime.decide_artifact_application(
+                lead_artifact_application_tests._application_decision(turn, ArtifactApplicationDecisionKind.APPLY)
+            )
+            self.assertIs(applied.outcome.outcome, ArtifactApplicationOutcomeKind.APPLIED)
+            self.assertEqual(self.session_git_snapshot()[:2], (first_head, first_index))
+            self.assertIsNotNone(applied.commit_request, applied.message)
             key, _pending, pin, descriptors = self.pending_commit(applied, captured)
         request = applied.commit_request
         assert request is not None
-        before_head = self.git("rev-parse", "HEAD").strip()
+        self.assertNotEqual(request.application_result_event_id, first.commit_request.application_result_event_id)
+        self.assertEqual(request.candidate.application_ids, (first.outcome.application_id, applied.outcome.application_id))
+        self.assertEqual(request.candidate.branch_tip, first_head.strip().decode())
+        self.assertIsNone(request.candidate.bundle_base_branch_tip)
+        self.assertEqual(tuple(item.path for item in request.candidate.paths), (ARTIFACT_FIXTURE_RULES_PATH, opening))
         commands: list[tuple[str, ...]] = []
         original_run = GitProcessRunner.run
 
@@ -482,14 +508,17 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
         assert result is not None
         self.assertIs(result.state, StoryCommitState.COMMITTED)
         after_head = self.git("rev-parse", "HEAD").strip()
-        self.assertNotEqual(after_head, before_head)
+        self.assertNotEqual(after_head, first_head.strip())
         self.assertEqual(result.commit_id.encode("ascii"), after_head)
         self.assertEqual(
             self.git(
                 "diff-tree", "--no-commit-id", "--name-only", "-r", after_head.decode()
             ).splitlines(),
-            [ARTIFACT_FIXTURE_RULES_PATH.encode()],
+            [ARTIFACT_FIXTURE_RULES_PATH.encode(), opening.encode()],
         )
+        self.assertEqual(self.git("rev-parse", "HEAD^{tree}").strip().decode(), request.candidate.expected_tree)
+        self.assertEqual(self.git("show", f"HEAD:{ARTIFACT_FIXTURE_RULES_PATH}"), rules_text.encode())
+        self.assertEqual(self.git("show", f"HEAD:{opening}"), opening_text.encode())
         self.assertEqual(self.git("diff", "--cached", "--binary"), b"")
         identity = (
             self.git(
@@ -580,13 +609,72 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
         self.assertIs(redisclosed.next_action, CollaborationNextAction.REPREPARE_COMMIT_REQUEST)
         preparation = redisclosed.story_commit_preparation_request
         assert preparation is not None
-        fresh_request = await self.runtime.reprepare_story_commit(preparation)
-        self.assertNotEqual(fresh_request.candidate.candidate_id, old_request.candidate.candidate_id)
-        self.assertEqual(fresh_request.application_result_event_id, old_request.application_result_event_id)
+        self.assertEqual(preparation.application_result_event_id, old_request.application_result_event_id)
+        prior_opening = self.git("show", f"HEAD:{opening}")
+        later_text = "A separately reviewed revision of the opening.\n"
+        revised_review = revised_apply.request.reviewed_proposal.final_review_evidence
+        later_turn = await seed_reviewed_artifact(
+            self, self.conversation("Separately reviewed opening"), (("replace", opening, later_text),),
+            review_task=(revised_review.task_id, revised_review.task_revision + 1),
+            retained_review_paths=(ARTIFACT_FIXTURE_RULES_PATH,),
+        )
+        later_apply = await self.runtime.decide_artifact_application(
+            lead_artifact_application_tests._application_decision(later_turn, ArtifactApplicationDecisionKind.APPLY)
+        )
+        self.assertIs(later_apply.outcome.outcome, ArtifactApplicationOutcomeKind.APPLIED)
+        later_request = later_apply.commit_request
+        self.assertIsNotNone(later_request, later_apply.message)
+        before_selection = self.session_git_snapshot()
+        restarted = StoryRuntime(self.workspace, _LeadBackend(test_case=self))
+        stale = await restarted.decide_story_commit(
+            _commit_decision(later_apply, StoryCommitDecision.COMMIT, confirmation_id="old_runtime_commit"),
+        )
+        self.assertIs(stale.outcome.outcome, StoryCommitOutcomeKind.STALE)
+        self.assertIs(stale.outcome.next_action, StoryCommitNextAction.REPREPARE)
+        self.assertEqual(self.session_git_snapshot(), before_selection)
+        later_focus = await self.runtime.lead_turn(self.session_id, later_turn.conversation_id, "Prepare a Commit request.")
+        later_preparation = later_focus.story_commit_preparation_request
+        assert later_preparation is not None
+        with self.assertRaises(StoryCommitQualificationBlocked) as blocked:
+            await self.runtime.reprepare_story_commit(replace(later_preparation, selected_paths=(opening,)))
+        self.assertTrue(any(ARTIFACT_FIXTURE_RULES_PATH in reason for reason in blocked.exception.blockers))
+        self.assertEqual(self.session_git_snapshot(), before_selection)
+        self.assertEqual(self.workspace.path(opening).read_bytes(), later_text.encode())
+        fresh_request = await self.runtime.reprepare_story_commit(
+            replace(later_preparation, selected_paths=(ARTIFACT_FIXTURE_RULES_PATH,)),
+        )
+        self.assertNotEqual(fresh_request.candidate.candidate_id, later_request.candidate.candidate_id)
+        self.assertEqual(fresh_request.application_result_event_id, later_request.application_result_event_id)
+        self.assertEqual(tuple(item.path for item in fresh_request.candidate.paths), (ARTIFACT_FIXTURE_RULES_PATH,))
+        self.assertEqual(tuple(item.path for item in fresh_request.candidate.remaining_paths), (opening,))
+        self.assertEqual(
+            fresh_request.candidate.application_ids,
+            (revised_apply.outcome.application_id, later_apply.outcome.application_id),
+        )
+        opening_file = self.workspace.path(opening)
+        drifted_text = "Externally changed opening after Commit preparation.\n"
+        opening_file.write_text(drifted_text, encoding="utf-8")
+        before_drifted_commit = self.session_git_snapshot()
+        drifted_commit = await self.runtime.decide_story_commit(_commit_decision(
+            replace(later_apply, commit_request=fresh_request), StoryCommitDecision.COMMIT,
+            confirmation_id="worktree_drift_commit",
+        ))
+        self.assertIs(drifted_commit.outcome.outcome, StoryCommitOutcomeKind.STALE)
+        self.assertEqual(self.session_git_snapshot(), before_drifted_commit)
+        self.assertEqual(opening_file.read_text(encoding="utf-8"), drifted_text)
+        opening_file.write_text(later_text, encoding="utf-8")
+        retry = await self.runtime.lead_turn(self.session_id, later_turn.conversation_id, "Prepare a Commit request.")
+        retry_preparation = retry.story_commit_preparation_request
+        assert retry_preparation is not None
+        retry_request = await self.runtime.reprepare_story_commit(
+            replace(retry_preparation, selected_paths=(ARTIFACT_FIXTURE_RULES_PATH,)),
+        )
+        self.assertNotEqual(retry_request.confirmation_request_id, fresh_request.confirmation_request_id)
+        fresh_request = retry_request
         with mock.patch.object(GitProcessRunner, "run", tracked_run):
             revised_commit = await self.runtime.decide_story_commit(
                 _commit_decision(
-                    replace(revised_apply, commit_request=fresh_request),
+                    replace(later_apply, commit_request=fresh_request),
                     StoryCommitDecision.COMMIT, confirmation_id="revised_commit_confirmation",
                 )
             )
@@ -601,7 +689,29 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
             [ARTIFACT_FIXTURE_RULES_PATH.encode()],
         )
         self.assertEqual(self.git("diff", "--cached", "--binary"), b"")
+        self.assertEqual(self.git("rev-parse", "HEAD^{tree}").strip().decode(), fresh_request.candidate.expected_tree)
+        self.assertEqual(self.git("show", f"HEAD:{opening}"), prior_opening)
+        self.assertEqual(self.workspace.path(opening).read_bytes(), later_text.encode())
+        self.assertEqual(self.git("diff", "--name-only"), opening.encode() + b"\n")
         self.assertFalse(any(command[0] in forbidden for command in commands))
+        self.assertIs(revised_commit.outcome.next_action, StoryCommitNextAction.REPREPARE)
+        resumed = await self.runtime.lead_turn(self.session_id, later_turn.conversation_id, "Prepare a Commit request.")
+        self.assertIs(resumed.next_action, CollaborationNextAction.REPREPARE_COMMIT_REQUEST)
+        remaining_preparation = resumed.story_commit_preparation_request
+        assert remaining_preparation is not None
+        before_remainder = self.session_git_snapshot()
+        remainder = await self.runtime.reprepare_story_commit(remaining_preparation)
+        self.assertNotEqual(remainder.confirmation_request_id, fresh_request.confirmation_request_id)
+        self.assertEqual(remainder.application_result_event_id, fresh_request.application_result_event_id)
+        self.assertEqual(remainder.candidate.branch_tip, final_head.decode())
+        self.assertEqual(tuple(item.path for item in remainder.candidate.paths), (opening,))
+        self.assertEqual(remainder.candidate.remaining_paths, ())
+        rejected_remainder = await self.runtime.decide_story_commit(_commit_decision(
+            replace(later_apply, commit_request=remainder), StoryCommitDecision.REJECT,
+            confirmation_id="remaining_paths_reject",
+        ))
+        self.assertIs(rejected_remainder.outcome.outcome, StoryCommitOutcomeKind.REJECTED)
+        self.assertEqual(self.session_git_snapshot(), before_remainder)
 
 
 

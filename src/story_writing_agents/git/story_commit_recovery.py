@@ -41,7 +41,7 @@ from .story_commit_git import (
     index_matches_tree,
     read_branch_tip,
     require_story_commit_recovery_topology,
-    worktree_matches_index,
+    worktree_matches_candidate,
 )
 from .story_commit_session import (
     candidate_operation_id,
@@ -154,7 +154,7 @@ class StoryCommitRecovery:
                         runner,
                         identity,
                         candidate.expected_tree,
-                    ) and worktree_matches_index(runner, identity)
+                    ) and worktree_matches_candidate(runner, identity, root, candidate)
                     parent_index = index_matches_tree(
                         runner,
                         identity,
@@ -253,7 +253,9 @@ class StoryCommitRecovery:
                             expected_branch_tip=candidate.branch_tip,
                         )
                     return _operation_result(candidate, operation)
-                if commit_matches(runner, identity, tip, candidate):
+                if candidate.qualification_digest is None and commit_matches(
+                    runner, identity, tip, candidate
+                ):
                     if operation.state in {
                         GitSessionHistoryState.RUNNING,
                         GitSessionHistoryState.OUTCOME_UNKNOWN,

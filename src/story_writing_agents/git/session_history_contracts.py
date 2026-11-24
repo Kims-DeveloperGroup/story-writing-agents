@@ -161,6 +161,10 @@ class GitSessionCandidateRecord:
     candidate_id: str = ""
     schema_version: int = GIT_SESSION_HISTORY_SCHEMA_VERSION
     state: GitSessionHistoryState = GitSessionHistoryState.PREPARED
+    qualification_digest: str | None = None
+    remaining_paths: tuple[GitSessionCandidatePath, ...] = ()
+    bundle_base_branch_tip: str | None = None
+    application_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         session = _require_session_id(self.session_id)
@@ -186,6 +190,33 @@ class GitSessionCandidateRecord:
         paths = tuple(_reconstruct_candidate_path(item) for item in self.paths)
         if paths != self.paths or paths != tuple(
             sorted(paths, key=lambda item: item.path.encode("utf-8"))
+        ):
+            raise _error(GitSessionHistoryFailureCode.RECORD_INVALID)
+        if self.qualification_digest is not None:
+            _require_digest(self.qualification_digest)
+        if self.bundle_base_branch_tip is not None:
+            if len(_require_object_id(self.bundle_base_branch_tip)) != len(self.branch_tip):
+                raise _error(GitSessionHistoryFailureCode.RECORD_INVALID)
+        if type(self.application_ids) is not tuple:
+            raise _error(GitSessionHistoryFailureCode.RECORD_INVALID)
+        ids = tuple(_require_opaque_id(item) for item in self.application_ids)
+        if len(set(ids)) != len(ids):
+            raise _error(GitSessionHistoryFailureCode.RECORD_INVALID)
+        if self.qualification_digest is None:
+            if ids or self.bundle_base_branch_tip is not None:
+                raise _error(GitSessionHistoryFailureCode.RECORD_INVALID)
+        elif ids[-1:] != (self.application_id,):
+            raise _error(GitSessionHistoryFailureCode.RECORD_INVALID)
+        if type(self.remaining_paths) is not tuple or (
+            self.remaining_paths and self.bundle_base_branch_tip is None
+        ):
+            raise _error(GitSessionHistoryFailureCode.RECORD_INVALID)
+        remaining = tuple(_reconstruct_candidate_path(item) for item in self.remaining_paths)
+        path_names = {item.path for item in (*paths, *remaining)}
+        if (
+            len(paths) + len(remaining) > GIT_SESSION_HISTORY_MAX_PATHS
+            or len(path_names) != len(paths) + len(remaining)
+            or remaining != tuple(sorted(remaining, key=lambda item: item.path.encode("utf-8")))
         ):
             raise _error(GitSessionHistoryFailureCode.RECORD_INVALID)
         _require_text(self.proposed_message, allow_newline=False)
@@ -547,15 +578,6 @@ def encode_candidate_record(value: GitSessionCandidateRecord) -> bytes:
 def decode_candidate_record(payload: bytes) -> GitSessionCandidateRecord:
     value = _decode(payload)
     try:
-        paths = tuple(
-            GitSessionCandidatePath(
-                path=item["path"],
-                operation=GitSessionCandidatePathOperation(item["operation"]),
-                before_sha256=item["before_sha256"],
-                after_sha256=item["after_sha256"],
-            )
-            for item in value["paths"]
-        )
         record = GitSessionCandidateRecord(
             session_id=value["session_id"],
             branch=value["branch"],
@@ -565,7 +587,7 @@ def decode_candidate_record(payload: bytes) -> GitSessionCandidateRecord:
             application_id=value["application_id"],
             proposal_id=value["proposal_id"],
             correlation_id=value["correlation_id"],
-            paths=paths,
+            paths=tuple(_decode_candidate_path(item) for item in value["paths"]),
             proposed_message=value["proposed_message"],
             impact_boundary=tuple(value["impact_boundary"]),
             author_identity_source=GitSessionIdentitySource(
@@ -577,12 +599,27 @@ def decode_candidate_record(payload: bytes) -> GitSessionCandidateRecord:
             candidate_id=value["candidate_id"],
             schema_version=value["schema_version"],
             state=GitSessionHistoryState(value["state"]),
+            qualification_digest=value.get("qualification_digest"),
+            bundle_base_branch_tip=value.get("bundle_base_branch_tip"),
+            application_ids=tuple(value.get("application_ids", ())),
+            remaining_paths=tuple(
+                _decode_candidate_path(item) for item in value.get("remaining_paths", ())
+            ),
         )
     except (KeyError, TypeError, ValueError, GitSessionHistoryError):
         raise _error(GitSessionHistoryFailureCode.RECORD_INVALID) from None
     if encode_candidate_record(record) != payload:
         raise _error(GitSessionHistoryFailureCode.RECORD_INVALID)
     return record
+
+
+def _decode_candidate_path(item: dict[str, Any]) -> GitSessionCandidatePath:
+    return GitSessionCandidatePath(
+        path=item["path"],
+        operation=GitSessionCandidatePathOperation(item["operation"]),
+        before_sha256=item["before_sha256"],
+        after_sha256=item["after_sha256"],
+    )
 
 
 def encode_commit_operation(value: GitSessionCommitOperationRecord) -> bytes:
@@ -653,15 +690,7 @@ def _candidate_object(
         "correlation_id": value.correlation_id,
         "expected_tree": value.expected_tree,
         "impact_boundary": list(value.impact_boundary),
-        "paths": [
-            {
-                "after_sha256": item.after_sha256,
-                "before_sha256": item.before_sha256,
-                "operation": item.operation.value,
-                "path": item.path,
-            }
-            for item in value.paths
-        ],
+        "paths": [_candidate_path_object(item) for item in value.paths],
         "proposal_id": value.proposal_id,
         "proposed_message": value.proposed_message,
         "schema_version": value.schema_version,
@@ -669,9 +698,26 @@ def _candidate_object(
         "state": value.state.value,
         "worktree_identity_sha256": value.worktree_identity_sha256,
     }
+    if value.qualification_digest is not None:
+        result["qualification_digest"] = value.qualification_digest
+    if value.bundle_base_branch_tip is not None:
+        result["bundle_base_branch_tip"] = value.bundle_base_branch_tip
+    if value.application_ids:
+        result["application_ids"] = list(value.application_ids)
+    if value.remaining_paths:
+        result["remaining_paths"] = [_candidate_path_object(item) for item in value.remaining_paths]
     if include_id:
         result["candidate_id"] = value.candidate_id
     return result
+
+
+def _candidate_path_object(item: GitSessionCandidatePath) -> dict[str, Any]:
+    return {
+        "after_sha256": item.after_sha256,
+        "before_sha256": item.before_sha256,
+        "operation": item.operation.value,
+        "path": item.path,
+    }
 
 
 def _operation_object(value: object) -> dict[str, Any]:
@@ -859,6 +905,7 @@ def _reconstruct_candidate_record(value: object) -> GitSessionCandidateRecord:
         return replace(
             value,
             paths=tuple(_reconstruct_candidate_path(item) for item in value.paths),
+            remaining_paths=tuple(_reconstruct_candidate_path(item) for item in value.remaining_paths),
         )
     except (AttributeError, TypeError, GitSessionHistoryError):
         raise _error(GitSessionHistoryFailureCode.RECORD_INVALID) from None

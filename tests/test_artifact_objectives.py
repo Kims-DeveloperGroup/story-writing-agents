@@ -483,7 +483,13 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
         from story_writing_agents.conversation_storage.archive import serialize_conversation_archive, deserialize_conversation_archive
         from tests.conversation_archive_fixture import archive_conversation, archive_from_conversations
         conversation_id, _ = await self.start()
-        await self.prepare(conversation_id)
+        reviewed = await self.review(await self.prepare(conversation_id))
+        applied = await self.apply(reviewed)
+        request = applied.commit_request
+        self.assertIsNotNone(request, applied.message)
+        self.assertIsNotNone(request.candidate.qualification_digest)
+        rejected = await self.reject_commit(applied)
+        self.assertIs(rejected.outcome.outcome, c.StoryCommitOutcomeKind.REJECTED)
         before = self.history(conversation_id)
         plans_before = self.projection(conversation_id).document_plans
         self.assertTrue(plans_before)
@@ -501,8 +507,11 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
         after = services.event_store.read(self.session_id, conversation_id)
         self.assertEqual(after, before)
         self.assertEqual(tuple(c.encode_collaboration_event(e) for e in after), tuple(c.encode_collaboration_event(e) for e in before))
-        self.assertEqual(c.project_collaboration_history(after), self.projection(conversation_id))
-        self.assertEqual(c.project_collaboration_history(after).document_plans, plans_before)
+        restored = c.project_collaboration_history(after)
+        self.assertEqual(restored, self.projection(conversation_id))
+        self.assertEqual(restored.document_plans, plans_before)
+        self.assertEqual(restored.current_story_commit_request, request)
+        self.assertEqual(restored.current_story_commit_result, rejected.outcome)
 
     async def test_readable_and_session_context_include_objectives_without_new_records(self):
         from story_writing_agents.agent_context.sources.session_history import SessionHistorySourceAdapter

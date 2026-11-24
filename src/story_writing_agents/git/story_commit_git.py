@@ -5,9 +5,12 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..writing_artifacts import canonical_artifact_kind
+from ..writing_artifacts.repository import WritingArtifactRepository
 from .adapter import GitRepositoryAdapter
 from .contracts import GIT_BASELINE_BRANCH, GitEffectiveIdentity, GitExternalOperationKind
 from .process import GitProcessFailure, GitProcessProfile, GitProcessResult, GitProcessRunner
@@ -129,6 +132,7 @@ class StoryCommitGit:
         expected_main_status_sha256: str,
         expected_branch_tip: str,
         expected_index_tree: str | None,
+        verify_worktree: bool = True,
     ) -> None:
         """Require exact session topology with an optional intentional index."""
 
@@ -202,7 +206,10 @@ class StoryCommitGit:
                 expected_index_tree is not None
                 and (
                     not index_matches_tree(runner, identity, expected_index_tree)
-                    or not worktree_matches_index(runner, identity)
+                    or (
+                        verify_worktree
+                        and not worktree_matches_candidate(runner, identity, root, candidate)
+                    )
                 )
             )
             or internal != expected_internal_tip
@@ -281,6 +288,13 @@ class StoryCommitGit:
             ).stdout
         )
         if tip != commit_id or tree != binding.candidate.expected_tree:
+            raise story_commit_error(StoryCommitFailureCode.OUTCOME_UNKNOWN)
+        if binding.candidate.qualification_digest is not None and (
+            not index_matches_tree(session_runner, session_identity, tree)
+            or not worktree_matches_candidate(
+                session_runner, session_identity, binding.session_root, binding.candidate
+            )
+        ):
             raise story_commit_error(StoryCommitFailureCode.OUTCOME_UNKNOWN)
         main_identity = directory_identity(binding.main_root)
         main_runner = GitProcessRunner(binding.main_root)
@@ -491,7 +505,7 @@ def require_story_commit_recovery_topology(
         and not commit_matches(runner, identity, tip, candidate)
     ) or not index_matches_tree(runner, identity, candidate.expected_tree):
         raise story_commit_error(StoryCommitFailureCode.RECOVERY_REQUIRED)
-    if not worktree_matches_index(runner, identity):
+    if not worktree_matches_candidate(runner, identity, root, candidate):
         raise story_commit_error(StoryCommitFailureCode.RECOVERY_REQUIRED)
     untracked = _required(
         runner,
@@ -499,7 +513,8 @@ def require_story_commit_recovery_topology(
         ("ls-files", "--others", "--exclude-standard", "-z"),
         GitProcessProfile.READ_ONLY,
     ).stdout
-    if untracked:
+    remainder = {item.path.encode("utf-8") for item in candidate.remaining_paths}
+    if set(untracked.split(b"\x00")) - {b""} - remainder:
         raise story_commit_error(StoryCommitFailureCode.RECOVERY_REQUIRED)
     external = GitRepositoryAdapter(root).inspect_external_operation()
     worktree_identity_sha256 = hashlib.sha256(
@@ -546,6 +561,63 @@ def worktree_matches_index(
         ("diff", "--quiet", "--"),
     )
     return result.returncode == 0
+
+
+def worktree_matches_candidate(
+    runner: GitProcessRunner,
+    identity: tuple[int, int],
+    root: Path,
+    candidate: StoryCommitCandidate,
+) -> bool:
+    """Permit only exact, explicitly excluded artifact changes outside the index."""
+    if candidate.qualification_digest is None:
+        return worktree_matches_index(runner, identity)
+    tracked = _required(
+        runner,
+        identity,
+        ("diff", "--name-only", "--no-renames", "-z", "--"),
+        GitProcessProfile.READ_ONLY,
+    ).stdout
+    untracked = _required(
+        runner,
+        identity,
+        ("ls-files", "--others", "--exclude-standard", "-z"),
+        GitProcessProfile.READ_ONLY,
+    ).stdout
+    try:
+        changed = set(tracked.decode("utf-8", errors="strict").split("\x00")) - {""}
+        changed.update(
+            path
+            for path in untracked.decode("utf-8", errors="strict").split("\x00")
+            if path and canonical_artifact_kind(path) is not None
+        )
+    except UnicodeError:
+        return False
+    if changed != {item.path for item in candidate.remaining_paths}:
+        return False
+    if any(
+        item.after_sha256 is None and os.path.lexists(root / item.path)
+        for item in candidate.remaining_paths
+    ):
+        return False
+    expected = {
+        item.path: item.after_sha256
+        for item in candidate.remaining_paths
+        if item.after_sha256 is not None
+    }
+    if not expected:
+        return True
+    try:
+        repository = WritingArtifactRepository(root, expected_root_identity=identity)
+        actual = {
+            item.path: hashlib.sha256(item.content).hexdigest()
+            for item in repository.read_current(tuple(expected))
+        }
+        return actual == expected and all(
+            not (root / path).lstat().st_mode & stat.S_IXUSR for path in expected
+        )
+    except (OSError, RuntimeError):
+        return False
 
 
 def _run_allowing_difference(

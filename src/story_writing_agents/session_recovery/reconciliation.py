@@ -74,6 +74,8 @@ from .contracts import (
     SessionRecoveryState,
     SessionReviewedProposalEvidence,
     is_unmatched_submitted_lead_projection,
+    matches_qualified_commit_operation,
+    matches_qualified_commit_request,
     reconcile_session_recovery,
 )
 
@@ -280,6 +282,7 @@ class SessionRecoveryReconciler:
                     tail,
                     reviewed,
                     application,
+                    history_a,
                 )
             return resource_blocker
         try:
@@ -420,6 +423,7 @@ class SessionRecoveryReconciler:
             external_a,
             reviewed,
             application,
+            history_a,
         )
         if isinstance(selected_a, tuple) and len(selected_a) == 3:
             candidate_a, commit_a, _checkpoint_a = selected_a
@@ -580,6 +584,7 @@ class SessionRecoveryReconciler:
             external_b,
             reviewed,
             application,
+            history_b,
         )
         if isinstance(selected_b, tuple) and len(selected_b) == 3:
             candidate, commit, checkpoint = selected_b
@@ -593,6 +598,13 @@ class SessionRecoveryReconciler:
                 owner,
                 failure,
             )
+
+        if candidate is not None and candidate.qualification_digest is not None:
+            worktree_blocker = _inspect_qualified_worktree(
+                artifact_binding, candidate, commit, session_id, conversation, tail
+            )
+            if worktree_blocker is not None:
+                return worktree_blocker
 
         branch_commit: GitCommitMetadata | None = None
         if commit is not None and commit.state is GitSessionHistoryState.COMMITTED:
@@ -821,6 +833,7 @@ def _staged_story_commit_recovery_result(
     tail: int,
     reviewed: SessionReviewedProposalEvidence | None,
     application: SessionArtifactApplicationEvidence | None,
+    history: CollaborationHistoryProjection,
 ) -> SessionRecoveryResult:
     """Validate, recheck, and release one transferred recovery generation pin."""
 
@@ -851,6 +864,7 @@ def _staged_story_commit_recovery_result(
             recovery,
             reviewed,
             application,
+            history,
         ):
             result = _blocked(
                 session_id,
@@ -1030,10 +1044,46 @@ def _inspect_application(
     return None
 
 
+def _inspect_qualified_worktree(
+    binding: SessionArtifactBinding,
+    candidate: GitSessionCandidateRecord,
+    commit: GitSessionCommitOperationRecord | None,
+    session_id: str,
+    conversation_id: str,
+    tail: int,
+) -> SessionRecoveryResult | None:
+    paths = candidate.remaining_paths
+    if commit is None or commit.state is not GitSessionHistoryState.COMMITTED:
+        paths += candidate.paths
+    if not paths:
+        return None
+    try:
+        with binding.open_ready_resources() as access:
+            current = {
+                item.path: item.source.source_sha256
+                for item in access.repository.capture_complete_state()
+            }
+    except Exception:
+        return _owner_recovery(
+            session_id, conversation_id, tail, SessionRecoveryOwner.REPOSITORY_STATUS
+        )
+    if any(current.get(item.path) != item.after_sha256 for item in paths):
+        return _blocked(
+            session_id,
+            conversation_id,
+            tail,
+            SessionRecoveryState.RECOVERY_REQUIRED,
+            SessionRecoveryOwner.REPOSITORY_STATUS,
+            SessionRecoveryFailureCode.REPOSITORY_STATE_MISMATCH,
+        )
+    return None
+
+
 def _staged_recovery_evidence_matches(
     recovery: StoryCommitRecoverySnapshot,
     reviewed: SessionReviewedProposalEvidence | None,
     application: SessionArtifactApplicationEvidence,
+    history: CollaborationHistoryProjection,
 ) -> bool:
     """Match staged candidate paths and application truth to reviewed intent."""
 
@@ -1148,8 +1198,18 @@ def _staged_recovery_evidence_matches(
         )
         for item in recovery.candidate.paths
     )
+    request = history.current_story_commit_request
+    if recovery.candidate.qualification_digest is None:
+        matching_candidate = observed_candidate_paths == expected_candidate_paths
+    else:
+        matching_candidate = (
+            request is not None
+            and request.candidate == recovery.candidate
+            and history.current_story_commit_result is None
+            and history.next_safe_action is not CollaborationNextAction.SUBMIT_COMMIT_DECISION
+        )
     return (
-        observed_candidate_paths == expected_candidate_paths
+        matching_candidate
         and result.affected_paths
         == tuple(sorted(affected_paths, key=sort_text))
         and tuple(
@@ -1181,6 +1241,7 @@ def _select_history(
     external: GitExternalOperationInspection,
     reviewed: SessionReviewedProposalEvidence | None,
     application: SessionArtifactApplicationEvidence | None,
+    history: CollaborationHistoryProjection,
 ) -> (
     tuple[
         GitSessionCandidateRecord | None,
@@ -1197,13 +1258,51 @@ def _select_history(
     if correlation_id is None:
         return None, None, None
 
+    request = history.current_story_commit_request
+    if request is not None and request.candidate.qualification_digest is not None:
+        selection = _select_qualified_history(snapshot, history, request.candidate.candidate_id)
+    else:
+        selection = _select_legacy_history(snapshot, resources, external, application, correlation_id)
+    candidate, commit = selection
+    if isinstance(candidate, SessionRecoveryOwner):
+        return candidate, commit
+
+    checkpoints = tuple(
+        operation
+        for operation in snapshot.checkpoint_operations
+        if operation.session_id == resources.identity.session_id
+        and operation.correlation_id == correlation_id
+    )
+    if len(checkpoints) > 1:
+        return SessionRecoveryOwner.CHECKPOINT, SessionRecoveryFailureCode.CORRELATION_MISMATCH
+    checkpoint = checkpoints[0] if checkpoints else None
+    return candidate, commit, checkpoint
+
+
+def _select_legacy_history(
+    snapshot: GitSessionHistorySnapshot,
+    resources: GitSessionResourceInspection,
+    external: GitExternalOperationInspection,
+    application: SessionArtifactApplicationEvidence | None,
+    correlation_id: str,
+) -> tuple[
+    GitSessionCandidateRecord | None, GitSessionCommitOperationRecord | None
+] | tuple[SessionRecoveryOwner, SessionRecoveryFailureCode]:
+    qualified_ids = {
+        candidate.candidate_id
+        for candidate in snapshot.candidates
+        if candidate.qualification_digest is not None
+    }
     related_candidates = tuple(
         candidate
         for candidate in snapshot.candidates
-        if candidate.correlation_id == correlation_id
-        or (
-            application is not None
-            and candidate.application_id == application.application_result.application_id
+        if candidate.candidate_id not in qualified_ids
+        and (
+            candidate.correlation_id == correlation_id
+            or (
+                application is not None
+                and candidate.application_id == application.application_result.application_id
+            )
         )
     )
     if application is None and related_candidates:
@@ -1231,8 +1330,11 @@ def _select_history(
     related_commits = tuple(
         operation
         for operation in snapshot.commit_operations
-        if operation.correlation_id == correlation_id
-        or (candidate is not None and operation.candidate_id == candidate.candidate_id)
+        if operation.candidate_id not in qualified_ids
+        and (
+            operation.correlation_id == correlation_id
+            or (candidate is not None and operation.candidate_id == candidate.candidate_id)
+        )
     )
     if candidate is None and related_commits:
         return SessionRecoveryOwner.STORY_COMMIT, SessionRecoveryFailureCode.MISSING_PREDECESSOR
@@ -1246,17 +1348,45 @@ def _select_history(
     if len(exact_commits) > 1 or len(exact_commits) != len(related_commits):
         return SessionRecoveryOwner.STORY_COMMIT, SessionRecoveryFailureCode.CORRELATION_MISMATCH
     commit = exact_commits[0] if exact_commits else None
+    return candidate, commit
 
-    checkpoints = tuple(
-        operation
-        for operation in snapshot.checkpoint_operations
-        if operation.session_id == resources.identity.session_id
-        and operation.correlation_id == correlation_id
-    )
-    if len(checkpoints) > 1:
-        return SessionRecoveryOwner.CHECKPOINT, SessionRecoveryFailureCode.CORRELATION_MISMATCH
-    checkpoint = checkpoints[0] if checkpoints else None
-    return candidate, commit, checkpoint
+
+def _select_qualified_history(
+    snapshot: GitSessionHistorySnapshot,
+    history: CollaborationHistoryProjection,
+    candidate_id: str,
+) -> tuple[
+    GitSessionCandidateRecord, GitSessionCommitOperationRecord | None
+] | tuple[SessionRecoveryOwner, SessionRecoveryFailureCode]:
+    candidate = next((item for item in snapshot.candidates if item.candidate_id == candidate_id), None)
+    if candidate is None:
+        return SessionRecoveryOwner.STORY_COMMIT, SessionRecoveryFailureCode.MISSING_PREDECESSOR
+    if not matches_qualified_commit_request(candidate, history):
+        return SessionRecoveryOwner.STORY_COMMIT, SessionRecoveryFailureCode.CORRELATION_MISMATCH
+    payload = history.current_story_commit_result
+    result = payload.result if payload is not None else None
+    if result is not None:
+        related = tuple(
+            item for item in snapshot.commit_operations if item.operation_id == result.operation_id
+        )
+        if not related:
+            return SessionRecoveryOwner.STORY_COMMIT, SessionRecoveryFailureCode.MISSING_PREDECESSOR
+    else:
+        related = tuple(
+            item
+            for item in snapshot.commit_operations
+            if item.candidate_id == candidate_id
+            and item.state in {
+                GitSessionHistoryState.RUNNING,
+                GitSessionHistoryState.STAGED,
+                GitSessionHistoryState.OUTCOME_UNKNOWN,
+            }
+        )
+    if len(related) > 1 or (
+        related and not matches_qualified_commit_operation(candidate, related[0], history)
+    ):
+        return SessionRecoveryOwner.STORY_COMMIT, SessionRecoveryFailureCode.CORRELATION_MISMATCH
+    return candidate, related[0] if related else None
 
 
 def _require_workspace_root(value: object) -> Path:

@@ -148,12 +148,23 @@ class StoryCommitResultPayload:
             if (expected is not self.outcome and not valid_rejection) or self.result.candidate_id != self.candidate_id:
                 raise ValueError("story commit terminal result is inconsistent")
         if self.outcome is StoryCommitOutcomeKind.COMMITTED:
-            if self.result is None or self.next_action is not StoryCommitNextAction.CONTINUE_WITH_LEAD:
-                raise ValueError("committed story result is incomplete")
+            if self.result is None or self.next_action not in {
+                StoryCommitNextAction.CONTINUE_WITH_LEAD, StoryCommitNextAction.REPREPARE,
+            }:
+                raise ValueError("committed story commit result is invalid")
+
+
+def _story_commit_path_value(path: StoryCommitPath) -> dict[str, object]:
+    return {
+        "after_sha256": path.after_sha256,
+        "before_sha256": path.before_sha256,
+        "operation": path.operation.value,
+        "path": path.path,
+    }
 
 
 def _story_commit_candidate_value(candidate: StoryCommitCandidate) -> dict[str, object]:
-    return {
+    value: dict[str, object] = {
         "application_id": candidate.application_id,
         "author_identity_source": candidate.author_identity_source.value,
         "branch": candidate.branch,
@@ -163,28 +174,25 @@ def _story_commit_candidate_value(candidate: StoryCommitCandidate) -> dict[str, 
         "correlation_id": candidate.correlation_id,
         "expected_tree": candidate.expected_tree,
         "impact_boundary": list(candidate.impact_boundary),
-        "paths": [{
-            "after_sha256": item.after_sha256,
-            "before_sha256": item.before_sha256,
-            "operation": item.operation.value,
-            "path": item.path,
-        } for item in candidate.paths],
+        "paths": [_story_commit_path_value(item) for item in candidate.paths],
         "proposal_id": candidate.proposal_id,
         "proposed_message": candidate.proposed_message,
         "session_id": candidate.session_id,
         "worktree_identity_sha256": candidate.worktree_identity_sha256,
     }
+    if candidate.qualification_digest is not None:
+        value["qualification"] = {
+            "application_ids": list(candidate.application_ids),
+            "bundle_base_branch_tip": candidate.bundle_base_branch_tip,
+            "digest": candidate.qualification_digest,
+            "remaining_paths": [_story_commit_path_value(item) for item in candidate.remaining_paths],
+        }
+    return value
 
 
-def _decode_story_commit_candidate(value: object) -> StoryCommitCandidate:
-    item = _object(value, {
-        "application_id", "author_identity_source", "branch", "branch_tip",
-        "candidate_id", "committer_identity_source", "correlation_id",
-        "expected_tree", "impact_boundary", "paths", "proposal_id",
-        "proposed_message", "session_id", "worktree_identity_sha256",
-    }, label="story commit candidate")
+def _decode_story_commit_paths(value: object) -> tuple[StoryCommitPath, ...]:
     paths = []
-    for raw_path in _array(item["paths"], label="story commit paths"):
+    for raw_path in _array(value, label="story commit paths"):
         path = _object(raw_path, {
             "after_sha256", "before_sha256", "operation", "path",
         }, label="story commit path")
@@ -194,6 +202,36 @@ def _decode_story_commit_candidate(value: object) -> StoryCommitCandidate:
             before_sha256=_optional_string(path["before_sha256"], label="before digest"),
             after_sha256=_optional_string(path["after_sha256"], label="after digest"),
         ))
+    return tuple(paths)
+
+
+def _decode_story_commit_candidate(value: object) -> StoryCommitCandidate:
+    fields = {
+        "application_id", "author_identity_source", "branch", "branch_tip",
+        "candidate_id", "committer_identity_source", "correlation_id",
+        "expected_tree", "impact_boundary", "paths", "proposal_id",
+        "proposed_message", "session_id", "worktree_identity_sha256",
+    }
+    qualified = type(value) is dict and "qualification" in value
+    item = _object(
+        value, fields | {"qualification"} if qualified else fields,
+        label="story commit candidate",
+    )
+    qualification_digest = None
+    remaining_paths: tuple[StoryCommitPath, ...] = ()
+    application_ids: tuple[str, ...] = ()
+    bundle_base_branch_tip = None
+    if qualified:
+        payload = _object(item["qualification"], {
+            "application_ids", "bundle_base_branch_tip", "digest", "remaining_paths",
+        }, label="story commit qualification")
+        qualification_digest = _string(payload["digest"], label="story commit qualification digest")
+        remaining_paths = _decode_story_commit_paths(payload["remaining_paths"])
+        bundle_base_branch_tip = _optional_string(payload["bundle_base_branch_tip"], label="bundle base branch tip")
+        application_ids = tuple(
+            _string(identifier, label="bundle application ID")
+            for identifier in _array(payload["application_ids"], label="bundle application IDs")
+        )
     return StoryCommitCandidate(
         candidate_id=_string(item["candidate_id"], label="story commit candidate ID"),
         session_id=_string(item["session_id"], label="story commit session ID"),
@@ -204,11 +242,15 @@ def _decode_story_commit_candidate(value: object) -> StoryCommitCandidate:
         application_id=_string(item["application_id"], label="story commit application ID"),
         proposal_id=_string(item["proposal_id"], label="story commit proposal ID"),
         correlation_id=_string(item["correlation_id"], label="story commit correlation ID"),
-        paths=tuple(paths),
+        paths=_decode_story_commit_paths(item["paths"]),
         proposed_message=_string(item["proposed_message"], label="story commit message"),
         impact_boundary=tuple(_string(value, label="story commit impact") for value in _array(item["impact_boundary"], label="story commit impacts")),
         author_identity_source=_enum(StoryCommitIdentitySource, item["author_identity_source"], label="author identity source"),
         committer_identity_source=_enum(StoryCommitIdentitySource, item["committer_identity_source"], label="committer identity source"),
+        qualification_digest=qualification_digest,
+        remaining_paths=remaining_paths,
+        bundle_base_branch_tip=bundle_base_branch_tip,
+        application_ids=application_ids,
     )
 
 

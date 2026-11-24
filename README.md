@@ -539,6 +539,14 @@ authoring target.
   specialist execution, typed synthesis, and separately confirmed stepwise
   consensus are active. Consensus has no shell command. Artifact Apply and
   local Commit use their own interactive confirmations.
+- A local Commit request covers the related reviewed Apply chain from the session branch
+  through the exact prospective Git tree. The runtime checks current document revisions,
+  specialist review evidence, and synchronization obligations again when consuming
+  the separate Commit approval. A successful Apply can remain recorded while Git
+  preparation is blocked. Python callers can request selected paths when repreparing a
+  Commit, and the runtime verifies the resulting tree with excluded paths at their
+  recorded revisions. A partial Commit leaves the remaining reviewed changes
+  available for a separate Commit request.
 - Confirming a consultation starts only the disclosed read-only provider work.
   It never confirms an artifact change or Git commit.
 - Initialization accepts only an absent/empty root or one exact resumable

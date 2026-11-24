@@ -31,6 +31,7 @@ from .story_commit_candidates import (
     load_story_commit_candidate_from_history,
     prepare_identity_bound_story_commit_candidate,
     prepare_story_commit_candidate,
+    require_story_commit_qualification,
     revalidate_identity_bound_story_commit_candidate,
     revalidate_story_commit_candidate,
 )
@@ -41,6 +42,8 @@ from .story_commit_contracts import (
     StoryCommitDecision,
     StoryCommitError,
     StoryCommitFailureCode,
+    StoryCommitQualificationGuard,
+    StoryCommitQualificationPhase,
     StoryCommitRecoveryAction,
     StoryCommitResult,
     StoryCommitState,
@@ -134,9 +137,11 @@ class StoryCommitAuthority:
         del protocol
         raise story_commit_error(StoryCommitFailureCode.AUTHORITY_INVALID)
 
-    def _consume(
+    def _execution_context(
         self,
         owner: object,
+        *,
+        consume: bool,
     ) -> tuple[
         StoryCommitCandidateBinding,
         StoryCommitConfirmation,
@@ -157,8 +162,8 @@ class StoryCommitAuthority:
                 raise story_commit_error(StoryCommitFailureCode.AUTHORITY_INVALID)
             if self._consumed:
                 raise story_commit_error(StoryCommitFailureCode.AUTHORITY_CONSUMED)
-            # Consumption precedes every filesystem or Git operation.
-            self._consumed = True
+            if consume:
+                self._consumed = True
             return (
                 self._binding,
                 self._confirmation,
@@ -181,6 +186,7 @@ class StoryCommitService:
         "_expected_session_root_identity",
         "_manifest",
         "_owner",
+        "_qualification_guard",
         "_root",
         "_session_id",
         "_state_lock",
@@ -217,6 +223,7 @@ class StoryCommitService:
         self._expected_generation_identity: GitSessionGenerationIdentity | None = None
         self._expected_session_root_identity: tuple[int, int] | None = None
         self._owner = object()
+        self._qualification_guard: StoryCommitQualificationGuard | None = None
         self._bindings: dict[str, StoryCommitCandidateBinding] = {}
         self._confirmation_ids: set[str] = set()
         self._state_lock = threading.Lock()
@@ -259,6 +266,7 @@ class StoryCommitService:
                 expected_session_root_identity=self._expected_session_root_identity,
                 expected_generation_identity=self._required_generation_identity(),
                 artifact_repository_access=artifact_repository_access,
+                qualification_guard=self._qualification_guard,
             )
         self._bindings[binding.candidate.candidate_id] = binding
         self._root = binding.main_root
@@ -331,7 +339,7 @@ class StoryCommitService:
         if type(authority) is not StoryCommitAuthority:
             raise story_commit_error(StoryCommitFailureCode.AUTHORITY_INVALID)
         binding, confirmation, operation_id, authorized_revalidation = (
-            authority._consume(self._owner)
+            authority._execution_context(self._owner, consume=False)
         )
         candidate = binding.candidate
         if (
@@ -343,6 +351,7 @@ class StoryCommitService:
         operation: GitSessionCommitOperationRecord | None = None
         running_persisted = False
         branch_updated = False
+        authority_consumed = False
         commit_id: str | None = None
         try:
             self._require_bound_session_root()
@@ -354,7 +363,7 @@ class StoryCommitService:
                 create=True,
                 allowed_worktree_changes=self._allowed_worktree_changes,
             ) as history:
-                self._require_history_ready(
+                ready = self._require_history_ready(
                     history,
                     expected_branch_tip=candidate.branch_tip,
                     expected_internal_tip=binding.internal_tip,
@@ -362,6 +371,7 @@ class StoryCommitService:
                 revalidation = self._revalidate_candidate(
                     binding,
                     history=history,
+                    qualification_phase=StoryCommitQualificationPhase.EXECUTE,
                 )
                 if revalidation != authorized_revalidation:
                     raise story_commit_error(StoryCommitFailureCode.CANDIDATE_DRIFT)
@@ -371,6 +381,8 @@ class StoryCommitService:
                     expected_branch_tip=candidate.branch_tip,
                     expected_internal_tip=binding.internal_tip,
                 )
+                authority._execution_context(self._owner, consume=True)
+                authority_consumed = True
                 operation = GitSessionCommitOperationRecord(
                     session_id=self._session_id,
                     operation_id=operation_id,
@@ -406,6 +418,13 @@ class StoryCommitService:
                         binding.internal_ref,
                     )
                     self._require_history_generation_current(history)
+                    self._refresh_qualification(
+                        binding,
+                        history,
+                        ready,
+                        candidate.branch_tip,
+                        StoryCommitQualificationPhase.EXECUTE,
+                    )
                     commit_id = git.create_commit(revalidation)
                     git.require_staged_candidate(
                         revalidation,
@@ -418,6 +437,13 @@ class StoryCommitService:
                         history,
                         expected_branch_tip=commit_id,
                         expected_internal_tip=binding.internal_tip,
+                    )
+                    self._refresh_qualification(
+                        binding,
+                        history,
+                        ready,
+                        commit_id,
+                        StoryCommitQualificationPhase.AFTER_WRITE,
                     )
                     git.verify_invariants(binding, commit_id)
                     self._require_history_ready(
@@ -480,6 +506,9 @@ class StoryCommitService:
                 branch_updated,
             )
             raise
+        finally:
+            if not authority_consumed:
+                authority._execution_context(self._owner, consume=True)
 
     def _bind_session_root_identity(
         self,
@@ -566,6 +595,7 @@ class StoryCommitService:
         binding: StoryCommitCandidateBinding,
         *,
         history: GitSessionHistory | None = None,
+        qualification_phase: StoryCommitQualificationPhase = StoryCommitQualificationPhase.AUTHORIZE,
     ) -> StoryCommitRevalidation:
         expected = self._expected_session_root_identity
         if expected is None:
@@ -581,6 +611,43 @@ class StoryCommitService:
             history=history,
             allowed_worktree_changes=self._allowed_worktree_changes,
             artifact_repository_access=self._require_artifact_repository_access(),
+            qualification_guard=self._qualification_guard,
+            qualification_phase=qualification_phase,
+        )
+
+    def _refresh_qualification(
+        self,
+        binding: StoryCommitCandidateBinding,
+        history: GitSessionHistory,
+        ready: GitSessionResourceInspection,
+        branch_tip: str,
+        phase: StoryCommitQualificationPhase,
+    ) -> None:
+        guard = self._qualification_guard
+        if guard is None:
+            return
+
+        def validate_capture() -> GitSessionResourceInspection:
+            self._require_history_generation_current(history)
+            self._git().require_session_topology(
+                binding.candidate,
+                internal_ref=binding.internal_ref,
+                expected_internal_tip=binding.internal_tip,
+                expected_main_head=binding.main_head,
+                expected_main_status_sha256=binding.main_status_sha256,
+                expected_branch_tip=branch_tip,
+                expected_index_tree=binding.candidate.expected_tree,
+                verify_worktree=False,
+            )
+            return ready
+
+        require_story_commit_qualification(
+            binding,
+            branch_tip,
+            phase,
+            self._require_artifact_repository_access(),
+            guard,
+            validate_capture,
         )
 
     def _require_artifact_repository_access(
@@ -842,6 +909,7 @@ def create_identity_bound_story_commit_service(
     *,
     allowed_worktree_changes: tuple[str, ...] = (),
     artifact_repository_access: StoryCommitArtifactRepositoryAccess,
+    qualification_guard: StoryCommitQualificationGuard | None = None,
 ) -> StoryCommitService:
     """Create a package-internal commit service pinned to one Apply root."""
 
@@ -855,6 +923,9 @@ def create_identity_bound_story_commit_service(
         raise story_commit_error(StoryCommitFailureCode.INVALID_REQUEST)
     service._bind_session_root_identity(expected_session_root_identity)
     service._bind_generation_identity(expected_generation_identity)
+    if qualification_guard is not None and not callable(qualification_guard):
+        raise story_commit_error(StoryCommitFailureCode.INVALID_REQUEST)
+    service._qualification_guard = qualification_guard
     service._bind_artifact_repository_access(
         lambda validate_ready: _open_generation_bound_artifact_repository(
             artifact_repository_access,

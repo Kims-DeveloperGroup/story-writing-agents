@@ -6,6 +6,7 @@ from ..lead_task_transitions import LeadTaskAction, LeadTaskDecision
 from ..document_plan import DocumentNodeSelection, DocumentCandidateSelection
 from ..conversations import LeadTaskDecisionResult, LeadMaterialChoice
 from ..conversations.session_context import SessionContextCapacityError
+from ..conversations.views.decision_results import StoryCommitQualificationBlocked
 
 import asyncio
 import dataclasses
@@ -830,9 +831,13 @@ class InteractiveLeadAdapter:
             return False
         if outcome.text != "yes":
             raise RuntimeError("commit preparation picker returned an invalid choice")
-        request = self._runner.run(
-            self._progress.run(self._session.reprepare_story_commit(preparation))
-        )
+        try:
+            request = self._runner.run(
+                self._progress.run(self._session.reprepare_story_commit(preparation))
+            )
+        except StoryCommitQualificationBlocked as exc:
+            self._write_unconfirmed(str(exc))
+            return False
         if type(request) is not StoryCommitRequestPayload:
             raise TypeError("commit preparation returned an invalid request")
         prepared_turn = dataclasses.replace(
