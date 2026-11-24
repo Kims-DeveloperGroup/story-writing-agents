@@ -51,14 +51,13 @@ from ...structured_output_validation import (
     ValidatedValue,
     closed_rule,
     decode_finite_selection,
-    failure_findings,
-    failure_issues,
     json_value_utf8_size,
     remap_validation,
     strict_json_member_text,
     strict_json_object,
     validation_failure,
 )
+from ...validation_findings import failure_findings, failure_issues
 from ..accounting import account_provider_payload
 from ..actions import (
     CONTEXT_ACTION_POLICY,

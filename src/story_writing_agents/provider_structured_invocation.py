@@ -18,13 +18,14 @@ from .agents import LEAD_ORCHESTRATOR
 from .provider_schema_projection import require_schema_projection
 from .provider_message_catalog import WIRE_VERSION
 from .provider_contract_guidance import add_contract_guidance, diagnostic_to_wire
-from .structured_output_validation import carry_validation, failure_issues
+from .structured_output_validation import carry_validation
+from .validation_findings import failure_issues
 from .structured_output_validation import (
     SchemaRules,
-    bounded_chunks,
     diagnose_json_text,
     strict_json_value,
 )
+from .validation_findings import bounded_chunks
 from .agent_context import ProviderCallAccounting, ProviderCallKind, ProviderCallState
 from .agent_context.contracts.errors import ContextExecutionError, ContextExecutionErrorCode
 from .agent_exchanges import AgentExchangeScopeKind

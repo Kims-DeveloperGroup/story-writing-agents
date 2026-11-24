@@ -52,18 +52,18 @@ from ..specialist_routing import (
     stage_plan_from_dict,
 )
 from ..structured_output_validation import (
-    DomainValidationRule,
     carry_validation,
     remap_validation,
     validation_call,
     validation_failure,
 )
+from ..validation_findings import DomainValidationRule
 from . import reply_contract_values
 from ..lead_provider_contracts import LeadDiscussionConstraints
 from ..lead_provider_contracts import LeadExplorationConstraints
 from ..lead_exploration import LeadInteractionMode
 from ..lead_provider_contracts import LeadProviderConstraints
-from ..structured_output_validation import bounded_chunks
+from ..validation_findings import bounded_chunks
 from ..structured_output_validation import diagnose_json_text
 from . import outcome_decoding
 

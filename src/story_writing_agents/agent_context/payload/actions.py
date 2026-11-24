@@ -7,15 +7,14 @@ from ...provider_message_catalog import WireShapeError
 from ...provider_contract_guidance import diagnostic_to_wire
 from ...provider_response_mapping import normalize_context_action, normalize_result
 from ...structured_output_validation import (
-    bounded_chunks,
     carry_validation,
     encoding_failure,
-    failure_issues,
     remap_validation,
     strict_json_object,
     validation_call,
     validation_failure,
 )
+from ...validation_findings import bounded_chunks, failure_issues
 from ..actions import (
     ContextActionCorrelation,
     ContextActionError,

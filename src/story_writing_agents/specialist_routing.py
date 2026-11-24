@@ -10,10 +10,10 @@ import re
 import unicodedata
 from itertools import combinations, product
 from .structured_output_validation import (
-    ValidationFinding,
     validation_failure,
     validation_call,
 )
+from .validation_findings import ValidationFinding
 from .provider_schema_patterns import unicode_scalar_classes
 from dataclasses import dataclass, field
 from enum import StrEnum

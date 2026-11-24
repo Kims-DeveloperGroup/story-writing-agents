@@ -4,6 +4,7 @@
   "origin_commit": "3b74dce89a2fffd726b94a739c87d4524c3deed7",
   "counted_support_files": [
     "tests/adapter_streaming_fixture.py",
+    "tests/agent_context/contracts/validation_findings_contract.py",
     "tests/agent_context/invocation/execution_fixture.py",
     "tests/agent_context/invocation/session_fixture.py",
     "tests/agent_context/ledger/ledger_fixture.py",
@@ -4765,6 +4766,86 @@
         "tests/test_workspace_session_history.py": 0,
         "tests/test_suite_budget.py": 3,
         "tests/lead_preparation/schema_choice_factory_contract.py": 45
+      },
+      "counting": "ordinary tests + registered support + 1550 legacy"
+    },
+    {
+      "issue": 1035,
+      "origin_commit": "7e4103b866b976efa6ae6e35a1294221a31f3f82",
+      "origins": [
+        {
+          "source": "tests/agent_context/contracts/test_result_validation.py",
+          "sha256": "9230ecf208c3cf23f3992bce711cb44150f80f733ec2e8a93ee61c56e394ae94"
+        },
+        {
+          "source": "tests/test_artifact_application_contracts.py",
+          "sha256": "da4357a061cfdbb0b3513300de31e77ecf44658a5576d691527e03cc4cb86a16"
+        },
+        {
+          "source": "tests/test_artifact_application_store_recovery.py",
+          "sha256": "d0e7f34fe5ffc325ca01525bba705a09518dbca03c7ec36fe261ec772635eda2"
+        },
+        {
+          "source": "tests/test_artifact_relationship_policy.py",
+          "sha256": "b8a27c734bb3bb60145d0102cfced4000fc05db4e4bddb2206c5b8dd43ef0bad"
+        },
+        {
+          "source": "tests/test_git_external_operation_inspection.py",
+          "sha256": "bbeccedeba484a5009943e136b79f27d67917860164602c3dfef39251e80cb84"
+        },
+        {
+          "source": "tests/test_interactive_controller.py",
+          "sha256": "d6c5e892d329e829c907ed7767b17e5c5dbdcd298b221faca4df014a83a8d1bb"
+        },
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "f9efe63b8dda6f28f9bc68f39c22ca108e500567f7a39caaa51b52087196b6e6"
+        },
+        {
+          "source": "tests/test_session_lifecycle.py",
+          "sha256": "69f89f3f11f6f7efb1e32e464bcf17e49b34eb1b25e322d95c315336dfe37ed0"
+        },
+        {
+          "source": "tests/test_session_recovery_contracts.py",
+          "sha256": "1df86d0bf31001cdb5ca47d3171d52fd9095fc2a77992656d003a739b9fe5947"
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "6e93288e859b1c7ddb44ebd67f094f63be2ccc7d5f6f9aa3bcdf9c76a1e6b831"
+        },
+        {
+          "source": "tests/test_workspace_session_history.py",
+          "sha256": "384e29516cf139ebeda19a9f938e981d4a20a87ec219c4837e78ab46718f70a8"
+        }
+      ],
+      "approved_source_delta": 47,
+      "planned_raw_delta": 10,
+      "planned_support_delta": 37,
+      "legacy_unresolved_lines": 1550,
+      "exact_source_pair": [
+        158513,
+        158560
+      ],
+      "original_caps_sha256": "20f8f0a9d510ad325f82fb32d14d7b3a73f372647aa85ed4cd0c60fc3d5124c6",
+      "expected_caps_sha256": "20f8f0a9d510ad325f82fb32d14d7b3a73f372647aa85ed4cd0c60fc3d5124c6",
+      "counted_support_paths": [
+        "tests/agent_context/contracts/validation_findings_contract.py"
+      ],
+      "excluded_monotonic_rule_ordinary": 1,
+      "excluded_monotonic_rule_physical": 1,
+      "cost_components": {
+        "tests/agent_context/contracts/test_result_validation.py": -23,
+        "tests/test_artifact_application_contracts.py": 0,
+        "tests/test_artifact_application_store_recovery.py": 0,
+        "tests/test_artifact_relationship_policy.py": 0,
+        "tests/test_git_external_operation_inspection.py": 0,
+        "tests/test_interactive_controller.py": 0,
+        "tests/test_rag_module_and_packaging_boundary.py": 30,
+        "tests/test_session_lifecycle.py": 0,
+        "tests/test_session_recovery_contracts.py": 0,
+        "tests/test_workspace_session_history.py": 0,
+        "tests/test_suite_budget.py": 3,
+        "tests/agent_context/contracts/validation_findings_contract.py": 37
       },
       "counting": "ordinary tests + registered support + 1550 legacy"
     }

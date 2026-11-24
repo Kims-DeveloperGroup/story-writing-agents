@@ -246,7 +246,10 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
-        lead_choice_current = suite_budget.load_budget()
+        validation_findings_current = suite_budget.load_budget()
+        lead_choice_current = dict(validation_findings_current, max_test_source_lines=158513)
+        self.assertIsNone(suite_budget.check_monotonic(validation_findings_current, lead_choice_current))
+        self._assert_source_limit_neighbors_rejected(validation_findings_current, lead_choice_current)
         storage_codec_current = dict(lead_choice_current, max_test_source_lines=158488)
         self.assertIsNone(suite_budget.check_monotonic(lead_choice_current, storage_codec_current))
         self._assert_source_limit_neighbors_rejected(lead_choice_current, storage_codec_current)

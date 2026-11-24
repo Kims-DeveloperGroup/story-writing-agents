@@ -132,12 +132,13 @@ import threading
 import uuid
 from .structured_output_validation import (
     NamedHostCheck, TypedDecoder, HostCheckContext,
-    DomainValidationRule, SchemaRules, closed_rule, strict_json_object, strict_json_member_text,
+    SchemaRules, closed_rule, strict_json_object, strict_json_member_text,
     validation_failure,
     validation_call,
     carry_validation,
     remap_validation,
 )
+from .validation_findings import DomainValidationRule
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, asynccontextmanager, contextmanager
 from dataclasses import asdict, dataclass, field, replace
@@ -180,9 +181,9 @@ from .agent_context.contracts.planning_inputs import (
 )
 from .agent_context.continuation import ContextContinuationTransaction
 from .structured_output_validation import (
-    bounded_chunks,
     diagnose_json_text,
 )
+from .validation_findings import bounded_chunks
 from .conversations.session_context import SessionContextCapacityError, SessionHistorySnapshot
 from .agent_context.invocation.context_execution import AgentContextService
 from .agent_context.invocation.delivery import ContextGroupInvocationState

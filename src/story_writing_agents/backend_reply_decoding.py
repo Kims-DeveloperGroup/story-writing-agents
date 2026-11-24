@@ -12,7 +12,8 @@ from .models import AgentReply, AgentReplyKind, AgentReplyNextPhase, Conversatio
 from .provider_contract_guidance import diagnostic_to_wire
 from .provider_message_catalog import WireShapeError
 from .provider_response_mapping import normalize_direct_result, normalize_retrieval_action
-from .structured_output_validation import carry_validation, prefix_validation, remap_validation, validation_failure
+from .structured_output_validation import carry_validation, remap_validation, validation_failure
+from .validation_findings import prefix_validation
 
 
 class PhaseReplyConstraintError(BackendProtocolError):
