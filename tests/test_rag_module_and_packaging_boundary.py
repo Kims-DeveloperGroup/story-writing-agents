@@ -414,8 +414,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 409)
-        self.assertEqual(len(edges), 2527)
+        self.assertEqual(len(modules), 416)
+        self.assertEqual(len(edges), 2600)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -835,20 +835,20 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 'story_writing_agents.agent_context.group_observation',
             },
             "story_writing_agents.conversations.context": {
-                "story_writing_agents.conversations.reducers.artifact_objective_history",
+                "story_writing_agents.conversations.candidate_batch_validation",
+                "story_writing_agents.conversations.editorial_context",
+                "story_writing_agents.conversations.event_store_contract",
+                "story_writing_agents.conversations.event_vocabulary",
+                "story_writing_agents.conversations.events",
+                "story_writing_agents.conversations.readable_context",
                 "story_writing_agents.conversations.reducers.artifact_operation_history",
-                "story_writing_agents.conversations.reducers.artifact_review_history",
+                "story_writing_agents.conversations.reducers.chronological_history",
                 "story_writing_agents.conversations.reducers.collaboration_transitions",
                 "story_writing_agents.conversations.reducers.document_plan_views",
                 "story_writing_agents.conversations.reducers.editorial_event_evidence",
-                "story_writing_agents.conversations.reducers.execution_batch_history",
-                "story_writing_agents.conversations.reducers.exploration_history",
-                "story_writing_agents.conversations.reducers.lead_control_gaps",
-                "story_writing_agents.conversations.reducers.premise_history",
-                "story_writing_agents.conversations.reducers.proposal_keys",
+                "story_writing_agents.conversations.reducers.history_projection",
                 "story_writing_agents.conversations.reducers.readiness_history",
                 "story_writing_agents.conversations.reducers.recommendation_history",
-                "story_writing_agents.conversations.reducers.stored_batches",
                 "story_writing_agents.conversations.reducers.task_source_history",
                 "story_writing_agents.conversations.views.collaboration_history_values",
                 "story_writing_agents.conversations.views.context_value_validation",
@@ -856,17 +856,9 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.conversations.views.decision_results",
                 "story_writing_agents.conversations.views.lead_results",
                 "story_writing_agents.conversations.views.readable_records",
-                "story_writing_agents.conversations.event_vocabulary",
-                "story_writing_agents.document_plan",
-                "story_writing_agents.lead_task_transitions",
+                "story_writing_agents.editorial_state",
                 "story_writing_agents.lead_premise_decisions",
-            "story_writing_agents.editorial_state",
-                "story_writing_agents.specialist_routing",
-                "story_writing_agents.conversations.events",
-                "story_writing_agents.errors",
-                "story_writing_agents.writing_artifacts",
-                'story_writing_agents.agent_context.group_observation',
-                "story_writing_agents.conversations.artifact_revision_sources",
+                "story_writing_agents.lead_task_transitions",
             },
         }
         for source, expected in conversation_dependencies.items():
@@ -1554,7 +1546,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             {source for source, target in edges
              if target == "story_writing_agents.agent_context.group_observation"},
             {"story_writing_agents.agent_context.group_reporting", 'story_writing_agents.agent_context.invocation.context_execution',
-             "story_writing_agents.conversations.context", "story_writing_agents.conversations.events",
+             "story_writing_agents.conversations.readable_context", "story_writing_agents.conversations.events",
              "story_writing_agents.orchestrator",
              "story_writing_agents.runtime_resources.provider_call_accounting"},
         )
@@ -1587,7 +1579,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             'story_writing_agents.conversations.event_contracts.control_records',
             'story_writing_agents.conversations.event_contracts.lead_outcomes',
             'story_writing_agents.conversations',
-            'story_writing_agents.conversations.context',
+            'story_writing_agents.conversations.reducers.history_projection',
             'story_writing_agents.conversations.reducers.document_plan_views',
             'story_writing_agents.conversations.views.collaboration_history_values',
             'story_writing_agents.conversations.views.lead_results',
@@ -2197,7 +2189,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 'story_writing_agents.conversations.events',
                 'story_writing_agents.lead_task_transitions',
                 'story_writing_agents.specialist_routing',
-            }, {'story_writing_agents.conversations.context', 'story_writing_agents.orchestrator'}),
+            }, {'story_writing_agents.conversations.reducers.task_context', 'story_writing_agents.orchestrator'}),
             (lead_answer_authority, {
                 'story_writing_agents.agent_context.actions',
                 'story_writing_agents.agent_context.manifest',
@@ -3748,6 +3740,13 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 "story_writing_agents/conversations/reducers/recommendation_history.py",
                 "story_writing_agents/conversations/reducers/stored_batches.py",
                 "story_writing_agents/conversations/reducers/task_source_history.py",
+                "story_writing_agents/conversations/candidate_batch_validation.py",
+                "story_writing_agents/conversations/editorial_context.py",
+                "story_writing_agents/conversations/event_store_contract.py",
+                "story_writing_agents/conversations/readable_context.py",
+                "story_writing_agents/conversations/reducers/chronological_history.py",
+                "story_writing_agents/conversations/reducers/history_projection.py",
+                "story_writing_agents/conversations/reducers/task_context.py",
                 "story_writing_agents/conversations/events.py",
                 "story_writing_agents/conversations/event_contracts/__init__.py",
                 "story_writing_agents/conversations/event_contracts/conversation_records.py",

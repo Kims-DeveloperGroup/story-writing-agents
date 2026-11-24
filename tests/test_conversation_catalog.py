@@ -1028,7 +1028,13 @@ class ConversationPackageBoundaryTests(unittest.TestCase):
                 "CollaborationReadableRecord",
             },
         }
-        reducer_definitions = {
+        history_definitions = {
+            "reducers/chronological_history.py": {"project_collaboration_history"},
+            "readable_context.py": {"project_collaboration_readable_history", "select_bounded_collaboration_context"},
+            "candidate_batch_validation.py": {"validate_collaboration_candidate_batch"},
+            "event_store_contract.py": {"CollaborationEventStore"},
+            "editorial_context.py": {"project_editorial_state"},
+            "reducers/history_projection.py": {"CollaborationHistoryProjection"},
             "reducers/collaboration_transitions.py": {"validate_collaboration_transition"},
             "reducers/document_plan_views.py": {"document_lineage_cost", "project_document_plan_views"},
             "reducers/editorial_event_evidence.py": {"editorial_provenance_available"},
@@ -1043,9 +1049,9 @@ class ConversationPackageBoundaryTests(unittest.TestCase):
                 *contract_definitions.items(),
             ),
             "context.py": (
-                ("context.py", _CONTEXT_EXPORTS - set().union(*view_definitions.values(), *reducer_definitions.values())),
+                ("context.py", _CONTEXT_EXPORTS - set().union(*view_definitions.values(), *history_definitions.values())),
                 *view_definitions.items(),
-                *reducer_definitions.items(),
+                *history_definitions.items(),
             ),
         }
         public_names = set(_CONVERSATION_FACADE_EXPORTS) | _OWNER_ONLY_EVENT_EXPORTS

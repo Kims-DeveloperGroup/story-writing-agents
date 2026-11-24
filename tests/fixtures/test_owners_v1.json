@@ -23119,6 +23119,211 @@
         "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_public_definitions_live_in_their_exact_owner_modules",
         "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_supported_package_exports_are_identity_stable"
       ]
+    },
+
+    {
+      "name": "conversations.candidate_batch_validation",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/conversations/candidate_batch_validation.py"
+      ],
+      "depends_on": [
+        "conversations.event-vocabulary",
+        "conversations.event_append_results",
+        "conversations.reducers.chronological_history",
+        "conversations.reducers.history_projection",
+        "conversations.reducers.stored_batches"
+      ],
+      "focused_ids": [
+        "tests.test_collaboration_context.CollaborationAtomicBatchTests.test_all_required_co_batch_families_and_split_rejections",
+        "tests.test_collaboration_context.CollaborationAtomicBatchTests.test_exact_retry_and_all_fixed_conflicts_are_classified"
+      ],
+      "affected_ids": [
+        "tests.test_collaboration_context.CollaborationAtomicBatchTests.test_all_required_co_batch_families_and_split_rejections",
+        "tests.test_collaboration_context.CollaborationAtomicBatchTests.test_exact_retry_and_all_fixed_conflicts_are_classified",
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_public_definitions_live_in_their_exact_owner_modules",
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_supported_package_exports_are_identity_stable",
+        "tests.test_filesystem_collaboration_event_store.FilesystemCollaborationEventStoreCorruptionTests.test_malformed_and_metadata_corruption_fail_closed_without_rewrite",
+        "tests.test_filesystem_collaboration_event_store.FilesystemCollaborationEventStorePersistenceTests.test_all_required_co_batches_append_and_split_forms_are_atomic",
+        "tests.test_sqlite_collaboration_event_store.SQLiteCollaborationEventStoreFirstSliceTests.test_all_batch_families_append_and_every_split_rolls_back",
+        "tests.test_sqlite_collaboration_event_store.SQLiteCollaborationEventStoreFirstSliceTests.test_corrupt_rows_fail_closed_and_database_constraints_reject_duplicates"
+      ]
+    },
+
+    {
+      "name": "conversations.editorial_context",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/conversations/editorial_context.py"
+      ],
+      "depends_on": [
+        "conversations.event-vocabulary",
+        "conversations.event_contracts.artifact_apply",
+        "conversations.event_contracts.artifact_reviews",
+        "conversations.event_contracts.authoring_records",
+        "conversations.reducers.chronological_history",
+        "conversations.reducers.editorial_event_evidence"
+      ],
+      "focused_ids": [
+        "tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests.test_projection_is_deterministic_ordered_typed_and_history_only"
+      ],
+      "affected_ids": [
+        "tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_public_definitions_live_in_their_exact_owner_modules",
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_supported_package_exports_are_identity_stable"
+      ]
+    },
+
+    {
+      "name": "conversations.event_store_contract",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/conversations/event_store_contract.py"
+      ],
+      "depends_on": [
+        "conversations.event_append_results",
+        "conversations.reducers.history_projection"
+      ],
+      "focused_ids": [
+        "tests.test_collaboration_context.CollaborationPortAndLegacyIsolationTests.test_unused_store_protocol_has_exact_methods_and_typing"
+      ],
+      "affected_ids": [
+        "tests.test_collaboration_context.CollaborationPortAndLegacyIsolationTests.test_unused_store_protocol_has_exact_methods_and_typing",
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_public_definitions_live_in_their_exact_owner_modules",
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_supported_package_exports_are_identity_stable",
+        "tests.test_filesystem_collaboration_event_store.FilesystemCollaborationEventStorePersistenceTests.test_all_required_co_batches_append_and_split_forms_are_atomic",
+        "tests.test_sqlite_collaboration_event_store.SQLiteCollaborationEventStoreFirstSliceTests.test_all_batch_families_append_and_every_split_rolls_back"
+      ]
+    },
+
+    {
+      "name": "conversations.readable_context",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/conversations/readable_context.py"
+      ],
+      "depends_on": [
+        "conversations.event-vocabulary",
+        "conversations.reducers.chronological_history",
+        "conversations.views.context_value_validation",
+        "conversations.views.readable_records"
+      ],
+      "focused_ids": [
+        "tests.test_collaboration_context.CollaborationReadableProjectionTests.test_default_context_is_content_free_and_selection_is_bounded_additive",
+        "tests.test_collaboration_context.CollaborationReadableProjectionTests.test_every_event_projects_once_with_complete_identity_and_closed_fields"
+      ],
+      "affected_ids": [
+        "tests.test_collaboration_context.CollaborationReadableProjectionTests.test_default_context_is_content_free_and_selection_is_bounded_additive",
+        "tests.test_collaboration_context.CollaborationReadableProjectionTests.test_every_event_projects_once_with_complete_identity_and_closed_fields",
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_public_definitions_live_in_their_exact_owner_modules",
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_supported_package_exports_are_identity_stable",
+        "tests.test_provider_response_mapping.ProviderResponseMappingTests.test_all_wire_values_have_stable_golden_hashes_and_round_trip"
+      ]
+    },
+
+    {
+      "name": "conversations.reducers.chronological_history",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/conversations/reducers/chronological_history.py"
+      ],
+      "depends_on": [
+        "conversations.event-vocabulary",
+        "conversations.event_contracts.artifact_apply",
+        "conversations.event_contracts.artifact_reviews",
+        "conversations.event_contracts.authoring_records",
+        "conversations.event_contracts.control_records",
+        "conversations.event_contracts.execution",
+        "conversations.event_contracts.lead_outcomes",
+        "conversations.event_contracts.story_commits",
+        "conversations.reducers.artifact_objective_history",
+        "conversations.reducers.artifact_operation_history",
+        "conversations.reducers.artifact_review_history",
+        "conversations.reducers.collaboration_transitions",
+        "conversations.reducers.document_plan_views",
+        "conversations.reducers.editorial_event_evidence",
+        "conversations.reducers.execution_batch_history",
+        "conversations.reducers.exploration_history",
+        "conversations.reducers.history_projection",
+        "conversations.reducers.lead_control_gaps",
+        "conversations.reducers.premise_history",
+        "conversations.reducers.proposal_keys",
+        "conversations.reducers.recommendation_history",
+        "conversations.reducers.stored_batches",
+        "conversations.reducers.task_context",
+        "conversations.views.collaboration_history_values"
+      ],
+      "focused_ids": [
+        "tests.test_collaboration_context.CollaborationConfirmationAndRecoveryTests.test_unmatched_read_only_lead_projects_retry_without_write_authority",
+        "tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests.test_projection_is_deterministic_ordered_typed_and_history_only"
+      ],
+      "affected_ids": [
+        "tests.test_collaboration_context.CollaborationConfirmationAndRecoveryTests.test_unmatched_read_only_lead_projects_retry_without_write_authority",
+        "tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_public_definitions_live_in_their_exact_owner_modules",
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_supported_package_exports_are_identity_stable",
+        "tests.test_filesystem_collaboration_event_store.FilesystemCollaborationEventStorePersistenceTests.test_all_required_co_batches_append_and_split_forms_are_atomic",
+        "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_unresolved_running_becomes_outcome_unknown_without_provider",
+        "tests.test_sqlite_collaboration_event_store.SQLiteCollaborationEventStoreFirstSliceTests.test_all_batch_families_append_and_every_split_rolls_back"
+      ]
+    },
+
+    {
+      "name": "conversations.reducers.history_projection",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/conversations/reducers/history_projection.py"
+      ],
+      "depends_on": [
+        "conversations.event-vocabulary",
+        "conversations.event_contracts.artifact_apply",
+        "conversations.event_contracts.artifact_reviews",
+        "conversations.event_contracts.execution",
+        "conversations.event_contracts.story_commits",
+        "conversations.reducers.recommendation_history",
+        "conversations.views.collaboration_history_values",
+        "conversations.views.context_value_validation"
+      ],
+      "focused_ids": [
+        "tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests.test_projection_is_deterministic_ordered_typed_and_history_only"
+      ],
+      "affected_ids": [
+        "tests.test_collaboration_context.CollaborationReadableProjectionTests.test_every_event_projects_once_with_complete_identity_and_closed_fields",
+        "tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_public_definitions_live_in_their_exact_owner_modules",
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_supported_package_exports_are_identity_stable"
+      ]
+    },
+
+    {
+      "name": "conversations.reducers.task_context",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/conversations/reducers/task_context.py"
+      ],
+      "depends_on": [
+        "conversations.event-vocabulary",
+        "conversations.event_contracts.artifact_apply",
+        "conversations.event_contracts.artifact_reviews",
+        "conversations.event_contracts.authoring_records",
+        "conversations.event_contracts.control_records",
+        "conversations.event_contracts.execution",
+        "conversations.event_contracts.lead_outcomes",
+        "conversations.reducers.history_projection",
+        "conversations.reducers.readiness_history",
+        "conversations.reducers.recommendation_history",
+        "conversations.reducers.task_source_history",
+        "conversations.views.collaboration_history_values"
+      ],
+      "focused_ids": [
+        "tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests.test_projection_is_deterministic_ordered_typed_and_history_only"
+      ],
+      "affected_ids": [
+        "tests.test_collaboration_history_projection.CollaborationHistoryProjectionTests.test_projection_is_deterministic_ordered_typed_and_history_only",
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_public_definitions_live_in_their_exact_owner_modules",
+        "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_supported_package_exports_are_identity_stable",
+        "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_unresolved_running_becomes_outcome_unknown_without_provider"
+      ]
     }
   ],
   "ignored_names": [
