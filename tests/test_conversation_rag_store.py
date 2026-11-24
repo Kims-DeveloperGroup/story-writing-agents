@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import errno
 import hashlib
-import inspect
 import json
 import os
 import stat
@@ -12,11 +11,9 @@ import subprocess
 import sys
 import textwrap
 import unittest
-from dataclasses import FrozenInstanceError, fields
 from pathlib import Path
 from unittest import mock
 
-from story_writing_agents import Workspace
 from story_writing_agents import conversation_rag as rag
 from story_writing_agents import conversation_rag_store as store_module
 from story_writing_agents.conversation_rag_local import (
@@ -34,177 +31,18 @@ from story_writing_agents.conversation_rag_store import (
     ConversationRagStoreStatus,
 )
 
-from tests.helpers import pristine_initialized_workspace
-
-_REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-_GENERIC_SOURCE = _REPOSITORY_ROOT / "vendor" / "generic-rag" / "src"
-if str(_GENERIC_SOURCE) not in sys.path:
-    sys.path.insert(0, str(_GENERIC_SOURCE))
-
-from story_writing_agents.generic_rag_adapter import (  # noqa: E402
-    GenericRagConversationService,
+from tests.conversation_rag.generation_format_contract import GenerationFormatContractMixin
+from tests.conversation_rag.store_fixture import (
+    ConversationRagStoreFixture,
+    _canonical_json,
+    _missing_state,
+    _publish,
+    _REPOSITORY_ROOT,
+    _request,
+    _service,
 )
 
 _VISIBLE_TURN_SCHEMA_ID = "story-conversation-rag-visible-turn-v1"
-
-
-class _EmptyLexicalRetriever:
-    def search(
-        self,
-        _request: rag.ConversationRagRetrievalRequest,
-        /,
-    ) -> tuple[rag.ConversationRagProviderCandidate, ...]:
-        return ()
-
-
-def _missing_state() -> rag.ConversationRagProjectionState:
-    return rag.ConversationRagProjectionState(
-        rag.ConversationRagProjectionStateAvailability.MISSING,
-        None,
-    )
-
-
-def _request(
-    *,
-    session_id: str = "session-a",
-    schema_id: str = CONVERSATION_RAG_STORE_SCHEMA_ID,
-    document_id: str = "document-a",
-    revision_id: str = "revision-a",
-    text: str = "Alpha 한글 🌙",
-) -> rag.ConversationRagProjectionRequest:
-    identity = rag.ConversationRagDocumentIdentity(
-        rag.ConversationRagDocumentKey(session_id, document_id),
-        f"conversation-{document_id.removeprefix('document-')}",
-        "turn-a",
-        "turn-b",
-        1,
-        2,
-        revision_id,
-    )
-    return rag.ConversationRagProjectionRequest(
-        session_id,
-        schema_id,
-        LocalConversationRagEmbedder().identity,
-        (rag.ConversationRagSourceDocument(identity, text),),
-    )
-
-
-def _service(
-    builder: object,
-) -> GenericRagConversationService:
-    return GenericRagConversationService(
-        rag.ConversationRagCollaborators(
-            LocalConversationRagEmbedder(),
-            builder,
-            builder,
-            object(),
-            _EmptyLexicalRetriever(),
-        )
-    )
-
-
-def _publish(
-    store: ConversationRagGenerationStore,
-    request: rag.ConversationRagProjectionRequest,
-    *,
-    state: rag.ConversationRagProjectionState | None = None,
-    rebuild: bool = True,
-) -> tuple[rag.ConversationRagProjectionResult, ConversationRagStoreSnapshot]:
-    supplied_state = _missing_state() if state is None else state
-    with store.begin_generation(
-        LOCAL_CONVERSATION_RAG_PROVIDER_ID,
-        request,
-        supplied_state,
-        rebuild=rebuild,
-    ) as builder:
-        service = _service(builder)
-        result = (
-            service.rebuild_projection(request, builder.state)
-            if rebuild
-            else service.project_documents(request, builder.state)
-        )
-        return result, builder.publish(result)
-
-
-def _canonical_json(value: object) -> bytes:
-    return (
-        json.dumps(
-            value,
-            ensure_ascii=False,
-            allow_nan=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        )
-        + "\n"
-    ).encode("utf-8")
-
-
-def _length_framed_sha256(fields: tuple[str, ...]) -> str:
-    digest = hashlib.sha256()
-    for field in fields:
-        encoded = field.encode("utf-8")
-        digest.update(len(encoded).to_bytes(8, "big"))
-        digest.update(encoded)
-    return f"sha256:{digest.hexdigest()}"
-
-
-def _persist_oversized_float_exponent(
-    session: Path,
-    generation: Path,
-) -> None:
-    vectors_path = generation / "vectors.jsonl"
-    vector_rows = vectors_path.read_text(encoding="utf-8").splitlines()
-    if len(vector_rows) != 1:
-        raise AssertionError("overflow fixture requires exactly one vector record")
-    vector = json.loads(vector_rows[0])
-    vector["values"][0] = "0x1p+" + "9" * 1_024
-    vectors_payload = _canonical_json(vector)
-    vectors_path.write_bytes(vectors_payload)
-
-    manifest_payload = (generation / "generic-manifest.json").read_bytes()
-    source_map_payload = (generation / "source-map.jsonl").read_bytes()
-    manifest_digest = f"sha256:{hashlib.sha256(manifest_payload).hexdigest()}"
-    source_map_digest = f"sha256:{hashlib.sha256(source_map_payload).hexdigest()}"
-    vectors_digest = f"sha256:{hashlib.sha256(vectors_payload).hexdigest()}"
-    generation_digest = _length_framed_sha256(
-        (
-            "story-conversation-rag-generation-v1",
-            "generic_manifest_digest",
-            manifest_digest,
-            "source_map_digest",
-            source_map_digest,
-            "vectors_digest",
-            vectors_digest,
-        )
-    )
-    generation_id = f"gen-{generation_digest.removeprefix('sha256:')}"
-
-    metadata_path = generation / "generation.json"
-    metadata = json.loads(metadata_path.read_bytes())
-    metadata.update(
-        {
-            "generation_digest": generation_digest,
-            "generation_id": generation_id,
-            "generic_manifest_digest": manifest_digest,
-            "payload_bytes": (
-                len(manifest_payload) + len(source_map_payload) + len(vectors_payload)
-            ),
-            "source_map_digest": source_map_digest,
-            "vectors_digest": vectors_digest,
-        }
-    )
-    metadata_path.write_bytes(_canonical_json(metadata))
-    generation.rename(generation.with_name(generation_id))
-
-    active_path = session / "active.json"
-    active = json.loads(active_path.read_bytes())
-    active["generation_digest"] = generation_digest
-    active["generation_id"] = generation_id
-    active_path.write_bytes(_canonical_json(active))
-    status_path = session / "status.json"
-    status = json.loads(status_path.read_bytes())
-    status["generation_id"] = generation_id
-    status_path.write_bytes(_canonical_json(status))
 
 
 def _regular_bytes(path: Path) -> bytes:
@@ -214,138 +52,9 @@ def _regular_bytes(path: Path) -> bytes:
     return path.read_bytes()
 
 
-class ConversationRagStoreTests(unittest.TestCase):
-    def new_store(
-        self,
-    ) -> tuple[Workspace, ConversationRagGenerationStore]:
-        workspace = pristine_initialized_workspace(self)
-        return workspace, ConversationRagGenerationStore(workspace)
-
-    @staticmethod
-    def session_root(workspace: Workspace, session_id: str = "session-a") -> Path:
-        return workspace.root.joinpath(
-            "agent_states",
-            "orchestrator_state",
-            "conversation_rag",
-            "sessions",
-            session_id,
-        )
-
-    @classmethod
-    def generation_root(
-        cls,
-        workspace: Workspace,
-        snapshot: ConversationRagStoreSnapshot,
-    ) -> Path:
-        assert snapshot.generation_id is not None
-        return cls.session_root(workspace, snapshot.session_id).joinpath(
-            "generations",
-            snapshot.generation_id,
-        )
-
-    def assertStoreFailure(
-        self,
-        error: ConversationRagStoreError,
-        failure: ConversationRagStoreFailure,
-    ) -> None:
-        self.assertIs(error.failure, failure)
-        self.assertIsNone(error.__cause__)
-        self.assertIsNone(error.__context__)
-        self.assertNotIn("secret", str(error).lower())
-        self.assertNotIn("secret", repr(error).lower())
-
-    def test_exact_surface_values_counts_snapshots_and_errors(self) -> None:
-        self.assertEqual(
-            store_module.__all__,
-            [
-                "CONVERSATION_RAG_STORE_SCHEMA_ID",
-                "ConversationRagStoreStatus",
-                "ConversationRagStoreFailure",
-                "ConversationRagStoreCounts",
-                "ConversationRagStoreSnapshot",
-                "ConversationRagGenerationBuilder",
-                "ConversationRagGenerationStore",
-                "ConversationRagStoreError",
-            ],
-        )
-        self.assertEqual(
-            CONVERSATION_RAG_STORE_SCHEMA_ID,
-            "story-conversation-rag-store-v1",
-        )
-        inspection = inspect.signature(ConversationRagGenerationStore.inspect)
-        self.assertEqual(
-            tuple(
-                (parameter.name, parameter.kind, parameter.default)
-                for parameter in inspection.parameters.values()
-            ),
-            (
-                ("self", inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.empty),
-                (
-                    "session_id",
-                    inspect.Parameter.POSITIONAL_ONLY,
-                    inspect.Parameter.empty,
-                ),
-                (
-                    "provider_id",
-                    inspect.Parameter.POSITIONAL_ONLY,
-                    inspect.Parameter.empty,
-                ),
-                (
-                    "embedding",
-                    inspect.Parameter.POSITIONAL_ONLY,
-                    inspect.Parameter.empty,
-                ),
-                (
-                    "expected_projection_schema_id",
-                    inspect.Parameter.KEYWORD_ONLY,
-                    CONVERSATION_RAG_STORE_SCHEMA_ID,
-                ),
-            ),
-        )
-        self.assertEqual(
-            tuple(item.value for item in ConversationRagStoreStatus),
-            ("missing", "ready", "stale", "corrupt", "incompatible", "provider_failed"),
-        )
-        self.assertEqual(
-            tuple(item.value for item in ConversationRagStoreFailure),
-            (
-                "unsupported",
-                "busy",
-                "unsafe",
-                "corrupt",
-                "incompatible",
-                "provider_failed",
-                "confirmation_required",
-                "operation_failed",
-            ),
-        )
-        self.assertEqual(
-            tuple(field.name for field in fields(ConversationRagStoreCounts)),
-            (
-                "conversations",
-                "events",
-                "documents",
-                "fragments",
-                "source_map_records",
-                "vector_records",
-                "generations",
-                "orphan_generations",
-                "source_utf8_bytes",
-                "payload_bytes",
-                "generation_bytes",
-            ),
-        )
-        counts = ConversationRagStoreCounts()
-        with self.assertRaises(FrozenInstanceError):
-            counts.documents = 1  # type: ignore[misc]
-        with self.assertRaisesRegex(ValueError, "record counts"):
-            ConversationRagStoreCounts(fragments=1)
-        with self.assertRaisesRegex(TypeError, "must be an integer"):
-            ConversationRagStoreCounts(events=True)  # type: ignore[arg-type]
-        for failure in ConversationRagStoreFailure:
-            with self.subTest(failure=failure):
-                self.assertStoreFailure(ConversationRagStoreError(failure), failure)
-
+class ConversationRagStoreTests(
+    GenerationFormatContractMixin, ConversationRagStoreFixture, unittest.TestCase,
+):
     def test_projection_schema_expectation_is_validated_before_storage_io(
         self,
     ) -> None:
@@ -1127,91 +836,6 @@ class ConversationRagStoreTests(unittest.TestCase):
                     ConversationRagStoreStatus.INCOMPATIBLE,
                 )
                 self.assertEqual(legacy.state, retry.state)
-
-    def test_canonical_corruption_size_and_generation_parity_fail_closed(self) -> None:
-        cases = ("bom", "pretty", "metadata_count", "jsonl_blank", "oversized")
-        for case in cases:
-            with self.subTest(case=case):
-                workspace, store = self.new_store()
-                _result, snapshot = _publish(store, _request())
-                session = self.session_root(workspace)
-                generation = self.generation_root(workspace, snapshot)
-                if case == "bom":
-                    active = session / "active.json"
-                    active.write_bytes(b"\xef\xbb\xbf" + active.read_bytes())
-                elif case == "pretty":
-                    active = session / "active.json"
-                    active.write_text(
-                        json.dumps(json.loads(active.read_bytes()), indent=2),
-                        encoding="utf-8",
-                    )
-                elif case == "metadata_count":
-                    metadata_path = generation / "generation.json"
-                    metadata = json.loads(metadata_path.read_bytes())
-                    metadata["fragment_count"] = 2
-                    metadata_path.write_bytes(_canonical_json(metadata))
-                elif case == "jsonl_blank":
-                    path = generation / "vectors.jsonl"
-                    path.write_bytes(path.read_bytes() + b"\n")
-                else:
-                    active = session / "active.json"
-                    with active.open("r+b") as handle:
-                        handle.truncate(store_module._MAX_POINTER_BYTES + 1)
-                corrupt = store.inspect(
-                    "session-a",
-                    "local",
-                    LocalConversationRagEmbedder().identity,
-                )
-                self.assertIs(corrupt.status, ConversationRagStoreStatus.CORRUPT)
-                self.assertIs(
-                    corrupt.state.availability,
-                    rag.ConversationRagProjectionStateAvailability.CORRUPT,
-                )
-                self.assertIsNone(corrupt.generation_id)
-
-    def test_bounded_hostile_json_and_float_exponents_are_fixed_corruption(
-        self,
-    ) -> None:
-        cases: tuple[tuple[str, bytes | None], ...] = (
-            ("deep_nesting", b"[" * 2_048 + b"0" + b"]" * 2_048 + b"\n"),
-            ("nan", b"NaN\n"),
-            ("infinity", b"Infinity\n"),
-            ("overflow_decimal", b"1e400\n"),
-            ("oversized_float_hex", None),
-        )
-        for case, active_payload in cases:
-            with self.subTest(case=case):
-                workspace, store = self.new_store()
-                _result, ready = _publish(store, _request())
-                session = self.session_root(workspace)
-                generation = self.generation_root(workspace, ready)
-                if active_payload is None:
-                    _persist_oversized_float_exponent(session, generation)
-                    active = json.loads((session / "active.json").read_bytes())
-                    mutated = session / "generations" / active["generation_id"]
-                    self.assertLess(
-                        (mutated / "vectors.jsonl").stat().st_size,
-                        store_module._MAX_JSONL_RECORD_BYTES,
-                    )
-                else:
-                    self.assertLess(
-                        len(active_payload),
-                        store_module._MAX_POINTER_BYTES,
-                    )
-                    (session / "active.json").write_bytes(active_payload)
-
-                observed = store.inspect(
-                    "session-a",
-                    "local",
-                    LocalConversationRagEmbedder().identity,
-                )
-                self.assertIs(observed.status, ConversationRagStoreStatus.CORRUPT)
-                with self.assertRaises(ConversationRagStoreError) as caught:
-                    store.open_active_reader(ready, LocalConversationRagVectorRanker())
-                self.assertStoreFailure(
-                    caught.exception,
-                    ConversationRagStoreFailure.CORRUPT,
-                )
 
     def test_request_bounds_are_checked_before_store_mutation(self) -> None:
         workspace, store = self.new_store()

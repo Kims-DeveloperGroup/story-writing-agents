@@ -3058,7 +3058,10 @@
         "tests.test_conversation_rag_store.ConversationRagStoreTests.test_unsupported_primitives_and_control_cleanup_leave_no_held_lock",
         "tests.test_conversation_rag_store.ConversationRagStoreTests.test_visible_projection_preserves_envelope_reopens_and_reinspects_reader"
       ],
-      "depends_on": []
+      "depends_on": [
+        "tests.conversation_rag.generation_format_contract",
+        "tests.conversation_rag.store_fixture"
+      ]
     },
     {
       "name": "tests.test_conversation_retrieval",
@@ -23389,6 +23392,88 @@
         "tests.test_sqlite_conversation_storage.SQLiteCollaborationSearchContractTests.test_sqlite_results_equal_the_reference_v2_search"
       ],
       "depends_on": []
+    },
+    {
+      "name": "conversation-rag-generation-contracts",
+      "paths": [
+        "src/story_writing_agents/conversation_rag_generation_contracts.py"
+      ],
+      "boundary": "pure",
+      "focused_ids": [
+        "tests.test_conversation_rag_store.ConversationRagStoreTests.test_bounded_hostile_json_and_float_exponents_are_fixed_corruption",
+        "tests.test_conversation_rag_store.ConversationRagStoreTests.test_canonical_corruption_size_and_generation_parity_fail_closed",
+        "tests.test_conversation_rag_store.ConversationRagStoreTests.test_exact_surface_values_counts_snapshots_and_errors"
+      ],
+      "affected_ids": [
+        "tests.test_conversation_rag_cli.ConversationRagCliWorkflowTests.test_failure_vocabulary_and_controls_are_sanitized_at_dispatch_boundary",
+        "tests.test_conversation_rag_composition.ConversationRagCompositionTests.test_concrete_runtime_state_maps_every_store_status_and_marks_stale",
+        "tests.test_conversation_rag_store.ConversationRagStoreTests.test_bounded_hostile_json_and_float_exponents_are_fixed_corruption",
+        "tests.test_conversation_rag_store.ConversationRagStoreTests.test_canonical_corruption_size_and_generation_parity_fail_closed",
+        "tests.test_conversation_rag_store.ConversationRagStoreTests.test_cross_process_session_contention_times_out_and_recovers",
+        "tests.test_conversation_rag_store.ConversationRagStoreTests.test_deterministic_publish_topology_canonical_bytes_counts_and_reader",
+        "tests.test_conversation_rag_store.ConversationRagStoreTests.test_exact_surface_values_counts_snapshots_and_errors",
+        "tests.test_conversation_rag_store.ConversationRagStoreTests.test_final_precommit_failures_preserve_old_pointer_and_retry",
+        "tests.test_conversation_rag_store.ConversationRagStoreTests.test_rebuild_is_deterministic_restart_not_resume_and_chunks_ranges",
+        "tests.test_rag_module_and_packaging_boundary.RagModuleBoundaryTests.test_inventory_edges_cycles_and_sole_dual_importer_match_the_brief",
+        "tests.test_rag_module_and_packaging_boundary.RagModuleBoundaryTests.test_supported_module_surfaces_do_not_expand_the_root_facade",
+        "tests.test_rag_module_and_packaging_boundary.RagPackagingBoundaryTests.test_temporary_base_and_optional_artifacts_exclude_vendored_source"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "tests.conversation_rag.store_fixture",
+      "paths": [
+        "tests/conversation_rag/__init__.py",
+        "tests/conversation_rag/store_fixture.py"
+      ],
+      "boundary": "test-support",
+      "focused_ids": [
+        "tests.test_conversation_rag_store.ConversationRagStoreTests.test_bounded_hostile_json_and_float_exponents_are_fixed_corruption",
+        "tests.test_conversation_rag_store.ConversationRagStoreTests.test_canonical_corruption_size_and_generation_parity_fail_closed",
+        "tests.test_conversation_rag_store.ConversationRagStoreTests.test_exact_surface_values_counts_snapshots_and_errors"
+      ],
+      "affected_ids": [
+        "tests.test_conversation_rag_store.ConversationRagStoreTests.test_advisory_status_never_masks_identity_or_schema_incompatibility",
+        "tests.test_conversation_rag_store.ConversationRagStoreTests.test_bounded_hostile_json_and_float_exponents_are_fixed_corruption",
+        "tests.test_conversation_rag_store.ConversationRagStoreTests.test_canonical_corruption_size_and_generation_parity_fail_closed",
+        "tests.test_conversation_rag_store.ConversationRagStoreTests.test_confirmed_purge_is_single_session_and_derived_only",
+        "tests.test_conversation_rag_store.ConversationRagStoreTests.test_construction_and_missing_inspection_do_not_create_store_state",
+        "tests.test_conversation_rag_store.ConversationRagStoreTests.test_cross_process_session_contention_times_out_and_recovers",
+        "tests.test_conversation_rag_store.ConversationRagStoreTests.test_deterministic_publish_topology_canonical_bytes_counts_and_reader",
+        "tests.test_conversation_rag_store.ConversationRagStoreTests.test_exact_surface_values_counts_snapshots_and_errors",
+        "tests.test_conversation_rag_store.ConversationRagStoreTests.test_final_precommit_failures_preserve_old_pointer_and_retry",
+        "tests.test_conversation_rag_store.ConversationRagStoreTests.test_legacy_generation_requires_atomic_rebuild_for_visible_schema",
+        "tests.test_conversation_rag_store.ConversationRagStoreTests.test_persisted_projection_schema_disagreement_is_corrupt",
+        "tests.test_conversation_rag_store.ConversationRagStoreTests.test_projection_schema_expectation_is_validated_before_storage_io",
+        "tests.test_conversation_rag_store.ConversationRagStoreTests.test_rebuild_is_deterministic_restart_not_resume_and_chunks_ranges",
+        "tests.test_conversation_rag_store.ConversationRagStoreTests.test_request_bounds_are_checked_before_store_mutation",
+        "tests.test_conversation_rag_store.ConversationRagStoreTests.test_status_is_advisory_active_is_sole_commit_and_content_free",
+        "tests.test_conversation_rag_store.ConversationRagStoreTests.test_successful_active_rename_is_the_final_publish_operation",
+        "tests.test_conversation_rag_store.ConversationRagStoreTests.test_symlink_hardlink_mode_namespace_and_identity_races_are_contained",
+        "tests.test_conversation_rag_store.ConversationRagStoreTests.test_unsupported_primitives_and_control_cleanup_leave_no_held_lock",
+        "tests.test_conversation_rag_store.ConversationRagStoreTests.test_visible_projection_preserves_envelope_reopens_and_reinspects_reader"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "tests.conversation_rag.generation_format_contract",
+      "paths": [
+        "tests/conversation_rag/generation_format_contract.py"
+      ],
+      "boundary": "test-support",
+      "focused_ids": [
+        "tests.test_conversation_rag_store.ConversationRagStoreTests.test_bounded_hostile_json_and_float_exponents_are_fixed_corruption",
+        "tests.test_conversation_rag_store.ConversationRagStoreTests.test_canonical_corruption_size_and_generation_parity_fail_closed",
+        "tests.test_conversation_rag_store.ConversationRagStoreTests.test_exact_surface_values_counts_snapshots_and_errors"
+      ],
+      "affected_ids": [
+        "tests.test_conversation_rag_store.ConversationRagStoreTests.test_bounded_hostile_json_and_float_exponents_are_fixed_corruption",
+        "tests.test_conversation_rag_store.ConversationRagStoreTests.test_canonical_corruption_size_and_generation_parity_fail_closed",
+        "tests.test_conversation_rag_store.ConversationRagStoreTests.test_exact_surface_values_counts_snapshots_and_errors"
+      ],
+      "depends_on": [
+        "tests.conversation_rag.store_fixture"
+      ]
     }
   ],
   "ignored_names": [

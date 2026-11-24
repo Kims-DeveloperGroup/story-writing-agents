@@ -166,13 +166,13 @@ backends through contracts; conversation/domain modules must not import a concre
 Responsibility: define the RAG contract, provide local and optional generic-RAG adapters,
 persist indexes, compose them, expose runtime retrieval, and support RAG administration.
 
-- `conversation_rag`, `conversation_rag_local`, `conversation_rag_store`
+- `conversation_rag`, `conversation_rag_local`, `conversation_rag_store`, `conversation_rag_generation_contracts`
 - `conversation_rag_composition`, `conversation_rag_runtime`, `conversation_rag_cli`
 - `generic_rag_adapter`
 
 Core runtime depends on `conversation_rag_runtime`, not concrete optional packages.
 `conversation_rag_composition` is the only normal construction boundary for optional
-adapters; `conversation_rag_store` owns index persistence.
+adapters; `conversation_rag_store` owns index persistence and the lifetime of filesystem resources. `conversation_rag_generation_contracts` defines stored generation values, canonical formats, validation, and errors below the store.
 
 ### Consensus workflow
 
