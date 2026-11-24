@@ -415,8 +415,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 423)
-        self.assertEqual(len(edges), 2625)
+        self.assertEqual(len(modules), 424)
+        self.assertEqual(len(edges), 2637)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -429,6 +429,23 @@ class RagModuleBoundaryTests(unittest.TestCase):
         activation_owner = "story_writing_agents.provider_configuration_activation"
         request_validation_owner = "story_writing_agents.bound_agent_request_validation"
         provider_dependencies = {
+            "story_writing_agents.validation_findings": (
+                set(),
+                {
+                    "story_writing_agents.agent_context.contracts.bound_call",
+                    "story_writing_agents.agent_context.invocation.context_execution",
+                    "story_writing_agents.agent_context.payload.actions",
+                    "story_writing_agents.backend",
+                    "story_writing_agents.backend_reply_decoding",
+                    "story_writing_agents.lead_preparation.outcome_decoding",
+                    "story_writing_agents.lead_provider_contracts",
+                    "story_writing_agents.orchestrator",
+                    "story_writing_agents.provider_structured_invocation",
+                    "story_writing_agents.runtime_resources.provider_call_accounting",
+                    "story_writing_agents.specialist_routing",
+                    "story_writing_agents.structured_output_validation",
+                },
+            ),
             "story_writing_agents.codex_native_outcome": (
                 {
                     "story_writing_agents.agent_context",
@@ -616,6 +633,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                     "story_writing_agents.provider_schema_projection",
                     "story_writing_agents.reply_trace",
                     "story_writing_agents.structured_output_validation",
+                    "story_writing_agents.validation_findings",
                     "story_writing_agents.workspace",
                     "story_writing_agents.writing_artifacts.read_actions",
                 },
@@ -1467,6 +1485,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 'story_writing_agents.provider_message_catalog',
                 'story_writing_agents.provider_schema_projection',
                 'story_writing_agents.structured_output_validation',
+                'story_writing_agents.validation_findings',
                 'story_writing_agents.workspace',
             },
         )
@@ -2377,6 +2396,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.provider_message_catalog",
                 "story_writing_agents.provider_response_mapping",
                 "story_writing_agents.structured_output_validation",
+                "story_writing_agents.validation_findings",
             },
         )
         self.assertEqual({source for source, target in edges if target == backend_reply_owner}, {"story_writing_agents.backend", structured_owner, conversation_retrieval_owner, direct_structured_owner})
@@ -2555,6 +2575,16 @@ class RagModuleBoundaryTests(unittest.TestCase):
 
 
     def test_supported_module_surfaces_do_not_expand_the_root_facade(self) -> None:
+        from story_writing_agents import structured_output_validation, validation_findings
+
+        for name in (
+            "ValidationFinding", "DomainValidationRule", "failure_findings", "failure_issues",
+            "prefix_validation", "domain_rule_chunks", "bounded_chunks",
+        ):
+            self.assertIs(
+                getattr(structured_output_validation, name),
+                getattr(validation_findings, name),
+            )
 
         self.assertEqual(len(story_writing_agents.__all__), 106)
         rag_names = set().union(
@@ -3691,6 +3721,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             'story_writing_agents/provider_request_mapping.py',
             'story_writing_agents/provider_response_mapping.py',
             'story_writing_agents/lead_schema_choice_compilation.py',
+            'story_writing_agents/validation_findings.py',
             'story_writing_agents/provider_schema_projection.py',
             "story_writing_agents/lead_preparation/recommendation_preparation.py",
             "story_writing_agents/lead_preparation/recommendation_requests.py",

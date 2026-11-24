@@ -42,7 +42,8 @@ from ..lead_task_transitions import LeadPublicResponse, LeadPublicResponseAccept
 from ..lead_premise_decisions import PremiseFreshWorkAdmission
 from ..agent_context.accounting import ProviderCallAccounting, ProviderCallKind, ProviderCallState
 from ..provider_execution_workspace import ProviderExecutionWorkspace
-from ..structured_output_validation import bounded_chunks, diagnose_json_text
+from ..structured_output_validation import diagnose_json_text
+from ..validation_findings import bounded_chunks
 from . import collaboration_event_journal as event_journal
 from ..provider_response_mapping import (
     recover_lead_public_response,

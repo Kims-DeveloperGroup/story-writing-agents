@@ -133,7 +133,8 @@ import contextvars
 import inspect
 import os
 import threading
-from .structured_output_validation import validation_failure, remap_validation, prefix_validation
+from .structured_output_validation import validation_failure, remap_validation
+from .validation_findings import prefix_validation
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import AbstractAsyncContextManager, AbstractContextManager, asynccontextmanager, contextmanager
 from dataclasses import dataclass, replace

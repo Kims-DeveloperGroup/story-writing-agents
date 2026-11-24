@@ -83,13 +83,14 @@ from .lead_premise_decisions import (
 from .structured_output_validation import (
     ContractOwner, BoundContract, ContractIdentity, ContractRejection, NamedHostCheck, TypedDecoder,
     HostCheckContext, SelectedHostContext, ValidatedValue, SelectedContract,
-    DomainValidationRule, ValidationFinding, validation_failure, SchemaRules, canonical_schema_rules,
-    strict_json_object, diagnose_value, failure_findings, failure_issues, nonempty_text_rule,
+    validation_failure, SchemaRules, canonical_schema_rules,
+    strict_json_object, diagnose_value, nonempty_text_rule,
     nonempty_text_value, visible_text_rule, finite_selection_rule, decode_finite_selection,
     schema_fragment_findings,
     SCHEMA_PYTHON_WHITESPACE,
     nonblank_text_rule,
 )
+from .validation_findings import DomainValidationRule, ValidationFinding, failure_findings, failure_issues
 from .provider_schema_patterns import unicode_scalar_classes
 
 

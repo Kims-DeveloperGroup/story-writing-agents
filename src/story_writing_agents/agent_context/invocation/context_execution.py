@@ -150,13 +150,10 @@ from ...provider_contract_guidance import diagnostic_to_wire
 from ...provider_schema_projection import project_lead_scope_diagnostic
 from ...structured_output_validation import (
     ContractRejection,
-    DomainValidationRule,
-    bounded_chunks,
     carry_validation,
     diagnose_json_text,
-    domain_rule_chunks,
-    failure_issues,
 )
+from ...validation_findings import DomainValidationRule, bounded_chunks, domain_rule_chunks, failure_issues
 from ...workspace import Workspace
 from typing import cast
 
