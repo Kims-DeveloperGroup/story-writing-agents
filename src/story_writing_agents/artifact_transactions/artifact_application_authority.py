@@ -17,7 +17,7 @@ from .synchronization_material import matches_projected_documents
 from ..artifact_proposals import ArtifactReviewCandidate
 from ..conversation_storage.contracts import ConversationStorageServices
 from ..conversations.events import CollaborationExplorationAdoptionPayload
-from ..git.story_commit_contracts import StoryCommitApplicationEvidence
+from ..conversations.views.decision_results import StoryCommitQualificationBlocked
 from ..errors import (
     BackendProtocolError,
     WorkspaceFormatError,
@@ -29,7 +29,6 @@ from ..workspace.session_artifact_binding import (
     SessionArtifactBindingError,
     SessionArtifactGenerationPin,
     compose_session_artifact_binding,
-    compose_story_commit_service,
 )
 from ..writing_artifacts import (
     ArtifactApplicationError,
@@ -89,6 +88,7 @@ from ..conversations import (
 from ..lead_preparation import authoring_authority
 from .pending_story_commits import PendingStoryCommits
 from .prepared_story_commit import PreparedStoryCommit
+from .story_commit_qualification import prepare_qualified_story_commit
 from ..lead_control_events import (
     effective_lead_control_events,
     terminal_state_draft,
@@ -498,51 +498,6 @@ class ArtifactApplicationAuthority:
                 ):
                     raise ValueError("artifact application decision tail changed")
                 result_event_id = event_journal.new_id("e")
-                if application_result is not None:
-                    assert artifact_binding is not None
-                    assert generation_pin is not None
-                    try:
-                        service = compose_story_commit_service(
-                            self.workspace.root,
-                            decision.session_id,
-                            artifact_binding,
-                        )
-                        candidate = service.prepare(
-                            StoryCommitApplicationEvidence(
-                                session_id=decision.session_id,
-                                application_id=application.application_id,
-                                proposal_id=reviewed.proposal_id,
-                                correlation_id=request.application_request_digest,
-                                change_set=application.change_set,
-                                applied_state_digest=(
-                                    application.change_set.projected_state_digest
-                                ),
-                            ),
-                            proposed_message="Apply reviewed artifact changes",
-                            impact_boundary=(
-                                f"commit {len(application_result.affected_paths)} "
-                                "reviewed artifact paths",
-                            ),
-                        )
-                        with artifact_binding.open_ready_resources():
-                            commit_request = build_story_commit_request_payload(
-                                confirmation_request_id=event_journal.new_id("g"),
-                                application_result_event_id=result_event_id,
-                                candidate=candidate,
-                            )
-                        pending_commit = PreparedStoryCommit(
-                            commit_request, service, generation_pin
-                        )
-                        generation_pin = None
-                    except Exception:
-                        next_action = (
-                            ArtifactApplicationNextAction.REPREPARE_COMMIT_REQUEST
-                        )
-                        message = (
-                            "The artifact result is known, but an exact commit "
-                            "request could not be prepared. Reprepare it before "
-                            "a separate Commit decision."
-                        )
                 if synchronization_blockers:
                     message = "Apply is blocked by semantic synchronization. " + synchronization_blockers[0]
                 result_payload = ArtifactApplicationResultPayload(
@@ -567,6 +522,51 @@ class ArtifactApplicationAuthority:
                     recipient=event_journal.USER_ACTOR,
                     payload=result_payload,
                 )
+
+                def synchronization_drafts(
+                    result: CollaborationEventDraft,
+                ) -> tuple[CollaborationEventDraft, ...]:
+                    if synchronization is None or outcome not in {
+                        ArtifactApplicationOutcomeKind.APPLIED, ArtifactApplicationOutcomeKind.UNCHANGED,
+                    }:
+                        return ()
+                    return synchronization_apply_drafts(*synchronization, result)
+
+                actual_drafts = synchronization_drafts(result_draft)
+                if application_result is not None:
+                    assert artifact_binding is not None
+                    assert generation_pin is not None
+                    try:
+                        service, candidate, current_blockers = prepare_qualified_story_commit(
+                            artifact_binding,
+                            capture_editorial_snapshot,
+                            request,
+                            proposed_message="Apply reviewed artifact changes",
+                            pending=(result_draft, *actual_drafts),
+                        )
+                        with artifact_binding.open_ready_resources():
+                            commit_request = build_story_commit_request_payload(
+                                confirmation_request_id=event_journal.new_id("g"),
+                                application_result_event_id=result_event_id,
+                                candidate=candidate,
+                            )
+                        pending_commit = PreparedStoryCommit(
+                            commit_request, service, generation_pin, current_blockers,
+                        )
+                        generation_pin = None
+                    except Exception as exc:
+                        commit_request = None
+                        next_action = ArtifactApplicationNextAction.REPREPARE_COMMIT_REQUEST
+                        message = (
+                            "The artifact result is known. " + str(exc)
+                            if isinstance(exc, StoryCommitQualificationBlocked)
+                            else "The artifact result is known, but an exact commit "
+                            "request could not be prepared. Reprepare it before "
+                            "a separate Commit decision."
+                        )
+                        result_payload = replace(result_payload, next_action=next_action)
+                        result_draft = replace(result_draft, payload=result_payload)
+                        actual_drafts = synchronization_drafts(result_draft)
 
                 def append_verified(drafts: tuple[CollaborationEventDraft, ...]) -> bool | None:
                     """Resolve one CAS append by exact batch readback on error."""
@@ -620,11 +620,7 @@ class ArtifactApplicationAuthority:
                             payload=commit_request,
                         ),
                     )
-                if synchronization is not None and outcome in {
-                    ArtifactApplicationOutcomeKind.APPLIED, ArtifactApplicationOutcomeKind.UNCHANGED,
-                }:
-                    drafts += synchronization_apply_drafts(*synchronization, result_draft)
-                published = append_verified(drafts)
+                published = append_verified((*drafts, *actual_drafts))
                 if published is False and commit_request is not None:
                     assert pending_commit is not None
                     pending_commit.close()
@@ -641,12 +637,7 @@ class ArtifactApplicationAuthority:
                         "request was not published. Reprepare it before Commit."
                     )
                     recovered_draft = replace(result_draft, payload=result_payload)
-                    fallback_drafts = (recovered_draft,)
-                    if synchronization is not None and outcome in {
-                        ArtifactApplicationOutcomeKind.APPLIED, ArtifactApplicationOutcomeKind.UNCHANGED,
-                    }:
-                        fallback_drafts += synchronization_apply_drafts(*synchronization, recovered_draft)
-                    published = append_verified(fallback_drafts)
+                    published = append_verified((recovered_draft, *synchronization_drafts(recovered_draft)))
                 if published is not True:
                     raise RuntimeError("artifact handoff publication is unproved")
                 result_persisted = True

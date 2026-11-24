@@ -74,6 +74,7 @@ def artifact_operation_next_action(
             and commit_result.outcome in {
                 StoryCommitOutcomeKind.STALE,
                 StoryCommitOutcomeKind.SUPERSEDED,
+                StoryCommitOutcomeKind.COMMITTED,
             }
         ):
             return (
@@ -269,6 +270,11 @@ def project_artifact_operation_history(
                 or payload.confirmation_request_id != commit_request.confirmation_request_id
                 or payload.candidate_id != commit_request.candidate.candidate_id
                 or payload.request_digest != commit_request.request_digest
+                or (
+                    payload.outcome is StoryCommitOutcomeKind.COMMITTED
+                    and (payload.next_action is StoryCommitNextAction.REPREPARE)
+                    != bool(commit_request.candidate.remaining_paths)
+                )
                 or (commit_decision.decision is StoryCommitDecision.COMMIT
                     and payload.outcome in {
                         StoryCommitOutcomeKind.REJECTED, StoryCommitOutcomeKind.SUPERSEDED,

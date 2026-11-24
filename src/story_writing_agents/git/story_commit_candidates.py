@@ -6,12 +6,14 @@ import hashlib
 import os
 import re
 import stat
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field, replace
 from functools import wraps
-from contextlib import AbstractContextManager, nullcontext
 from pathlib import Path
-from typing import Callable, ParamSpec, TypeVar
+from types import MappingProxyType
+from typing import Callable, Mapping, ParamSpec, TypeVar
 
+from ..runtime_state_paths import WRITING_ARTIFACT_DIRECTORY
 from ..writing_artifacts import (
     ArtifactChangeSetError,
     ArtifactCreateOperation,
@@ -22,6 +24,7 @@ from ..writing_artifacts import (
     canonical_artifact_kind,
     project_artifact_change_set,
 )
+from ..writing_artifacts.change_sets import artifact_state_digest
 from ..writing_artifacts.repository import WritingArtifactRepository
 from .contracts import GitBaselineManifest, GitEffectiveIdentity, GitIdentity
 from .process import (
@@ -55,10 +58,13 @@ from .story_commit_contracts import (
     StoryCommitIdentitySource,
     StoryCommitPath,
     StoryCommitPathOperation,
+    StoryCommitQualificationGuard,
+    StoryCommitQualificationPhase,
 )
 
 
 _OBJECT_ID = re.compile(rb"(?:[0-9a-f]{40}|[0-9a-f]{64})")
+_SESSION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 _MAX_ENTRIES = 65_536
 _MAX_CONTENT_BYTES = 64 * 1024 * 1024
 _P = ParamSpec("_P")
@@ -70,6 +76,16 @@ StoryCommitArtifactRepositoryAccess = Callable[
     [StoryCommitSemanticReadyValidator],
     AbstractContextManager[WritingArtifactRepository],
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class StoryCommitBase:
+    """Canonical artifact bytes at the attached branch and its optional ancestor."""
+
+    branch_tip: str
+    tree: str
+    artifacts: Mapping[str, bytes] = field(repr=False)
+    ancestor_artifacts: Mapping[str, bytes] | None = field(default=None, repr=False)
 
 
 def _require_history_ready(
@@ -123,6 +139,46 @@ def _content_free_boundary(
         raise failure
 
     return invoke
+
+
+@_content_free_boundary
+def read_story_commit_base(
+    session_root: Path,
+    session_id: str,
+    expected_session_root_identity: tuple[int, int],
+    *,
+    expected_branch_tip: str | None = None,
+    ancestor_branch_tip: str | None = None,
+) -> StoryCommitBase:
+    """Read a base snapshot for qualification; Git rechecks it at preparation."""
+    root = _require_root(session_root)
+    _require_directory_identity(expected_session_root_identity)
+    if type(session_id) is not str or _SESSION_ID.fullmatch(session_id) is None:
+        raise _error(StoryCommitFailureCode.INVALID_REQUEST)
+    runner = GitProcessRunner(root)
+    identity = _directory_identity(root)
+    if identity != expected_session_root_identity:
+        raise _error(StoryCommitFailureCode.CANDIDATE_DRIFT)
+    branch = f"story/session/{session_id}"
+    head = _attached_branch_tip(runner, identity, branch)
+    if expected_branch_tip is not None and head != _require_object_id_text(expected_branch_tip):
+        raise _error(StoryCommitFailureCode.CANDIDATE_DRIFT)
+    tree = _object_id(
+        _required(runner, identity, ("rev-parse", "--verify", f"{head}^{{tree}}")).stdout
+    )
+    artifacts = MappingProxyType(
+        _canonical_tree_state(runner, identity, _tree_entries(runner, identity, tree))
+    )
+    ancestor = None
+    if ancestor_branch_tip is not None:
+        _require_ancestor(runner, identity, ancestor_branch_tip, head)
+        ancestor = artifacts
+        if ancestor_branch_tip != head:
+            ancestor_entries = _tree_entries(runner, identity, ancestor_branch_tip)
+            ancestor = MappingProxyType(_canonical_tree_state(runner, identity, ancestor_entries))
+    if _attached_branch_tip(runner, identity, branch) != head:
+        raise _error(StoryCommitFailureCode.CANDIDATE_DRIFT)
+    return StoryCommitBase(head, tree, artifacts, ancestor)
 
 
 @dataclass(frozen=True, slots=True)
@@ -231,6 +287,7 @@ def prepare_identity_bound_story_commit_candidate(
     expected_session_root_identity: tuple[int, int],
     expected_generation_identity: GitSessionGenerationIdentity,
     artifact_repository_access: StoryCommitArtifactRepositoryAccess,
+    qualification_guard: StoryCommitQualificationGuard | None = None,
 ) -> StoryCommitCandidateBinding:
     """Package-internal preparation pinned to an Apply worktree identity."""
 
@@ -247,6 +304,7 @@ def prepare_identity_bound_story_commit_candidate(
         expected_root_identity=expected_session_root_identity,
         expected_generation_identity=expected_generation_identity,
         artifact_repository_access=artifact_repository_access,
+        qualification_guard=qualification_guard,
     )
 
 
@@ -261,6 +319,7 @@ def _prepare_story_commit_candidate(
     expected_root_identity: tuple[int, int] | None,
     expected_generation_identity: GitSessionGenerationIdentity | None = None,
     artifact_repository_access: StoryCommitArtifactRepositoryAccess | None = None,
+    qualification_guard: StoryCommitQualificationGuard | None = None,
 ) -> StoryCommitCandidateBinding:
     """Implement bound and compatibility candidate preparation."""
 
@@ -268,6 +327,7 @@ def _prepare_story_commit_candidate(
         main_root = _root(root)
         expected_manifest = _reconstruct_manifest(manifest)
         application = _reconstruct_evidence(evidence)
+        _require_qualification_mode(application, expected_generation_identity, qualification_guard)
         ready = require_ready_git_session_resources(
             main_root,
             expected_manifest,
@@ -304,6 +364,8 @@ def _prepare_story_commit_candidate(
                 artifact_repository_access=artifact_repository_access,
                 history=history,
                 expected_generation_identity=expected_generation_identity,
+                qualification_guard=qualification_guard,
+                qualification_phase=StoryCommitQualificationPhase.PREPARE,
             )
             _require_history_ready(
                 history,
@@ -424,6 +486,8 @@ def revalidate_identity_bound_story_commit_candidate(
     history: GitSessionHistory | None = None,
     allowed_worktree_changes: tuple[str, ...] = (),
     artifact_repository_access: StoryCommitArtifactRepositoryAccess,
+    qualification_guard: StoryCommitQualificationGuard | None = None,
+    qualification_phase: StoryCommitQualificationPhase = StoryCommitQualificationPhase.AUTHORIZE,
 ) -> StoryCommitRevalidation:
     """Package-internal revalidation pinned to an Apply worktree identity."""
 
@@ -437,6 +501,8 @@ def revalidate_identity_bound_story_commit_candidate(
         expected_session_root_identity=expected_session_root_identity,
         expected_generation_identity=expected_generation_identity,
         artifact_repository_access=artifact_repository_access,
+        qualification_guard=qualification_guard,
+        qualification_phase=qualification_phase,
     )
 
 
@@ -448,11 +514,14 @@ def _revalidate_story_commit_candidate(
     expected_session_root_identity: tuple[int, int] | None,
     expected_generation_identity: GitSessionGenerationIdentity | None = None,
     artifact_repository_access: StoryCommitArtifactRepositoryAccess | None = None,
+    qualification_guard: StoryCommitQualificationGuard | None = None,
+    qualification_phase: StoryCommitQualificationPhase = StoryCommitQualificationPhase.AUTHORIZE,
 ) -> StoryCommitRevalidation:
     """Implement public and identity-bound candidate revalidation."""
 
     try:
         value = _reconstruct_binding(binding)
+        _require_qualification_mode(value.evidence, expected_generation_identity, qualification_guard)
         if history is None:
             ready = require_ready_git_session_resources(
                 value.main_root,
@@ -482,6 +551,8 @@ def _revalidate_story_commit_candidate(
                     expected_session_root_identity,
                     expected_generation_identity,
                     artifact_repository_access,
+                    qualification_guard,
+                    qualification_phase,
                 )
         if type(history) is not GitSessionHistory:
             raise _error(StoryCommitFailureCode.INVALID_REQUEST)
@@ -495,6 +566,8 @@ def _revalidate_story_commit_candidate(
             expected_session_root_identity,
             expected_generation_identity,
             artifact_repository_access,
+            qualification_guard,
+            qualification_phase,
         )
     except StoryCommitError:
         raise
@@ -513,6 +586,8 @@ def _revalidate_under_history(
     expected_session_root_identity: tuple[int, int] | None,
     expected_generation_identity: GitSessionGenerationIdentity | None,
     artifact_repository_access: StoryCommitArtifactRepositoryAccess | None,
+    qualification_guard: StoryCommitQualificationGuard | None,
+    qualification_phase: StoryCommitQualificationPhase,
 ) -> StoryCommitRevalidation:
     _require_history_ready(history, expected_generation_identity)
     durable = _candidate_from_record(
@@ -540,6 +615,8 @@ def _revalidate_under_history(
         artifact_repository_access=artifact_repository_access,
         history=history,
         expected_generation_identity=expected_generation_identity,
+        qualification_guard=qualification_guard,
+        qualification_phase=qualification_phase,
     )
     _require_history_ready(
         history,
@@ -581,6 +658,8 @@ def _capture(
     artifact_repository_access: StoryCommitArtifactRepositoryAccess | None,
     history: GitSessionHistory,
     expected_generation_identity: GitSessionGenerationIdentity | None,
+    qualification_guard: StoryCommitQualificationGuard | None,
+    qualification_phase: StoryCommitQualificationPhase,
 ) -> tuple[
     StoryCommitCandidate,
     GitEffectiveIdentity,
@@ -596,19 +675,22 @@ def _capture(
     ):
         raise _error(StoryCommitFailureCode.CANDIDATE_DRIFT)
     runner = GitProcessRunner(session_root)
-    symbolic = _required(runner, session_identity, ("symbolic-ref", "--quiet", "HEAD"))
-    if _line(symbolic.stdout) != f"refs/heads/{branch}":
-        raise _error(StoryCommitFailureCode.CANDIDATE_DRIFT)
-    head = _object_id(
-        _required(runner, session_identity, ("rev-parse", "--verify", "HEAD")).stdout
-    )
+    head = _attached_branch_tip(runner, session_identity, branch)
     if head != branch_tip:
         raise _error(StoryCommitFailureCode.CANDIDATE_DRIFT)
+    qualification = evidence.qualification
+    if qualification is not None:
+        if head != qualification.base_branch_tip:
+            raise _error(StoryCommitFailureCode.CANDIDATE_DRIFT)
+        if qualification.bundle_base_branch_tip is not None:
+            _require_ancestor(runner, session_identity, qualification.bundle_base_branch_tip, head)
     staged = _run(runner, session_identity, ("diff", "--cached", "--quiet", "--"))
     if staged.returncode == 1:
         raise _error(StoryCommitFailureCode.PRESTAGED_CHANGES)
     if staged.returncode != 0:
         raise _error(StoryCommitFailureCode.GIT_FAILED)
+    if qualification is None:
+        _require_no_managed_session_state(main_root, session_root, evidence.session_id)
 
     tree_entries = _tree_entries(runner, session_identity, head)
     base_state = _canonical_tree_state(runner, session_identity, tree_entries)
@@ -616,32 +698,16 @@ def _capture(
         projected = dict(project_artifact_change_set(base_state, evidence.change_set))
     except ArtifactChangeSetError:
         raise _error(StoryCommitFailureCode.APPLICATION_MISMATCH) from None
-    repository_context: AbstractContextManager[WritingArtifactRepository]
-    if artifact_repository_access is None:
-        repository_context = nullcontext(
-            WritingArtifactRepository(
-                session_root,
-                expected_root_identity=session_identity,
-            )
-        )
-    else:
-        repository_context = artifact_repository_access(
-            lambda: _require_history_ready(
-                history,
-                expected_generation_identity,
-                expected_branch_tip=branch_tip,
-                expected_internal_tip=internal_tip,
-            )
-        )
-    with repository_context as repository:
-        if type(repository) is not WritingArtifactRepository:
-            raise _error(StoryCommitFailureCode.CANDIDATE_DRIFT)
-        current = _current_artifact_state(repository)
-    _require_history_ready(
-        history,
-        expected_generation_identity,
-        expected_branch_tip=branch_tip,
-        expected_internal_tip=internal_tip,
+    current = _read_worktree_artifacts(
+        session_root,
+        session_identity,
+        artifact_repository_access,
+        lambda: _require_history_ready(
+            history,
+            expected_generation_identity,
+            expected_branch_tip=branch_tip,
+            expected_internal_tip=internal_tip,
+        ),
     )
     if (
         current != projected
@@ -649,14 +715,15 @@ def _capture(
     ):
         raise _error(StoryCommitFailureCode.APPLICATION_MISMATCH)
 
-    paths = _candidate_paths(evidence)
+    all_paths = _candidate_paths(evidence)
     changed = {
         path
         for path in set(base_state) | set(projected)
         if base_state.get(path) != projected.get(path)
     }
-    if changed != {item.path for item in paths}:
+    if changed != {item.path for item in all_paths}:
         raise _error(StoryCommitFailureCode.APPLICATION_MISMATCH)
+    paths, remaining_paths = _select_candidate_paths(evidence, all_paths)
 
     algorithm = "sha1" if len(head) == 40 else "sha256"
     expected_entries = dict(tree_entries)
@@ -695,6 +762,9 @@ def _capture(
     if observed_internal != internal_tip:
         raise _error(StoryCommitFailureCode.CANDIDATE_DRIFT)
 
+    bundle_base = qualification.bundle_base_branch_tip if qualification is not None else None
+    if remaining_paths and bundle_base is None:
+        bundle_base = head
     record = build_candidate_record(
         session_id=evidence.session_id,
         branch=branch,
@@ -704,26 +774,174 @@ def _capture(
         application_id=evidence.application_id,
         proposal_id=evidence.proposal_id,
         correlation_id=evidence.correlation_id,
-        paths=tuple(
-            GitSessionCandidatePath(
-                item.path,
-                GitSessionCandidatePathOperation(item.operation.value),
-                item.before_sha256,
-                item.after_sha256,
-            )
-            for item in paths
-        ),
+        paths=tuple(_history_candidate_path(item) for item in paths),
         proposed_message=proposed_message,
         impact_boundary=impact_boundary,
         author_identity_source=GitSessionIdentitySource(author_source.value),
         committer_identity_source=GitSessionIdentitySource(committer_source.value),
+        qualification_digest=qualification.digest if qualification is not None else None,
+        remaining_paths=tuple(_history_candidate_path(item) for item in remaining_paths),
+        bundle_base_branch_tip=bundle_base,
+        application_ids=qualification.application_ids if qualification is not None else (),
     )
     candidate = _candidate_from_record(record)
+    if qualification_guard is not None:
+        qualification_guard(evidence, candidate, qualification_phase, MappingProxyType(current))
     return (
         candidate,
         identity,
         (observed_internal, main_head, hashlib.sha256(main_status).hexdigest()),
         current,
+    )
+
+
+def _require_qualification_mode(
+    evidence: StoryCommitApplicationEvidence,
+    generation: GitSessionGenerationIdentity | None,
+    guard: StoryCommitQualificationGuard | None,
+) -> None:
+    if generation is None:
+        if evidence.qualification is not None or guard is not None:
+            raise _error(StoryCommitFailureCode.INVALID_REQUEST)
+    elif evidence.qualification is None or not callable(guard):
+        raise _error(StoryCommitFailureCode.APPLICATION_MISMATCH)
+
+
+def _require_no_managed_session_state(
+    main_root: Path, session_root: Path, session_id: str
+) -> None:
+    for root in (main_root, session_root):
+        for relative in (
+            "discussion_logs/conversation_storage.sqlite3",
+            f"discussion_logs/{session_id}/interactive/conversations",
+        ):
+            if _runtime_path_exists(root, relative):
+                raise _error(StoryCommitFailureCode.APPLICATION_MISMATCH)
+    state = session_root / WRITING_ARTIFACT_DIRECTORY
+    for name in ("applications", "transactions"):
+        if _runtime_path_exists(session_root, f"{WRITING_ARTIFACT_DIRECTORY}/{name}") and next(
+            (state / name).iterdir(), None
+        ) is not None:
+            raise _error(StoryCommitFailureCode.APPLICATION_MISMATCH)
+    if _runtime_path_exists(session_root, f"{WRITING_ARTIFACT_DIRECTORY}/recovery_blocked.json"):
+        raise _error(StoryCommitFailureCode.RECOVERY_REQUIRED)
+
+
+def _runtime_path_exists(root: Path, relative: str) -> bool:
+    path = root
+    for part in relative.split("/"):
+        path = path / part
+        try:
+            mode = path.lstat().st_mode
+        except FileNotFoundError:
+            return False
+        if stat.S_ISLNK(mode):
+            raise _error(StoryCommitFailureCode.APPLICATION_MISMATCH)
+    return True
+
+
+def _attached_branch_tip(
+    runner: GitProcessRunner, identity: tuple[int, int], branch: str
+) -> str:
+    symbolic = _required(runner, identity, ("symbolic-ref", "--quiet", "HEAD"))
+    if _line(symbolic.stdout) != f"refs/heads/{branch}":
+        raise _error(StoryCommitFailureCode.CANDIDATE_DRIFT)
+    return _object_id(_required(runner, identity, ("rev-parse", "--verify", "HEAD")).stdout)
+
+
+def _require_ancestor(
+    runner: GitProcessRunner, identity: tuple[int, int], ancestor: str, tip: str
+) -> None:
+    _require_object_id_text(ancestor)
+    if ancestor == tip:
+        return
+    result = _run(runner, identity, ("merge-base", "--is-ancestor", ancestor, tip))
+    if result.returncode != 0:
+        raise _error(StoryCommitFailureCode.CANDIDATE_DRIFT)
+
+
+def require_story_commit_qualification(
+    binding: StoryCommitCandidateBinding,
+    branch_tip: str,
+    phase: StoryCommitQualificationPhase,
+    artifact_repository_access: StoryCommitArtifactRepositoryAccess,
+    qualification_guard: StoryCommitQualificationGuard,
+    validate_ready: StoryCommitSemanticReadyValidator,
+) -> None:
+    """Refresh qualification after staging and while the resulting branch is fenced."""
+    candidate = binding.candidate
+    identity = _directory_identity(binding.session_root)
+    runner = GitProcessRunner(binding.session_root)
+    if _attached_branch_tip(runner, identity, candidate.branch) != branch_tip:
+        raise _error(StoryCommitFailureCode.CANDIDATE_DRIFT)
+    current = _read_worktree_artifacts(
+        binding.session_root, identity, artifact_repository_access, validate_ready
+    )
+    if artifact_state_digest(current) != binding.evidence.applied_state_digest:
+        raise _error(StoryCommitFailureCode.CANDIDATE_DRIFT)
+    qualification_guard(
+        binding.evidence,
+        candidate,
+        phase,
+        MappingProxyType(current),
+    )
+
+
+def _read_worktree_artifacts(
+    root: Path,
+    identity: tuple[int, int],
+    access: StoryCommitArtifactRepositoryAccess | None,
+    validate_ready: StoryCommitSemanticReadyValidator,
+) -> dict[str, bytes]:
+    repository_context = (
+        nullcontext(WritingArtifactRepository(root, expected_root_identity=identity))
+        if access is None
+        else access(validate_ready)
+    )
+    with repository_context as repository:
+        if type(repository) is not WritingArtifactRepository:
+            raise _error(StoryCommitFailureCode.CANDIDATE_DRIFT)
+        current = _current_artifact_state(repository)
+    validate_ready()
+    return current
+
+
+def _select_candidate_paths(
+    evidence: StoryCommitApplicationEvidence,
+    paths: tuple[StoryCommitPath, ...],
+) -> tuple[tuple[StoryCommitPath, ...], tuple[StoryCommitPath, ...]]:
+    qualification = evidence.qualification
+    if qualification is None or not qualification.selected_paths:
+        return paths, ()
+    selected = frozenset(qualification.selected_paths)
+    if not selected.issubset(item.path for item in paths):
+        raise _error(StoryCommitFailureCode.APPLICATION_MISMATCH)
+    for operation in evidence.change_set.operations:
+        if type(operation) is ArtifactRenameOperation and (
+            (operation.source_path in selected) != (operation.destination_path in selected)
+        ):
+            raise _error(StoryCommitFailureCode.APPLICATION_MISMATCH)
+    return (
+        tuple(item for item in paths if item.path in selected),
+        tuple(item for item in paths if item.path not in selected),
+    )
+
+
+def _history_candidate_path(item: StoryCommitPath) -> GitSessionCandidatePath:
+    return GitSessionCandidatePath(
+        item.path,
+        GitSessionCandidatePathOperation(item.operation.value),
+        item.before_sha256,
+        item.after_sha256,
+    )
+
+
+def _candidate_path(item: GitSessionCandidatePath) -> StoryCommitPath:
+    return StoryCommitPath(
+        item.path,
+        StoryCommitPathOperation(item.operation.value),
+        item.before_sha256,
+        item.after_sha256,
     )
 
 
@@ -980,15 +1198,7 @@ def _candidate_record(value: StoryCommitCandidate) -> GitSessionCandidateRecord:
         application_id=value.application_id,
         proposal_id=value.proposal_id,
         correlation_id=value.correlation_id,
-        paths=tuple(
-            GitSessionCandidatePath(
-                item.path,
-                GitSessionCandidatePathOperation(item.operation.value),
-                item.before_sha256,
-                item.after_sha256,
-            )
-            for item in value.paths
-        ),
+        paths=tuple(_history_candidate_path(item) for item in value.paths),
         proposed_message=value.proposed_message,
         impact_boundary=value.impact_boundary,
         author_identity_source=GitSessionIdentitySource(
@@ -998,6 +1208,10 @@ def _candidate_record(value: StoryCommitCandidate) -> GitSessionCandidateRecord:
             value.committer_identity_source.value
         ),
         candidate_id=value.candidate_id,
+        qualification_digest=value.qualification_digest,
+        remaining_paths=tuple(_history_candidate_path(item) for item in value.remaining_paths),
+        bundle_base_branch_tip=value.bundle_base_branch_tip,
+        application_ids=value.application_ids,
     )
 
 
@@ -1012,15 +1226,7 @@ def _candidate_from_record(value: GitSessionCandidateRecord) -> StoryCommitCandi
         application_id=value.application_id,
         proposal_id=value.proposal_id,
         correlation_id=value.correlation_id,
-        paths=tuple(
-            StoryCommitPath(
-                item.path,
-                StoryCommitPathOperation(item.operation.value),
-                item.before_sha256,
-                item.after_sha256,
-            )
-            for item in value.paths
-        ),
+        paths=tuple(_candidate_path(item) for item in value.paths),
         proposed_message=value.proposed_message,
         impact_boundary=value.impact_boundary,
         author_identity_source=StoryCommitIdentitySource(
@@ -1029,6 +1235,10 @@ def _candidate_from_record(value: GitSessionCandidateRecord) -> StoryCommitCandi
         committer_identity_source=StoryCommitIdentitySource(
             value.committer_identity_source.value
         ),
+        qualification_digest=value.qualification_digest,
+        remaining_paths=tuple(_candidate_path(item) for item in value.remaining_paths),
+        bundle_base_branch_tip=value.bundle_base_branch_tip,
+        application_ids=value.application_ids,
     )
 
 
@@ -1145,7 +1355,11 @@ def _reconstruct_candidate(value: object) -> StoryCommitCandidate:
     try:
         if type(value) is not StoryCommitCandidate:
             raise TypeError
-        return replace(value, paths=tuple(replace(item) for item in value.paths))
+        return replace(
+            value,
+            paths=tuple(replace(item) for item in value.paths),
+            remaining_paths=tuple(replace(item) for item in value.remaining_paths),
+        )
     except (AttributeError, TypeError, RuntimeError):
         raise _error(StoryCommitFailureCode.INVALID_REQUEST) from None
 

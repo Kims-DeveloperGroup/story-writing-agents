@@ -29,6 +29,7 @@ from .context_value_validation import (
     validate_positive_integer as _validate_positive_integer,
 )
 from ...git.story_commit_contracts import StoryCommitDecision
+from ...writing_artifacts.catalog import canonical_artifact_kind
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,6 +189,14 @@ class ArtifactApplicationDecisionResult:
             raise ValueError("application decision result correlation drifted")
 
 
+class StoryCommitQualificationBlocked(ValueError):
+    """The current reviewed history does not authorize a Git recording request."""
+
+    def __init__(self, blockers: tuple[str, ...]) -> None:
+        self.blockers = blockers
+        super().__init__(" ".join(blockers[:3]))
+
+
 @dataclass(frozen=True, slots=True)
 class StoryCommitPreparationRequest:
     """Reprepare only the exact current known Apply result tail."""
@@ -199,6 +208,7 @@ class StoryCommitPreparationRequest:
     application_id: str
     application_request_digest: str
     tail_event_id: str
+    selected_paths: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         for value, label in (
@@ -215,6 +225,12 @@ class StoryCommitPreparationRequest:
             or _SHA256_DIGEST.fullmatch(self.application_request_digest) is None
         ):
             raise ValueError("application request digest is invalid")
+        if type(self.selected_paths) is not tuple:
+            raise TypeError("selected story commit paths must be a tuple")
+        for path in self.selected_paths:
+            canonical_artifact_kind(path)
+        if len(self.selected_paths) != len(set(self.selected_paths)):
+            raise ValueError("selected story commit paths must be distinct")
 
 
 @dataclass(frozen=True, slots=True)

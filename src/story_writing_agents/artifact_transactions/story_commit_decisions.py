@@ -7,17 +7,13 @@ from ..conversations.session_context import SessionHistorySnapshot
 from ..conversation_storage.contracts import ConversationStorageServices
 from ..conversations.events import CollaborationExplorationAdoptionPayload
 from ..git.story_commit_contracts import (
-    StoryCommitApplicationEvidence,
     StoryCommitConfirmation,
     StoryCommitDecision,
     StoryCommitError,
     StoryCommitRecoveryAction,
 )
 from ..workspace import Workspace
-from ..workspace.session_artifact_binding import (
-    compose_session_artifact_binding,
-    compose_story_commit_service,
-)
+from ..workspace.session_artifact_binding import compose_session_artifact_binding
 from ..runtime_resources import collaboration_event_journal as event_journal
 from ..runtime_resources.session_execution_scopes import SessionExecutionScopes
 from ..conversations import CollaborationAppendReceipt, CollaborationEventBatch
@@ -42,6 +38,7 @@ from ..conversations import (
 )
 from .pending_story_commits import PendingStoryCommits
 from .prepared_story_commit import PreparedStoryCommit
+from .story_commit_qualification import prepare_qualified_story_commit
 from ..lead_control_events import effective_lead_control_events
 
 
@@ -132,29 +129,16 @@ class StoryCommitDecisions:
                     f"(commit request revision {revision_count})"
                 )
             )
-            reviewed = application_request.reviewed_proposal
-            application = application_request.application_request
             artifact_binding = compose_session_artifact_binding(self.workspace.root, request.session_id)
             generation_pin = artifact_binding.acquire_generation_pin()
             pending_commit: PreparedStoryCommit | None = None
             try:
-                service = compose_story_commit_service(
-                    self.workspace.root, request.session_id, artifact_binding
-                )
-                candidate = service.prepare(
-                    StoryCommitApplicationEvidence(
-                        session_id=request.session_id,
-                        application_id=application.application_id,
-                        proposal_id=reviewed.proposal_id,
-                        correlation_id=application_request.application_request_digest,
-                        change_set=application.change_set,
-                        applied_state_digest=application.change_set.projected_state_digest,
-                    ),
+                service, candidate, current_blockers = prepare_qualified_story_commit(
+                    artifact_binding,
+                    capture_editorial_snapshot,
+                    application_request,
                     proposed_message=proposed_message,
-                    impact_boundary=(
-                        f"commit {len(application_result.result.affected_paths)} "
-                        "reviewed artifact paths",
-                    ),
+                    selected_paths=request.selected_paths,
                 )
                 with artifact_binding.open_ready_resources():
                     commit_request = build_story_commit_request_payload(
@@ -195,7 +179,7 @@ class StoryCommitDecisions:
                     ):
                         raise
                 pending_commit = PreparedStoryCommit(
-                    commit_request, service, generation_pin
+                    commit_request, service, generation_pin, current_blockers,
                 )
                 generation_pin = None
                 key = (request.session_id, request.conversation_id, request.step_id)
@@ -310,11 +294,18 @@ class StoryCommitDecisions:
                             )
                             result = service.execute(authority)
                             outcome = StoryCommitOutcomeKind.COMMITTED
-                            next_action = StoryCommitNextAction.CONTINUE_WITH_LEAD
-                            message = (
-                                "The exact prepared artifact paths were staged and "
-                                "committed locally. No remote operation occurred."
-                            )
+                            if request.candidate.remaining_paths:
+                                next_action = StoryCommitNextAction.REPREPARE
+                                message = (
+                                    "The selected paths were committed locally. Prepare "
+                                    "a separate request for the remaining reviewed changes."
+                                )
+                            else:
+                                next_action = StoryCommitNextAction.CONTINUE_WITH_LEAD
+                                message = (
+                                    "The exact prepared artifact paths were staged and "
+                                    "committed locally. No remote operation occurred."
+                                )
                         elif decision.kind is StoryCommitDecision.REJECT:
                             result = service.reject(request.candidate, confirmation)
                             outcome = StoryCommitOutcomeKind.REJECTED
@@ -352,10 +343,12 @@ class StoryCommitDecisions:
                                 StoryCommitNextAction.REPREPARE,
                             ),
                         )
+                        blockers = pending.current_blockers()
                         message = (
-                            "The local commit did not complete safely. Follow the "
-                            "single reported recovery action before preparing another "
-                            "request."
+                            " ".join(blockers[:3])
+                            if blockers
+                            else f"{exc} Follow the reported recovery action before "
+                            "preparing another request."
                         )
                 result_payload = StoryCommitResultPayload(
                     confirmation_request_id=request.confirmation_request_id,

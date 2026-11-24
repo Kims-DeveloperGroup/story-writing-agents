@@ -126,7 +126,9 @@ def _synchronization_fixture_assessment(
 
 
 async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_core_evidence=(),
-                                 editorial_refs=(), editorial_context_digest=None):
+                                 editorial_refs=(), editorial_context_digest=None,
+                                 review_task: tuple[str, int] | None = None,
+                                 retained_review_paths: tuple[str, ...] = ()):
     """Publish a real reviewed candidate without unrelated provider authoring."""
     import hashlib
     import json
@@ -157,7 +159,9 @@ async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_cor
             captured = access.repository.capture_complete_state()
         base = {item.path: item.content for item in captured}
         paths = tuple(dict.fromkeys(item[1] for item in operations))
-        evidence_paths = tuple(dict.fromkeys((*tuple(path for path in paths if path in base), *extra_core_evidence)))
+        evidence_paths = tuple(dict.fromkeys(
+            (*(path for path in paths if path in base), *extra_core_evidence, *retained_review_paths),
+        ))
         if not evidence_paths:
             evidence_paths = ("core_documents/global_outline.md",)
         evidence = tuple(artifacts.ArtifactIntentEvidence(
@@ -216,10 +220,12 @@ async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_cor
                 revision_digest=evidence[0].source_digest, start_line=None, end_line=None),),
             profile_ids=(LEAD_ORCHESTRATOR, *disclosed), evidence=template_evidence,
         )
-        scope_paths = tuple(dict.fromkeys((*paths, *(value for kind, _, value in operations if kind == "rename"))))
+        renamed_paths = tuple(value for kind, _, value in operations if kind == "rename")
+        scope_paths = tuple(dict.fromkeys((*paths, *renamed_paths, *retained_review_paths)))
+        task_id, task_revision = review_task or (prefix + "_task", 1)
         scope = AuthoringScope(
             AuthoringActivity.REVIEW, scope_paths, candidate.disclosed_review_domains,
-            "Review the exact fixture candidate.", prefix + "_task", 1, schema_version=3 if editorial_refs else 2,
+            "Review the exact fixture candidate.", task_id, task_revision, schema_version=3 if editorial_refs else 2,
             contributions=tuple(AuthoringContribution(domain, AuthoringContributionRole.DRAFT_OWNER)
                                 for domain in candidate.disclosed_review_domains) if editorial_refs else (),
         )

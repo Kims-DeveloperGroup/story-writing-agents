@@ -592,6 +592,13 @@ def project_lead_confirmation(
             Field("Purpose", "Create the exact disclosed local session-branch commit."),
             Field("Branch", candidate.branch),
             Field("Files", _joined(tuple(item.path for item in candidate.paths))),
+            *((
+                Field("Reviewed Applies", _joined(candidate.application_ids)),
+                Field("Prospective tree", candidate.expected_tree),
+            ) if candidate.qualification_digest is not None else ()),
+            *((
+                Field("Paths left in worktree", _joined(tuple(item.path for item in candidate.remaining_paths))),
+            ) if candidate.remaining_paths else ()),
             Field("Message", candidate.proposed_message),
             Field("Git index", "not staged"),
         ), impact=(Notice("Local staging and commit only; no remote push.", label="SCOPE"),))
@@ -1503,6 +1510,13 @@ def _payload_items(
             Field("Candidate", payload.candidate.candidate_id),
             Field("Branch", payload.candidate.branch),
             Field("Paths", _joined(tuple(item.path for item in payload.candidate.paths))),
+            *((
+                Field("Reviewed Applies", _joined(payload.candidate.application_ids)),
+                Field("Prospective tree", payload.candidate.expected_tree),
+            ) if payload.candidate.qualification_digest is not None else ()),
+            *((
+                Field("Paths left in worktree", _joined(tuple(item.path for item in payload.candidate.remaining_paths))),
+            ) if payload.candidate.remaining_paths else ()),
             Field("Proposed message", payload.candidate.proposed_message),
             Field("User impact", _joined(payload.candidate.impact_boundary)),
             Field("Choices", _values(payload.choices)),

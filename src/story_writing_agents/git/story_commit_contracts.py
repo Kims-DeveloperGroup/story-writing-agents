@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
+from typing import Callable, Mapping
 
 from ..writing_artifacts import (
     ArtifactChangeSet,
@@ -42,6 +43,15 @@ class StoryCommitState(StrEnum):
     REJECTED = "rejected"
     OUTCOME_UNKNOWN = "outcome_unknown"
     RECOVERY_REQUIRED = "recovery_required"
+
+
+class StoryCommitQualificationPhase(StrEnum):
+    """Git boundaries that require refresh of session qualification."""
+
+    PREPARE = "prepare"
+    AUTHORIZE = "authorize"
+    EXECUTE = "execute"
+    AFTER_WRITE = "after_write"
 
 
 class StoryCommitPathOperation(StrEnum):
@@ -129,6 +139,30 @@ class StoryCommitError(RuntimeError):
 
 
 @dataclass(frozen=True, slots=True)
+class StoryCommitQualification:
+    """Session qualification bound to an exact Git base and path selection."""
+
+    base_branch_tip: str
+    digest: str
+    selected_paths: tuple[str, ...] = ()
+    bundle_base_branch_tip: str | None = None
+    application_ids: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        base = _require_object_id(self.base_branch_tip)
+        ancestor = _optional_object_id(self.bundle_base_branch_tip)
+        if ancestor is not None and len(ancestor) != len(base):
+            raise _error(StoryCommitFailureCode.INVALID_REQUEST)
+        _require_digest(self.digest)
+        _require_application_ids(self.application_ids)
+        if type(self.selected_paths) is not tuple:
+            raise _error(StoryCommitFailureCode.INVALID_REQUEST)
+        paths = tuple(_require_path(path) for path in self.selected_paths)
+        if paths != tuple(sorted(set(paths), key=lambda path: path.encode("utf-8"))):
+            raise _error(StoryCommitFailureCode.INVALID_REQUEST)
+
+
+@dataclass(frozen=True, slots=True)
 class StoryCommitApplicationEvidence:
     """Typed proof that one exact artifact change set was applied successfully."""
 
@@ -138,6 +172,7 @@ class StoryCommitApplicationEvidence:
     correlation_id: str
     change_set: ArtifactChangeSet = field(repr=False)
     applied_state_digest: str
+    qualification: StoryCommitQualification | None = None
 
     def __post_init__(self) -> None:
         _require_session(self.session_id)
@@ -149,6 +184,12 @@ class StoryCommitApplicationEvidence:
             != change_set.projected_state_digest
         ):
             raise _error(StoryCommitFailureCode.APPLICATION_MISMATCH)
+        if self.qualification is not None:
+            if type(self.qualification) is not StoryCommitQualification:
+                raise _error(StoryCommitFailureCode.INVALID_REQUEST)
+            replace(self.qualification)
+            if self.qualification.application_ids[-1:] != (self.application_id,):
+                raise _error(StoryCommitFailureCode.APPLICATION_MISMATCH)
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,6 +247,10 @@ class StoryCommitCandidate:
     impact_boundary: tuple[str, ...] = field(repr=False)
     author_identity_source: StoryCommitIdentitySource
     committer_identity_source: StoryCommitIdentitySource
+    qualification_digest: str | None = None
+    remaining_paths: tuple[StoryCommitPath, ...] = ()
+    bundle_base_branch_tip: str | None = None
+    application_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _require_digest(self.candidate_id)
@@ -226,6 +271,30 @@ class StoryCommitCandidate:
             or self.paths
             != tuple(sorted(self.paths, key=lambda item: item.path.encode("utf-8")))
             or len({item.path for item in self.paths}) != len(self.paths)
+        ):
+            raise _error(StoryCommitFailureCode.INVALID_REQUEST)
+        _optional_digest(self.qualification_digest)
+        ancestor = _optional_object_id(self.bundle_base_branch_tip)
+        if ancestor is not None and len(ancestor) != len(self.branch_tip):
+            raise _error(StoryCommitFailureCode.INVALID_REQUEST)
+        _require_application_ids(self.application_ids)
+        if self.qualification_digest is None:
+            if self.application_ids or self.bundle_base_branch_tip is not None:
+                raise _error(StoryCommitFailureCode.INVALID_REQUEST)
+        elif self.application_ids[-1:] != (self.application_id,):
+            raise _error(StoryCommitFailureCode.INVALID_REQUEST)
+        if type(self.remaining_paths) is not tuple or (
+            self.remaining_paths and self.bundle_base_branch_tip is None
+        ):
+            raise _error(StoryCommitFailureCode.INVALID_REQUEST)
+        remaining = tuple(
+            replace(item) for item in self.remaining_paths if type(item) is StoryCommitPath
+        )
+        names = {item.path for item in (*self.paths, *remaining)}
+        if (
+            remaining != self.remaining_paths
+            or remaining != tuple(sorted(remaining, key=lambda item: item.path.encode("utf-8")))
+            or len(names) != len(self.paths) + len(remaining)
         ):
             raise _error(StoryCommitFailureCode.INVALID_REQUEST)
         _require_message(self.proposed_message)
@@ -254,6 +323,9 @@ class StoryCommitProjection:
     impact_boundary: tuple[str, ...]
     author_identity_source: StoryCommitIdentitySource
     committer_identity_source: StoryCommitIdentitySource
+    qualification_digest: str | None = None
+    bundle_base_branch_tip: str | None = None
+    application_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         candidate = StoryCommitCandidate(
@@ -271,8 +343,22 @@ class StoryCommitProjection:
             impact_boundary=self.impact_boundary,
             author_identity_source=self.author_identity_source,
             committer_identity_source=self.committer_identity_source,
+            qualification_digest=self.qualification_digest,
+            bundle_base_branch_tip=self.bundle_base_branch_tip,
+            application_ids=self.application_ids,
         )
         del candidate
+
+
+StoryCommitQualificationGuard = Callable[
+    [
+        StoryCommitApplicationEvidence,
+        StoryCommitCandidate,
+        StoryCommitQualificationPhase,
+        Mapping[str, bytes],
+    ],
+    None,
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -347,6 +433,9 @@ def project_story_commit_candidate(
         impact_boundary=value.impact_boundary,
         author_identity_source=value.author_identity_source,
         committer_identity_source=value.committer_identity_source,
+        qualification_digest=value.qualification_digest,
+        bundle_base_branch_tip=value.bundle_base_branch_tip,
+        application_ids=value.application_ids,
     )
 
 
@@ -358,6 +447,7 @@ def _reconstruct_candidate(value: object) -> StoryCommitCandidate:
             value,
             paths=tuple(replace(item) for item in value.paths),
             impact_boundary=tuple(value.impact_boundary),
+            remaining_paths=tuple(replace(item) for item in value.remaining_paths),
         )
     except (AttributeError, TypeError, RuntimeError):
         raise _error(StoryCommitFailureCode.INVALID_REQUEST) from None
@@ -382,6 +472,14 @@ def _require_opaque(value: object) -> str:
     if type(value) is not str or _OPAQUE_ID.fullmatch(value) is None:
         raise _error(StoryCommitFailureCode.INVALID_REQUEST)
     return value
+
+
+def _require_application_ids(value: object) -> None:
+    if type(value) is not tuple:
+        raise _error(StoryCommitFailureCode.INVALID_REQUEST)
+    ids = tuple(_require_opaque(item) for item in value)
+    if len(set(ids)) != len(ids):
+        raise _error(StoryCommitFailureCode.INVALID_REQUEST)
 
 
 def _require_digest(value: object) -> str:

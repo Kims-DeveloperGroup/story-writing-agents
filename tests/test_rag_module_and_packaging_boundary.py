@@ -415,8 +415,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 438)
-        self.assertEqual(len(edges), 2740)
+        self.assertEqual(len(modules), 441)
+        self.assertEqual(len(edges), 2779)
         assessment_owner = "story_writing_agents.synchronization_assessment"
         obligations_owner = "story_writing_agents.synchronization_obligations"
         semantic_dependencies = {
@@ -1019,7 +1019,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             "workspace.root_filesystem": {"errors"},
             "workspace.session_artifact_binding": {
                 "errors", "git", "git.repository_lock", "git.session_contracts",
-                "git.session_generation", "git.session_resources", "git.story_commits", "provider_execution_workspace",
+                "git.session_generation", "git.session_resources", "git.story_commit_contracts", "git.story_commits", "provider_execution_workspace",
                 "workspace.policy_scaffold", "workspace.root_contracts", "workspace.root_filesystem",
                 "workspace.session_role_projection", "writing_artifacts.repository",
             },
@@ -1084,6 +1084,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.git.session_history_contracts",
                 "story_writing_agents.git.session_resources",
                 "story_writing_agents.git.story_commit_contracts",
+                "story_writing_agents.runtime_state_paths",
+                "story_writing_agents.writing_artifacts.change_sets",
                 "story_writing_agents.writing_artifacts",
                 "story_writing_agents.writing_artifacts.repository",
             },
@@ -1195,6 +1197,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "git.story_commit_candidates",
                 "git.story_commit_contracts",
                 "git.story_commit_session",
+                "writing_artifacts",
+                "writing_artifacts.repository",
             },
             "git.story_commit_recovery": {
                 "git.contracts",
@@ -1653,6 +1657,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
             "story_writing_agents.conversations.event_contracts.lead_outcomes",
             "story_writing_agents.conversations.event_contracts.lead_scope",
             "story_writing_agents.authoring_task_lifecycle", "story_writing_agents.conversations", "story_writing_agents.conversations.views.lead_results",
+            "story_writing_agents.conversations.reducers.story_commit_history",
+            "story_writing_agents.conversations.reducers.story_commit_review_coverage",
             "story_writing_agents.conversations.events", "story_writing_agents.interactive_terminal._collaboration_view",
             "story_writing_agents.artifact_transactions.artifact_application_authority", "story_writing_agents.lead_preparation.outcome_decoding",
             "story_writing_agents.lead_execution.known_result_finalization",
@@ -1671,6 +1677,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             'story_writing_agents.conversations',
             'story_writing_agents.conversations.reducers.history_projection',
             'story_writing_agents.conversations.reducers.document_plan_views',
+            "story_writing_agents.conversations.reducers.story_commit_history",
             'story_writing_agents.conversations.views.collaboration_history_values',
             'story_writing_agents.conversations.views.lead_results',
             'story_writing_agents.conversations.events',
@@ -3722,12 +3729,15 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             "story_writing_agents/artifact_transactions/artifact_application_authority.py",
             "story_writing_agents/artifact_transactions/pending_story_commits.py",
             "story_writing_agents/artifact_transactions/prepared_story_commit.py",
+            "story_writing_agents/artifact_transactions/story_commit_qualification.py",
             "story_writing_agents/artifact_transactions/story_commit_decisions.py",
                 "story_writing_agents/artifact_transactions/synchronization_control.py",
                 "story_writing_agents/artifact_transactions/synchronization_material.py",
                 "story_writing_agents/artifact_transactions/synchronization_publication.py",
                 "story_writing_agents/artifact_transactions/synchronization_review.py",
                 "story_writing_agents/conversations/event_contracts/synchronization.py",
+                "story_writing_agents/conversations/reducers/story_commit_history.py",
+                "story_writing_agents/conversations/reducers/story_commit_review_coverage.py",
                 "story_writing_agents/conversations/reducers/synchronization_history.py",
                 "story_writing_agents/conversations/reducers/synchronization_absence_history.py",
                 "story_writing_agents/lead_preparation/synchronization_review_response.py",

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from ..git.story_commits import StoryCommitService
 from ..workspace.session_artifact_binding import SessionArtifactGenerationPin
 from ..conversations import StoryCommitRequestPayload
@@ -10,13 +12,14 @@ from ..conversations import StoryCommitRequestPayload
 class PreparedStoryCommit:
     """Own one exact service and physical-generation pin until publication."""
 
-    __slots__ = ("request", "service", "_generation_pin")
+    __slots__ = ("request", "service", "_generation_pin", "current_blockers")
 
     def __init__(
         self,
         request: StoryCommitRequestPayload,
         service: StoryCommitService,
         generation_pin: SessionArtifactGenerationPin,
+        current_blockers: Callable[[], tuple[str, ...]] = tuple,
     ) -> None:
         if (
             type(request) is not StoryCommitRequestPayload
@@ -26,6 +29,7 @@ class PreparedStoryCommit:
             raise TypeError("pending story commit is invalid")
         self.request = request
         self.service = service
+        self.current_blockers = current_blockers
         self._generation_pin: SessionArtifactGenerationPin | None = generation_pin
 
     def close(self) -> None:

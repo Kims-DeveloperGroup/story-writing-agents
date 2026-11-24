@@ -307,6 +307,17 @@ class StoryCommitCandidateIntegrationTests(StoryCommitGitTestCase):
         )
         self.assertNotIn("새 장면", repr(binding))
 
+        history = root / "discussion_logs" / "novel" / "interactive" / "conversations"
+        history.mkdir(parents=True)
+        managed_before = self.repository_snapshot(root)
+        with self.assertRaises(StoryCommitError) as blocked:
+            prepare_story_commit_candidate(
+                root, manifest(), evidence, "Unqualified bypass", ("managed history",),
+            )
+        self.assertEqual(blocked.exception.code, StoryCommitFailureCode.APPLICATION_MISMATCH)
+        self.assertEqual(self.repository_snapshot(root), managed_before)
+        self.assertEqual(self.run_git(session_root, "rev-parse", "HEAD").stdout, session_before[0])
+
 
 
 

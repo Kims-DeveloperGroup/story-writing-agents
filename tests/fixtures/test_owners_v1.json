@@ -14204,6 +14204,7 @@
       "depends_on": [
         "artifact-transactions.pending_story_commits",
         "artifact-transactions.prepared_story_commit",
+        "artifact-transactions.story_commit_qualification",
         "lead-control-events",
         "lead-preparation.authoring_authority",
         "lead-preparation.call_rule_factory",
@@ -14290,10 +14291,37 @@
       "depends_on": [
         "artifact-transactions.pending_story_commits",
         "artifact-transactions.prepared_story_commit",
+        "artifact-transactions.story_commit_qualification",
         "lead-control-events",
         "runtime-resources",
         "runtime-resources.collaboration_event_journal",
         "runtime-resources.session_execution_scopes"
+      ]
+    },
+    {
+      "name": "artifact-transactions.story_commit_qualification",
+      "boundary": "authority",
+      "paths": [
+        "src/story_writing_agents/artifact_transactions/story_commit_qualification.py"
+      ],
+      "focused_ids": [
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation"
+      ],
+      "affected_ids": [
+        "tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_objective_history_round_trips_through_filesystem_sqlite_and_archive",
+        "tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_projection_retains_satisfaction_across_later_apply_commit_cycles",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation"
+      ],
+      "affected_full": true,
+      "depends_on": [
+        "conversations.reducers.story_commit_history",
+        "conversations.event_contracts.story_commits"
       ]
     },
     {
@@ -22770,6 +22798,31 @@
         "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_public_definitions_live_in_their_exact_owner_modules",
         "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_supported_package_exports_are_identity_stable",
         "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals"
+      ]
+    },
+    {
+      "name": "conversations.reducers.story_commit_history",
+      "boundary": "pure",
+      "paths": [
+        "src/story_writing_agents/conversations/reducers/story_commit_history.py",
+        "src/story_writing_agents/conversations/reducers/story_commit_review_coverage.py"
+      ],
+      "depends_on": [
+        "conversations.event_contracts.artifact_apply",
+        "conversations.event_contracts.story_commits"
+      ],
+      "focused_ids": [
+        "tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_objective_history_round_trips_through_filesystem_sqlite_and_archive",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation"
+      ],
+      "affected_ids": [
+        "tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_objective_history_round_trips_through_filesystem_sqlite_and_archive",
+        "tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_projection_retains_satisfaction_across_later_apply_commit_cycles",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_application_and_result_persistence_failures_map_safely",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git",
+        "tests.test_lead_story_commit_authority.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation"
       ]
     },
     {

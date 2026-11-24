@@ -14,14 +14,15 @@ from dataclasses import replace
 from unittest import mock
 
 from story_writing_agents import StoryRuntime
-from story_writing_agents.git.story_commits import StoryCommitService
 from story_writing_agents.conversations import (
     ArtifactApplicationDecision, ArtifactApplicationDecisionKind,
     ArtifactApplicationNextAction, ArtifactApplicationOutcomeKind,
     ArtifactApplicationResultPayload, CollaborationNextAction,
     CollaborationSideEffect, StoryCommitDecisionRequest, StoryCommitNextAction,
-    StoryCommitOutcomeKind, StoryCommitRequestPayload, project_collaboration_history,
+    StoryCommitOutcomeKind, StoryCommitPreparationRequest, StoryCommitRequestPayload,
+    project_collaboration_history,
 )
+from story_writing_agents.conversations.views.decision_results import StoryCommitQualificationBlocked
 from story_writing_agents.git.story_commit_contracts import (
     StoryCommitDecision, StoryCommitError, StoryCommitFailureCode,
 )
@@ -51,7 +52,7 @@ def _application_decision(
     revision_request: str | None = None,
 ) -> ArtifactApplicationDecision:
     request = turn.artifact_application_request  # type: ignore[attr-defined]
-    assert request is not None
+    assert request is not None, (turn.kind, turn.message, turn.validation_details)  # type: ignore[attr-defined]
     reviewed = request.reviewed_proposal
     application = request.application_request
     return ArtifactApplicationDecision(
@@ -107,14 +108,17 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         )
 
     async def reviewed_create(self, subject: str = "Reviewed application", *, kind="create",
-                              editorial_refs=(), editorial_context_digest=None):
+                              new_text="Use restrained close-third narration.\n",
+                              editorial_refs=(), editorial_context_digest=None, review_task=None,
+                              extra_core_evidence=()):
         conversation_id = self.conversation(subject)
         if kind == "create":
             self.workspace.path(ARTIFACT_FIXTURE_RULES_PATH).unlink(missing_ok=True)
         return await seed_reviewed_artifact(self, conversation_id, (
-            (kind, ARTIFACT_FIXTURE_RULES_PATH, "Use restrained close-third narration.\n"),
+            (kind, ARTIFACT_FIXTURE_RULES_PATH, new_text),
         ),
             editorial_refs=editorial_refs, editorial_context_digest=editorial_context_digest,
+            review_task=review_task, extra_core_evidence=extra_core_evidence,
         )
 
     async def reviewed_rename(self):
@@ -332,21 +336,28 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         self.assertEqual(self.git_snapshot(), relationship_git)
 
     async def test_application_and_result_persistence_failures_map_safely(self) -> None:
-        self.workspace.path(ARTIFACT_FIXTURE_RULES_PATH).unlink(missing_ok=True)
-        subprocess.run(
-            ["git", "add", "-A", "--", "core_documents", "manuscript"],
-            cwd=self.workspace.root, check=True,
+        fault_case = LeadArtifactApplicationTests()
+        fault_case.setUp()
+        self.addCleanup(fault_case.doCleanups)
+        for case in (self, fault_case):
+            case.workspace.path(ARTIFACT_FIXTURE_RULES_PATH).unlink(missing_ok=True)
+            subprocess.run(
+                ["git", "add", "-A", "--", "core_documents", "manuscript"],
+                cwd=case.workspace.root, check=True,
+            )
+            subprocess.run(
+                ["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                 "commit", "-m", "Seed Apply failure baseline"],
+                cwd=case.workspace.root, check=True, stdout=subprocess.DEVNULL,
+            )
+        draft = replace(
+            editorial_request("failure_scope").draft,
+            scope=scopes.EditorialScope.whole(ARTIFACT_FIXTURE_RULES_PATH),
         )
-        subprocess.run(
-            ["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
-             "commit", "-m", "Seed Apply failure baseline"],
-            cwd=self.workspace.root, check=True, stdout=subprocess.DEVNULL,
+        direction = editorial.EditorialRecordRequest.directive(draft, transition_reason="Retain actual target direction.")
+        fault_memory = await fault_case.runtime.record_editorial_decision(
+            fault_case.session_id, fault_case.conversation("Scoped repository failure"), direction,
         )
-        memory_conversation = self.conversation("Scoped failure direction")
-        draft = replace(editorial_request("failure_scope").draft, scope=scopes.EditorialScope.whole(ARTIFACT_FIXTURE_RULES_PATH))
-        memory = await self.runtime.record_editorial_decision(self.session_id, memory_conversation,
-            editorial.EditorialRecordRequest.directive(draft,
-                transition_reason="Retain the actual target direction."))
         for code, expected, next_action in (
             (
                 ArtifactApplicationErrorCode.RECOVERY_REQUIRED,
@@ -360,29 +371,29 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
             ),
         ):
             with self.subTest(code=code):
-                turn = await self.reviewed_create(code.value, editorial_refs=(memory.record_ref,),
-                    editorial_context_digest=self.runtime.inspect_editorial_state(self.session_id)
-                        .context_digest((memory.record_ref,)))
-                before = self.artifact_snapshot()
-                git_before = self.git_snapshot()
+                turn = await fault_case.reviewed_create(code.value, editorial_refs=(fault_memory.record_ref,),
+                    editorial_context_digest=fault_case.runtime.inspect_editorial_state(fault_case.session_id)
+                        .context_digest((fault_memory.record_ref,)))
+                before = fault_case.artifact_snapshot()
+                git_before = fault_case.git_snapshot()
                 with mock.patch.object(
                     WritingArtifactRepository,
                     "apply_artifact_changes",
                     side_effect=ArtifactApplicationError(code),
                 ):
-                    result = await self.runtime.decide_artifact_application(
+                    result = await fault_case.runtime.decide_artifact_application(
                         _application_decision(
                             turn, ArtifactApplicationDecisionKind.APPLY
                         )
                     )
                 self.assertIs(result.outcome.outcome, expected)
                 self.assertIs(result.outcome.next_action, next_action)
-                self.assertEqual(self.artifact_snapshot(), before)
-                self.assertEqual(self.git_snapshot(), git_before)
-                state = self.runtime.inspect_editorial_state(self.session_id)
+                self.assertEqual(fault_case.artifact_snapshot(), before)
+                self.assertEqual(fault_case.git_snapshot(), git_before)
+                state = fault_case.runtime.inspect_editorial_state(fault_case.session_id)
                 request = turn.artifact_application_request
                 attempts = tuple(item for item in state.application_attempts
-                                 if item.record_ref == memory.record_ref
+                                 if item.record_ref == fault_memory.record_ref
                                  and item.request_event.conversation_id == turn.conversation_id
                                  and item.application_request_digest == request.application_request_digest)
                 self.assertEqual(attempts[-1].phase, "recovery_required" if expected is
@@ -390,10 +401,44 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
                 self.assertEqual(attempts[-1].target_paths, (ARTIFACT_FIXTURE_RULES_PATH,))
                 self.assertEqual(state.applied_facts, ())
 
+        blocked_turn = await fault_case.reviewed_create("Apply after an uncertain result on the same documents")
+        git_before = fault_case.git_snapshot()
+        blocked_apply = await fault_case.runtime.decide_artifact_application(
+            _application_decision(blocked_turn, ArtifactApplicationDecisionKind.APPLY),
+        )
+        self.assertIs(blocked_apply.outcome.outcome, ArtifactApplicationOutcomeKind.APPLIED)
+        self.assertIs(blocked_apply.outcome.next_action, ArtifactApplicationNextAction.REPREPARE_COMMIT_REQUEST)
+        self.assertIsNone(blocked_apply.commit_request)
+        self.assertIn("physical Apply outcome", blocked_apply.message)
+        self.assertEqual(fault_case.git_snapshot(), git_before)
+        blocked_history = fault_case.history(blocked_turn.conversation_id)
+        blocked_result = next(event for event in blocked_history if event.payload == blocked_apply.outcome)
+        restored = StoryRuntime(fault_case.control_workspace, _LeadBackend(test_case=fault_case))
+        projection = restored.inspect_lead_collaboration(fault_case.session_id, blocked_turn.conversation_id)
+        self.assertEqual(projection.current_artifact_application_result, blocked_apply.outcome)
+        self.assertIsNone(projection.current_story_commit_request)
+        preparation = StoryCommitPreparationRequest(
+            session_id=fault_case.session_id,
+            conversation_id=blocked_turn.conversation_id,
+            step_id=blocked_turn.step_id,
+            application_result_event_id=blocked_result.event_id,
+            application_id=blocked_apply.outcome.application_id,
+            application_request_digest=blocked_apply.outcome.application_request_digest,
+            tail_event_id=blocked_result.event_id,
+        )
+        with self.assertRaises(StoryCommitQualificationBlocked) as blocked:
+            await restored.reprepare_story_commit(preparation)
+        self.assertTrue(any("physical Apply outcome" in reason for reason in blocked.exception.blockers))
+        self.assertEqual(fault_case.history(blocked_turn.conversation_id), blocked_history)
+        self.assertEqual(fault_case.git_snapshot(), git_before)
+
+        memory = await self.runtime.record_editorial_decision(
+            self.session_id, self.conversation("Scoped publication failure"), direction,
+        )
         turn = await self.reviewed_create("Commit preparation failure")
         git_before = self.git_snapshot()
-        with mock.patch.object(
-            StoryCommitService, "prepare",
+        with mock.patch(
+            "story_writing_agents.artifact_transactions.story_commit_qualification.compose_story_commit_service",
             side_effect=StoryCommitError(StoryCommitFailureCode.CANDIDATE_DRIFT),
         ):
             prepared = await self.runtime.decide_artifact_application(
@@ -449,7 +494,14 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         self.assertIs(rejected.outcome.outcome, StoryCommitOutcomeKind.REJECTED)
         self.assertEqual(self.git_snapshot(), git_before)
 
-        turn = await self.reviewed_create("Published pair readback")
+        known_review = prepared.request.reviewed_proposal.final_review_evidence
+        continued_core_evidence = ("core_documents/global_outline.md",)
+        turn = await self.reviewed_create(
+            "Published pair readback", kind="replace",
+            new_text="Use a consistent close-third narrative voice.\n",
+            review_task=(known_review.task_id, known_review.task_revision + 1),
+            extra_core_evidence=continued_core_evidence,
+        )
         store = self.runtime.conversation_storage_services.event_store
         original_batch = type(store).append_batch
         appended_pair = False
@@ -482,7 +534,12 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         )
         self.assertEqual(self.git_snapshot(), git_before)
 
-        turn = await self.reviewed_create("Commit publication failure")
+        turn = await self.reviewed_create(
+            "Commit request publication fails, known apply survives", kind="replace",
+            new_text="Maintain close third person through the scene.\n",
+            review_task=(known_review.task_id, known_review.task_revision + 2),
+            extra_core_evidence=continued_core_evidence,
+        )
         failed_pair = False
 
         def fail_pair(current, batch):
@@ -512,7 +569,9 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         )
 
         turn = await self.reviewed_create(
-            "Result persistence failure", editorial_refs=(memory.record_ref,),
+            "Result persistence failure", kind="replace", new_text="Keep viewpoint with one character.\n",
+            review_task=(known_review.task_id, known_review.task_revision + 3), editorial_refs=(memory.record_ref,),
+            extra_core_evidence=continued_core_evidence,
             editorial_context_digest=self.runtime.inspect_editorial_state(self.session_id)
             .context_digest((memory.record_ref,)))
         original_read = type(store).read

@@ -23,6 +23,7 @@ from ..errors import (
     WorkspaceVersionUnsupportedError,
 )
 from ..git import GitBaselineManifest
+from ..git.story_commit_contracts import StoryCommitQualificationGuard
 from ..git.story_commits import (
     StoryCommitService,
     create_identity_bound_story_commit_service,
@@ -1064,6 +1065,8 @@ def compose_story_commit_service(
     root: Path,
     session_id: str,
     artifact_binding: SessionArtifactBinding | None = None,
+    *,
+    qualification_guard: StoryCommitQualificationGuard | None = None,
 ) -> StoryCommitService:
     """Compose commit authority for one already-ready workspace session."""
 
@@ -1083,6 +1086,10 @@ def compose_story_commit_service(
         allowed_worktree_changes=allowance,
     )
     if artifact_binding is None:
+        if qualification_guard is not None:
+            raise SessionArtifactBindingError(
+                "story commit qualification requires the ready session binding"
+            )
         return StoryCommitService(
             main_root,
             manifest,
@@ -1108,4 +1115,5 @@ def compose_story_commit_service(
             artifact_repository_access=(
                 artifact_binding.open_story_commit_artifact_repository
             ),
+            qualification_guard=qualification_guard,
         )

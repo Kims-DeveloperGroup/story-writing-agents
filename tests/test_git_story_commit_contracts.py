@@ -103,7 +103,11 @@ class StoryCommitContractTests(unittest.TestCase):
         value = candidate()
         self.assertTrue(is_dataclass(value))
         self.assertTrue(hasattr(value, "__slots__"))
-        self.assertEqual(len(fields(value)), 14)
+        self.assertEqual(len(fields(value)), 18)
+        self.assertEqual(
+            tuple(item.name for item in fields(value)[-4:]),
+            ("qualification_digest", "remaining_paths", "bundle_base_branch_tip", "application_ids"),
+        )
         with self.assertRaises(FrozenInstanceError):
             value.branch = "other"  # type: ignore[misc]
         for name in contracts.__all__:
