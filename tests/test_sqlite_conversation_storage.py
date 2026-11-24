@@ -27,10 +27,10 @@ from story_writing_agents import (
     normalize_conversation_subject,
 )
 from story_writing_agents.agents import LEAD_ORCHESTRATOR
+from story_writing_agents.collaboration_history_search import ReferenceCollaborationHistorySearch
 from story_writing_agents.conversation_search import (
     CollaborationHistorySearchQuery,
     CollaborationHistorySearchScope,
-    ReferenceCollaborationHistorySearch,
 )
 from story_writing_agents.conversation_storage import (
     ConversationArchiveConflictError,

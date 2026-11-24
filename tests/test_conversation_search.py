@@ -12,6 +12,8 @@ from dataclasses import FrozenInstanceError, fields, replace
 from pathlib import Path
 
 import story_writing_agents
+from story_writing_agents import collaboration_history as history_module
+from story_writing_agents import collaboration_history_search as history_search_module
 from story_writing_agents import conversation_literal_search as literal_module
 from story_writing_agents import conversation_search as search_module
 from story_writing_agents.conversation_literal_search import (
@@ -22,6 +24,8 @@ from story_writing_agents.conversation_literal_search import (
     normalize_conversation_literal_query,
     normalize_conversation_literal_text,
 )
+from story_writing_agents.collaboration_history import CollaborationHistoryService
+from story_writing_agents.collaboration_history_search import ReferenceCollaborationHistorySearch
 from story_writing_agents.conversation_search import (
     COLLABORATION_READABLE_SOURCE_SCHEMA_ID,
     CONVERSATION_MEMORY_POLICY,
@@ -33,9 +37,7 @@ from story_writing_agents.conversation_search import (
     CollaborationHistorySearchQuery,
     CollaborationHistorySearchResult,
     CollaborationHistorySearchScope,
-    CollaborationHistoryService,
     ConversationMemoryPolicy,
-    ReferenceCollaborationHistorySearch,
     collaboration_readable_document_id,
     continue_collaboration_history,
     page_collaboration_history,
@@ -44,10 +46,6 @@ from story_writing_agents.conversation_search import (
 )
 from story_writing_agents.conversation_storage import (
     compose_filesystem_conversation_storage,
-)
-from story_writing_agents.conversation_storage.filesystem import (
-    FilesystemCollaborationEventStore,
-    FilesystemConversationCatalog,
 )
 from story_writing_agents.errors import SessionIdError
 from story_writing_agents.conversations import (
@@ -69,52 +67,7 @@ from tests.collaboration_contract_fixture import (
     proposal_state,
     store_batch,
 )
-from tests.conversation_search_contract import (
-    CollaborationSearchContractMixin,
-    MemoryCollaborationEventStore,
-    MemoryConversationCatalog,
-)
 from tests.helpers import initialized_workspace
-
-
-class InMemoryCollaborationSearchContractTests(
-    CollaborationSearchContractMixin,
-    unittest.TestCase,
-):
-    def make_adapters(
-        self,
-    ) -> tuple[MemoryConversationCatalog, MemoryCollaborationEventStore]:
-        catalog = MemoryConversationCatalog()
-        return catalog, MemoryCollaborationEventStore(catalog)
-
-
-class FilesystemCollaborationSearchContractTests(
-    CollaborationSearchContractMixin,
-    unittest.TestCase,
-):
-    def make_adapters(
-        self,
-    ) -> tuple[FilesystemConversationCatalog, FilesystemCollaborationEventStore]:
-        self.workspace = initialized_workspace(self)
-        self.services = compose_filesystem_conversation_storage(self.workspace)
-        self.assertIsInstance(self.services.catalog, FilesystemConversationCatalog)
-        self.assertIsInstance(
-            self.services.event_store,
-            FilesystemCollaborationEventStore,
-        )
-        return self.services.catalog, self.services.event_store
-
-    def make_search(
-        self,
-        catalog: object,
-        store: object,
-    ) -> CollaborationHistorySearch:
-        del catalog, store
-        self.assertIsInstance(
-            self.services.search,
-            ReferenceCollaborationHistorySearch,
-        )
-        return self.services.search
 
 
 class CollaborationSearchValueContractTests(unittest.TestCase):
@@ -458,9 +411,7 @@ class ConversationSearchPackageBoundaryTests(unittest.TestCase):
             "CollaborationHistorySearchQuery",
             "CollaborationHistorySearchResult",
             "CollaborationHistorySearchScope",
-            "CollaborationHistoryService",
             "ConversationMemoryPolicy",
-            "ReferenceCollaborationHistorySearch",
             "collaboration_readable_document_id",
             "continue_collaboration_history",
             "page_collaboration_history",
@@ -468,7 +419,13 @@ class ConversationSearchPackageBoundaryTests(unittest.TestCase):
             "search_collaboration_history",
         }
         self.assertEqual(set(search_module.__all__), expected)
-        self.assertEqual(len(search_module.__all__), 18)
+        self.assertEqual(len(search_module.__all__), 16)
+        self.assertEqual(tuple(history_module.__all__), ("CollaborationHistoryService",))
+        self.assertEqual(tuple(history_search_module.__all__), ("ReferenceCollaborationHistorySearch",))
+        self.assertIs(history_module.CollaborationHistoryService, CollaborationHistoryService)
+        self.assertIs(history_search_module.ReferenceCollaborationHistorySearch, ReferenceCollaborationHistorySearch)
+        self.assertFalse(hasattr(search_module, "CollaborationHistoryService"))
+        self.assertFalse(hasattr(search_module, "ReferenceCollaborationHistorySearch"))
         self.assertEqual(
             expected & set(story_writing_agents.__all__),
             {"CONVERSATION_MEMORY_POLICY", "ConversationMemoryPolicy"},
@@ -497,7 +454,10 @@ class ConversationSearchPackageBoundaryTests(unittest.TestCase):
                     + str(root / "src")
                     + "'); import story_writing_agents as root; "
                     "import story_writing_agents.conversation_search as search; "
-                    "assert len(root.__all__) == 106; assert len(search.__all__) == 18; "
+                    "import story_writing_agents.collaboration_history as history; "
+                    "import story_writing_agents.collaboration_history_search as reference; "
+                    "assert len(root.__all__) == 106; assert len(search.__all__) == 16; "
+                    "assert len(history.__all__) == len(reference.__all__) == 1; "
                     "assert not hasattr(root, 'ConversationMemoryService'); "
                     "assert 'sqlite3' not in sys.modules"
                 ),

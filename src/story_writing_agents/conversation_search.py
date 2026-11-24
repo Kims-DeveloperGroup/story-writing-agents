@@ -78,7 +78,7 @@ def _boolean(value: bool, *, label: str) -> bool:
     return value
 
 
-def _identifier(value: str, *, label: str) -> str:
+def validate_conversation_identifier(value: str, *, label: str) -> str:
     """Return an exact-string safe identifier without mutation.
 
     Non-strings raise ``TypeError`` and syntax violations raise
@@ -133,7 +133,7 @@ def _has_control_or_format(value: str) -> bool:
     return any(unicodedata.category(character).startswith("C") for character in value)
 
 
-def _normalized_query(value: str) -> str:
+def normalize_conversation_search_query(value: str) -> str:
     """Return the bounded normalized literal used by conversation search.
 
     The source must be strict UTF-8, nonblank, within policy, and free of
@@ -207,9 +207,9 @@ class CollaborationHistoryCitation:
     input_ordinal: int | None = None
 
     def __post_init__(self) -> None:
-        _identifier(self.session_id, label="session ID")
-        _identifier(self.conversation_id, label="conversation ID")
-        _identifier(self.event_id, label="event ID")
+        validate_conversation_identifier(self.session_id, label="session ID")
+        validate_conversation_identifier(self.conversation_id, label="conversation ID")
+        validate_conversation_identifier(self.event_id, label="event ID")
         _positive_integer(self.sequence, label="event sequence")
         if type(self.field_key) is not CollaborationReadableFieldKey:
             raise TypeError(
@@ -241,7 +241,7 @@ class CollaborationHistorySearchQuery:
     limit: int = CONVERSATION_MEMORY_POLICY.default_search_hits
 
     def __post_init__(self) -> None:
-        _normalized_query(self.text)
+        normalize_conversation_search_query(self.text)
         _positive_integer(
             self.limit,
             label="collaboration search hit limit",
@@ -288,7 +288,7 @@ class CollaborationHistorySearchResult:
     def __post_init__(self) -> None:
         if type(self.query) is not CollaborationHistorySearchQuery:
             raise TypeError("collaboration search query is invalid")
-        if self.normalized_query != _normalized_query(self.query.text):
+        if self.normalized_query != normalize_conversation_search_query(self.query.text):
             raise ValueError("normalized collaboration search query is inconsistent")
         if type(self.hits) is not tuple or any(
             type(hit) is not CollaborationHistorySearchHit for hit in self.hits
@@ -318,7 +318,7 @@ class CollaborationHistorySearchResult:
             self.scan_truncated or self.matched_fields > len(self.hits)
         ):
             raise ValueError("collaboration search truncated flag is inconsistent")
-        if self.hits != tuple(sorted(self.hits, key=_collaboration_search_hit_key)):
+        if self.hits != tuple(sorted(self.hits, key=collaboration_history_search_hit_key)):
             raise ValueError("collaboration search hits are not deterministic")
         coordinates = tuple(hit.citation for hit in self.hits)
         if len(set(coordinates)) != len(coordinates):
@@ -339,8 +339,8 @@ class CollaborationHistoryPageCursor:
     max_utf8_bytes: int
 
     def __post_init__(self) -> None:
-        _identifier(self.session_id, label="session ID")
-        _identifier(self.conversation_id, label="conversation ID")
+        validate_conversation_identifier(self.session_id, label="session ID")
+        validate_conversation_identifier(self.conversation_id, label="conversation ID")
         _positive_integer(self.next_sequence, label="next sequence")
         _positive_integer(self.end_sequence, label="end sequence")
         _positive_integer(self.snapshot_last_sequence, label="snapshot last sequence")
@@ -380,9 +380,9 @@ class CollaborationHistoryPage:
         if (self.session_id is None) is not (self.conversation_id is None):
             raise ValueError("collaboration page identity is incomplete")
         if self.session_id is not None:
-            _identifier(self.session_id, label="session ID")
+            validate_conversation_identifier(self.session_id, label="session ID")
             assert self.conversation_id is not None
-            _identifier(self.conversation_id, label="conversation ID")
+            validate_conversation_identifier(self.conversation_id, label="conversation ID")
         if type(self.records) is not tuple or any(
             type(record) is not CollaborationReadableRecord for record in self.records
         ):
@@ -466,7 +466,7 @@ def search_collaboration_history(
     if type(query) is not CollaborationHistorySearchQuery:
         raise TypeError("collaboration search query is invalid")
     records = project_collaboration_readable_history(events)
-    normalized_query = _normalized_query(query.text)
+    normalized_query = normalize_conversation_search_query(query.text)
     matches: list[CollaborationHistorySearchHit] = []
     scanned_fields = 0
     scanned_records = records[: CONVERSATION_MEMORY_POLICY.max_scan_events]
@@ -474,7 +474,7 @@ def search_collaboration_history(
     for record in scanned_records:
         for field in record.fields:
             scanned_fields += 1
-            normalized_text, spans = _normalized_literal_with_spans(field.text)
+            normalized_text, spans = normalize_conversation_literal_with_spans(field.text)
             match_start = normalized_text.find(normalized_query)
             if match_start < 0:
                 continue
@@ -506,7 +506,7 @@ def search_collaboration_history(
                     ),
                 )
             )
-    matches.sort(key=_collaboration_search_hit_key)
+    matches.sort(key=collaboration_history_search_hit_key)
     retained = tuple(matches[: query.limit])
     return CollaborationHistorySearchResult(
         query=query,
@@ -775,7 +775,7 @@ def _collaboration_hit_key(
     )
 
 
-def _collaboration_search_hit_key(
+def collaboration_history_search_hit_key(
     hit: CollaborationHistorySearchHit,
 ) -> tuple[str, str, int, int, int, int]:
     citation = hit.citation
@@ -797,7 +797,7 @@ def _digest(value: str, *, label: str) -> str:
     return text
 
 
-def _normalized_literal_with_spans(
+def normalize_conversation_literal_with_spans(
     source: str,
 ) -> tuple[str, tuple[tuple[int, int], ...]]:
     """Normalize exactly while retaining original code-point source ranges.
@@ -908,7 +908,7 @@ class ConversationSearchScope:
     session_id: str
 
     def __post_init__(self) -> None:
-        _identifier(self.session_id, label="session ID")
+        validate_conversation_identifier(self.session_id, label="session ID")
 
 
 @dataclass(frozen=True, slots=True)
@@ -920,7 +920,7 @@ class ConversationSearchQuery:
     include_archived: bool = False
 
     def __post_init__(self) -> None:
-        _normalized_query(self.text)
+        normalize_conversation_search_query(self.text)
         _positive_integer(
             self.limit,
             label="conversation search hit limit",
@@ -940,8 +940,8 @@ class ConversationCitation:
     event_kind: ConversationEventKind | None
 
     def __post_init__(self) -> None:
-        _identifier(self.session_id, label="session ID")
-        _identifier(self.conversation_id, label="conversation ID")
+        validate_conversation_identifier(self.session_id, label="session ID")
+        validate_conversation_identifier(self.conversation_id, label="conversation ID")
         event_values = (self.turn_id, self.sequence, self.event_kind)
         if all(value is None for value in event_values):
             return
@@ -949,7 +949,7 @@ class ConversationCitation:
             raise ValueError(
                 "citation turn ID, sequence, and event kind must be present together"
             )
-        _identifier(self.turn_id, label="turn ID")  # type: ignore[arg-type]
+        validate_conversation_identifier(self.turn_id, label="turn ID")  # type: ignore[arg-type]
         _positive_integer(
             self.sequence,  # type: ignore[arg-type]
             label="event sequence",
@@ -1040,7 +1040,7 @@ class ConversationSearchResult:
             self.normalized_query,
             label="normalized conversation search query",
         )
-        if normalized != _normalized_query(self.query.text):
+        if normalized != normalize_conversation_search_query(self.query.text):
             raise ValueError("normalized conversation search query is inconsistent")
         if type(self.hits) is not tuple or any(
             type(hit) is not ConversationSearchHit for hit in self.hits
@@ -1099,8 +1099,8 @@ class ConversationTranscriptCursor:
     citation: ConversationCitation | None
 
     def __post_init__(self) -> None:
-        _identifier(self.session_id, label="session ID")
-        _identifier(self.conversation_id, label="conversation ID")
+        validate_conversation_identifier(self.session_id, label="session ID")
+        validate_conversation_identifier(self.conversation_id, label="conversation ID")
         _positive_integer(self.next_sequence, label="next sequence")
         _positive_integer(self.end_sequence, label="end sequence")
         _positive_integer(
@@ -1112,7 +1112,7 @@ class ConversationTranscriptCursor:
         if self.end_sequence > self.snapshot_last_sequence:
             raise ValueError("cursor range exceeds its transcript snapshot")
         if self.turn_id is not None:
-            _identifier(self.turn_id, label="turn ID")
+            validate_conversation_identifier(self.turn_id, label="turn ID")
         _positive_integer(
             self.max_events,
             label="transcript page event limit",
@@ -1148,8 +1148,8 @@ class ConversationTranscriptPage:
     truncated: bool
 
     def __post_init__(self) -> None:
-        _identifier(self.session_id, label="session ID")
-        _identifier(self.conversation_id, label="conversation ID")
+        validate_conversation_identifier(self.session_id, label="session ID")
+        validate_conversation_identifier(self.conversation_id, label="conversation ID")
         if type(self.events) is not tuple or any(
             type(event) is not ConversationEvent for event in self.events
         ):
@@ -1261,7 +1261,7 @@ def _subject_match_kind(
     return None if match_kind is None else ConversationSearchMatchKind(match_kind)
 
 
-def _validated_metadata(
+def validate_conversation_metadata(
     metadata: object,
     *,
     session_id: str,
@@ -1394,7 +1394,7 @@ class ReferenceConversationSearch:
                 "conversation search query must be a ConversationSearchQuery"
             )
 
-        normalized_query = _normalized_query(query.text)
+        normalized_query = normalize_conversation_search_query(query.text)
         raw_metadata = self._catalog.list(
             scope.session_id,
             include_archived=query.include_archived,
@@ -1404,7 +1404,7 @@ class ReferenceConversationSearch:
         metadata = tuple(
             sorted(
                 (
-                    _validated_metadata(item, session_id=scope.session_id)
+                    validate_conversation_metadata(item, session_id=scope.session_id)
                     for item in raw_metadata
                 ),
                 key=lambda item: (item.created_at, item.conversation_id),
@@ -1672,14 +1672,14 @@ class ConversationMemoryService:
     ) -> ConversationTranscriptPage:
         """Read one inclusive bounded chronological transcript range."""
 
-        _identifier(conversation_id, label="conversation ID")
+        validate_conversation_identifier(conversation_id, label="conversation ID")
         _positive_integer(start_sequence, label="start sequence")
         if end_sequence is not None:
             _positive_integer(end_sequence, label="end sequence")
             if end_sequence < start_sequence:
                 raise ValueError("end sequence must not precede start sequence")
         if turn_id is not None:
-            _identifier(turn_id, label="turn ID")
+            validate_conversation_identifier(turn_id, label="turn ID")
         _positive_integer(
             max_events,
             label="transcript page event limit",
@@ -1746,7 +1746,7 @@ class ConversationMemoryService:
         and invalid adapter data raises ``TypeError`` or ``ValueError``.
         """
 
-        metadata = _validated_metadata(
+        metadata = validate_conversation_metadata(
             self._catalog.get(self._scope.session_id, conversation_id),
             session_id=self._scope.session_id,
         )
@@ -1888,7 +1888,7 @@ class CollaborationHistorySearchScope:
     include_archived: bool = False
 
     def __post_init__(self) -> None:
-        _identifier(self.session_id, label="session ID")
+        validate_conversation_identifier(self.session_id, label="session ID")
         _boolean(self.include_archived, label="include archived")
 
 
@@ -1905,310 +1905,6 @@ class CollaborationHistorySearch(Protocol):
         ...
 
 
-class ReferenceCollaborationHistorySearch:
-    """Bounded deterministic aggregate search over a catalog and v2 store."""
-
-    def __init__(
-        self,
-        catalog: ConversationCatalog,
-        event_store: CollaborationEventStore,
-    ) -> None:
-        if not callable(getattr(catalog, "list", None)):
-            raise TypeError("conversation catalog must provide list()")
-        if not callable(getattr(event_store, "read", None)):
-            raise TypeError("collaboration event store must provide read()")
-        self._catalog = catalog
-        self._event_store = event_store
-
-    def search(
-        self,
-        scope: CollaborationHistorySearchScope,
-        query: CollaborationHistorySearchQuery,
-    ) -> CollaborationHistorySearchResult:
-        """Search ordered public fields only; catalog subjects never create hits."""
-
-        if type(scope) is not CollaborationHistorySearchScope:
-            raise TypeError("collaboration search scope is invalid")
-        if type(query) is not CollaborationHistorySearchQuery:
-            raise TypeError("collaboration search query is invalid")
-        raw_metadata = self._catalog.list(
-            scope.session_id,
-            include_archived=scope.include_archived,
-        )
-        if type(raw_metadata) is not tuple:
-            raise TypeError("conversation catalog list must return an exact tuple")
-        metadata = tuple(
-            _validated_metadata(item, session_id=scope.session_id)
-            for item in raw_metadata
-        )
-        if len({item.conversation_id for item in metadata}) != len(metadata):
-            raise ValueError("catalog returned duplicate conversation identities")
-        if not scope.include_archived and any(
-            item.status is ConversationStatus.ARCHIVED for item in metadata
-        ):
-            raise ValueError("catalog returned archived metadata without authorization")
-
-        selected = metadata[: CONVERSATION_MEMORY_POLICY.max_scan_conversations]
-        scan_truncated = len(selected) != len(metadata)
-        remaining_records = CONVERSATION_MEMORY_POLICY.max_scan_events
-        matched: list[CollaborationHistorySearchHit] = []
-        scanned_fields = 0
-        scanned_records = 0
-        normalized_query = _normalized_query(query.text)
-        for metadata_index, item in enumerate(selected):
-            events = self._event_store.read(item.session_id, item.conversation_id)
-            records = project_collaboration_readable_history(events)
-            retained = records[:remaining_records]
-            if len(retained) != len(records):
-                scan_truncated = True
-            for record in retained:
-                scanned_records += 1
-                for field in record.fields:
-                    scanned_fields += 1
-                    normalized_text, spans = _normalized_literal_with_spans(field.text)
-                    match_start = normalized_text.find(normalized_query)
-                    if match_start < 0:
-                        continue
-                    match_spans = spans[
-                        match_start : match_start + len(normalized_query)
-                    ]
-                    matched.append(
-                        CollaborationHistorySearchHit(
-                            citation=CollaborationHistoryCitation(
-                                session_id=record.session_id,
-                                conversation_id=record.conversation_id,
-                                event_id=record.event_id,
-                                sequence=record.sequence,
-                                field_key=field.key,
-                                start_codepoint=min(span[0] for span in match_spans),
-                                end_codepoint=max(span[1] for span in match_spans),
-                                assignment_ordinal=field.assignment_ordinal,
-                                input_ordinal=field.input_ordinal,
-                            ),
-                            snippet=build_conversation_literal_snippet(
-                                normalized_text,
-                                normalized_query,
-                                max_characters=(
-                                    CONVERSATION_MEMORY_POLICY.max_snippet_characters
-                                ),
-                                max_utf8_bytes=(
-                                    CONVERSATION_MEMORY_POLICY.max_snippet_utf8_bytes
-                                ),
-                            ),
-                        )
-                    )
-            remaining_records -= len(retained)
-            if remaining_records == 0:
-                if metadata_index + 1 < len(selected):
-                    scan_truncated = True
-                break
-
-        matched.sort(key=_collaboration_search_hit_key)
-        retained_hits = tuple(matched[: query.limit])
-        return CollaborationHistorySearchResult(
-            query=query,
-            normalized_query=normalized_query,
-            hits=retained_hits,
-            matched_fields=len(matched),
-            scanned_records=scanned_records,
-            scanned_fields=scanned_fields,
-            scan_truncated=scan_truncated,
-            truncated=scan_truncated or len(matched) > len(retained_hits),
-        )
-
-
-class _CollaborationStorageServicesLike(Protocol):
-    """Narrow storage bundle view that avoids a storage-to-search cycle."""
-
-    @property
-    def catalog(self) -> ConversationCatalog: ...
-
-    @property
-    def event_store(self) -> CollaborationEventStore: ...
-
-    @property
-    def search(self) -> CollaborationHistorySearch: ...
-
-    @property
-    def mutation_coordinator(self) -> object: ...
-
-
-def _collaboration_storage_service_components(
-    value: _CollaborationStorageServicesLike,
-) -> tuple[ConversationCatalog, CollaborationEventStore, CollaborationHistorySearch]:
-    try:
-        catalog = value.catalog
-        event_store = value.event_store
-        search = value.search
-        coordinator = value.mutation_coordinator
-    except AttributeError as exc:
-        raise TypeError("conversation storage services are invalid") from exc
-    if not callable(getattr(catalog, "get", None)):
-        raise TypeError("conversation storage catalog is invalid")
-    if any(
-        not callable(getattr(event_store, name, None))
-        for name in ("append_batch", "read", "read_context")
-    ):
-        raise TypeError("collaboration event store is invalid")
-    if not callable(getattr(search, "search", None)):
-        raise TypeError("collaboration history search is invalid")
-    if not callable(getattr(coordinator, "borrow", None)):
-        raise TypeError("conversation storage coordinator is invalid")
-    return catalog, event_store, search
-
-
-class CollaborationHistoryService:
-    """Authorize one session for aggregate search and bounded readable pages."""
-
-    def __init__(
-        self,
-        scope: CollaborationHistorySearchScope,
-        catalog: ConversationCatalog | None = None,
-        event_store: CollaborationEventStore | None = None,
-        *,
-        search: CollaborationHistorySearch | None = None,
-        conversation_storage_services: _CollaborationStorageServicesLike | None = None,
-    ) -> None:
-        if type(scope) is not CollaborationHistorySearchScope:
-            raise TypeError("collaboration search scope is invalid")
-        if conversation_storage_services is not None:
-            if catalog is not None or event_store is not None or search is not None:
-                raise TypeError(
-                    "conversation_storage_services conflicts with raw collaborators"
-                )
-            catalog, event_store, search = _collaboration_storage_service_components(
-                conversation_storage_services
-            )
-        elif catalog is None or event_store is None:
-            raise TypeError(
-                "catalog and event_store are required without storage services"
-            )
-        if not callable(getattr(catalog, "get", None)):
-            raise TypeError("conversation catalog must provide get()")
-        if not callable(getattr(event_store, "read", None)):
-            raise TypeError("collaboration event store must provide read()")
-        if search is not None and not callable(getattr(search, "search", None)):
-            raise TypeError("collaboration search adapter must provide search()")
-        self._scope = scope
-        self._catalog = catalog
-        self._event_store = event_store
-        self._search = (
-            ReferenceCollaborationHistorySearch(catalog, event_store)
-            if search is None
-            else search
-        )
-
-    @property
-    def scope(self) -> CollaborationHistorySearchScope:
-        """Return the immutable authorization scope."""
-
-        return self._scope
-
-    def search(
-        self,
-        query: CollaborationHistorySearchQuery,
-    ) -> CollaborationHistorySearchResult:
-        """Return field-cited matches from the authorized session."""
-
-        if type(query) is not CollaborationHistorySearchQuery:
-            raise TypeError("collaboration search query is invalid")
-        result = self._search.search(self._scope, query)
-        if type(result) is not CollaborationHistorySearchResult:
-            raise TypeError("collaboration search adapter returned an invalid result")
-        if result.query != query:
-            raise ValueError("collaboration search adapter changed the query")
-        if any(
-            hit.citation.session_id != self._scope.session_id for hit in result.hits
-        ):
-            raise ValueError("collaboration search crossed the authorized session")
-        return result
-
-    def read_history(
-        self,
-        conversation_id: str,
-        *,
-        start_sequence: int = 1,
-        end_sequence: int | None = None,
-        max_records: int = CONVERSATION_MEMORY_POLICY.default_page_events,
-        max_utf8_bytes: int = CONVERSATION_MEMORY_POLICY.max_page_utf8_bytes,
-        citation: CollaborationHistoryCitation | None = None,
-    ) -> CollaborationHistoryPage:
-        """Read one bounded canonical history page after catalog authorization."""
-
-        conversation = _identifier(conversation_id, label="conversation ID")
-        metadata = _validated_metadata(
-            self._catalog.get(self._scope.session_id, conversation),
-            session_id=self._scope.session_id,
-        )
-        if metadata.conversation_id != conversation:
-            raise ValueError("catalog returned the wrong conversation identity")
-        if (
-            not self._scope.include_archived
-            and metadata.status is ConversationStatus.ARCHIVED
-        ):
-            raise ValueError("archived conversation is outside the authorized scope")
-        events = self._event_store.read(self._scope.session_id, conversation)
-        if citation is not None:
-            self._validate_citation(citation, conversation_id=conversation)
-            resolve_collaboration_citation(events, citation)
-        page = page_collaboration_history(
-            events,
-            start_sequence=start_sequence,
-            end_sequence=end_sequence,
-            max_records=max_records,
-            max_utf8_bytes=max_utf8_bytes,
-        )
-        if page.session_id is None:
-            return CollaborationHistoryPage(
-                session_id=self._scope.session_id,
-                conversation_id=conversation,
-                records=(),
-                requested_start_sequence=page.requested_start_sequence,
-                requested_end_sequence=page.requested_end_sequence,
-                snapshot_last_sequence=0,
-                snapshot_tail_batch_digest=None,
-                returned_utf8_bytes=0,
-                next_cursor=None,
-                truncated=False,
-            )
-        return page
-
-    def continue_history(
-        self,
-        cursor: CollaborationHistoryPageCursor,
-    ) -> CollaborationHistoryPage:
-        """Continue a page only while its exact v2 snapshot remains current."""
-
-        if type(cursor) is not CollaborationHistoryPageCursor:
-            raise TypeError("collaboration page cursor is invalid")
-        if cursor.session_id != self._scope.session_id:
-            raise ValueError("collaboration cursor is outside the authorized session")
-        metadata = _validated_metadata(
-            self._catalog.get(cursor.session_id, cursor.conversation_id),
-            session_id=self._scope.session_id,
-        )
-        if (
-            not self._scope.include_archived
-            and metadata.status is ConversationStatus.ARCHIVED
-        ):
-            raise ValueError("archived conversation is outside the authorized scope")
-        events = self._event_store.read(cursor.session_id, cursor.conversation_id)
-        return continue_collaboration_history(events, cursor)
-
-    def _validate_citation(
-        self,
-        citation: CollaborationHistoryCitation,
-        *,
-        conversation_id: str,
-    ) -> None:
-        if type(citation) is not CollaborationHistoryCitation:
-            raise TypeError("collaboration citation is invalid")
-        if citation.session_id != self._scope.session_id:
-            raise ValueError("collaboration citation is outside the authorized session")
-        if citation.conversation_id != conversation_id:
-            raise ValueError("collaboration citation identifies another conversation")
-
-
 __all__ = [
     "COLLABORATION_READABLE_SOURCE_SCHEMA_ID",
     "CONVERSATION_MEMORY_POLICY",
@@ -2220,9 +1916,7 @@ __all__ = [
     "CollaborationHistorySearchQuery",
     "CollaborationHistorySearchResult",
     "CollaborationHistorySearchScope",
-    "CollaborationHistoryService",
     "ConversationMemoryPolicy",
-    "ReferenceCollaborationHistorySearch",
     "collaboration_readable_document_id",
     "continue_collaboration_history",
     "page_collaboration_history",

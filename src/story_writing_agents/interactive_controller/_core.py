@@ -34,10 +34,10 @@ from ..cli_context import (
     save_default_conversation,
     save_default_session,
 )
+from ..collaboration_history import CollaborationHistoryService
 from ..conversation_search import (
     CollaborationHistorySearchQuery,
     CollaborationHistorySearchScope,
-    CollaborationHistoryService,
 )
 from ..conversation_storage.contracts import ConversationStorageServices
 from ..conversation_storage.selection import (

@@ -837,8 +837,8 @@ assert len(writing_artifacts.__all__) == len(set(writing_artifacts.__all__)) == 
 
     def test_module_graph_matches_accepted_delta(self) -> None:
         modules, edges = module_graph(_SOURCE_ROOT)
-        self.assertEqual(len(modules), 416)
-        self.assertEqual(len(edges), 2600)
+        self.assertEqual(len(modules), 418)
+        self.assertEqual(len(edges), 2609)
         application_name = (
             "story_writing_agents.writing_artifacts.application_contracts"
         )

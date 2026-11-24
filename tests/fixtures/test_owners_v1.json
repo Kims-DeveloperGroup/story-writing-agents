@@ -3117,13 +3117,7 @@
         "tests.test_conversation_search.CollaborationSearchValueContractTests.test_queries_scopes_and_values_reject_malformed_inputs",
         "tests.test_conversation_search.ConversationSearchPackageBoundaryTests.test_clean_process_import_uses_only_the_source_tree",
         "tests.test_conversation_search.ConversationSearchPackageBoundaryTests.test_literal_search_dependency_is_one_way_and_leaf_owned",
-        "tests.test_conversation_search.ConversationSearchPackageBoundaryTests.test_module_and_root_facade_exports_are_exact",
-        "tests.test_conversation_search.FilesystemCollaborationSearchContractTests.test_archived_histories_are_visible_only_in_explicit_scope",
-        "tests.test_conversation_search.FilesystemCollaborationSearchContractTests.test_cited_pages_preserve_one_exact_history_snapshot",
-        "tests.test_conversation_search.FilesystemCollaborationSearchContractTests.test_search_uses_readable_event_fields_and_never_catalog_subjects",
-        "tests.test_conversation_search.InMemoryCollaborationSearchContractTests.test_archived_histories_are_visible_only_in_explicit_scope",
-        "tests.test_conversation_search.InMemoryCollaborationSearchContractTests.test_cited_pages_preserve_one_exact_history_snapshot",
-        "tests.test_conversation_search.InMemoryCollaborationSearchContractTests.test_search_uses_readable_event_fields_and_never_catalog_subjects"
+        "tests.test_conversation_search.ConversationSearchPackageBoundaryTests.test_module_and_root_facade_exports_are_exact"
       ],
       "affected_ids": [
         "tests.test_conversation_search.CollaborationReadableSearchContractTests.test_document_identity_binds_event_field_and_metadata_revision",
@@ -3136,13 +3130,7 @@
         "tests.test_conversation_search.CollaborationSearchValueContractTests.test_queries_scopes_and_values_reject_malformed_inputs",
         "tests.test_conversation_search.ConversationSearchPackageBoundaryTests.test_clean_process_import_uses_only_the_source_tree",
         "tests.test_conversation_search.ConversationSearchPackageBoundaryTests.test_literal_search_dependency_is_one_way_and_leaf_owned",
-        "tests.test_conversation_search.ConversationSearchPackageBoundaryTests.test_module_and_root_facade_exports_are_exact",
-        "tests.test_conversation_search.FilesystemCollaborationSearchContractTests.test_archived_histories_are_visible_only_in_explicit_scope",
-        "tests.test_conversation_search.FilesystemCollaborationSearchContractTests.test_cited_pages_preserve_one_exact_history_snapshot",
-        "tests.test_conversation_search.FilesystemCollaborationSearchContractTests.test_search_uses_readable_event_fields_and_never_catalog_subjects",
-        "tests.test_conversation_search.InMemoryCollaborationSearchContractTests.test_archived_histories_are_visible_only_in_explicit_scope",
-        "tests.test_conversation_search.InMemoryCollaborationSearchContractTests.test_cited_pages_preserve_one_exact_history_snapshot",
-        "tests.test_conversation_search.InMemoryCollaborationSearchContractTests.test_search_uses_readable_event_fields_and_never_catalog_subjects"
+        "tests.test_conversation_search.ConversationSearchPackageBoundaryTests.test_module_and_root_facade_exports_are_exact"
       ],
       "depends_on": []
     },
@@ -6885,6 +6873,7 @@
         "tests.test_sqlite_conversation_storage.SQLiteProvisioningConcurrencyTests.test_spawned_process_provisioners_install_one_complete_database"
       ],
       "depends_on": [
+        "tests.conversation_search.contract",
         "tests.test_collaboration_events"
       ]
     },
@@ -21204,7 +21193,6 @@
         "tests.test_interactive_controller.ControllerSettingsTests.test_storage_edit_is_desired_only_and_keeps_current_shell_bundle"
       ]
     },
-
     {
       "name": "provider.configuration-activation",
       "boundary": "provider-configuration-activation",
@@ -21294,7 +21282,6 @@
       ],
       "depends_on": []
     },
-
     {
       "name": "provider.execution-profile-observations",
       "boundary": "provider-execution-profile-observations",
@@ -21699,7 +21686,6 @@
       ],
       "depends_on": []
     },
-
     {
       "name": "provider.bound-agent-request-validation",
       "boundary": "bound-agent-request-validation",
@@ -22303,7 +22289,6 @@
         "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_public_definitions_live_in_their_exact_owner_modules"
       ]
     },
-
     {
       "name": "conversations.event_contracts.conversation_records",
       "boundary": "pure",
@@ -22379,7 +22364,6 @@
         "tests.test_lead_evidence_grounding.RuntimeLeadEvidenceGroundingTests.test_whole_and_range_conflict_bind_proposal_and_detect_drift"
       ]
     },
-
     {
       "name": "conversations.event_contracts.authoring_records",
       "boundary": "pure",
@@ -22397,7 +22381,6 @@
         "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_public_definitions_live_in_their_exact_owner_modules"
       ]
     },
-
     {
       "name": "conversations.event_contracts.control_records",
       "boundary": "pure",
@@ -22415,7 +22398,6 @@
         "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_public_definitions_live_in_their_exact_owner_modules"
       ]
     },
-
     {
       "name": "conversations.event_contracts.execution",
       "boundary": "pure",
@@ -22439,7 +22421,6 @@
         "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_public_definitions_live_in_their_exact_owner_modules"
       ]
     },
-
     {
       "name": "conversations.event_contracts.lead_outcomes",
       "boundary": "pure",
@@ -22461,7 +22442,6 @@
         "tests.test_lead_evidence_matrix.DurableLeadEvidenceMatrixTests.test_all_sixty_scope_status_kind_cells_are_closed_and_exact"
       ]
     },
-
     {
       "name": "conversations.event_contracts.artifact_apply",
       "boundary": "pure",
@@ -22481,7 +22461,6 @@
         "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect"
       ]
     },
-
     {
       "name": "conversations.event_contracts.artifact_reviews",
       "boundary": "pure",
@@ -22499,7 +22478,6 @@
         "tests.test_provider_response_mapping.ProviderResponseMappingTests.test_all_wire_values_have_stable_golden_hashes_and_round_trip"
       ]
     },
-
     {
       "name": "conversations.event_contracts.story_commits",
       "boundary": "pure",
@@ -22517,7 +22495,6 @@
         "tests.test_provider_response_mapping.ProviderResponseMappingTests.test_all_wire_values_have_stable_golden_hashes_and_round_trip"
       ]
     },
-
     {
       "name": "conversations.event_append_results",
       "boundary": "pure",
@@ -22539,7 +22516,6 @@
         "tests.test_sqlite_collaboration_event_store.SQLiteCollaborationEventStoreFirstSliceTests.test_fresh_direct_append_persists_exact_rows_and_refreshes_lexical_index"
       ]
     },
-
     {
       "name": "conversations.event_payload_validation",
       "boundary": "pure",
@@ -22562,7 +22538,6 @@
         "tests.test_sqlite_collaboration_event_store.SQLiteCollaborationEventStoreFirstSliceTests.test_all_batch_families_append_and_every_split_rolls_back"
       ]
     },
-
     {
       "name": "conversations.payload_codec",
       "boundary": "pure",
@@ -22591,7 +22566,6 @@
         "tests.test_provider_response_mapping.ProviderResponseMappingTests.test_all_wire_values_have_stable_golden_hashes_and_round_trip"
       ]
     },
-
     {
       "name": "conversations.views.context_value_validation",
       "boundary": "pure",
@@ -22608,7 +22582,6 @@
         "tests.test_conversation_runtime.ConversationResultContractTests.test_result_revalidates_identifiers_agent_content_and_context"
       ]
     },
-
     {
       "name": "conversations.views.conversation_windows",
       "boundary": "pure",
@@ -22632,7 +22605,6 @@
         "tests.test_workspace_and_config.DebateContextSidecarTests.test_absent_fresh_included_and_empty_schemas_are_exact"
       ]
     },
-
     {
       "name": "conversations.views.collaboration_history_values",
       "boundary": "pure",
@@ -22652,7 +22624,6 @@
         "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_supported_package_exports_are_identity_stable"
       ]
     },
-
     {
       "name": "conversations.views.readable_records",
       "boundary": "pure",
@@ -22681,7 +22652,6 @@
         "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_supported_package_exports_are_identity_stable"
       ]
     },
-
     {
       "name": "conversations.views.decision_results",
       "boundary": "pure",
@@ -22704,7 +22674,6 @@
         "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_supported_package_exports_are_identity_stable"
       ]
     },
-
     {
       "name": "conversations.views.lead_results",
       "boundary": "pure",
@@ -22730,7 +22699,6 @@
         "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_supported_package_exports_are_identity_stable"
       ]
     },
-
     {
       "name": "conversations.views.package",
       "boundary": "pure",
@@ -22746,7 +22714,6 @@
         "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_supported_package_exports_are_identity_stable"
       ]
     },
-
     {
       "name": "conversations.reducers.artifact_objective_history",
       "boundary": "pure",
@@ -22773,7 +22740,6 @@
         "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_supported_package_exports_are_identity_stable"
       ]
     },
-
     {
       "name": "conversations.reducers.artifact_operation_history",
       "boundary": "pure",
@@ -22797,7 +22763,6 @@
         "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_reject_and_revise_are_structured_zero_write_terminals"
       ]
     },
-
     {
       "name": "conversations.reducers.artifact_review_history",
       "boundary": "pure",
@@ -22822,7 +22787,6 @@
         "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority"
       ]
     },
-
     {
       "name": "conversations.reducers.collaboration_transitions",
       "boundary": "pure",
@@ -22844,7 +22808,6 @@
         "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_supported_package_exports_are_identity_stable"
       ]
     },
-
     {
       "name": "conversations.reducers.document_plan_views",
       "boundary": "pure",
@@ -22871,7 +22834,6 @@
         "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_supported_package_exports_are_identity_stable"
       ]
     },
-
     {
       "name": "conversations.reducers.editorial_event_evidence",
       "boundary": "pure",
@@ -22893,7 +22855,6 @@
         "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_supported_package_exports_are_identity_stable"
       ]
     },
-
     {
       "name": "conversations.reducers.execution_batch_history",
       "boundary": "pure",
@@ -22920,7 +22881,6 @@
         "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_supported_package_exports_are_identity_stable"
       ]
     },
-
     {
       "name": "conversations.reducers.exploration_history",
       "boundary": "pure",
@@ -22943,7 +22903,6 @@
         "tests.test_rag_module_and_packaging_boundary.RagModuleBoundaryTests.test_inventory_edges_cycles_and_sole_dual_importer_match_the_brief"
       ]
     },
-
     {
       "name": "conversations.reducers.lead_control_gaps",
       "boundary": "pure",
@@ -22967,7 +22926,6 @@
         "tests.test_rag_module_and_packaging_boundary.RagModuleBoundaryTests.test_inventory_edges_cycles_and_sole_dual_importer_match_the_brief"
       ]
     },
-
     {
       "name": "conversations.reducers.premise_history",
       "boundary": "pure",
@@ -22991,7 +22949,6 @@
         "tests.test_rag_module_and_packaging_boundary.RagModuleBoundaryTests.test_inventory_edges_cycles_and_sole_dual_importer_match_the_brief"
       ]
     },
-
     {
       "name": "conversations.reducers.proposal_keys",
       "boundary": "pure",
@@ -23013,7 +22970,6 @@
         "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_supported_package_exports_are_identity_stable"
       ]
     },
-
     {
       "name": "conversations.reducers.readiness_history",
       "boundary": "pure",
@@ -23036,7 +22992,6 @@
         "tests.test_rag_module_and_packaging_boundary.RagModuleBoundaryTests.test_inventory_edges_cycles_and_sole_dual_importer_match_the_brief"
       ]
     },
-
     {
       "name": "conversations.reducers.recommendation_history",
       "boundary": "pure",
@@ -23063,7 +23018,6 @@
         "tests.test_recommendation_actions.RecommendationActionContractTests.test_recommendation_and_objective_v2_round_trip_through_both_stores_and_archive"
       ]
     },
-
     {
       "name": "conversations.reducers.stored_batches",
       "boundary": "pure",
@@ -23081,7 +23035,6 @@
         "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_supported_package_exports_are_identity_stable"
       ]
     },
-
     {
       "name": "conversations.reducers.task_source_history",
       "boundary": "pure",
@@ -23104,7 +23057,6 @@
         "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_supported_package_exports_are_identity_stable"
       ]
     },
-
     {
       "name": "conversations.reducers.package",
       "boundary": "pure",
@@ -23120,7 +23072,6 @@
         "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_supported_package_exports_are_identity_stable"
       ]
     },
-
     {
       "name": "conversations.candidate_batch_validation",
       "boundary": "pure",
@@ -23149,7 +23100,6 @@
         "tests.test_sqlite_collaboration_event_store.SQLiteCollaborationEventStoreFirstSliceTests.test_corrupt_rows_fail_closed_and_database_constraints_reject_duplicates"
       ]
     },
-
     {
       "name": "conversations.editorial_context",
       "boundary": "pure",
@@ -23173,7 +23123,6 @@
         "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_supported_package_exports_are_identity_stable"
       ]
     },
-
     {
       "name": "conversations.event_store_contract",
       "boundary": "pure",
@@ -23195,7 +23144,6 @@
         "tests.test_sqlite_collaboration_event_store.SQLiteCollaborationEventStoreFirstSliceTests.test_all_batch_families_append_and_every_split_rolls_back"
       ]
     },
-
     {
       "name": "conversations.readable_context",
       "boundary": "pure",
@@ -23220,7 +23168,6 @@
         "tests.test_provider_response_mapping.ProviderResponseMappingTests.test_all_wire_values_have_stable_golden_hashes_and_round_trip"
       ]
     },
-
     {
       "name": "conversations.reducers.chronological_history",
       "boundary": "pure",
@@ -23267,7 +23214,6 @@
         "tests.test_sqlite_collaboration_event_store.SQLiteCollaborationEventStoreFirstSliceTests.test_all_batch_families_append_and_every_split_rolls_back"
       ]
     },
-
     {
       "name": "conversations.reducers.history_projection",
       "boundary": "pure",
@@ -23294,7 +23240,6 @@
         "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_supported_package_exports_are_identity_stable"
       ]
     },
-
     {
       "name": "conversations.reducers.task_context",
       "boundary": "pure",
@@ -23324,6 +23269,126 @@
         "tests.test_conversation_catalog.ConversationPackageBoundaryTests.test_supported_package_exports_are_identity_stable",
         "tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_unresolved_running_becomes_outcome_unknown_without_provider"
       ]
+    },
+    {
+      "name": "collaboration-history-search",
+      "boundary": "read-side",
+      "paths": [
+        "src/story_writing_agents/collaboration_history_search.py"
+      ],
+      "focused_ids": [
+        "tests.conversation_search.test_history_service_memory.InMemoryCollaborationSearchContractTests.test_archived_histories_are_visible_only_in_explicit_scope",
+        "tests.conversation_search.test_history_service_memory.InMemoryCollaborationSearchContractTests.test_cited_pages_preserve_one_exact_history_snapshot",
+        "tests.conversation_search.test_history_service_memory.InMemoryCollaborationSearchContractTests.test_search_uses_readable_event_fields_and_never_catalog_subjects"
+      ],
+      "affected_ids": [
+        "tests.conversation_search.test_history_service_filesystem.FilesystemCollaborationSearchContractTests.test_archived_histories_are_visible_only_in_explicit_scope",
+        "tests.conversation_search.test_history_service_filesystem.FilesystemCollaborationSearchContractTests.test_cited_pages_preserve_one_exact_history_snapshot",
+        "tests.conversation_search.test_history_service_filesystem.FilesystemCollaborationSearchContractTests.test_search_uses_readable_event_fields_and_never_catalog_subjects",
+        "tests.conversation_search.test_history_service_memory.InMemoryCollaborationSearchContractTests.test_archived_histories_are_visible_only_in_explicit_scope",
+        "tests.conversation_search.test_history_service_memory.InMemoryCollaborationSearchContractTests.test_cited_pages_preserve_one_exact_history_snapshot",
+        "tests.conversation_search.test_history_service_memory.InMemoryCollaborationSearchContractTests.test_search_uses_readable_event_fields_and_never_catalog_subjects",
+        "tests.test_conversation_search.ConversationSearchPackageBoundaryTests.test_module_and_root_facade_exports_are_exact",
+        "tests.test_sqlite_conversation_storage.SQLiteCollaborationSearchContractTests.test_archived_histories_are_visible_only_in_explicit_scope",
+        "tests.test_sqlite_conversation_storage.SQLiteCollaborationSearchContractTests.test_cited_pages_preserve_one_exact_history_snapshot",
+        "tests.test_sqlite_conversation_storage.SQLiteCollaborationSearchContractTests.test_search_uses_readable_event_fields_and_never_catalog_subjects",
+        "tests.test_sqlite_conversation_storage.SQLiteCollaborationSearchContractTests.test_sqlite_results_equal_the_reference_v2_search"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "collaboration-history",
+      "boundary": "read-side",
+      "paths": [
+        "src/story_writing_agents/collaboration_history.py"
+      ],
+      "focused_ids": [
+        "tests.conversation_search.test_history_service_memory.InMemoryCollaborationSearchContractTests.test_archived_histories_are_visible_only_in_explicit_scope",
+        "tests.conversation_search.test_history_service_memory.InMemoryCollaborationSearchContractTests.test_cited_pages_preserve_one_exact_history_snapshot",
+        "tests.conversation_search.test_history_service_memory.InMemoryCollaborationSearchContractTests.test_search_uses_readable_event_fields_and_never_catalog_subjects"
+      ],
+      "affected_ids": [
+        "tests.conversation_search.test_history_service_filesystem.FilesystemCollaborationSearchContractTests.test_archived_histories_are_visible_only_in_explicit_scope",
+        "tests.conversation_search.test_history_service_filesystem.FilesystemCollaborationSearchContractTests.test_cited_pages_preserve_one_exact_history_snapshot",
+        "tests.conversation_search.test_history_service_filesystem.FilesystemCollaborationSearchContractTests.test_search_uses_readable_event_fields_and_never_catalog_subjects",
+        "tests.conversation_search.test_history_service_memory.InMemoryCollaborationSearchContractTests.test_archived_histories_are_visible_only_in_explicit_scope",
+        "tests.conversation_search.test_history_service_memory.InMemoryCollaborationSearchContractTests.test_cited_pages_preserve_one_exact_history_snapshot",
+        "tests.conversation_search.test_history_service_memory.InMemoryCollaborationSearchContractTests.test_search_uses_readable_event_fields_and_never_catalog_subjects",
+        "tests.test_conversation_search.CollaborationSearchValueContractTests.test_protocol_service_and_bundle_signatures_are_stable",
+        "tests.test_conversation_search.ConversationSearchPackageBoundaryTests.test_module_and_root_facade_exports_are_exact",
+        "tests.test_sqlite_conversation_storage.SQLiteCollaborationSearchContractTests.test_archived_histories_are_visible_only_in_explicit_scope",
+        "tests.test_sqlite_conversation_storage.SQLiteCollaborationSearchContractTests.test_cited_pages_preserve_one_exact_history_snapshot",
+        "tests.test_sqlite_conversation_storage.SQLiteCollaborationSearchContractTests.test_search_uses_readable_event_fields_and_never_catalog_subjects",
+        "tests.test_sqlite_conversation_storage.SQLiteCollaborationSearchContractTests.test_sqlite_results_equal_the_reference_v2_search"
+      ],
+      "depends_on": [
+        "collaboration-history-search"
+      ]
+    },
+    {
+      "name": "tests.conversation_search.test_history_service_memory",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/conversation_search/test_history_service_memory.py"
+      ],
+      "focused_ids": [
+        "tests.conversation_search.test_history_service_memory.InMemoryCollaborationSearchContractTests.test_archived_histories_are_visible_only_in_explicit_scope",
+        "tests.conversation_search.test_history_service_memory.InMemoryCollaborationSearchContractTests.test_cited_pages_preserve_one_exact_history_snapshot",
+        "tests.conversation_search.test_history_service_memory.InMemoryCollaborationSearchContractTests.test_search_uses_readable_event_fields_and_never_catalog_subjects"
+      ],
+      "affected_ids": [
+        "tests.conversation_search.test_history_service_memory.InMemoryCollaborationSearchContractTests.test_archived_histories_are_visible_only_in_explicit_scope",
+        "tests.conversation_search.test_history_service_memory.InMemoryCollaborationSearchContractTests.test_cited_pages_preserve_one_exact_history_snapshot",
+        "tests.conversation_search.test_history_service_memory.InMemoryCollaborationSearchContractTests.test_search_uses_readable_event_fields_and_never_catalog_subjects"
+      ],
+      "depends_on": [
+        "tests.conversation_search.contract"
+      ]
+    },
+    {
+      "name": "tests.conversation_search.test_history_service_filesystem",
+      "boundary": "existing-cases",
+      "paths": [
+        "tests/conversation_search/test_history_service_filesystem.py"
+      ],
+      "focused_ids": [
+        "tests.conversation_search.test_history_service_filesystem.FilesystemCollaborationSearchContractTests.test_archived_histories_are_visible_only_in_explicit_scope",
+        "tests.conversation_search.test_history_service_filesystem.FilesystemCollaborationSearchContractTests.test_cited_pages_preserve_one_exact_history_snapshot",
+        "tests.conversation_search.test_history_service_filesystem.FilesystemCollaborationSearchContractTests.test_search_uses_readable_event_fields_and_never_catalog_subjects"
+      ],
+      "affected_ids": [
+        "tests.conversation_search.test_history_service_filesystem.FilesystemCollaborationSearchContractTests.test_archived_histories_are_visible_only_in_explicit_scope",
+        "tests.conversation_search.test_history_service_filesystem.FilesystemCollaborationSearchContractTests.test_cited_pages_preserve_one_exact_history_snapshot",
+        "tests.conversation_search.test_history_service_filesystem.FilesystemCollaborationSearchContractTests.test_search_uses_readable_event_fields_and_never_catalog_subjects"
+      ],
+      "depends_on": [
+        "tests.conversation_search.contract"
+      ]
+    },
+    {
+      "name": "tests.conversation_search.contract",
+      "boundary": "test-support",
+      "paths": [
+        "tests/conversation_search_contract.py"
+      ],
+      "focused_ids": [
+        "tests.conversation_search.test_history_service_memory.InMemoryCollaborationSearchContractTests.test_archived_histories_are_visible_only_in_explicit_scope",
+        "tests.conversation_search.test_history_service_memory.InMemoryCollaborationSearchContractTests.test_cited_pages_preserve_one_exact_history_snapshot",
+        "tests.conversation_search.test_history_service_memory.InMemoryCollaborationSearchContractTests.test_search_uses_readable_event_fields_and_never_catalog_subjects"
+      ],
+      "affected_ids": [
+        "tests.conversation_search.test_history_service_filesystem.FilesystemCollaborationSearchContractTests.test_archived_histories_are_visible_only_in_explicit_scope",
+        "tests.conversation_search.test_history_service_filesystem.FilesystemCollaborationSearchContractTests.test_cited_pages_preserve_one_exact_history_snapshot",
+        "tests.conversation_search.test_history_service_filesystem.FilesystemCollaborationSearchContractTests.test_search_uses_readable_event_fields_and_never_catalog_subjects",
+        "tests.conversation_search.test_history_service_memory.InMemoryCollaborationSearchContractTests.test_archived_histories_are_visible_only_in_explicit_scope",
+        "tests.conversation_search.test_history_service_memory.InMemoryCollaborationSearchContractTests.test_cited_pages_preserve_one_exact_history_snapshot",
+        "tests.conversation_search.test_history_service_memory.InMemoryCollaborationSearchContractTests.test_search_uses_readable_event_fields_and_never_catalog_subjects",
+        "tests.test_sqlite_conversation_storage.SQLiteCollaborationSearchContractTests.test_archived_histories_are_visible_only_in_explicit_scope",
+        "tests.test_sqlite_conversation_storage.SQLiteCollaborationSearchContractTests.test_cited_pages_preserve_one_exact_history_snapshot",
+        "tests.test_sqlite_conversation_storage.SQLiteCollaborationSearchContractTests.test_search_uses_readable_event_fields_and_never_catalog_subjects",
+        "tests.test_sqlite_conversation_storage.SQLiteCollaborationSearchContractTests.test_sqlite_results_equal_the_reference_v2_search"
+      ],
+      "depends_on": []
     }
   ],
   "ignored_names": [

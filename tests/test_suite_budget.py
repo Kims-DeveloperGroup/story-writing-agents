@@ -246,7 +246,13 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
-        codex_native_outcome_current = suite_budget.load_budget()
+        history_search_current = suite_budget.load_budget()
+        *move_receipts, history_search_stage = load_receipt()
+        codex_native_outcome_current = dict(history_search_current, max_test_source_lines=158347, subtest_caps=dict(history_search_current["subtest_caps"]))
+        for move in history_search_stage["moves"]:
+            codex_native_outcome_current["subtest_caps"][move["old_id"]] = codex_native_outcome_current["subtest_caps"].pop(move["new_id"])
+        self.assertIsNone(suite_budget.check_monotonic(history_search_current, codex_native_outcome_current))
+        self._assert_source_limit_neighbors_rejected(history_search_current, codex_native_outcome_current)
         execution_profile_current = dict(codex_native_outcome_current, max_test_source_lines=158099)
         antigravity_outcome_current = dict(execution_profile_current, max_test_source_lines=158075)
         workspace_authority_current = dict(antigravity_outcome_current, max_test_source_lines=158043)
@@ -277,7 +283,7 @@ class SuiteBudgetTests(unittest.TestCase):
         retrieval_outcomes_current = dict(accounting_current, max_test_source_lines=156953)
         provider_generation_current = dict(retrieval_outcomes_current, max_test_source_lines=156942)
         antigravity_stream_current = dict(provider_generation_current, max_test_source_lines=156925)
-        *legacy_move_receipts, defaults_stage, wire_stage, stream_stage, invocation_stage, exchange_finalization_stage, native_recovery_stage, staging_stage, antigravity_command_stage, antigravity_stream_stage = load_receipt()
+        *legacy_move_receipts, defaults_stage, wire_stage, stream_stage, invocation_stage, exchange_finalization_stage, native_recovery_stage, staging_stage, antigravity_command_stage, antigravity_stream_stage = move_receipts
         antigravity_stream_moves = antigravity_stream_stage["moves"]
         antigravity_command_current = dict(antigravity_stream_current, max_test_source_lines=156851, subtest_caps=dict(antigravity_stream_current["subtest_caps"]))
         for move in antigravity_stream_moves:

@@ -16111,6 +16111,75 @@
           "expected_method_ast_sha256": "78da225194a150b79cd33a2e0b014effa4891bdefb2cbd959c393b7ef3b57283"
         }
       ]
+    },
+    {
+      "schema_version": 1,
+      "issue": 1024,
+      "origin_commit": "2edcabc7138bcd6fc1b43a4426f23f5a59f418da",
+      "original_caps_sha256": "0fc8c5e140b56200643f090106395259da9ca23d1e90a0e64738c3bd3f5c5fbe",
+      "expected_caps_sha256": "20f8f0a9d510ad325f82fb32d14d7b3a73f372647aa85ed4cd0c60fc3d5124c6",
+      "moves": [
+        {
+          "old_id": "tests.test_conversation_search.FilesystemCollaborationSearchContractTests.test_archived_histories_are_visible_only_in_explicit_scope",
+          "new_id": "tests.conversation_search.test_history_service_filesystem.FilesystemCollaborationSearchContractTests.test_archived_histories_are_visible_only_in_explicit_scope",
+          "subtest_cap": 0,
+          "source": "tests/test_conversation_search.py",
+          "destination": "tests/conversation_search/test_history_service_filesystem.py",
+          "original_file_sha256": "426bc60beead26d4a23e8749c3c84aa2fff9f1dcdd102a5443e51cf16378c430",
+          "original_method_ast_sha256": "8372885d1f282360ff1a1ad7d7dddf073a24203374749287e9e27c0bc5b3b86a",
+          "expected_method_ast_sha256": "8372885d1f282360ff1a1ad7d7dddf073a24203374749287e9e27c0bc5b3b86a"
+        },
+        {
+          "old_id": "tests.test_conversation_search.FilesystemCollaborationSearchContractTests.test_cited_pages_preserve_one_exact_history_snapshot",
+          "new_id": "tests.conversation_search.test_history_service_filesystem.FilesystemCollaborationSearchContractTests.test_cited_pages_preserve_one_exact_history_snapshot",
+          "subtest_cap": 0,
+          "source": "tests/test_conversation_search.py",
+          "destination": "tests/conversation_search/test_history_service_filesystem.py",
+          "original_file_sha256": "426bc60beead26d4a23e8749c3c84aa2fff9f1dcdd102a5443e51cf16378c430",
+          "original_method_ast_sha256": "e34a360d2e1d44e56d9e8d0c55b5a88fc89196496bad7938b96e75536780e4f6",
+          "expected_method_ast_sha256": "e34a360d2e1d44e56d9e8d0c55b5a88fc89196496bad7938b96e75536780e4f6"
+        },
+        {
+          "old_id": "tests.test_conversation_search.FilesystemCollaborationSearchContractTests.test_search_uses_readable_event_fields_and_never_catalog_subjects",
+          "new_id": "tests.conversation_search.test_history_service_filesystem.FilesystemCollaborationSearchContractTests.test_search_uses_readable_event_fields_and_never_catalog_subjects",
+          "subtest_cap": 0,
+          "source": "tests/test_conversation_search.py",
+          "destination": "tests/conversation_search/test_history_service_filesystem.py",
+          "original_file_sha256": "426bc60beead26d4a23e8749c3c84aa2fff9f1dcdd102a5443e51cf16378c430",
+          "original_method_ast_sha256": "e2a29f6de82201c873b98f787efbe410ad6eb16d690df5a3116dc279faead4cc",
+          "expected_method_ast_sha256": "e2a29f6de82201c873b98f787efbe410ad6eb16d690df5a3116dc279faead4cc"
+        },
+        {
+          "old_id": "tests.test_conversation_search.InMemoryCollaborationSearchContractTests.test_archived_histories_are_visible_only_in_explicit_scope",
+          "new_id": "tests.conversation_search.test_history_service_memory.InMemoryCollaborationSearchContractTests.test_archived_histories_are_visible_only_in_explicit_scope",
+          "subtest_cap": 0,
+          "source": "tests/test_conversation_search.py",
+          "destination": "tests/conversation_search/test_history_service_memory.py",
+          "original_file_sha256": "426bc60beead26d4a23e8749c3c84aa2fff9f1dcdd102a5443e51cf16378c430",
+          "original_method_ast_sha256": "8372885d1f282360ff1a1ad7d7dddf073a24203374749287e9e27c0bc5b3b86a",
+          "expected_method_ast_sha256": "8372885d1f282360ff1a1ad7d7dddf073a24203374749287e9e27c0bc5b3b86a"
+        },
+        {
+          "old_id": "tests.test_conversation_search.InMemoryCollaborationSearchContractTests.test_cited_pages_preserve_one_exact_history_snapshot",
+          "new_id": "tests.conversation_search.test_history_service_memory.InMemoryCollaborationSearchContractTests.test_cited_pages_preserve_one_exact_history_snapshot",
+          "subtest_cap": 0,
+          "source": "tests/test_conversation_search.py",
+          "destination": "tests/conversation_search/test_history_service_memory.py",
+          "original_file_sha256": "426bc60beead26d4a23e8749c3c84aa2fff9f1dcdd102a5443e51cf16378c430",
+          "original_method_ast_sha256": "e34a360d2e1d44e56d9e8d0c55b5a88fc89196496bad7938b96e75536780e4f6",
+          "expected_method_ast_sha256": "e34a360d2e1d44e56d9e8d0c55b5a88fc89196496bad7938b96e75536780e4f6"
+        },
+        {
+          "old_id": "tests.test_conversation_search.InMemoryCollaborationSearchContractTests.test_search_uses_readable_event_fields_and_never_catalog_subjects",
+          "new_id": "tests.conversation_search.test_history_service_memory.InMemoryCollaborationSearchContractTests.test_search_uses_readable_event_fields_and_never_catalog_subjects",
+          "subtest_cap": 0,
+          "source": "tests/test_conversation_search.py",
+          "destination": "tests/conversation_search/test_history_service_memory.py",
+          "original_file_sha256": "426bc60beead26d4a23e8749c3c84aa2fff9f1dcdd102a5443e51cf16378c430",
+          "original_method_ast_sha256": "e2a29f6de82201c873b98f787efbe410ad6eb16d690df5a3116dc279faead4cc",
+          "expected_method_ast_sha256": "e2a29f6de82201c873b98f787efbe410ad6eb16d690df5a3116dc279faead4cc"
+        }
+      ]
     }
   ]
 }

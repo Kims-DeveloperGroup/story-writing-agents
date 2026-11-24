@@ -615,13 +615,13 @@ only explicit known event IDs add whole records under the 24-record/32,768-byte
 limit. It does not include current input, private payload, or provider
 authority.
 
-Use the direct search module for current provider-free search and paging:
+Import the history service and its query and scope types from their public modules.
 
 ```python
+from story_writing_agents.collaboration_history import CollaborationHistoryService
 from story_writing_agents.conversation_search import (
     CollaborationHistorySearchQuery,
     CollaborationHistorySearchScope,
-    CollaborationHistoryService,
 )
 
 service = CollaborationHistoryService(

@@ -23,10 +23,10 @@ from story_writing_agents import (
     FilesystemConversationCatalog,
     Workspace,
 )
+from story_writing_agents.collaboration_history_search import ReferenceCollaborationHistorySearch
 from story_writing_agents.conversation_search import (
     CollaborationHistorySearchQuery,
     CollaborationHistorySearchScope,
-    ReferenceCollaborationHistorySearch,
 )
 from story_writing_agents.conversation_storage import (
     CONVERSATION_STORAGE_ACTIVATION_SCHEMA_VERSION,
@@ -1653,6 +1653,7 @@ class ConversationStorageBoundaryTests(unittest.TestCase):
             archive_module: {"conversations", "errors"},
             contracts_module: {"conversation_search", "conversations", "errors"},
             composition_module: {
+                "collaboration_history_search",
                 "conversation_search",
                 "workspace.core",
                 "filesystem",
