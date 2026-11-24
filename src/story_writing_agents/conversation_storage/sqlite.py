@@ -110,6 +110,10 @@ from .contracts import (
     ConversationStorageUnavailableError,
     validate_conversation_storage_mutation_timeout,
 )
+from .sqlite_row_codec import (
+    decode_collaboration_event_row as _collaboration_event_from_row,
+    decode_conversation_metadata_row as _metadata_from_row,
+)
 
 
 SQLITE_CONVERSATION_STORAGE_APPLICATION_ID = SQLITE_APPLICATION_ID
@@ -1147,34 +1151,6 @@ def _validate_identity(session_id: str, conversation_id: str) -> tuple[str, str]
     )
 
 
-def _metadata_from_row(row: object) -> ConversationMetadata:
-    """Construct domain metadata and verify its private normalized subject."""
-
-    if type(row) is not tuple or len(row) != 9:
-        raise SQLiteDatabaseFormatError()
-    normalized_subject = row[4]
-    status = row[6]
-    if type(normalized_subject) is not str or type(status) is not str:
-        raise SQLiteDatabaseFormatError()
-    try:
-        metadata = ConversationMetadata(
-            schema_version=row[0],
-            session_id=row[1],
-            conversation_id=row[2],
-            subject=row[3],
-            subject_revision=row[5],
-            status=ConversationStatus(status),
-            created_at=row[7],
-            updated_at=row[8],
-        )
-        expected_normalized_subject = normalize_conversation_subject(metadata.subject)
-    except (SessionIdError, TypeError, ValueError):
-        raise SQLiteDatabaseFormatError() from None
-    if normalized_subject != expected_normalized_subject:
-        raise SQLiteDatabaseFormatError()
-    return metadata
-
-
 def _event_and_searchable_from_row(
     row: object,
 ) -> tuple[ConversationEvent, str]:
@@ -1218,36 +1194,6 @@ def _event_from_row(row: object) -> ConversationEvent:
     """Construct one exact domain event from a persisted row."""
 
     event, _searchable = _event_and_searchable_from_row(row)
-    return event
-
-
-def _collaboration_event_from_row(row: object) -> CollaborationEventV2:
-    """Decode one canonical v2 BLOB and verify every redundant SQL column."""
-
-    if type(row) is not tuple or len(row) != 13 or type(row[12]) is not bytes:
-        raise SQLiteDatabaseFormatError()
-    try:
-        event = decode_collaboration_event(row[12])
-        canonical = encode_collaboration_event(event)
-    except (AssertionError, KeyError, SessionIdError, TypeError, ValueError):
-        raise SQLiteDatabaseFormatError() from None
-    expected = (
-        event.schema_version,
-        event.event_id,
-        event.session_id,
-        event.conversation_id,
-        event.turn_id,
-        event.step_id,
-        event.sequence,
-        event.timestamp,
-        event.batch_id,
-        event.batch_ordinal,
-        event.batch_size,
-        event.batch_digest,
-        canonical,
-    )
-    if row != expected:
-        raise SQLiteDatabaseFormatError()
     return event
 
 

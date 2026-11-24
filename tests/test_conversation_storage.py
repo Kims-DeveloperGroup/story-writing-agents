@@ -1660,6 +1660,7 @@ class ConversationStorageBoundaryTests(unittest.TestCase):
                 "contracts",
             },
             filesystem_module: {
+                "filesystem_history_codec",
                 "conversations",
                 "conversations.events",
                 "errors",

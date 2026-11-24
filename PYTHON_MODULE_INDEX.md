@@ -124,10 +124,10 @@ Stable trusted schema/decoder implementations are not re-attested for each respo
 Responsibility: model, capture, locate, and persist provider exchange records. The package
 facade is public; capture owns once-only physical terminal records and capture-only call
 identity. `provider_finalization` owns terminal reporting and context finalizers, which
-attach validated task diagnostics only on accepted publication. Storage owns persistence. Diagnostic failures never change provider or workflow authority.
+attach validated task diagnostics only on accepted publication. `storage` owns persistence and filesystem resource lifetime. `storage_record_codec` owns persisted record and sequence formats. Diagnostic failures never change provider or workflow authority.
 
 - `agent_exchanges`, `agent_exchanges.contracts`, `agent_exchanges.capture`, `agent_exchanges.provider_finalization`
-- `agent_exchanges.storage`, `agent_exchange_paths`
+- `agent_exchanges.storage`, `agent_exchange_paths`, `agent_exchanges.storage_record_codec`
 
 ### Conversations and retrieval
 
@@ -158,7 +158,7 @@ are re-exported by `conversation_storage`; backend details stay internal to the 
 - `conversation_storage.sqlite_search_index`, `conversation_storage.archive`
 - `conversation_storage.migration`, `conversation_storage.provisioning`
 
-`filesystem` and `sqlite` own their data layout and handles. `migration` may coordinate both
+`filesystem` and `sqlite` own their data layout and handles. `filesystem_history_codec` owns canonical schema-v2 JSON Lines. `sqlite_row_codec` owns typed catalog and schema-v2 row decoding. `migration` may coordinate both
 backends through contracts; conversation/domain modules must not import a concrete backend.
 
 ### Retrieval-augmented conversation search

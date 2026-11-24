@@ -39,13 +39,24 @@ from .contracts import (
     AgentExchangeAppendReceipt,
     AgentExchangeFailure,
     AgentExchangeInventoryItem,
-    AgentExchangeProvider,
     AgentExchangeRecordInput,
-    AgentExchangeRequestType,
     AgentExchangeScopeKind,
     AgentExchangeSelection,
     AgentExchangeSnapshot,
     AgentExchangeStorageError,
+)
+from .storage_record_codec import (
+    GLOBAL_STATE_FIELDS as _GLOBAL_STATE_FIELDS,
+    EXCHANGE_SEQUENCE_MAX as _MAX_SEQUENCE,
+    EXCHANGE_RECORD_MAX_BYTES as _RECORD_MAX_BYTES,
+    STREAM_STATE_FIELDS as _STREAM_STATE_FIELDS,
+    AgentExchangeStorageFault as _StorageFault,
+    StoredAgentExchangeRecord as _StoredRecord,
+    encode_exchange_json_line as _canonical_json_line,
+    encode_global_exchange_state as _global_state_payload,
+    decode_exchange_segment as _parse_segment,
+    decode_exchange_state as _parse_state,
+    encode_stream_exchange_state as _stream_state_payload,
 )
 
 
@@ -59,41 +70,8 @@ _SEGMENT_BACKUP_COUNT = AGENT_EXCHANGE_SEGMENT_BACKUP_COUNT
 _LOCK_TIMEOUT_SECONDS = 0.1
 _LOCK_RETRY_SECONDS = 0.01
 _STATE_MAX_BYTES = 512
-_RECORD_MAX_BYTES = AGENT_EXCHANGE_CONTENT_MAX_BYTES + 4_096
 _MAX_DIRECTORY_ENTRIES = 4_096
-_MAX_SEQUENCE = 9_223_372_036_854_775_807
 _SAFE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
-_RFC3339_MILLISECONDS = re.compile(
-    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"
-    r"\.[0-9]{3}\+00:00"
-)
-_SHA256 = re.compile(r"sha256:[0-9a-f]{64}")
-_GLOBAL_STATE_FIELDS = frozenset({"schema_version", "workspace_sequence"})
-_STREAM_STATE_FIELDS = frozenset({"schema_version", "sequence"})
-_RECORD_FIELDS = frozenset(
-    {
-        "schema_version",
-        "workspace_sequence",
-        "sequence",
-        "timestamp",
-        "request_type",
-        "session_id",
-        "scope_kind",
-        "scope_id",
-        "agent_id",
-        "provider",
-        "exchange_id",
-        "content",
-        "content_full_utf8_bytes",
-        "content_retained_utf8_bytes",
-        "content_full_characters",
-        "content_retained_characters",
-        "content_truncated",
-        "content_sha256",
-    }
-)
-
-
 def _optional_platform_module(name: str) -> ModuleType | None:
     """Import one platform lock module without making it a dependency."""
 
@@ -116,16 +94,6 @@ class _WorkspaceProcessLock:
         self.lock = threading.Lock()
 
 
-class _StorageFault(Exception):
-    """Private safe classification retained until the public boundary."""
-
-    __slots__ = ("failure",)
-
-    def __init__(self, failure: AgentExchangeFailure) -> None:
-        self.failure = failure
-        super().__init__(failure.value)
-
-
 @dataclass(frozen=True, slots=True)
 class _LeafSnapshot:
     """Stable content-relevant facts for one managed regular file."""
@@ -134,20 +102,6 @@ class _LeafSnapshot:
     size: int
     modified_ns: int
     changed_ns: int
-
-
-@dataclass(frozen=True, slots=True)
-class _StoredRecord:
-    """One validated canonical source record and its physical segment."""
-
-    payload: bytes
-    session_id: str
-    agent_id: str
-    filename: str
-    workspace_sequence: int
-    sequence: int
-    scope_kind: AgentExchangeScopeKind
-    scope_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -899,98 +853,6 @@ def _verify_session_directory(
     )
 
 
-def _global_state_payload(workspace_sequence: int) -> bytes:
-    """Serialize one canonical global high-water reservation."""
-
-    return _canonical_json_line(
-        {
-            "schema_version": AGENT_EXCHANGE_SCHEMA_VERSION,
-            "workspace_sequence": workspace_sequence,
-        }
-    )
-
-
-def _stream_state_payload(sequence: int) -> bytes:
-    """Serialize one canonical per-session/per-agent high-water reservation."""
-
-    return _canonical_json_line(
-        {
-            "schema_version": AGENT_EXCHANGE_SCHEMA_VERSION,
-            "sequence": sequence,
-        }
-    )
-
-
-def _canonical_json_line(value: dict[str, object]) -> bytes:
-    """Return deterministic strict-UTF-8 compact JSON terminated once."""
-
-    return (
-        json.dumps(
-            value,
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        ).encode("utf-8", errors="strict")
-        + b"\n"
-    )
-
-
-def _reject_duplicate_fields(
-    pairs: list[tuple[str, object]],
-) -> dict[str, object]:
-    """Build one JSON object while rejecting duplicate member names."""
-
-    result: dict[str, object] = {}
-    for key, value in pairs:
-        if key in result:
-            raise _StorageFault(AgentExchangeFailure.CORRUPT_STORAGE)
-        result[key] = value
-    return result
-
-
-def _parse_json_object(payload: bytes) -> dict[str, object]:
-    """Decode one strict UTF-8 duplicate-free JSON object."""
-
-    try:
-        text = payload.decode("utf-8", errors="strict")
-        value = json.loads(text, object_pairs_hook=_reject_duplicate_fields)
-    except _StorageFault:
-        raise
-    except (UnicodeError, json.JSONDecodeError):
-        raise _StorageFault(AgentExchangeFailure.CORRUPT_STORAGE) from None
-    if type(value) is not dict:
-        raise _StorageFault(AgentExchangeFailure.CORRUPT_STORAGE)
-    return value
-
-
-def _parse_state(
-    payload: bytes,
-    *,
-    field: str,
-    expected_fields: frozenset[str],
-) -> int:
-    """Validate one canonical schema-v1 high-water state document."""
-
-    value = _parse_json_object(payload)
-    if frozenset(value) != expected_fields:
-        raise _StorageFault(AgentExchangeFailure.CORRUPT_STORAGE)
-    if type(value.get("schema_version")) is not int or (
-        value["schema_version"] != AGENT_EXCHANGE_SCHEMA_VERSION
-    ):
-        raise _StorageFault(AgentExchangeFailure.CORRUPT_STORAGE)
-    high_water = value.get(field)
-    if type(high_water) is not int or not 0 <= high_water <= _MAX_SEQUENCE:
-        raise _StorageFault(AgentExchangeFailure.CORRUPT_STORAGE)
-    expected = (
-        _global_state_payload(high_water)
-        if field == "workspace_sequence"
-        else _stream_state_payload(high_water)
-    )
-    if payload != expected:
-        raise _StorageFault(AgentExchangeFailure.CORRUPT_STORAGE)
-    return high_water
-
-
 def _stream_state_filename(agent_id: str) -> str:
     return f"{agent_id}.sequence.json"
 
@@ -1198,171 +1060,6 @@ def _scan_session(
             )
         )
     return tuple(streams)
-
-
-def _parse_segment(
-    payload: bytes,
-    *,
-    session_id: str,
-    agent_id: str,
-    filename: str,
-) -> tuple[_StoredRecord, ...]:
-    """Parse canonical complete records from one size-bounded segment."""
-
-    if not payload.endswith(b"\n"):
-        raise _StorageFault(AgentExchangeFailure.CORRUPT_STORAGE)
-    lines = payload.splitlines(keepends=True)
-    if not lines or any(not line.endswith(b"\n") for line in lines):
-        raise _StorageFault(AgentExchangeFailure.CORRUPT_STORAGE)
-    records: list[_StoredRecord] = []
-    for line in lines:
-        if len(line) > _RECORD_MAX_BYTES:
-            raise _StorageFault(AgentExchangeFailure.CAPACITY_EXCEEDED)
-        records.append(
-            _parse_record(
-                line,
-                session_id=session_id,
-                agent_id=agent_id,
-                filename=filename,
-            )
-        )
-    return tuple(records)
-
-
-def _parse_record(
-    payload: bytes,
-    *,
-    session_id: str,
-    agent_id: str,
-    filename: str,
-) -> _StoredRecord:
-    """Validate every durable schema and content-retention invariant."""
-
-    value = _parse_json_object(payload)
-    if frozenset(value) != _RECORD_FIELDS or _canonical_json_line(value) != payload:
-        raise _StorageFault(AgentExchangeFailure.CORRUPT_STORAGE)
-    if type(value["schema_version"]) is not int or (
-        value["schema_version"] != AGENT_EXCHANGE_SCHEMA_VERSION
-    ):
-        raise _StorageFault(AgentExchangeFailure.CORRUPT_STORAGE)
-    workspace_sequence = value["workspace_sequence"]
-    sequence = value["sequence"]
-    if (
-        type(workspace_sequence) is not int
-        or workspace_sequence <= 0
-        or type(sequence) is not int
-        or sequence <= 0
-    ):
-        raise _StorageFault(AgentExchangeFailure.CORRUPT_STORAGE)
-    timestamp = value["timestamp"]
-    if type(timestamp) is not str or _RFC3339_MILLISECONDS.fullmatch(timestamp) is None:
-        raise _StorageFault(AgentExchangeFailure.CORRUPT_STORAGE)
-    try:
-        parsed_timestamp = datetime.fromisoformat(timestamp)
-    except ValueError:
-        raise _StorageFault(AgentExchangeFailure.CORRUPT_STORAGE) from None
-    if parsed_timestamp.utcoffset() != UTC.utcoffset(None):
-        raise _StorageFault(AgentExchangeFailure.CORRUPT_STORAGE)
-    request_type_value = value["request_type"]
-    scope_kind_value = value["scope_kind"]
-    provider_value = value["provider"]
-    session_value = value["session_id"]
-    scope_value = value["scope_id"]
-    agent_value = value["agent_id"]
-    exchange_value = value["exchange_id"]
-    content_value = value["content"]
-    if any(
-        type(item) is not str
-        for item in (
-            request_type_value,
-            scope_kind_value,
-            provider_value,
-            session_value,
-            scope_value,
-            agent_value,
-            exchange_value,
-            content_value,
-        )
-    ):
-        raise _StorageFault(AgentExchangeFailure.CORRUPT_STORAGE)
-    assert isinstance(request_type_value, str)
-    assert isinstance(scope_kind_value, str)
-    assert isinstance(provider_value, str)
-    assert isinstance(session_value, str)
-    assert isinstance(scope_value, str)
-    assert isinstance(agent_value, str)
-    assert isinstance(exchange_value, str)
-    assert isinstance(content_value, str)
-    try:
-        request_type = AgentExchangeRequestType(request_type_value)
-        scope_kind = AgentExchangeScopeKind(scope_kind_value)
-        provider = AgentExchangeProvider(provider_value)
-    except (TypeError, ValueError):
-        raise _StorageFault(AgentExchangeFailure.CORRUPT_STORAGE) from None
-    try:
-        input_record = AgentExchangeRecordInput(
-            session_id=session_value,
-            scope_kind=scope_kind,
-            scope_id=scope_value,
-            agent_id=agent_value,
-            provider=provider,
-            exchange_id=exchange_value,
-            request_type=request_type,
-            content=content_value,
-        )
-    except (TypeError, ValueError):
-        raise _StorageFault(AgentExchangeFailure.CORRUPT_STORAGE) from None
-    if input_record.session_id != session_id or input_record.agent_id != agent_id:
-        raise _StorageFault(AgentExchangeFailure.CORRUPT_STORAGE)
-    retained = input_record.content.encode("utf-8", errors="strict")
-    full_size = value["content_full_utf8_bytes"]
-    retained_size = value["content_retained_utf8_bytes"]
-    full_characters = value["content_full_characters"]
-    retained_characters = value["content_retained_characters"]
-    truncated = value["content_truncated"]
-    digest = value["content_sha256"]
-    if (
-        type(full_size) is not int
-        or full_size < 0
-        or type(retained_size) is not int
-        or retained_size < 0
-        or retained_size != len(retained)
-        or retained_size > AGENT_EXCHANGE_CONTENT_MAX_BYTES
-        or type(full_characters) is not int
-        or full_characters < 0
-        or type(retained_characters) is not int
-        or retained_characters < 0
-        or retained_characters != len(input_record.content)
-        or retained_characters > full_characters
-        or type(truncated) is not bool
-        or type(digest) is not str
-        or _SHA256.fullmatch(digest) is None
-    ):
-        raise _StorageFault(AgentExchangeFailure.CORRUPT_STORAGE)
-    if truncated:
-        if (
-            full_size <= AGENT_EXCHANGE_CONTENT_MAX_BYTES
-            or full_size <= retained_size
-            or retained_size < AGENT_EXCHANGE_CONTENT_MAX_BYTES - 3
-            or full_characters <= retained_characters
-        ):
-            raise _StorageFault(AgentExchangeFailure.CORRUPT_STORAGE)
-    elif (
-        full_size != retained_size
-        or full_characters != retained_characters
-        or digest != f"sha256:{hashlib.sha256(retained).hexdigest()}"
-    ):
-        raise _StorageFault(AgentExchangeFailure.CORRUPT_STORAGE)
-    return _StoredRecord(
-        payload=payload,
-        session_id=session_id,
-        agent_id=agent_id,
-        filename=filename,
-        workspace_sequence=workspace_sequence,
-        sequence=sequence,
-        scope_kind=scope_kind,
-        scope_id=input_record.scope_id,
-    )
 
 
 def _verify_casefold_unique(names: list[str]) -> None:

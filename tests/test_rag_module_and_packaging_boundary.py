@@ -415,8 +415,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 419)
-        self.assertEqual(len(edges), 2613)
+        self.assertEqual(len(modules), 422)
+        self.assertEqual(len(edges), 2622)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -919,6 +919,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.workspace.policy_material",
             },
             "story_writing_agents.conversation_storage.filesystem": {
+                "story_writing_agents.conversation_storage.filesystem_history_codec",
                 "story_writing_agents.conversations",
                 "story_writing_agents.conversations.events",
                 "story_writing_agents.errors",
@@ -1214,6 +1215,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.conversation_storage.composition",
                 "story_writing_agents.conversation_storage.contracts",
                 "story_writing_agents.conversation_storage.sqlite_database",
+                "story_writing_agents.conversation_storage.sqlite_row_codec",
                 "story_writing_agents.conversation_storage.sqlite_search_index",
                 "story_writing_agents.conversations",
                 "story_writing_agents.conversations.events",
@@ -1221,6 +1223,22 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.workspace.core",
             },
         }
+        codec_dependencies = {
+            "story_writing_agents.agent_exchanges.storage_record_codec": {
+                "story_writing_agents.agent_exchanges.contracts",
+            },
+            "story_writing_agents.conversation_storage.filesystem_history_codec": {
+                "story_writing_agents.conversations",
+                "story_writing_agents.errors",
+            },
+            "story_writing_agents.conversation_storage.sqlite_row_codec": {
+                "story_writing_agents.conversation_storage.sqlite_database",
+                "story_writing_agents.conversations",
+                "story_writing_agents.errors",
+            },
+        }
+        for source, expected in codec_dependencies.items():
+            self.assertEqual({target for origin, target in edges if origin == source}, expected, source)
         for source, expected in changed_storage_dependencies.items():
             with self.subTest(storage_source=source):
                 self.assertEqual(
@@ -3729,9 +3747,12 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                         self.assertEqual(handle.read(),
                             (_REPOSITORY_ROOT / "src" / package_path).read_bytes())
             conversation_package_paths = (
+                "story_writing_agents/agent_exchanges/storage_record_codec.py",
                 "story_writing_agents/collaboration_history.py",
                 "story_writing_agents/collaboration_history_search.py",
                 "story_writing_agents/conversation_rag_generation_contracts.py",
+                "story_writing_agents/conversation_storage/filesystem_history_codec.py",
+                "story_writing_agents/conversation_storage/sqlite_row_codec.py",
                 "story_writing_agents/artifact_transactions/__init__.py",
                 "story_writing_agents/conversations/__init__.py",
                 "story_writing_agents/conversations/catalog.py",
