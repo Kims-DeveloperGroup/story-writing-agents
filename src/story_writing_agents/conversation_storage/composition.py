@@ -20,11 +20,11 @@ try:
 except ImportError:  # pragma: no cover - non-POSIX hosts fail closed on borrow.
     _fcntl = None
 
+from ..collaboration_history_search import ReferenceCollaborationHistorySearch
 from ..conversation_search import (
     CollaborationHistorySearchQuery,
     CollaborationHistorySearchResult,
     CollaborationHistorySearchScope,
-    ReferenceCollaborationHistorySearch,
 )
 from ..workspace.core import Workspace
 from .filesystem import (

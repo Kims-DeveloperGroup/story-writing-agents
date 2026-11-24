@@ -1,0 +1,1 @@
+"""Conversation search contract adapters."""

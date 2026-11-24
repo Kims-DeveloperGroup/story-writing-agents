@@ -660,7 +660,7 @@
         }
       ],
       "legacy_unresolved_lines": 1550,
-      "counting": "Approved1021 only raw89/support289=+378,151686\u2192152064. New module description1row reallocated to actual required import. Final rendered counter required; no old assertion/helper/docstring or legacy credit.",
+      "counting": "Approved1021 only raw89/support289=+378,151686→152064. New module description1row reallocated to actual required import. Final rendered counter required; no old assertion/helper/docstring or legacy credit.",
       "approved_source_delta": 378,
       "planned_raw_delta": 89,
       "planned_support_delta": 289,
@@ -688,7 +688,7 @@
         }
       ],
       "legacy_unresolved_lines": 1550,
-      "counting": "User-approved1027 only raw65/support9=+74,152064\u2192152138: raw148806+support1782+legacy1550. Generic suite_budget.py16ordinary rows outside fee disclosed; no assertion/scenario moved there.",
+      "counting": "User-approved1027 only raw65/support9=+74,152064→152138: raw148806+support1782+legacy1550. Generic suite_budget.py16ordinary rows outside fee disclosed; no assertion/scenario moved there.",
       "approved_source_delta": 74,
       "planned_raw_delta": 65,
       "planned_support_delta": 9,
@@ -979,7 +979,7 @@
           ]
         }
       ],
-      "counting": "Move each of1469 original ordinary body rows once; +426 extraction/retarget +15 existing BudgetCase rows +4 necessary consumer import-restoration rows =+445,152220\u2192152665. Correction batch restores accounting mixed-import binding,9 actual peer namespace targets and1 actual type ForwardRef; no scenarios/assertions removed, legacy1550 unchanged. Existing generic helper11 and generic consumer5 rows remain outside frozen charge scope and are disclosed.",
+      "counting": "Move each of1469 original ordinary body rows once; +426 extraction/retarget +15 existing BudgetCase rows +4 necessary consumer import-restoration rows =+445,152220→152665. Correction batch restores accounting mixed-import binding,9 actual peer namespace targets and1 actual type ForwardRef; no scenarios/assertions removed, legacy1550 unchanged. Existing generic helper11 and generic consumer5 rows remain outside frozen charge scope and are disclosed.",
       "approved_source_delta": 445,
       "planned_raw_delta": -1195,
       "planned_support_delta": 1640,
@@ -1011,7 +1011,7 @@
       "planned_raw_delta": 62,
       "planned_support_delta": 0,
       "legacy_unresolved_lines": 1550,
-      "counting": "Source-only152665\u2192152727(+62): Candidate same-Case adapter32 + existing RAG graph/packaging14 + existing BudgetCase16. Nine count readers update literals only. Generic suite_budget guard11 physical rows outside frozen charge scope disclosed; legacy1550 and all receipts/profile/weights unchanged.",
+      "counting": "Source-only152665→152727(+62): Candidate same-Case adapter32 + existing RAG graph/packaging14 + existing BudgetCase16. Nine count readers update literals only. Generic suite_budget guard11 physical rows outside frozen charge scope disclosed; legacy1550 and all receipts/profile/weights unchanged.",
       "expected_caps_sha256": "d72ded85920beccddd24ee08ca2be40c8963d0832366ce07d211f67684033335",
       "generic_execution_tool_rows_disclosed": 11
     },
@@ -1042,7 +1042,7 @@
       "planned_raw_delta": 84,
       "planned_support_delta": 3,
       "legacy_unresolved_lines": 1550,
-      "counting": "152727\u2192152814(+87): normal domain header20 + actual4call adapter12 + newowner graph26 + existing2incoming-set expansion6 + packaging1 + existingBudgetCase19 + counted id_moves support3. Nine reader numeric literals change0 rows. Generic combined source+closed2-ID guard16 physical rows outside frozen charge, disclosed. No new Case/scenario/subTest; global weight pool conserved through existing canonical quotient/remainder rule.",
+      "counting": "152727→152814(+87): normal domain header20 + actual4call adapter12 + newowner graph26 + existing2incoming-set expansion6 + packaging1 + existingBudgetCase19 + counted id_moves support3. Nine reader numeric literals change0 rows. Generic combined source+closed2-ID guard16 physical rows outside frozen charge, disclosed. No new Case/scenario/subTest; global weight pool conserved through existing canonical quotient/remainder rule.",
       "expected_caps_sha256": "c2a287a57fa759f2c1b984c2a3aedf171aa8a08f1ef8032fbd09180079b3fc34",
       "generic_execution_tool_rows_disclosed": 16
     },
@@ -1248,7 +1248,7 @@
       "legacy_unresolved_lines": 1550,
       "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
       "generic_execution_tool_rows_disclosed": 16,
-      "counting": "Final coherent actual counter raw147717+support4674+retained legacy1550=153941; base153829 delta112(raw+109/support+3). Test-role owned changes contribute93(raw+90/support+3); Root-owned existing BudgetCase adds19 charged rows. Root generic suite_budget guard16ordinary/physical rows remain outside the frozen charge. Original2methods and exclusive57producer rows transfer raw\u2192raw once net0, no Recommendation797/799 recharge. Root-owned budget3files are observed, not edited by this test role."
+      "counting": "Final coherent actual counter raw147717+support4674+retained legacy1550=153941; base153829 delta112(raw+109/support+3). Test-role owned changes contribute93(raw+90/support+3); Root-owned existing BudgetCase adds19 charged rows. Root generic suite_budget guard16ordinary/physical rows remain outside the frozen charge. Original2methods and exclusive57producer rows transfer raw→raw once net0, no Recommendation797/799 recharge. Root-owned budget3files are observed, not edited by this test role."
     },
     {
       "issue": 1045,
@@ -1705,619 +1705,608 @@
       "counting": "Actual raw149344/support4689/legacy1550=155583; exact source-only155510 to155583. No ID-receipt, Case/profile/weight/launch rekey or fixture prewarm. Generic exact guard17 ordinary/physical rows remains outside the frozen source charge. Absolute owner import produces canonical318/1939, relative-only318/1935, controller318/1802.",
       "CI_correction": "Restore original future-annotations flag and canonical ProcessRequest supplier in the actual definition module; +1 raw row. Failed155582 candidate remains only in immutable prior evidence, not a stable source guard/history pair."
     },
-{
-  "issue": 1060,
-  "origin_commit": "a78d2ec85a3aadc71a592589790dd908c99d72c8",
-  "origins": [
     {
-      "source": "tests/test_codex_backend.py",
-      "sha256": "c72681b0892acdb37ae403111c093c3f89dfa03ec78028030112aec821cb2639",
-      "source_ranges": [
-        [
-          5834,
-          5902
-        ],
-        [
-          7473,
-          7589
-        ],
-        [
-          7591,
-          7623
-        ],
-        [
-          380,
-          383
-        ],
-        [
-          386,
-          400
-        ],
-        [
-          499,
-          511
-        ],
-        [
-          514,
-          517
-        ],
-        [
-          520,
-          522
-        ]
+      "issue": 1060,
+      "origin_commit": "a78d2ec85a3aadc71a592589790dd908c99d72c8",
+      "origins": [
+        {
+          "source": "tests/test_codex_backend.py",
+          "sha256": "c72681b0892acdb37ae403111c093c3f89dfa03ec78028030112aec821cb2639",
+          "source_ranges": [
+            [
+              5834,
+              5902
+            ],
+            [
+              7473,
+              7589
+            ],
+            [
+              7591,
+              7623
+            ],
+            [
+              380,
+              383
+            ],
+            [
+              386,
+              400
+            ],
+            [
+              499,
+              511
+            ],
+            [
+              514,
+              517
+            ],
+            [
+              520,
+              522
+            ]
+          ],
+          "destination": "tests/test_backend_reply_decoding.py",
+          "counting": "Three whole existing method definitions (219 physical source rows) and five original producers move once; public producer renames and public runtime decoder call transports only. Canonical direct function aliases retain Case IDs, MRO, fixture lifetime, assertions and caps5/13/0."
+        }
       ],
-      "destination": "tests/test_backend_reply_decoding.py",
-      "counting": "Three whole existing method definitions (219 physical source rows) and five original producers move once; public producer renames and public runtime decoder call transports only. Canonical direct function aliases retain Case IDs, MRO, fixture lifetime, assertions and caps5/13/0."
-    }
-  ],
-  "approved_source_delta": 104,
-  "planned_raw_delta": 104,
-  "planned_support_delta": 0,
-  "legacy_unresolved_lines": 1550,
-  "exact_source_pair": [
-    155583,
-    155687
-  ],
-  "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
-  "generic_tooling_ordinary_delta_excluded": 17,
-  "generic_tooling_physical_delta_excluded": 17,
-  "cost_components": {
-    "definitions_public_producers_imports_aliases_net": 24,
-    "existing_RAG_API_graph_packaging": 46,
-    "existing_BudgetCase_definition_and_strict_source_checks": 34
-  },
-  "counting": "Source-only allocation. No Case IDs, caps, receipts, profile, weight, launch or shard changes. Original compiler future annotations and nested code flags preserved. Existing historical stages remain physically unchanged; actual generic exact-pair guard rows are outside frozen source count."
-},
-{
-  "issue": 1063,
-  "origin_commit": "7b4020428617ddc00eb9a69ecb70e9467613cbba",
-  "origins": [
-    {
-      "source": "tests/test_agent_policy_composition.py",
-      "sha256": "2499f968e2c3ee41d93e71c6e40342c91dd6bd919b4a5524caa0e9b2779f04f5"
+      "approved_source_delta": 104,
+      "planned_raw_delta": 104,
+      "planned_support_delta": 0,
+      "legacy_unresolved_lines": 1550,
+      "exact_source_pair": [
+        155583,
+        155687
+      ],
+      "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
+      "generic_tooling_ordinary_delta_excluded": 17,
+      "generic_tooling_physical_delta_excluded": 17,
+      "cost_components": {
+        "definitions_public_producers_imports_aliases_net": 24,
+        "existing_RAG_API_graph_packaging": 46,
+        "existing_BudgetCase_definition_and_strict_source_checks": 34
+      },
+      "counting": "Source-only allocation. No Case IDs, caps, receipts, profile, weight, launch or shard changes. Original compiler future annotations and nested code flags preserved. Existing historical stages remain physically unchanged; actual generic exact-pair guard rows are outside frozen source count."
     },
     {
-      "source": "tests/test_antigravity_adapter.py",
-      "sha256": "1ffb37b53382ef75b1ba7394de5adce67062b49898cd4900df040dccddd511d2"
-    }
-  ],
-  "approved_source_delta": 30,
-  "planned_raw_delta": 30,
-  "planned_support_delta": 0,
-  "legacy_unresolved_lines": 1550,
-  "exact_source_pair": [
-    155687,
-    155717
-  ],
-  "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
-  "generic_tooling_ordinary_delta_excluded": 0,
-  "generic_tooling_physical_delta_excluded": 0,
-  "cost_components": {
-    "existing_RAG_API_graph_packaging": 26,
-    "existing_BudgetCase_strict_source_pair": 4
-  },
-  "counting": "raw149448\u2192149478, support4689, 1550 legacy. Existing Case/subTest/worker limits retained."
-},
-{
-  "issue": 1064,
-  "origin_commit": "89439136d8b9fc2e014bbf0be1a5d03382d942bf",
-  "origins": [
-    {
-      "source": "tests/test_antigravity_adapter.py",
-      "sha256": "0ca7280e4c5ca0aab7769a0758c2a65b676982c55e30f402d1fdebc9af208576"
-    }
-  ],
-  "approved_source_delta": 68,
-  "planned_raw_delta": 68,
-  "planned_support_delta": 0,
-  "legacy_unresolved_lines": 1550,
-  "exact_source_pair": [
-    155717,
-    155785
-  ],
-  "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
-  "generic_tooling_ordinary_delta_excluded": 0,
-  "generic_tooling_physical_delta_excluded": 0,
-  "cost_components": {
-    "real_case_definition_transport_net": 18,
-    "existing_RAG_API_graph_packaging": 31,
-    "existing_BudgetCase_registration_alias_and_exact_source_pair": 19
-  },
-  "counting": "raw149478\u2192149546, support4689, 1550 legacy. Existing Case/subTest/time/worker unchanged."
-},
-
-{
-  "issue": 1067,
-  "origin_commit": "a57b837271bfc06725a00034cf3af0e986bb5d51",
-  "origins": [
-    {
-      "source": "tests/test_codex_backend.py",
-      "sha256": "71be91942432af37e3340bd58665fef07c33c5dfbd31cc79f2d22ebcd4707ba0"
+      "issue": 1063,
+      "origin_commit": "7b4020428617ddc00eb9a69ecb70e9467613cbba",
+      "origins": [
+        {
+          "source": "tests/test_agent_policy_composition.py",
+          "sha256": "2499f968e2c3ee41d93e71c6e40342c91dd6bd919b4a5524caa0e9b2779f04f5"
+        },
+        {
+          "source": "tests/test_antigravity_adapter.py",
+          "sha256": "1ffb37b53382ef75b1ba7394de5adce67062b49898cd4900df040dccddd511d2"
+        }
+      ],
+      "approved_source_delta": 30,
+      "planned_raw_delta": 30,
+      "planned_support_delta": 0,
+      "legacy_unresolved_lines": 1550,
+      "exact_source_pair": [
+        155687,
+        155717
+      ],
+      "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
+      "generic_tooling_ordinary_delta_excluded": 0,
+      "generic_tooling_physical_delta_excluded": 0,
+      "cost_components": {
+        "existing_RAG_API_graph_packaging": 26,
+        "existing_BudgetCase_strict_source_pair": 4
+      },
+      "counting": "raw149448→149478, support4689, 1550 legacy. Existing Case/subTest/worker limits retained."
     },
     {
-      "source": "tests/test_rag_module_and_packaging_boundary.py",
-      "sha256": "ada654a156be2d81d424df6ecdf6dcc479556610ef9ef03254e7243ec9210503"
+      "issue": 1064,
+      "origin_commit": "89439136d8b9fc2e014bbf0be1a5d03382d942bf",
+      "origins": [
+        {
+          "source": "tests/test_antigravity_adapter.py",
+          "sha256": "0ca7280e4c5ca0aab7769a0758c2a65b676982c55e30f402d1fdebc9af208576"
+        }
+      ],
+      "approved_source_delta": 68,
+      "planned_raw_delta": 68,
+      "planned_support_delta": 0,
+      "legacy_unresolved_lines": 1550,
+      "exact_source_pair": [
+        155717,
+        155785
+      ],
+      "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
+      "generic_tooling_ordinary_delta_excluded": 0,
+      "generic_tooling_physical_delta_excluded": 0,
+      "cost_components": {
+        "real_case_definition_transport_net": 18,
+        "existing_RAG_API_graph_packaging": 31,
+        "existing_BudgetCase_registration_alias_and_exact_source_pair": 19
+      },
+      "counting": "raw149478→149546, support4689, 1550 legacy. Existing Case/subTest/time/worker unchanged."
     },
     {
-      "source": "tests/test_suite_budget.py",
-      "sha256": "6e53767b72cc285976f49306c13ee8773935cf9306df454a4eb0da8139f04808"
-    }
-  ],
-  "approved_source_delta": 57,
-  "planned_raw_delta": 57,
-  "planned_support_delta": 0,
-  "legacy_unresolved_lines": 1550,
-  "exact_source_pair": [
-    155785,
-    155842
-  ],
-  "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
-  "generic_tooling_ordinary_delta_excluded": 0,
-  "generic_tooling_physical_delta_excluded": 0,
-  "cost_components": {
-    "existing_RAG_API_graph_packaging": 53,
-    "same_case_direct_public_API": 0,
-    "existing_BudgetCase_strict_source_pair": 4
-  },
-  "counting": "raw149546\u2192149603, support4689, 1550 legacy. Existing Case/subTest/time/worker limits retained."
-},
-
-{
-  "issue": 1069,
-  "origin_commit": "f6c54fcfc2e7f78deab8e2de9e36aa74b2951c23",
-  "origins": [
-    {
-      "source": "tests/test_session_lifecycle.py",
-      "sha256": "2bbf41b7ca7afdb11dc046e8bc8dabe20d35a0b98e44025e16b0fc8becdf6ff5"
+      "issue": 1067,
+      "origin_commit": "a57b837271bfc06725a00034cf3af0e986bb5d51",
+      "origins": [
+        {
+          "source": "tests/test_codex_backend.py",
+          "sha256": "71be91942432af37e3340bd58665fef07c33c5dfbd31cc79f2d22ebcd4707ba0"
+        },
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "ada654a156be2d81d424df6ecdf6dcc479556610ef9ef03254e7243ec9210503"
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "6e53767b72cc285976f49306c13ee8773935cf9306df454a4eb0da8139f04808"
+        }
+      ],
+      "approved_source_delta": 57,
+      "planned_raw_delta": 57,
+      "planned_support_delta": 0,
+      "legacy_unresolved_lines": 1550,
+      "exact_source_pair": [
+        155785,
+        155842
+      ],
+      "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
+      "generic_tooling_ordinary_delta_excluded": 0,
+      "generic_tooling_physical_delta_excluded": 0,
+      "cost_components": {
+        "existing_RAG_API_graph_packaging": 53,
+        "same_case_direct_public_API": 0,
+        "existing_BudgetCase_strict_source_pair": 4
+      },
+      "counting": "raw149546→149603, support4689, 1550 legacy. Existing Case/subTest/time/worker limits retained."
     },
     {
-      "source": "tests/test_rag_module_and_packaging_boundary.py",
-      "sha256": "f3a7c0506c273303651f48822e4532c8137de1964ac47ae748d97b145e756199"
+      "issue": 1069,
+      "origin_commit": "f6c54fcfc2e7f78deab8e2de9e36aa74b2951c23",
+      "origins": [
+        {
+          "source": "tests/test_session_lifecycle.py",
+          "sha256": "2bbf41b7ca7afdb11dc046e8bc8dabe20d35a0b98e44025e16b0fc8becdf6ff5"
+        },
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "f3a7c0506c273303651f48822e4532c8137de1964ac47ae748d97b145e756199"
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "0d385290e497c3d36b1b94c152ef8c2a452b9374e5462ee557f8a62cc8405303"
+        }
+      ],
+      "approved_source_delta": 27,
+      "planned_raw_delta": 27,
+      "planned_support_delta": 0,
+      "legacy_unresolved_lines": 1550,
+      "exact_source_pair": [
+        155842,
+        155869
+      ],
+      "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
+      "generic_tooling_ordinary_delta_excluded": 0,
+      "generic_tooling_physical_delta_excluded": 0,
+      "cost_components": {
+        "existing_selected_API_graph_packaging_and_guard_rebinding": 23,
+        "existing_BudgetCase_strict_source_pair": 4
+      },
+      "counting": "raw 149603→149630, support 4689, legacy 1550. Existing Case/subTest/time/worker unchanged."
     },
     {
-      "source": "tests/test_suite_budget.py",
-      "sha256": "0d385290e497c3d36b1b94c152ef8c2a452b9374e5462ee557f8a62cc8405303"
-    }
-  ],
-  "approved_source_delta": 27,
-  "planned_raw_delta": 27,
-  "planned_support_delta": 0,
-  "legacy_unresolved_lines": 1550,
-  "exact_source_pair": [
-    155842,
-    155869
-  ],
-  "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
-  "generic_tooling_ordinary_delta_excluded": 0,
-  "generic_tooling_physical_delta_excluded": 0,
-  "cost_components": {
-    "existing_selected_API_graph_packaging_and_guard_rebinding": 23,
-    "existing_BudgetCase_strict_source_pair": 4
-  },
-  "counting": "raw 149603\u2192149630, support 4689, legacy 1550. Existing Case/subTest/time/worker unchanged."
-},
-
-{
-  "issue": 1071,
-  "origin_commit": "ae58f93f3fa3903207d15da478afe6b05a02d199",
-  "origins": [
-    {
-      "source": "tests/test_session_lifecycle.py",
-      "sha256": "9279e734194caca8c04bcbd2c8e09c4ec0533357c337363ac3817dc5cd03fb20"
+      "issue": 1071,
+      "origin_commit": "ae58f93f3fa3903207d15da478afe6b05a02d199",
+      "origins": [
+        {
+          "source": "tests/test_session_lifecycle.py",
+          "sha256": "9279e734194caca8c04bcbd2c8e09c4ec0533357c337363ac3817dc5cd03fb20"
+        },
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "dee3ba38a262a0d64d01d3fd9d2d5a230b51eefb6cdf6af584505f236000aa36"
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "988a5e827fb4f08bb2950d87b6c975bf862588ed11c36d6776298be87e8c8c1e"
+        }
+      ],
+      "approved_source_delta": 45,
+      "planned_raw_delta": 45,
+      "planned_support_delta": 0,
+      "legacy_unresolved_lines": 1550,
+      "exact_source_pair": [
+        155869,
+        155914
+      ],
+      "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
+      "generic_tooling_ordinary_delta_excluded": 0,
+      "generic_tooling_physical_delta_excluded": 0,
+      "cost_components": {
+        "existing_selected_API_graph_packaging_and_liveness_rebinding": 41,
+        "existing_BudgetCase_strict_source_pair": 4
+      },
+      "counting": "raw 149630→149675, support 4689, legacy 1550. Existing Case/subTest/time/worker unchanged."
     },
     {
-      "source": "tests/test_rag_module_and_packaging_boundary.py",
-      "sha256": "dee3ba38a262a0d64d01d3fd9d2d5a230b51eefb6cdf6af584505f236000aa36"
+      "issue": 1073,
+      "origin_commit": "9146b58f2313d8e47b2d6b810de9bc788a10e990",
+      "origins": [
+        {
+          "source": "tests/test_session_lifecycle.py",
+          "sha256": "9f3a5ad60e62cdf63f1bcb424c6489e26fb14fed18793b52b0b1cf1b03b882af"
+        },
+        {
+          "source": "tests/test_codex_backend.py",
+          "sha256": "8d38422fde015b688834e12f17a2b2050d310e24098739a77ffce170cb54e868"
+        },
+        {
+          "source": "tests/test_antigravity_parity.py",
+          "sha256": "d9ceba7602e65dd9cea7fc30c07e8a249db4130db0ce43b95cb172c59a77672c"
+        },
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "0ad0f84ddcb669ac1882c553020651b374cb5c504b8ebaba79fbc78192fc05a7"
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "b78a79d7f13f774b3c0754658bb8049e6019c71e39cf2c177841a310c85149f1"
+        }
+      ],
+      "approved_source_delta": 46,
+      "planned_raw_delta": 46,
+      "planned_support_delta": 0,
+      "legacy_unresolved_lines": 1550,
+      "exact_source_pair": [
+        155914,
+        155960
+      ],
+      "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
+      "generic_tooling_ordinary_delta_excluded": 0,
+      "generic_tooling_physical_delta_excluded": 0,
+      "cost_components": {
+        "existing_selected_API_graph_packaging_and_write_rebinding": 42,
+        "existing_BudgetCase_strict_source_pair": 4
+      },
+      "counting": "raw 149675→149721, support 4689, legacy 1550. Existing Case/subTest/time/worker unchanged."
     },
     {
-      "source": "tests/test_suite_budget.py",
-      "sha256": "988a5e827fb4f08bb2950d87b6c975bf862588ed11c36d6776298be87e8c8c1e"
-    }
-  ],
-  "approved_source_delta": 45,
-  "planned_raw_delta": 45,
-  "planned_support_delta": 0,
-  "legacy_unresolved_lines": 1550,
-  "exact_source_pair": [
-    155869,
-    155914
-  ],
-  "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
-  "generic_tooling_ordinary_delta_excluded": 0,
-  "generic_tooling_physical_delta_excluded": 0,
-  "cost_components": {
-    "existing_selected_API_graph_packaging_and_liveness_rebinding": 41,
-    "existing_BudgetCase_strict_source_pair": 4
-  },
-  "counting": "raw 149630\u2192149675, support 4689, legacy 1550. Existing Case/subTest/time/worker unchanged."
-},
-
-{
-  "issue": 1073,
-  "origin_commit": "9146b58f2313d8e47b2d6b810de9bc788a10e990",
-  "origins": [
-    {
-      "source": "tests/test_session_lifecycle.py",
-      "sha256": "9f3a5ad60e62cdf63f1bcb424c6489e26fb14fed18793b52b0b1cf1b03b882af"
+      "issue": 1075,
+      "origin_commit": "609790cf2eef879f16da49eaaa01781d360f0706",
+      "origins": [
+        {
+          "source": "tests/test_session_lifecycle.py",
+          "sha256": "65156361d23949cba598cec798bfa4f600b5ee76507e446b59d0d9a8597ee28e"
+        },
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "9146f15b53337b52b17940cbac4d9f47fa7faa888ad1a79c01b77b9672a675bf"
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "90acbfeefeea71b07f47921b785775b13c338ac89389914a9573a9f25b48704e"
+        }
+      ],
+      "approved_source_delta": 49,
+      "planned_raw_delta": 49,
+      "planned_support_delta": 0,
+      "legacy_unresolved_lines": 1550,
+      "exact_source_pair": [
+        155960,
+        156009
+      ],
+      "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
+      "generic_tooling_ordinary_delta_excluded": 0,
+      "generic_tooling_physical_delta_excluded": 0,
+      "cost_components": {
+        "existing_selected_API_graph_packaging": 45,
+        "existing_BudgetCase_strict_source_pair": 4
+      },
+      "counting": "raw 149721→149770, support 4689, legacy 1550. Existing Case/subTest/time/worker unchanged."
     },
     {
-      "source": "tests/test_codex_backend.py",
-      "sha256": "8d38422fde015b688834e12f17a2b2050d310e24098739a77ffce170cb54e868"
+      "issue": 1077,
+      "origin_commit": "c134e6a2c1b101730ecead2a824783a3059a5267",
+      "origins": [
+        {
+          "source": "tests/test_session_lifecycle.py",
+          "sha256": "75727ffea06b3e687b1cd949980c7a0c475bf1b7fd0f6be0c4d6dd7a8b74898f"
+        },
+        {
+          "source": "tests/test_codex_backend.py",
+          "sha256": "fc28da79028c6bd21fe35ee313c1b2278f468f4e8ab3370aff59aec8fe8ab2fe"
+        },
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "2aa0aa63b5c1b66f68693377dabfa926d8a1b1bc7ed97843a3bcabd5393f78f2"
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "571fa501e1240f4dc91d7a94678603d11297402e73c77c10ed576a758113c2b5"
+        }
+      ],
+      "approved_source_delta": 37,
+      "planned_raw_delta": 37,
+      "planned_support_delta": 0,
+      "legacy_unresolved_lines": 1550,
+      "exact_source_pair": [
+        156009,
+        156046
+      ],
+      "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
+      "generic_tooling_ordinary_delta_excluded": 0,
+      "generic_tooling_physical_delta_excluded": 0,
+      "cost_components": {
+        "existing_close_patch_API_graph_packaging": 33,
+        "existing_BudgetCase_strict_source_pair": 4
+      },
+      "counting": "raw 149770→149807, support 4689, legacy 1550. Existing Case/subTest/time/worker unchanged."
     },
     {
-      "source": "tests/test_antigravity_parity.py",
-      "sha256": "d9ceba7602e65dd9cea7fc30c07e8a249db4130db0ce43b95cb172c59a77672c"
+      "issue": 1079,
+      "origin_commit": "d5fa1d11bf5b8a541540d8bdb32eca32f07c6667",
+      "origins": [
+        {
+          "source": "tests/test_provider_auth_recovery.py",
+          "sha256": "d8f19f8b648f190f0e4d4dcc86842ef545893362b4a441d0c846a4e52376ee32"
+        },
+        {
+          "source": "tests/test_session_lifecycle.py",
+          "sha256": "5ea7fc0b5fc0f9fc44768fb911a32aa546a3394d2b6d6f866ec4e93dc115d6c5"
+        },
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "0a5cffbbfc2ec3680aa6d6d81163b04c3d7d839815a9d321da14c2ad3359ad49"
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "8033375a2cd4c8e7c7a92919a9fea2d80880999087eac88450dff3092a629b2d"
+        }
+      ],
+      "approved_source_delta": 40,
+      "planned_raw_delta": 40,
+      "planned_support_delta": 0,
+      "legacy_unresolved_lines": 1550,
+      "exact_source_pair": [
+        156046,
+        156086
+      ],
+      "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
+      "generic_tooling_ordinary_delta_excluded": 0,
+      "generic_tooling_physical_delta_excluded": 0,
+      "cost_components": {
+        "existing_replay_drift_patch_API_graph_packaging": 36,
+        "existing_BudgetCase_strict_source_pair": 4
+      },
+      "counting": "raw 149807→149847, support 4689, legacy 1550. Existing Case/subTest/time/worker unchanged."
     },
     {
-      "source": "tests/test_rag_module_and_packaging_boundary.py",
-      "sha256": "0ad0f84ddcb669ac1882c553020651b374cb5c504b8ebaba79fbc78192fc05a7"
+      "issue": 1081,
+      "origin_commit": "5ec8173155aa4884ebed18b406d09f707be60e8f",
+      "origins": [
+        {
+          "source": "tests/test_codex_backend.py",
+          "sha256": "b272129bf9af55c4ec460e749c8c0b4ba21dbcbcaf2df439ad0a6b1a773bc7f9"
+        },
+        {
+          "source": "tests/test_antigravity_parity.py",
+          "sha256": "dd0b4e785e098d81e5074a20f94ee968a8096154d61f2ed8d99c1a6357e9cfed"
+        },
+        {
+          "source": "tests/test_session_lifecycle.py",
+          "sha256": "a0ac3cdb0dca662c2817dd7d8e26740a87148ac5bd96fc28a6cf6397376bf2b2"
+        },
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "6342e22bc73b61dd0dec0a734684a9cc421383df91a4e83146ee60252c9d581e"
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "948aea5135cfc23b9a4d0d0376ce58c1509609ef68e5357d8aaae7d70adfd3c0"
+        }
+      ],
+      "approved_source_delta": 46,
+      "planned_raw_delta": 46,
+      "planned_support_delta": 0,
+      "legacy_unresolved_lines": 1550,
+      "exact_source_pair": [
+        156086,
+        156132
+      ],
+      "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
+      "generic_tooling_ordinary_delta_excluded": 0,
+      "generic_tooling_physical_delta_excluded": 0,
+      "cost_components": {
+        "existing_manifest_thread_seams_API_graph_packaging": 42,
+        "existing_BudgetCase_strict_source_pair": 4
+      },
+      "counting": "raw 149847→149893, support 4689, legacy 1550. Existing Case/subTest/time/worker unchanged."
     },
     {
-      "source": "tests/test_suite_budget.py",
-      "sha256": "b78a79d7f13f774b3c0754658bb8049e6019c71e39cf2c177841a310c85149f1"
-    }
-  ],
-  "approved_source_delta": 46,
-  "planned_raw_delta": 46,
-  "planned_support_delta": 0,
-  "legacy_unresolved_lines": 1550,
-  "exact_source_pair": [
-    155914,
-    155960
-  ],
-  "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
-  "generic_tooling_ordinary_delta_excluded": 0,
-  "generic_tooling_physical_delta_excluded": 0,
-  "cost_components": {
-    "existing_selected_API_graph_packaging_and_write_rebinding": 42,
-    "existing_BudgetCase_strict_source_pair": 4
-  },
-  "counting": "raw 149675\u2192149721, support 4689, legacy 1550. Existing Case/subTest/time/worker unchanged."
-},
-
-{
-  "issue": 1075,
-  "origin_commit": "609790cf2eef879f16da49eaaa01781d360f0706",
-  "origins": [
-    {
-      "source": "tests/test_session_lifecycle.py",
-      "sha256": "65156361d23949cba598cec798bfa4f600b5ee76507e446b59d0d9a8597ee28e"
+      "issue": 1083,
+      "origin_commit": "9c0ef2bfa9d80c127e93d2d1f30418460873c4da",
+      "origins": [
+        {
+          "source": "tests/test_session_lifecycle.py",
+          "sha256": "ebf0ffc42345fdd9d0d9bf85f47136db71076b7a2d9fa01af21b46ac741f916f"
+        },
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "f0fd088f641da721a890ece0570ad565bbbf1aa9983e2fb572f296ce83721be5"
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "643d1c2479f5cc2b9ee527492d594a673aeed91302cd1e2a998d1de53f7c92d7"
+        }
+      ],
+      "approved_source_delta": 42,
+      "planned_raw_delta": 42,
+      "planned_support_delta": 0,
+      "legacy_unresolved_lines": 1550,
+      "exact_source_pair": [
+        156132,
+        156174
+      ],
+      "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
+      "generic_tooling_ordinary_delta_excluded": 0,
+      "generic_tooling_physical_delta_excluded": 0,
+      "cost_components": {
+        "existing_session_transition_API_graph_packaging": 38,
+        "existing_BudgetCase_strict_source_pair": 4
+      },
+      "counting": "raw 149893→149935, support 4689, legacy 1550. Existing Case/subTest/time/worker unchanged."
     },
     {
-      "source": "tests/test_rag_module_and_packaging_boundary.py",
-      "sha256": "9146f15b53337b52b17940cbac4d9f47fa7faa888ad1a79c01b77b9672a675bf"
+      "issue": 1085,
+      "origin_commit": "ddfe6881d05396a4ea1ec9a92c13be32e05a1c5f",
+      "origins": [
+        {
+          "source": "tests/test_codex_backend.py",
+          "sha256": "b46b45bdebcd219f63a7da8fdcf976b99c8b5d90d083e302d9de5f9ecac0e9c1"
+        },
+        {
+          "source": "tests/test_session_lifecycle.py",
+          "sha256": "b4b5cb94c93a742b3907233af1eaa63f830fba3813ef7381f447206c5a329f53"
+        },
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "b72a9c46c2bdad95b95347ac18385982b8d4ba599d4f82099ee7a42bdf354ef8"
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "d0ba9aa24d91906bf2d0621defec96e1b670ca0cc2765754663a6018dbcad0f8"
+        }
+      ],
+      "approved_source_delta": 33,
+      "planned_raw_delta": 33,
+      "planned_support_delta": 0,
+      "legacy_unresolved_lines": 1550,
+      "exact_source_pair": [
+        156174,
+        156207
+      ],
+      "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
+      "generic_tooling_ordinary_delta_excluded": 0,
+      "generic_tooling_physical_delta_excluded": 0,
+      "cost_components": {
+        "existing_execution_profile_API_graph_packaging": 29,
+        "existing_BudgetCase_strict_source_pair": 4
+      },
+      "counting": "raw 149935→149968, support 4689, legacy 1550. Existing Case/subTest/time/worker unchanged."
     },
     {
-      "source": "tests/test_suite_budget.py",
-      "sha256": "90acbfeefeea71b07f47921b785775b13c338ac89389914a9573a9f25b48704e"
-    }
-  ],
-  "approved_source_delta": 49,
-  "planned_raw_delta": 49,
-  "planned_support_delta": 0,
-  "legacy_unresolved_lines": 1550,
-  "exact_source_pair": [
-    155960,
-    156009
-  ],
-  "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
-  "generic_tooling_ordinary_delta_excluded": 0,
-  "generic_tooling_physical_delta_excluded": 0,
-  "cost_components": {
-    "existing_selected_API_graph_packaging": 45,
-    "existing_BudgetCase_strict_source_pair": 4
-  },
-  "counting": "raw 149721\u2192149770, support 4689, legacy 1550. Existing Case/subTest/time/worker unchanged."
-},
-
-{
-  "issue": 1077,
-  "origin_commit": "c134e6a2c1b101730ecead2a824783a3059a5267",
-  "origins": [
-    {
-      "source": "tests/test_session_lifecycle.py",
-      "sha256": "75727ffea06b3e687b1cd949980c7a0c475bf1b7fd0f6be0c4d6dd7a8b74898f"
+      "issue": 1087,
+      "origin_commit": "938d20969dd268e1557cff00dbae8f823110a832",
+      "origins": [
+        {
+          "source": "tests/test_codex_backend.py",
+          "sha256": "2fc0d45eef969a2481519a64f309635c3257ccd0d4dadf75894f429fb6600485"
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "f2876beba16cf47bf318c42cb264f639a24d1e887ed481f09b10a2af6af8bae1"
+        }
+      ],
+      "approved_source_delta": 67,
+      "planned_raw_delta": 37,
+      "planned_support_delta": 30,
+      "legacy_unresolved_lines": 1550,
+      "exact_source_pair": [
+        156207,
+        156274
+      ],
+      "expected_caps_sha256": "0d14af735a342f0bde739f20dca64d0ee402dd03f9c83a017fb89cd0219ffa3f",
+      "original_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
+      "current_receipt_sha256": "2d683bd89f317d917c3b31f749ff41a3e2939ea957363a839624bde36381eaf6",
+      "generic_tooling_ordinary_delta_excluded": 15,
+      "generic_tooling_physical_delta_excluded": 15,
+      "cost_components": {
+        "ordinary_test_module_layout": 11,
+        "registered_debug_fixture": 27,
+        "registered_id_move_guard": 3,
+        "existing_budget_case_assertions": 26
+      },
+      "counting": "Raw 149968→150005 + registered 4689→4719 + legacy 1550. Existing 10 Cases moved 1:1, count/cap/timing/worker frozen."
     },
     {
-      "source": "tests/test_codex_backend.py",
-      "sha256": "fc28da79028c6bd21fe35ee313c1b2278f468f4e8ab3370aff59aec8fe8ab2fe"
+      "issue": 1089,
+      "origin_commit": "32b7301720069228bd43bed4437f865d77377877",
+      "origins": [
+        {
+          "source": "tests/test_codex_backend.py",
+          "sha256": "dfd6da177ce72881c73f2e9cdb31b51cb9745684a7b7c142c02d599e5cb7089b",
+          "source_ranges": [
+            [
+              6183,
+              6274
+            ],
+            [
+              6640,
+              6667
+            ],
+            [
+              6673,
+              6692
+            ],
+            [
+              368,
+              394
+            ]
+          ]
+        },
+        {
+          "source": "tests/test_backend_reply_decoding.py",
+          "sha256": "5fbf373d69f49e7c1812d67a7b2e2de88afbe8180fb0fbc76f20333b5bc6a0d4",
+          "source_ranges": [
+            [
+              16,
+              19
+            ],
+            [
+              21,
+              35
+            ]
+          ]
+        },
+        {
+          "source": "tests/test_antigravity_parity.py",
+          "sha256": "b1855190581f8f939072d365b7926c2610ab3c365f903d1861917459fb334cf4"
+        },
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "bc720bc1a10c51b3ea524cc7a2a1b5230c7c188014eea327604ea3fc9f514a76"
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "3f7bc43f8e0199c4a414191838b94631b63ebab4dbc0e0da68758264be5bdeef"
+        },
+        {
+          "source": "tests/id_moves.py",
+          "sha256": "e380a39928f09a5606ff787d77bee44a6a3f72fb9851f4d1a57edcbbaa820a01"
+        }
+      ],
+      "approved_source_delta": 95,
+      "planned_raw_delta": 42,
+      "planned_support_delta": 53,
+      "legacy_unresolved_lines": 1550,
+      "exact_source_pair": [
+        156274,
+        156369
+      ],
+      "original_caps_sha256": "0d14af735a342f0bde739f20dca64d0ee402dd03f9c83a017fb89cd0219ffa3f",
+      "expected_caps_sha256": "a49ec017285634e6e0be8e23c353dc9a2029e9edb7b67f7e637a9358991e4cbd",
+      "current_receipt_sha256": "a531caadd7c8b04f83d795994b3d05059ab090cf3a16d3a1ddf45118b6450f30",
+      "generic_tooling_ordinary_delta_excluded": 15,
+      "generic_tooling_physical_delta_excluded": 15,
+      "cost_components": {
+        "ordinary_runtime_test_layout_and_import_adjustments": -34,
+        "existing_graph_api_packaging_cases": 52,
+        "existing_budget_case_closed_move_checks": 24,
+        "registered_wire_value_fixture": 50,
+        "registered_id_move_guard": 3
+      },
+      "counting": "Raw 150005→150047 + registered 4719→4772 + legacy 1550. Existing 3 Cases moved 1:1, count/cap/individual weight shares/time/worker frozen."
     },
-    {
-      "source": "tests/test_rag_module_and_packaging_boundary.py",
-      "sha256": "2aa0aa63b5c1b66f68693377dabfa926d8a1b1bc7ed97843a3bcabd5393f78f2"
-    },
-    {
-      "source": "tests/test_suite_budget.py",
-      "sha256": "571fa501e1240f4dc91d7a94678603d11297402e73c77c10ed576a758113c2b5"
-    }
-  ],
-  "approved_source_delta": 37,
-  "planned_raw_delta": 37,
-  "planned_support_delta": 0,
-  "legacy_unresolved_lines": 1550,
-  "exact_source_pair": [
-    156009,
-    156046
-  ],
-  "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
-  "generic_tooling_ordinary_delta_excluded": 0,
-  "generic_tooling_physical_delta_excluded": 0,
-  "cost_components": {
-    "existing_close_patch_API_graph_packaging": 33,
-    "existing_BudgetCase_strict_source_pair": 4
-  },
-  "counting": "raw 149770\u2192149807, support 4689, legacy 1550. Existing Case/subTest/time/worker unchanged."
-},
-
-{
-  "issue": 1079,
-  "origin_commit": "d5fa1d11bf5b8a541540d8bdb32eca32f07c6667",
-  "origins": [
-    {
-      "source": "tests/test_provider_auth_recovery.py",
-      "sha256": "d8f19f8b648f190f0e4d4dcc86842ef545893362b4a441d0c846a4e52376ee32"
-    },
-    {
-      "source": "tests/test_session_lifecycle.py",
-      "sha256": "5ea7fc0b5fc0f9fc44768fb911a32aa546a3394d2b6d6f866ec4e93dc115d6c5"
-    },
-    {
-      "source": "tests/test_rag_module_and_packaging_boundary.py",
-      "sha256": "0a5cffbbfc2ec3680aa6d6d81163b04c3d7d839815a9d321da14c2ad3359ad49"
-    },
-    {
-      "source": "tests/test_suite_budget.py",
-      "sha256": "8033375a2cd4c8e7c7a92919a9fea2d80880999087eac88450dff3092a629b2d"
-    }
-  ],
-  "approved_source_delta": 40,
-  "planned_raw_delta": 40,
-  "planned_support_delta": 0,
-  "legacy_unresolved_lines": 1550,
-  "exact_source_pair": [
-    156046,
-    156086
-  ],
-  "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
-  "generic_tooling_ordinary_delta_excluded": 0,
-  "generic_tooling_physical_delta_excluded": 0,
-  "cost_components": {
-    "existing_replay_drift_patch_API_graph_packaging": 36,
-    "existing_BudgetCase_strict_source_pair": 4
-  },
-  "counting": "raw 149807\u2192149847, support 4689, legacy 1550. Existing Case/subTest/time/worker unchanged."
-},
-
-{
-  "issue": 1081,
-  "origin_commit": "5ec8173155aa4884ebed18b406d09f707be60e8f",
-  "origins": [
-    {
-      "source": "tests/test_codex_backend.py",
-      "sha256": "b272129bf9af55c4ec460e749c8c0b4ba21dbcbcaf2df439ad0a6b1a773bc7f9"
-    },
-    {
-      "source": "tests/test_antigravity_parity.py",
-      "sha256": "dd0b4e785e098d81e5074a20f94ee968a8096154d61f2ed8d99c1a6357e9cfed"
-    },
-    {
-      "source": "tests/test_session_lifecycle.py",
-      "sha256": "a0ac3cdb0dca662c2817dd7d8e26740a87148ac5bd96fc28a6cf6397376bf2b2"
-    },
-    {
-      "source": "tests/test_rag_module_and_packaging_boundary.py",
-      "sha256": "6342e22bc73b61dd0dec0a734684a9cc421383df91a4e83146ee60252c9d581e"
-    },
-    {
-      "source": "tests/test_suite_budget.py",
-      "sha256": "948aea5135cfc23b9a4d0d0376ce58c1509609ef68e5357d8aaae7d70adfd3c0"
-    }
-  ],
-  "approved_source_delta": 46,
-  "planned_raw_delta": 46,
-  "planned_support_delta": 0,
-  "legacy_unresolved_lines": 1550,
-  "exact_source_pair": [
-    156086,
-    156132
-  ],
-  "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
-  "generic_tooling_ordinary_delta_excluded": 0,
-  "generic_tooling_physical_delta_excluded": 0,
-  "cost_components": {
-    "existing_manifest_thread_seams_API_graph_packaging": 42,
-    "existing_BudgetCase_strict_source_pair": 4
-  },
-  "counting": "raw 149847\u2192149893, support 4689, legacy 1550. Existing Case/subTest/time/worker unchanged."
-},
-
-{
-  "issue": 1083,
-  "origin_commit": "9c0ef2bfa9d80c127e93d2d1f30418460873c4da",
-  "origins": [
-    {
-      "source": "tests/test_session_lifecycle.py",
-      "sha256": "ebf0ffc42345fdd9d0d9bf85f47136db71076b7a2d9fa01af21b46ac741f916f"
-    },
-    {
-      "source": "tests/test_rag_module_and_packaging_boundary.py",
-      "sha256": "f0fd088f641da721a890ece0570ad565bbbf1aa9983e2fb572f296ce83721be5"
-    },
-    {
-      "source": "tests/test_suite_budget.py",
-      "sha256": "643d1c2479f5cc2b9ee527492d594a673aeed91302cd1e2a998d1de53f7c92d7"
-    }
-  ],
-  "approved_source_delta": 42,
-  "planned_raw_delta": 42,
-  "planned_support_delta": 0,
-  "legacy_unresolved_lines": 1550,
-  "exact_source_pair": [
-    156132,
-    156174
-  ],
-  "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
-  "generic_tooling_ordinary_delta_excluded": 0,
-  "generic_tooling_physical_delta_excluded": 0,
-  "cost_components": {
-    "existing_session_transition_API_graph_packaging": 38,
-    "existing_BudgetCase_strict_source_pair": 4
-  },
-  "counting": "raw 149893\u2192149935, support 4689, legacy 1550. Existing Case/subTest/time/worker unchanged."
-},
-
-{
-  "issue": 1085,
-  "origin_commit": "ddfe6881d05396a4ea1ec9a92c13be32e05a1c5f",
-  "origins": [
-    {
-      "source": "tests/test_codex_backend.py",
-      "sha256": "b46b45bdebcd219f63a7da8fdcf976b99c8b5d90d083e302d9de5f9ecac0e9c1"
-    },
-    {
-      "source": "tests/test_session_lifecycle.py",
-      "sha256": "b4b5cb94c93a742b3907233af1eaa63f830fba3813ef7381f447206c5a329f53"
-    },
-    {
-      "source": "tests/test_rag_module_and_packaging_boundary.py",
-      "sha256": "b72a9c46c2bdad95b95347ac18385982b8d4ba599d4f82099ee7a42bdf354ef8"
-    },
-    {
-      "source": "tests/test_suite_budget.py",
-      "sha256": "d0ba9aa24d91906bf2d0621defec96e1b670ca0cc2765754663a6018dbcad0f8"
-    }
-  ],
-  "approved_source_delta": 33,
-  "planned_raw_delta": 33,
-  "planned_support_delta": 0,
-  "legacy_unresolved_lines": 1550,
-  "exact_source_pair": [
-    156174,
-    156207
-  ],
-  "expected_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
-  "generic_tooling_ordinary_delta_excluded": 0,
-  "generic_tooling_physical_delta_excluded": 0,
-  "cost_components": {
-    "existing_execution_profile_API_graph_packaging": 29,
-    "existing_BudgetCase_strict_source_pair": 4
-  },
-  "counting": "raw 149935\u2192149968, support 4689, legacy 1550. Existing Case/subTest/time/worker unchanged."
-}
-,
-{
-  "issue": 1087,
-  "origin_commit": "938d20969dd268e1557cff00dbae8f823110a832",
-  "origins": [
-    {
-      "source": "tests/test_codex_backend.py",
-      "sha256": "2fc0d45eef969a2481519a64f309635c3257ccd0d4dadf75894f429fb6600485"
-    },
-    {
-      "source": "tests/test_suite_budget.py",
-      "sha256": "f2876beba16cf47bf318c42cb264f639a24d1e887ed481f09b10a2af6af8bae1"
-    }
-  ],
-  "approved_source_delta": 67,
-  "planned_raw_delta": 37,
-  "planned_support_delta": 30,
-  "legacy_unresolved_lines": 1550,
-  "exact_source_pair": [
-    156207,
-    156274
-  ],
-  "expected_caps_sha256": "0d14af735a342f0bde739f20dca64d0ee402dd03f9c83a017fb89cd0219ffa3f",
-  "original_caps_sha256": "3cd5c7be219e190fb30850d45c7c60603211b66de3cdc12c3ffe3c5dd37718d2",
-  "current_receipt_sha256": "2d683bd89f317d917c3b31f749ff41a3e2939ea957363a839624bde36381eaf6",
-  "generic_tooling_ordinary_delta_excluded": 15,
-  "generic_tooling_physical_delta_excluded": 15,
-  "cost_components": {
-    "ordinary_test_module_layout": 11,
-    "registered_debug_fixture": 27,
-    "registered_id_move_guard": 3,
-    "existing_budget_case_assertions": 26
-  },
-  "counting": "Raw 149968\u2192150005 + registered 4689\u21924719 + legacy 1550. Existing 10 Cases moved 1:1, count/cap/timing/worker frozen."
-},
-{
-  "issue": 1089,
-  "origin_commit": "32b7301720069228bd43bed4437f865d77377877",
-  "origins": [
-    {
-      "source": "tests/test_codex_backend.py",
-      "sha256": "dfd6da177ce72881c73f2e9cdb31b51cb9745684a7b7c142c02d599e5cb7089b",
-      "source_ranges": [
-        [
-          6183,
-          6274
-        ],
-        [
-          6640,
-          6667
-        ],
-        [
-          6673,
-          6692
-        ],
-        [
-          368,
-          394
-        ]
-      ]
-    },
-    {
-      "source": "tests/test_backend_reply_decoding.py",
-      "sha256": "5fbf373d69f49e7c1812d67a7b2e2de88afbe8180fb0fbc76f20333b5bc6a0d4",
-      "source_ranges": [
-        [
-          16,
-          19
-        ],
-        [
-          21,
-          35
-        ]
-      ]
-    },
-    {
-      "source": "tests/test_antigravity_parity.py",
-      "sha256": "b1855190581f8f939072d365b7926c2610ab3c365f903d1861917459fb334cf4"
-    },
-    {
-      "source": "tests/test_rag_module_and_packaging_boundary.py",
-      "sha256": "bc720bc1a10c51b3ea524cc7a2a1b5230c7c188014eea327604ea3fc9f514a76"
-    },
-    {
-      "source": "tests/test_suite_budget.py",
-      "sha256": "3f7bc43f8e0199c4a414191838b94631b63ebab4dbc0e0da68758264be5bdeef"
-    },
-    {
-      "source": "tests/id_moves.py",
-      "sha256": "e380a39928f09a5606ff787d77bee44a6a3f72fb9851f4d1a57edcbbaa820a01"
-    }
-  ],
-  "approved_source_delta": 95,
-  "planned_raw_delta": 42,
-  "planned_support_delta": 53,
-  "legacy_unresolved_lines": 1550,
-  "exact_source_pair": [
-    156274,
-    156369
-  ],
-  "original_caps_sha256": "0d14af735a342f0bde739f20dca64d0ee402dd03f9c83a017fb89cd0219ffa3f",
-  "expected_caps_sha256": "a49ec017285634e6e0be8e23c353dc9a2029e9edb7b67f7e637a9358991e4cbd",
-  "current_receipt_sha256": "a531caadd7c8b04f83d795994b3d05059ab090cf3a16d3a1ddf45118b6450f30",
-  "generic_tooling_ordinary_delta_excluded": 15,
-  "generic_tooling_physical_delta_excluded": 15,
-  "cost_components": {
-    "ordinary_runtime_test_layout_and_import_adjustments": -34,
-    "existing_graph_api_packaging_cases": 52,
-    "existing_budget_case_closed_move_checks": 24,
-    "registered_wire_value_fixture": 50,
-    "registered_id_move_guard": 3
-  },
-  "counting": "Raw 150005\u2192150047 + registered 4719\u21924772 + legacy 1550. Existing 3 Cases moved 1:1, count/cap/individual weight shares/time/worker frozen."
-},
     {
       "issue": 1091,
       "origin_commit": "f8090ab80ea957afc5b7cf0c0c53bffbe221ce25",
@@ -3129,9 +3118,37 @@
       },
       "counting": "ordinary tests + unchanged registered support + 1550 legacy"
     },
-
-    {"issue":1109,"origin_commit":"35231181388143262d665ab9e57523ad7490d275","origins":[{"source":"tests/test_rag_module_and_packaging_boundary.py","sha256":"d7106d3540f332d6d2eafb1a8156f89d87dea6e49565327fb40f67965a24aa24"},{"source":"tests/test_suite_budget.py","sha256":"aa47e0d50a703f52f511645dfdb33acf29b09786f0a54894167bf31155d14a6d"}],"approved_source_delta":11,"planned_raw_delta":11,"planned_support_delta":0,"legacy_unresolved_lines":1550,"exact_source_pair":[156942,156953],"original_caps_sha256":"0fc8c5e140b56200643f090106395259da9ca23d1e90a0e64738c3bd3f5c5fbe","expected_caps_sha256":"0fc8c5e140b56200643f090106395259da9ca23d1e90a0e64738c3bd3f5c5fbe","excluded_monotonic_rule_ordinary":0,"excluded_monotonic_rule_physical":0,"cost_components":{"tests/test_rag_module_and_packaging_boundary.py":4,"tests/test_suite_budget.py":7},"counting":"ordinary tests + unchanged registered support + 1550 legacy"},
-
+    {
+      "issue": 1109,
+      "origin_commit": "35231181388143262d665ab9e57523ad7490d275",
+      "origins": [
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "d7106d3540f332d6d2eafb1a8156f89d87dea6e49565327fb40f67965a24aa24"
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "aa47e0d50a703f52f511645dfdb33acf29b09786f0a54894167bf31155d14a6d"
+        }
+      ],
+      "approved_source_delta": 11,
+      "planned_raw_delta": 11,
+      "planned_support_delta": 0,
+      "legacy_unresolved_lines": 1550,
+      "exact_source_pair": [
+        156942,
+        156953
+      ],
+      "original_caps_sha256": "0fc8c5e140b56200643f090106395259da9ca23d1e90a0e64738c3bd3f5c5fbe",
+      "expected_caps_sha256": "0fc8c5e140b56200643f090106395259da9ca23d1e90a0e64738c3bd3f5c5fbe",
+      "excluded_monotonic_rule_ordinary": 0,
+      "excluded_monotonic_rule_physical": 0,
+      "cost_components": {
+        "tests/test_rag_module_and_packaging_boundary.py": 4,
+        "tests/test_suite_budget.py": 7
+      },
+      "counting": "ordinary tests + unchanged registered support + 1550 legacy"
+    },
     {
       "issue": 1111,
       "origin_commit": "8c4b422d545ec0f3b84da3b5a2bd31261a4a49cc",
@@ -3163,7 +3180,6 @@
       },
       "counting": "ordinary tests + unchanged registered support + 1550 legacy"
     },
-
     {
       "issue": 1113,
       "origin_commit": "8195f07c5beb89574055907c8d8433a18f89990d",
@@ -3200,8 +3216,7 @@
         "tests/test_provider_binding_call_lifetime.py": 275
       },
       "counting": "ordinary tests + unchanged registered support + 1550 legacy"
-    }
-,
+    },
     {
       "issue": 1115,
       "origin_commit": "8195f07c5beb89574055907c8d8433a18f89990d",
@@ -4399,6 +4414,103 @@
         158099,
         158154
       ]
+    },
+    {
+      "issue": 1024,
+      "origin_commit": "2edcabc7138bcd6fc1b43a4426f23f5a59f418da",
+      "origins": [
+        {
+          "source": "tests/conversation_search_contract.py",
+          "sha256": "79a96d83eace0aef21f294770315efcd7cbc360d1c9c3a98eff50d11c0443206"
+        },
+        {
+          "source": "tests/id_moves.py",
+          "sha256": "cb62f3167ff1066738349cc0fc70634354cf770d0bbb63cd9f1eb3a2cd58b39c"
+        },
+        {
+          "source": "tests/test_artifact_application_contracts.py",
+          "sha256": "6f929676b85908c16ce08e2b457c5cb6ce9db71d2296886e04dc285aa84b6400"
+        },
+        {
+          "source": "tests/test_artifact_application_store_recovery.py",
+          "sha256": "ba211e4a2d01c9fbfb5c028f11edc84630bb399ab391a361dc1a1630b269a264"
+        },
+        {
+          "source": "tests/test_artifact_relationship_policy.py",
+          "sha256": "c3e9e2735c5997ef68e928fe0228d171b1d15deb6dcc2bc368ac91b33512ba17"
+        },
+        {
+          "source": "tests/test_conversation_search.py",
+          "sha256": "426bc60beead26d4a23e8749c3c84aa2fff9f1dcdd102a5443e51cf16378c430"
+        },
+        {
+          "source": "tests/test_conversation_storage.py",
+          "sha256": "fef7539c942fd32299a9b5fd6036e0b0014d6a4e54e3814ee68fddd78032a232"
+        },
+        {
+          "source": "tests/test_git_external_operation_inspection.py",
+          "sha256": "fd2e99406f4e4ec98c1901e869876dfcbea9c5d10f126bb55ea6b757f93fe956"
+        },
+        {
+          "source": "tests/test_interactive_controller.py",
+          "sha256": "0d20cbe0399dde071f09e6f48bf4e52370ea5543569a83d53689760a51fc3648"
+        },
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "3fbe6f79e99dc07f56a686689aa82b874941e53ea8c23053dcd38ef2807b2501"
+        },
+        {
+          "source": "tests/test_session_lifecycle.py",
+          "sha256": "9a4c7687fec454788f09c970dd16fa557281a741f7fffa3c0d0956dfeb631d53"
+        },
+        {
+          "source": "tests/test_session_recovery_contracts.py",
+          "sha256": "52233f0c2f0c965faba4e744c6599641012568caaa9c0e3b7c219a40ca86801f"
+        },
+        {
+          "source": "tests/test_sqlite_conversation_storage.py",
+          "sha256": "8de09f4b56dc03eba044af20cf50145a5da7f5f3c1a84e6e2c56a0ffe4caeea5"
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "303ae8400fb20acf9997c76436ed07a5bd28a290c614c5f9f88c827b45cdc215"
+        },
+        {
+          "source": "tests/test_workspace_session_history.py",
+          "sha256": "b1a150949fba9960bf297a2d208e0bcb6ca31e5f5f1c2511c4741ffe730c5002"
+        }
+      ],
+      "approved_source_delta": 31,
+      "planned_raw_delta": 27,
+      "planned_support_delta": 4,
+      "legacy_unresolved_lines": 1550,
+      "exact_source_pair": [
+        158347,
+        158378
+      ],
+      "original_caps_sha256": "0fc8c5e140b56200643f090106395259da9ca23d1e90a0e64738c3bd3f5c5fbe",
+      "expected_caps_sha256": "20f8f0a9d510ad325f82fb32d14d7b3a73f372647aa85ed4cd0c60fc3d5124c6",
+      "excluded_monotonic_rule_ordinary": 13,
+      "excluded_monotonic_rule_physical": 13,
+      "cost_components": {
+        "tests/conversation_search/test_history_service_filesystem.py": 38,
+        "tests/conversation_search/test_history_service_memory.py": 17,
+        "tests/id_moves.py": 4,
+        "tests/test_artifact_application_contracts.py": 0,
+        "tests/test_artifact_application_store_recovery.py": 0,
+        "tests/test_artifact_relationship_policy.py": 0,
+        "tests/test_conversation_search.py": -35,
+        "tests/test_conversation_storage.py": 0,
+        "tests/test_git_external_operation_inspection.py": 0,
+        "tests/test_interactive_controller.py": -2,
+        "tests/test_rag_module_and_packaging_boundary.py": 3,
+        "tests/test_session_lifecycle.py": 0,
+        "tests/test_session_recovery_contracts.py": 0,
+        "tests/test_sqlite_conversation_storage.py": 0,
+        "tests/test_suite_budget.py": 6,
+        "tests/test_workspace_session_history.py": 0
+      },
+      "counting": "ordinary tests + registered support + 1550 legacy"
     }
   ]
 }

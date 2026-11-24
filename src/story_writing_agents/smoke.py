@@ -8,10 +8,10 @@ from pathlib import Path
 from typing import Any
 
 from .agents import EXECUTION_SPECIALIST
+from .collaboration_history import CollaborationHistoryService
 from .conversation_search import (
     CollaborationHistorySearchQuery,
     CollaborationHistorySearchScope,
-    CollaborationHistoryService,
 )
 from .conversation_storage.contracts import (
     ConversationStorageBackend,

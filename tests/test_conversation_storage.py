@@ -23,10 +23,10 @@ from story_writing_agents import (
     FilesystemConversationCatalog,
     Workspace,
 )
+from story_writing_agents.collaboration_history_search import ReferenceCollaborationHistorySearch
 from story_writing_agents.conversation_search import (
     CollaborationHistorySearchQuery,
     CollaborationHistorySearchScope,
-    ReferenceCollaborationHistorySearch,
 )
 from story_writing_agents.conversation_storage import (
     CONVERSATION_STORAGE_ACTIVATION_SCHEMA_VERSION,

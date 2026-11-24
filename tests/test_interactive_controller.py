@@ -42,9 +42,7 @@ from story_writing_agents.cli_context import (
     save_default_session,
 )
 from story_writing_agents.config import ConfigManager
-from story_writing_agents.conversation_search import (
-    ReferenceCollaborationHistorySearch,
-)
+from story_writing_agents.collaboration_history_search import ReferenceCollaborationHistorySearch
 from story_writing_agents.conversation_storage import (
     CONVERSATION_STORAGE_ACTIVATION_STATE_PATH,
     ConversationStorageBackend,
@@ -1749,8 +1747,8 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 416)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 2461)
+        self.assertEqual(len(modules), 418)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 2470)
         self.assertTrue(
             {
                 "story_writing_agents.artifact_proposals",

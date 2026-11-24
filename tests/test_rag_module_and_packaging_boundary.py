@@ -414,8 +414,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 416)
-        self.assertEqual(len(edges), 2600)
+        self.assertEqual(len(modules), 418)
+        self.assertEqual(len(edges), 2609)
         self.assertIn(('story_writing_agents.agent_context.invocation.context_execution', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.agent_context.invocation.provider', 'story_writing_agents.provider_adapter'), edges)
         self.assertIn(('story_writing_agents.interactive_terminal._advisory_progress', 'story_writing_agents.agent_context.contracts.events'), edges)
@@ -1165,6 +1165,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             self.assertEqual(actual, expected, owner)
         changed_storage_dependencies = {
             "story_writing_agents.conversation_storage.composition": {
+                "story_writing_agents.collaboration_history_search",
                 "story_writing_agents.conversation_search",
                 "story_writing_agents.conversation_storage.contracts",
                 "story_writing_agents.conversation_storage.filesystem",
@@ -3713,6 +3714,8 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                         self.assertEqual(handle.read(),
                             (_REPOSITORY_ROOT / "src" / package_path).read_bytes())
             conversation_package_paths = (
+                "story_writing_agents/collaboration_history.py",
+                "story_writing_agents/collaboration_history_search.py",
                 "story_writing_agents/artifact_transactions/__init__.py",
                 "story_writing_agents/conversations/__init__.py",
                 "story_writing_agents/conversations/catalog.py",
