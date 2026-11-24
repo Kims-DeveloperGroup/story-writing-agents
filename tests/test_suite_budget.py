@@ -246,7 +246,10 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
-        history_search_current = suite_budget.load_budget()
+        rag_generation_current = suite_budget.load_budget()
+        history_search_current = dict(rag_generation_current, max_test_source_lines=158380)
+        self.assertIsNone(suite_budget.check_monotonic(rag_generation_current, history_search_current))
+        self._assert_source_limit_neighbors_rejected(rag_generation_current, history_search_current)
         *move_receipts, history_search_stage = load_receipt()
         codex_native_outcome_current = dict(history_search_current, max_test_source_lines=158347, subtest_caps=dict(history_search_current["subtest_caps"]))
         for move in history_search_stage["moves"]:

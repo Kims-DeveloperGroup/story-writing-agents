@@ -33,13 +33,13 @@ from .conversation_rag_runtime import (
     ConversationRagRuntimeInspection,
     inspect_authorized_conversation_rag,
 )
-from .conversation_rag_store import (
-    ConversationRagGenerationStore,
+from .conversation_rag_generation_contracts import (
     ConversationRagStoreCounts,
     ConversationRagStoreError,
     ConversationRagStoreFailure,
     ConversationRagStoreSnapshot,
 )
+from .conversation_rag_store import ConversationRagGenerationStore
 from .conversation_retrieval import (
     ConversationRagAttemptOutcome,
     ConversationRagContext,

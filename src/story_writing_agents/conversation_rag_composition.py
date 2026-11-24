@@ -32,13 +32,13 @@ from .conversation_rag_local import (
     LocalConversationRagEmbedder,
     LocalConversationRagVectorRanker,
 )
-from .conversation_rag_store import (
-    ConversationRagGenerationStore,
+from .conversation_rag_generation_contracts import (
     ConversationRagStoreError,
     ConversationRagStoreFailure,
     ConversationRagStoreSnapshot,
     ConversationRagStoreStatus,
 )
+from .conversation_rag_store import ConversationRagGenerationStore
 from .conversation_rag_runtime import (
     CONVERSATION_RAG_RUNTIME_SCHEMA_ID,
     ConversationRagRuntimeService,

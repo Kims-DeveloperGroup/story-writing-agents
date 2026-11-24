@@ -10,29 +10,31 @@
     "tests/agent_context/planning/fixtures.py",
     "tests/agent_context/sources/authority_fixture.py",
     "tests/agent_context/sources/value_inputs.py",
+    "tests/agent_exchange_capture_fixture.py",
+    "tests/antigravity_adapter_fixture.py",
+    "tests/antigravity_streaming_fixture.py",
+    "tests/backend_debug_log_fixture.py",
+    "tests/backend_lifecycle_diagnostic_fixture.py",
+    "tests/bound_context_provider_cases.py",
+    "tests/codex_native_process_fixture.py",
+    "tests/conversation_rag/generation_format_contract.py",
+    "tests/conversation_rag/store_fixture.py",
+    "tests/conversation_retrieval_wire_fixture.py",
     "tests/feedback_probe.py",
     "tests/id_moves.py",
-    "tests/module_graph_fixture.py",
-    "tests/terminal_input_fixture.py",
-    "tests/provider_response_contract_fixture.py",
     "tests/known_result_finalization_fixture.py",
     "tests/lead_fixtures/__init__.py",
+    "tests/lead_fixtures/artifact_review.py",
     "tests/lead_fixtures/material_values.py",
     "tests/lead_fixtures/preparation_data.py",
     "tests/lead_fixtures/provider_responses.py",
     "tests/lead_fixtures/runtime_setup.py",
-    "tests/recommendation_fixture.py",
     "tests/lead_fixtures/specialist_routing.py",
-    "tests/lead_fixtures/artifact_review.py",
-    "tests/backend_debug_log_fixture.py",
-    "tests/conversation_retrieval_wire_fixture.py",
-    "tests/bound_context_provider_cases.py",
-    "tests/codex_native_process_fixture.py",
-    "tests/agent_exchange_capture_fixture.py",
-    "tests/antigravity_adapter_fixture.py",
-    "tests/antigravity_streaming_fixture.py",
-    "tests/backend_lifecycle_diagnostic_fixture.py",
-    "tests/provider_session_lifecycle_artifacts_fixture.py"
+    "tests/module_graph_fixture.py",
+    "tests/provider_response_contract_fixture.py",
+    "tests/provider_session_lifecycle_artifacts_fixture.py",
+    "tests/recommendation_fixture.py",
+    "tests/terminal_input_fixture.py"
   ],
   "origins": {
     "test_git_external_operation_inspection.py": {
@@ -4509,6 +4511,88 @@
         "tests/test_sqlite_conversation_storage.py": 0,
         "tests/test_suite_budget.py": 6,
         "tests/test_workspace_session_history.py": 0
+      },
+      "counting": "ordinary tests + registered support + 1550 legacy"
+    },
+    {
+      "issue": 1025,
+      "origin_commit": "79a8d8fba6df7f1365c3c9db9ee02e9b819c7cc6",
+      "origins": [
+        {
+          "source": "tests/test_artifact_application_contracts.py",
+          "sha256": "c80e4c119c1a52798f5631ad57139e2c681cfe5cc91e89ab59b78c206b6d1c69"
+        },
+        {
+          "source": "tests/test_artifact_application_store_recovery.py",
+          "sha256": "1c114a6ac2af6dcb9a58566957cc1acd6e229f098743e404c05581b964e87740"
+        },
+        {
+          "source": "tests/test_artifact_relationship_policy.py",
+          "sha256": "16c40150299ce00dc6edd5c8559835c513ae9c3afbf0aaa620f33835f3a1879f"
+        },
+        {
+          "source": "tests/test_conversation_rag_store.py",
+          "sha256": "f2249bfb7c00002e189415a444a5796065887579ad48916156228796919f6977"
+        },
+        {
+          "source": "tests/test_git_external_operation_inspection.py",
+          "sha256": "401aaa490c8e6a51ec24bd63fb6c36569f9b125461d25b4990f92e533b3becf2"
+        },
+        {
+          "source": "tests/test_interactive_controller.py",
+          "sha256": "afa6bfe649f0991f0c231e67bc6cb9c5613cd99bbb85eda44a015647a984a6b9"
+        },
+        {
+          "source": "tests/test_rag_module_and_packaging_boundary.py",
+          "sha256": "1abaf3e7d3e6dd0e92ad48659540326c40a944dfed93ad7d4ba7fae46b778218"
+        },
+        {
+          "source": "tests/test_session_lifecycle.py",
+          "sha256": "187939fa7541441f706dbb343874a68cfe9147639a36f51cb66d886f18c5a1b9"
+        },
+        {
+          "source": "tests/test_session_recovery_contracts.py",
+          "sha256": "9b4c05d991da5f26b04a2977caee1ade915c6228298ea428ab429dc1f05d18c7"
+        },
+        {
+          "source": "tests/test_suite_budget.py",
+          "sha256": "5f6c275319871b4a3f08d9fe761e2147190651c95fbac10123aad0576dd3b7f6"
+        },
+        {
+          "source": "tests/test_workspace_session_history.py",
+          "sha256": "9e7c2aba1244c6b3fdfdd8d96669c5cce011017b95cc11a582f3fcf85ff3250d"
+        }
+      ],
+      "approved_source_delta": 81,
+      "planned_raw_delta": -322,
+      "planned_support_delta": 403,
+      "legacy_unresolved_lines": 1550,
+      "exact_source_pair": [
+        158380,
+        158461
+      ],
+      "original_caps_sha256": "20f8f0a9d510ad325f82fb32d14d7b3a73f372647aa85ed4cd0c60fc3d5124c6",
+      "expected_caps_sha256": "20f8f0a9d510ad325f82fb32d14d7b3a73f372647aa85ed4cd0c60fc3d5124c6",
+      "counted_support_paths": [
+        "tests/conversation_rag/store_fixture.py",
+        "tests/conversation_rag/generation_format_contract.py"
+      ],
+      "excluded_monotonic_rule_ordinary": 8,
+      "excluded_monotonic_rule_physical": 8,
+      "cost_components": {
+        "tests/test_artifact_application_contracts.py": 0,
+        "tests/test_artifact_application_store_recovery.py": 0,
+        "tests/test_artifact_relationship_policy.py": 0,
+        "tests/test_conversation_rag_store.py": -347,
+        "tests/test_git_external_operation_inspection.py": 0,
+        "tests/test_interactive_controller.py": 0,
+        "tests/test_rag_module_and_packaging_boundary.py": 22,
+        "tests/test_session_lifecycle.py": 0,
+        "tests/test_session_recovery_contracts.py": 0,
+        "tests/test_suite_budget.py": 3,
+        "tests/test_workspace_session_history.py": 0,
+        "tests/conversation_rag/store_fixture.py": 203,
+        "tests/conversation_rag/generation_format_contract.py": 200
       },
       "counting": "ordinary tests + registered support + 1550 legacy"
     }
