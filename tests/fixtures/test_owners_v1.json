@@ -18543,8 +18543,7 @@
         "lead-fixtures.specialist-routing",
         "tests.test_artifact_objectives",
         "tests.test_collaboration_events",
-        "tests.test_lead_artifact_application_authority",
-        "tests.test_lead_story_commit_authority"
+        "tests.test_lead_artifact_application_authority"
       ]
     },
     {
