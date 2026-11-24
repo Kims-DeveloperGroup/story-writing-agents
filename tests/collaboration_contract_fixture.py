@@ -300,6 +300,8 @@ CONVERSATION_FACADE_EXPORTS = (
     'ArtifactApplicationOutcomeKind',
     'ArtifactApplicationRequestPayload',
     'ArtifactApplicationResultPayload',
+    'SynchronizationPayload',
+    'synchronization_event_ref',
     'StoryCommitPreparationRequest',
     'StoryCommitDecisionRequest',
     'StoryCommitDecisionResult',

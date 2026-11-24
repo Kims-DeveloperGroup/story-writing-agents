@@ -959,6 +959,7 @@ class ConversationPackageBoundaryTests(unittest.TestCase):
                 "decode_artifact_reviewed_proposal",
                 "encode_artifact_reviewed_proposal",
             },
+            "event_contracts/synchronization.py": {"SynchronizationPayload"},
             "event_contracts/story_commits.py": {
                 "StoryCommitDecisionPayload",
                 "StoryCommitRequestPayload",

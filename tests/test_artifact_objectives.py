@@ -240,12 +240,15 @@ class ObjectiveCase(runtime_setup.LeadOrchestrationTestCase):
             (len(result.proposal.participants) + 1) * (1 + int(attached)), 12)
         return result
 
-    async def review(self, proposed):
+    async def review(self, proposed, *, expect_apply=True):
         for assignment in proposed.proposal.assignments:
             self.backend.enqueue_for(assignment.specialist_id, preparation_data.lead_specialist_outcome("supports"))
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, artifact._artifact_synthesis_outcome("propose"))
         result = await self.runtime.decide_lead_step(preparation_data.lead_confirmation_decision(proposed, c.CollaborationConfirmationDecision.CONFIRM))
-        self.assertIsNotNone(result.turn.artifact_application_request, result.turn)
+        if expect_apply:
+            self.assertIsNotNone(result.turn.artifact_application_request, result.turn)
+        else:
+            self.assertIsNone(result.turn.artifact_application_request, result.turn)
         return result.turn
 
     async def apply(self, reviewed, kind=c.ArtifactApplicationDecisionKind.APPLY):

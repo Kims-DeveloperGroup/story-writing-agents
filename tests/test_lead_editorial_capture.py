@@ -245,6 +245,15 @@ class LeadEditorialCaptureTests(RecommendationCase):
         unchanged_payload = replace(satisfied.payload, outcome=c.ArtifactApplicationOutcomeKind.UNCHANGED,
                                     result=replace(satisfied.payload.result, state=ArtifactApplicationState.UNCHANGED))
         unchanged_history = objectives.rewrite_history(self.history(conversation_id), satisfied.event_id, payload=unchanged_payload)
+        unchanged_result = next(event for event in unchanged_history if event.event_id == satisfied.event_id)
+        report = next(event for event in unchanged_history if type(event.payload) is c.SynchronizationPayload
+                      and event.payload.assessment is not None and event.payload.assessment.basis.application is not None)
+        with self.assertRaisesRegex(ValueError, "reference is missing, changed, or not yet recorded"):
+            c.project_collaboration_history(unchanged_history)
+        assessed = report.payload.assessment
+        unchanged_application = replace(assessed.basis.application, result=c.synchronization_event_ref(unchanged_result))
+        report_payload = c.SynchronizationPayload(assessment=replace(assessed, basis=replace(assessed.basis, application=unchanged_application)))
+        unchanged_history = objectives.rewrite_history(unchanged_history, report.event_id, payload=report_payload)
         self.assertIs(next(item for item in c.project_collaboration_history(unchanged_history).artifact_objectives
             if item.facts.objective_id == objective.facts.objective_id).state, c.ArtifactObjectiveState.SATISFIED)
         other_case = objectives.ObjectiveCase()

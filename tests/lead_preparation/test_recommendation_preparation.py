@@ -436,8 +436,15 @@ class LeadRecommendationTests(RecommendationCase):
         new_prepared = await self.runtime.decide_lead_recommendation(decision(fresh))
         self.assertEqual(new_prepared.proposal.basis.editorial_context_digest,
             fresh_basis.editorial_context_digest)
-        reviewed = await self.review(new_prepared)
+        reviewed = await self.review(new_prepared, expect_apply=False)
         self.assertIs(reviewed.artifact_proposal.state, c.ArtifactProposalState.REVIEWED)
+        self.assertIs(reviewed.next_action, c.CollaborationNextAction.CONTINUE_WITH_LEAD)
+        exact_review = reviewed.artifact_proposal.reviewed_proposal
+        self.assertEqual(exact_review.candidate, new_prepared.artifact_proposal.candidate.candidate)
+        synchronization = self.projection(work).synchronization.assessment_for_review(exact_review)
+        self.assertIsNotNone(synchronization)
+        self.assertEqual((len(synchronization.census.required_pairs), synchronization.findings,
+                          synchronization.ready), (3, (), False))
         self.assertEqual(self.runtime.inspect_editorial_state(self.session_id).applied_facts, ())
 
         self.workspace.path(OUTLINE).write_text("Source-bound outline line.\n", encoding="utf-8")
