@@ -1258,21 +1258,21 @@ class SpecialistRoutingRuntimeTests(SpecialistRoutingRuntimeCase):
         with self.assertRaisesRegex(ValueError, "latest"):
             await restarted.lead_turn(self.session_id, new_owner, "Do not reuse the old choice.", adoption=selection)
         self.assertEqual((self.history(conversation), len(self.backend.calls)), (owner_history, calls))
-        # The later rule review must also account for the manuscript this test just applied.
+        # The later style review keeps the current rules as exact review criteria.
         await self.record_book_readiness(preserve_documents=True, additional_read_paths=(_OPENING_PATH, path))
-        fresh_path = "core_documents/narrative_rules.md"
+        fresh_path = _OPENING_PATH
         rule_path = "core_documents/narrative_rules.md"
         rule_locator = "${core_documents/narrative_rules.md}"
         rule_bytes = self.workspace.path(rule_path).read_bytes()
         rule_digest = "sha256:" + hashlib.sha256(rule_bytes).hexdigest()
+        opening_text = self.workspace.path(fresh_path).read_text(encoding="utf-8")
         late_roster = (EXECUTION_SPECIALIST,)
         style_request = (
-            "Review the supplied current narrative rules as a STYLE-only candidate. "
-            "Do not invent or change plot, character, world facts, or any existing rule. "
-            "You may make bounded style-review judgments and prepare a separate exact "
-            "replacement containing the same text plus one trailing blank line. "
-            "Execution requires its own exact confirmation.\n" + rule_locator)
-        style_assessment = task_assessment(foundation_ids=("reference_1",),
+            "Review the supplied opening against the current narrative rules. "
+            "Preserve plot, world facts, and the current rule. "
+            "Prepare a separate exact opening replacement containing its existing text and a trailing blank line. "
+            "Execution requires its own exact confirmation.\n" + rule_locator + "\n${" + fresh_path + "}")
+        style_assessment = task_assessment(foundation_ids=("reference_1", "reference_2"),
             actions=("bounded style-review judgments", "separate exact formatting-only candidate preparation"))
         condition_before = self.artifact_bytes()
         late_synthesis_checks = []
@@ -1281,34 +1281,30 @@ class SpecialistRoutingRuntimeTests(SpecialistRoutingRuntimeCase):
             source_id = next(reply["reply_event_id"] for reply in material["replies"] if reply["mode"] == "review")
             raw = _synthesis_outcome(
                 recommendation_family=2, recommended_action=action(target_paths=(fresh_path,),
-                       source_ids=("user_input", "reference_1", source_id)))(call, provider)
+                       source_ids=("user_input", "reference_1", "reference_2", source_id)))(call, provider)
             late_synthesis_checks.append(call.contract.structural_findings(raw))
             return raw
         late_calls = len(self.backend.calls)
         try:
-            (fresh,
-                fresh_review,
-            ) = await self.finish_draft(
+            fresh, fresh_review = await self.finish_draft(
                 new_owner, text=style_request, response=self._native_scoped(
-                EXECUTION_SPECIALIST,
-                activity="review", paths=(fresh_path,),
-                domains=("tone_execution",),
-                candidate_ids=("reference_1",),
-                authoring_assessment=style_assessment,
-            ), selection_group="consultation.authoring.review", synthesis=changed_recommend)
+                    EXECUTION_SPECIALIST, activity="review", paths=(fresh_path,), domains=("tone_execution",),
+                    candidate_ids=("reference_1", "reference_2"), authoring_assessment=style_assessment,
+                ), selection_group="consultation.authoring.review", synthesis=changed_recommend,
+            )
         finally:
             self.assertEqual(late_synthesis_checks, [()])
         self.assertIsNotNone(fresh.proposal, fresh)
         self.assertNotEqual(fresh.proposal.authoring_scope.task_id, task_id)
         self.assertEqual((fresh.proposal.authoring_scope.task_revision, fresh.proposal.budget.rounds_spent,
                           fresh.proposal.budget.physical_calls_spent), (1, 0, 2))
-        changed_response = artifact_review_outcome(operations=[{"kind": "replace", "evidence_id": "reference_1",
-                "new_text": rule_bytes.decode("utf-8") + "\n"}],
-                           evidence_status="incomplete", evidence_ids=["reference_1"],
-            objective_intent={"action": "start", "target_paths": {fresh_path: True},
-                "next_step": "prepare"},
+        changed_response = artifact_review_outcome(
+            operations=[{"kind": "replace", "evidence_id": "reference_2", "new_text": opening_text + "\n"}],
+            evidence_status="incomplete", evidence_ids=["reference_1", "reference_2"],
+            objective_intent={"action": "start", "target_paths": {fresh_path: True}, "next_step": "prepare"},
             authoring_scope=lambda _: c.authoring_scope_to_dict(fresh.proposal.authoring_scope),
-            authoring_assessment=asdict(style_assessment),)
+            authoring_assessment=asdict(style_assessment),
+        )
         def changed_integrate(call, provider):
             return changed_response(call, provider)
         self.backend.enqueue(changed_integrate)

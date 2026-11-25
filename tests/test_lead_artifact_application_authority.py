@@ -177,12 +177,12 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
     async def reviewed_create(self, subject: str = "Reviewed application", *, kind="create",
                               new_text="Use restrained close-third narration.\n",
                               editorial_refs=(), editorial_context_digest=None, review_task=None,
-                              extra_core_evidence=()):
+                              extra_core_evidence=(), artifact_path=ARTIFACT_FIXTURE_RULES_PATH):
         conversation_id = self.conversation(subject)
         if kind == "create":
-            self.workspace.path(ARTIFACT_FIXTURE_RULES_PATH).unlink(missing_ok=True)
+            self.workspace.path(artifact_path).unlink(missing_ok=True)
         return await seed_reviewed_artifact(self, conversation_id, (
-            (kind, ARTIFACT_FIXTURE_RULES_PATH, new_text),
+            (kind, artifact_path, new_text),
         ),
             editorial_refs=editorial_refs, editorial_context_digest=editorial_context_digest,
             review_task=review_task, extra_core_evidence=extra_core_evidence,
@@ -919,7 +919,7 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         self.assertEqual(self.git_snapshot(), git_before)
 
     async def test_application_and_result_persistence_failures_map_safely(self) -> None:
-        self.workspace.path(ARTIFACT_FIXTURE_RULES_PATH).unlink(missing_ok=True)
+        self.workspace.path(_PART_OUTLINES).unlink(missing_ok=True)
         self._commit_fixture_baseline("Seed Apply failure baseline")
 
         draft = replace(
@@ -996,9 +996,11 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         self.assertEqual(fault_case.git_snapshot(), blocked_git)
 
         memory = await self.runtime.record_editorial_decision(
-            self.session_id, self.conversation("Scoped publication failure"), direction,
+            self.session_id, self.conversation("Scoped publication failure"),
+            replace(direction, draft=replace(draft, scope=scopes.EditorialScope.whole(_PART_OUTLINES))),
         )
-        turn = await self.reviewed_create("Commit preparation failure")
+        turn = await self.reviewed_create("Commit preparation failure", artifact_path=_PART_OUTLINES,
+                                          new_text="Mara crosses the bridge to reach the archive.\n")
         git_before = self.git_snapshot()
         with mock.patch(
             "story_writing_agents.artifact_transactions.story_commit_qualification.compose_story_commit_service",
@@ -1060,8 +1062,8 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         known_review = prepared.request.reviewed_proposal.final_review_evidence
         continued_core_evidence = ("core_documents/global_outline.md",)
         turn = await self.reviewed_create(
-            "Published pair readback", kind="replace",
-            new_text="Use a consistent close-third narrative voice.\n",
+            "Published pair readback", kind="replace", artifact_path=_PART_OUTLINES,
+            new_text="Mara waits for dusk before crossing the bridge.\n",
             review_task=(known_review.task_id, known_review.task_revision + 1),
             extra_core_evidence=continued_core_evidence,
         )
@@ -1098,8 +1100,8 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         self.assertEqual(self.git_snapshot(), git_before)
 
         turn = await self.reviewed_create(
-            "Commit request publication fails, known apply survives", kind="replace",
-            new_text="Maintain close third person through the scene.\n",
+            "Commit request publication fails, known apply survives", kind="replace", artifact_path=_PART_OUTLINES,
+            new_text="Mara leaves the archive before the keeper arrives.\n",
             review_task=(known_review.task_id, known_review.task_revision + 2),
             extra_core_evidence=continued_core_evidence,
         )
@@ -1132,7 +1134,8 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         )
 
         turn = await self.reviewed_create(
-            "Result persistence failure", kind="replace", new_text="Keep viewpoint with one character.\n",
+            "Result persistence failure", kind="replace", artifact_path=_PART_OUTLINES,
+            new_text="Mara returns to the bridge before the keeper notices.\n",
             review_task=(known_review.task_id, known_review.task_revision + 3), editorial_refs=(memory.record_ref,),
             extra_core_evidence=continued_core_evidence,
             editorial_context_digest=self.runtime.inspect_editorial_state(self.session_id)
@@ -1169,7 +1172,7 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
             ArtifactApplicationNextAction.INSPECT_AND_RESOLVE_OUTCOME,
         )
         self.assertIsNone(uncertain.outcome.result)
-        self.assertTrue(self.workspace.path(ARTIFACT_FIXTURE_RULES_PATH).exists())
+        self.assertTrue(self.workspace.path(_PART_OUTLINES).exists())
         self.assertEqual(self.git_snapshot(), git_before)
         observed = self.runtime.inspect_editorial_state(self.session_id)
         request = turn.artifact_application_request
