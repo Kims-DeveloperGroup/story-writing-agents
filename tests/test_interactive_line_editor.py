@@ -38,6 +38,7 @@ EXPECTED_SUGGESTIONS = (
     "/explore", "/adopt",
     "/task",
     "/premise",
+    "/revise-rules",
     "/agents",
     "/auth",
     "/settings",
@@ -379,7 +380,7 @@ class SuggestionContractTests(unittest.TestCase):
         )
         expected_identities = {"/?": "/help", "/toggle": "/progress"}
         for suggestion in suggestions:
-            with (self.subTest(token=suggestion.token) if suggestion.token not in ("/explore", "/adopt", "/premise", "/task") else contextlib.nullcontext()):
+            with (self.subTest(token=suggestion.token) if suggestion.token not in ("/explore", "/adopt", "/premise", "/task", "/revise-rules") else contextlib.nullcontext()):
                 self.assertEqual(
                     suggestion.canonical_token,
                     expected_identities.get(suggestion.token, suggestion.token),

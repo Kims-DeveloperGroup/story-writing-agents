@@ -6,12 +6,15 @@ from hashlib import sha256
 from types import MappingProxyType
 
 from ..core_document_readiness import AuthoringTarget, DEPENDENCIES
+from ..narrative_rule_revision import NarrativeRuleRevisionSelection
 from ..synchronization_assessment import (
+    NARRATIVE_RULES_PATH,
     SynchronizationAbsence,
     SynchronizationAbsenceOrigin,
     SynchronizationAssessment,
     SynchronizationCensus,
     SynchronizationDocument,
+    SynchronizationEventRef,
     SynchronizationRead,
 )
 from ..synchronization_obligations import (
@@ -38,15 +41,22 @@ class SynchronizationMaterial:
     selected_conditions: tuple[SynchronizationCondition, ...] = ()
     absence_origins: tuple[SynchronizationAbsenceOrigin, ...] = ()
 
+    narrative_impact: NarrativeRuleRevisionSelection | None = None
+    narrative_impact_request: SynchronizationEventRef | None = None
+    narrative_impact_line_counts: tuple[tuple[str, int], ...] = ()
+    narrative_impact_retained_targets: tuple[str, ...] = ()
+
     @property
     def read_paths(self) -> frozenset[str]:
-        if self.current_state_digest is not None:
+        if self.current_state_digest is not None and self.narrative_impact is None:
             return frozenset(path for condition in self.selected_conditions
                              for path in (condition.changed_path, condition.target_path)
                              if path in self.current_digests)
         return frozenset(self.current_digests)
 
     def provider_input(self, obligations: SynchronizationObligations) -> dict[str, object]:
+        if self.narrative_impact is not None:
+            return self._narrative_impact_input()
         selected = set(self.selected_conditions)
         selected_paths = {path for condition in selected
                           for path in (condition.changed_path, condition.target_path)}
@@ -102,6 +112,74 @@ class SynchronizationMaterial:
                 "Identify the exact condition addressed by each finding. This review does not change any document."
             ),
         }
+
+
+    def _narrative_impact_input(self) -> dict[str, object]:
+        selection = self.narrative_impact
+        assert selection is not None
+        counts = dict(self.narrative_impact_line_counts)
+        return {
+            "changes": self.census.changes,
+            "current_state_digest": self.current_state_digest,
+            "reviewed_target_paths": self.narrative_impact_retained_targets,
+            "approved_narrative_revision": {
+                "rules_digest": selection.rules_digest,
+                "direction": selection.direction,
+                "features": tuple(feature.value for feature in selection.features),
+                "preserve": selection.preserve,
+                "exceptions": selection.exceptions,
+            },
+            "targets": [
+                {"path": item.path, "current_digest": item.digest, "line_count": counts.get(item.path)}
+                for item in self.census.documents
+            ],
+            "instructions": (
+                "Inspect the approved direction against the complete current work inventory. "
+                "Prior complete findings still cover the listed reviewed targets on this unchanged basis. "
+                "Review the rules and remaining targets, including distant manuscripts. "
+                "Use guarded READ over each present source in full, combining exact ranges where needed. "
+                "For each rules-to-target pair, cite exact READ IDs and the responsible specialist reply. "
+                "Set the responsible domain for every known judgment. Record needs_change, no_change, "
+                "or not_applicable with precise reasons and applicable scope. "
+                "Report unread and missing targets explicitly. Preserve approved unchanged features and exceptions. "
+                "This review grants no permission to edit artifacts or resolve existing obligations."
+            ),
+        }
+
+
+def capture_narrative_rule_impact_material(
+    current: Mapping[str, bytes],
+    selection: NarrativeRuleRevisionSelection,
+    request: SynchronizationEventRef,
+) -> SynchronizationMaterial:
+    """Capture the complete physical inventory for a pre-authoring, review-only direction."""
+    state_digest = artifact_state_digest(current)
+    digests = {path: sha256(content).hexdigest() for path, content in current.items()}
+    if selection.impact is not None or selection.rules_digest != f"sha256:{digests.get(NARRATIVE_RULES_PATH)}":
+        raise ValueError("narrative-rule impact review requires the approved current rules source")
+    documents = tuple(
+        SynchronizationDocument(path, digests[path]) if path in digests
+        else SynchronizationDocument(path, absence=SynchronizationAbsence.ABSENT)
+        for path in sorted({*CORE_ARTIFACT_PATHS, *digests})
+    )
+    counts = tuple(
+        (path, _physical_line_count(content))
+        for path, content in sorted(current.items())
+    )
+    return SynchronizationMaterial(
+        SynchronizationCensus((NARRATIVE_RULES_PATH,), documents, complete=True),
+        MappingProxyType(digests),
+        current_state_digest=state_digest,
+        narrative_impact=selection,
+        narrative_impact_request=request,
+        narrative_impact_line_counts=counts,
+    )
+
+
+def _physical_line_count(content: bytes) -> int:
+    # Use the artifact READ adapter's CRLF, LF and lone CR record boundaries.
+    terminated = content.count(b"\r") + content.count(b"\n") - content.count(b"\r\n")
+    return terminated + int(bool(content) and not content.endswith((b"\r", b"\n")))
 
 
 def earlier_read_id(read: SynchronizationRead) -> str:

@@ -35,6 +35,7 @@ from .conversations import (
 from .errors import BackendProtocolError
 from .lead_preparation.synchronization_review_response import SynchronizationReviewFinding
 from .runtime_resources import collaboration_event_journal as event_journal
+from .synchronization_assessment import SynchronizationEventRef
 
 if TYPE_CHECKING:
     from .artifact_transactions.synchronization_material import SynchronizationMaterial
@@ -57,6 +58,10 @@ class CollaborationInvocationResult:
     trace: ReplyTrace | None = None
     pending_validation: tuple[str, tuple[tuple[str, tuple[str, ...]], ...]] | None = None
     provider_invocation_id: str | None = field(default=None, kw_only=True)
+    synchronization_reads: tuple[ContextEvidenceReceipt, ...] = field(default=(), kw_only=True, repr=False)
+    synchronization_impact_basis: tuple[SynchronizationEventRef, str] | None = field(
+        default=None, kw_only=True, repr=False,
+    )
 
     def __post_init__(self) -> None:
         if self.trace is not None and type(self.trace) is not ReplyTrace:

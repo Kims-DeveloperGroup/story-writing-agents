@@ -59,6 +59,7 @@ EXPECTED_ACTION_KINDS = (
     "lead_adopt",
     "lead_task",
     "premise_decision",
+    "narrative_rule_revision",
     "list_agents",
     "search",
     "transcript",
@@ -92,6 +93,7 @@ EXPECTED_COMMANDS = (
     CommandSpec("Writing", "/adopt", (), True, True, "/adopt"),
     CommandSpec("Writing", "/task", (), True, False, "/task"),
     CommandSpec("Writing", "/premise", (), True, True, "/premise"),
+    CommandSpec("Writing", "/revise-rules", (), True, True, "/revise-rules"),
     CommandSpec("Agents", "/agents", (), False, False, "/agents"),
     CommandSpec("Agents", "/auth", (), True, True, "/auth"),
     CommandSpec("Agents", "/settings", (), True, True, "/settings"),
@@ -401,6 +403,8 @@ class InteractiveParserRetirementTests(unittest.TestCase):
 
         self.assertEqual(parse_interactive_line("/premise"), InteractiveAction(ActionKind.PREMISE_DECISION))
         self.assertIs(parse_interactive_line("/premise choose forged-option").kind, ActionKind.PARSE_ERROR)
+        self.assertEqual(parse_interactive_line("/revise-rules"), InteractiveAction(ActionKind.NARRATIVE_RULE_REVISION))
+        self.assertIs(parse_interactive_line("/revise-rules approve").kind, ActionKind.PARSE_ERROR)
 
     def test_parser_is_provider_filesystem_process_and_network_free(self) -> None:
         with (

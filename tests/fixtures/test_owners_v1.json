@@ -5,6 +5,65 @@
   ],
   "owners": [
     {
+      "name": "artifact-transactions.narrative_rule_revision_control",
+      "boundary": "authority",
+      "paths": [
+        "src/story_writing_agents/artifact_transactions/narrative_rule_revision_control.py"
+      ],
+      "focused_ids": [
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority"
+      ],
+      "affected_ids": [
+        "tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_objective_history_round_trips_through_filesystem_sqlite_and_archive",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority"
+      ],
+      "affected_full": true,
+      "depends_on": [
+        "conversations.reducers.narrative_rule_revision_history",
+        "narrative-rule-revision"
+      ]
+    },
+    {
+      "name": "conversations.reducers.narrative_rule_revision_history",
+      "boundary": "authority",
+      "paths": [
+        "src/story_writing_agents/conversations/reducers/narrative_rule_revision_history.py"
+      ],
+      "focused_ids": [
+        "tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_objective_history_round_trips_through_filesystem_sqlite_and_archive",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority"
+      ],
+      "affected_ids": [
+        "tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_objective_history_round_trips_through_filesystem_sqlite_and_archive",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority"
+      ],
+      "affected_full": true,
+      "depends_on": [
+        "narrative-rule-revision"
+      ]
+    },
+    {
+      "name": "narrative-rule-revision",
+      "boundary": "authority",
+      "paths": [
+        "src/story_writing_agents/narrative_rule_revision.py"
+      ],
+      "focused_ids": [
+        "tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_objective_history_round_trips_through_filesystem_sqlite_and_archive",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority"
+      ],
+      "affected_ids": [
+        "tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_objective_history_round_trips_through_filesystem_sqlite_and_archive",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_prewrite_identity_base_and_relationship_drift_are_zero_write",
+        "tests.test_lead_artifact_application_authority.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority"
+      ],
+      "affected_full": true,
+      "depends_on": []
+    },
+    {
       "name": "artifact-transactions.synchronization_apply_qualification",
       "boundary": "authority",
       "paths": [

@@ -13,6 +13,7 @@ from ..agent_context.sources.session_history import SessionHistorySourceAdapter
 from ..conversations.session_context import SessionHistorySnapshot
 from .synchronization_publication import synchronization_apply_drafts
 from .synchronization_material import matches_projected_documents
+from .narrative_rule_revision_control import require_narrative_rule_candidate_authority
 from .synchronization_apply_qualification import (
     SynchronizationApplyBlocked,
     qualify_synchronization_apply,
@@ -346,6 +347,11 @@ class ArtifactApplicationAuthority:
                                 try:
                                     session_events = snapshot.events()
                                     require_previous_write_outcomes(session_events, active_apply=active_apply)
+                                    require_narrative_rule_candidate_authority(
+                                        snapshot, base_state, decision.conversation_id,
+                                        consultation.authoring_scope, application.change_set,
+                                        active_application_decision=active_apply,
+                                    )
                                     history = snapshot.synchronization()
                                     assessment, conditional = qualify_synchronization_apply(
                                         history, reviewed, session_events,
@@ -795,8 +801,9 @@ class ArtifactApplicationAuthority:
                     artifact_binding = compose_session_artifact_binding(self.workspace.root, session_id)
                     with artifact_binding.open_ready_resources() as access:
                         snapshots = access.repository.capture_complete_state()
+                        base_state = {item.path: item.content for item in snapshots}
                         expected_state = project_artifact_change_set(
-                            {item.path: item.content for item in snapshots},
+                            base_state,
                             candidate.candidate.change_set,
                         )
                 except (
@@ -896,6 +903,10 @@ class ArtifactApplicationAuthority:
                             ).capture()
                             session_events = snapshot.events()
                             require_previous_write_outcomes(session_events)
+                            require_narrative_rule_candidate_authority(
+                                snapshot, base_state, events[-1].conversation_id,
+                                proposal.authoring_scope, candidate.candidate.change_set,
+                            )
                             assessment, conditional = qualify_synchronization_apply(
                                 snapshot.synchronization(), reviewed_proposal, session_events,
                                 {item.path: item.source.source_sha256 for item in snapshots},

@@ -10,6 +10,8 @@ from ...synchronization_assessment import (
     SynchronizationAbsence, SynchronizationAssessment, SynchronizationCandidate, SynchronizationCensus,
     SynchronizationDocument, SynchronizationEventRef, SynchronizationFinding,
     SynchronizationJudgment, SynchronizationRead,
+    narrative_rule_finding_has_full_reads,
+    same_narrative_impact_material,
 )
 from ...synchronization_obligations import (
     SynchronizationObligations,
@@ -35,6 +37,9 @@ from ..event_vocabulary import (
     CollaborationSpecialistAssessment,
 )
 from ..events import CollaborationEvent, CollaborationLeadSynthesisPayload, CollaborationProposal, synchronization_event_ref
+from .narrative_rule_revision_history import (
+    narrative_rule_revision_task, narrative_rule_revision_task_for_origin,
+)
 
 from .synchronization_absence_history import (
     derive_absence_origins as derive_absence_origins,
@@ -42,6 +47,8 @@ from .synchronization_absence_history import (
     successful_candidates,
     validate_absence_proof,
 )
+
+NARRATIVE_RULES_PATH = AuthoringTarget.NARRATIVE_RULES.value
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,7 +161,9 @@ def _validate_read_evidence(
     entry: CollaborationEvent,
     evidence: SynchronizationReadEvidence,
     synthesis: CollaborationEvent | None,
-    submitted_syntheses: dict[tuple[str, str], int],
+    submitted_calls: dict[
+        tuple[str, str, CollaborationInvocationKind, str], CollaborationEvent
+    ],
 ) -> None:
     if synthesis is None:
         return
@@ -162,7 +171,14 @@ def _validate_read_evidence(
         ArtifactReviewSynthesisPayload if evidence.candidate is not None else CollaborationLeadSynthesisPayload
     )
     payload = synthesis.payload
-    submitted = submitted_syntheses.get((synthesis.conversation_id, evidence.invocation_id))
+    invocation_kind = CollaborationInvocationKind.LEAD_SYNTHESIS
+    role = LEAD_ORCHESTRATOR
+    specialist = evidence.narrative_rule_revision is not None and type(payload) is CollaborationSpecialistReplyPayload
+    if specialist:
+        expected_type = CollaborationSpecialistReplyPayload
+        invocation_kind = CollaborationInvocationKind.SPECIALIST_ASSIGNMENT
+        role = synthesis.sender.agent_id
+    submitted = submitted_calls.get((synthesis.conversation_id, evidence.invocation_id, invocation_kind, role))
     if (
         type(payload) is not expected_type
         or payload.provider_invocation_id != evidence.invocation_id
@@ -170,7 +186,8 @@ def _validate_read_evidence(
         != (entry.conversation_id, entry.turn_id, entry.step_id)
         or synthesis.batch_id != entry.batch_id
         or submitted is None
-        or submitted >= synthesis.sequence
+        or submitted.sequence >= synthesis.sequence
+        or (specialist and (submitted.turn_id, submitted.step_id) != (synthesis.turn_id, synthesis.step_id))
     ):
         raise ValueError("synchronization READ receipts must follow their exact submitted and recorded synthesis")
     if evidence.candidate is not None and (
@@ -228,6 +245,7 @@ def _read_matches(
     assessment: SynchronizationAssessment,
     candidate: CollaborationEvent | None,
     readiness_origins: tuple[str, ...],
+    synthesis: CollaborationEvent | None,
 ) -> bool:
     payload = event.payload
     if type(payload) is ArtifactReviewCandidatePayload:
@@ -235,6 +253,8 @@ def _read_matches(
     if read.selection_digest is None or read.source_revision is None:
         return False
     if type(payload) is CollaborationLeadJudgmentPayload:
+        if assessment.basis.narrative_rule_revision is not None:
+            return False
         if candidate is not None and (
             event.conversation_id, event.event_id
         ) != (candidate.conversation_id, candidate.payload.lead_judgment_event_id) and (
@@ -244,8 +264,21 @@ def _read_matches(
             return False
         return _earlier_read_matches(read, payload)
     evidence = payload.read_evidence if type(payload) is SynchronizationPayload else None
-    if evidence is None or (
-        evidence.synthesis != assessment.basis.review_synthesis or evidence.candidate != assessment.basis.candidate
+    if evidence is None or evidence.candidate != assessment.basis.candidate:
+        return False
+    basis = assessment.basis
+    if evidence.narrative_rule_revision != basis.narrative_rule_revision:
+        return False
+    if basis.narrative_rule_revision is None:
+        if evidence.synthesis != basis.review_synthesis:
+            return False
+    elif (
+        evidence.current_state_digest != basis.result_state_digest or synthesis is None
+        or event.batch_id != synthesis.batch_id
+        or (evidence.synthesis != basis.review_synthesis and (
+            evidence.synthesis.conversation_id != synthesis.conversation_id
+            or evidence.synthesis.event_id not in synthesis.payload.reply_event_ids
+        ))
     ):
         return False
     return any(
@@ -337,6 +370,7 @@ def _validate_assessment(
     lookup: _EventLookup,
     events: _EventIndex,
     candidates: dict[tuple[str, SynchronizationCandidate], CollaborationEvent],
+    prior_assessments: dict[SynchronizationEventRef, SynchronizationAssessment],
     projected_assessments: dict[SynchronizationAssessment, int],
 ) -> None:
     basis = assessment.basis
@@ -385,6 +419,25 @@ def _validate_assessment(
             )
         ):
             raise ValueError("current-state synchronization exceeds its exact review-only task scope")
+    if basis.narrative_rule_revision is not None:
+        task = narrative_rule_revision_task(
+            tuple(events.values()), entry.conversation_id, basis.task_id,
+            task_revision=basis.task_revision, before_sequence=entry.sequence,
+        )
+        rules = next((doc for doc in assessment.census.documents if doc.path == NARRATIVE_RULES_PATH), None)
+        if (
+            request is None or task is None or task.origin != request or task.selection.impact is not None
+            or rules is None or task.selection.rules_digest != f"sha256:{rules.digest}"
+            or not assessment.census.complete or assessment.census.changes != (NARRATIVE_RULES_PATH,)
+            or assessment.census.prior_documents or synthesis is None
+            or not assessment.census.coverage_paths.issubset(synthesis.payload.authoring_scope.target_paths)
+            or {path for path, _ in basis.narrative_rule_line_counts}
+            != {doc.path for doc in assessment.census.documents if doc.digest is not None}
+            or {finding.pair for finding in assessment.findings} != set(assessment.census.required_pairs)
+            or any(finding.resolves or finding.absences for finding in assessment.findings)
+        ):
+            raise ValueError("narrative-rule impact does not match its exact approved whole-work review")
+
     if basis.application is not None:
         application = basis.application
         applied = lookup(application.result)
@@ -413,14 +466,58 @@ def _validate_assessment(
                            candidate.payload.consultation_proposal_digest)), None)
         if review is not None and review.basis.core_document_readiness is not None:
             readiness_origins = review.basis.core_document_readiness.prior_assessment_refs
+    narrative_review_sources = (
+        frozenset(
+            proof.synthesis
+            for evidence_event in events.values()
+            if evidence_event.conversation_id == entry.conversation_id
+            and evidence_event.batch_id == entry.batch_id and evidence_event.sequence < entry.sequence
+            and type(evidence_event.payload) is SynchronizationPayload
+            and (proof := evidence_event.payload.read_evidence) is not None
+            and proof.narrative_rule_revision == basis.narrative_rule_revision
+            and proof.current_state_digest == basis.result_state_digest
+        )
+        if basis.narrative_rule_revision is not None else frozenset()
+    )
+    retained = dict(basis.narrative_rule_retained)
+    if not retained.keys() <= {finding.target_path for finding in assessment.findings}:
+        raise ValueError("retained narrative-rule finding is outside the whole-work census")
     for finding in assessment.findings:
         for proof in finding.absences:
             validate_absence_proof(proof, finding, assessment, lookup, candidates, events)
+
+        if basis.narrative_rule_revision is not None and finding.judgment in {
+            SynchronizationJudgment.NEEDS_CHANGE, SynchronizationJudgment.NO_CHANGE,
+            SynchronizationJudgment.NOT_APPLICABLE,
+        } and (
+            finding.review == basis.review_synthesis
+            or not narrative_rule_finding_has_full_reads(finding, basis.narrative_rule_line_counts)
+        ):
+            raise ValueError("narrative-rule judgment needs full physical READs and responsible specialist review")
+        if finding.target_path in retained:
+            prior_ref = retained[finding.target_path]
+            prior_event = lookup(prior_ref)
+            prior = prior_assessments.get(prior_ref)
+            prior_origin = None if prior is None else narrative_rule_revision_task_for_origin(
+                tuple(events.values()), prior.basis.request, before_sequence=entry.sequence,
+            )
+            if (
+                prior_event is None or prior is None or prior_origin is None or request is None
+                or prior_ref.conversation_id != entry.conversation_id
+                or prior_origin.selection != request.payload.narrative_rule_revision
+                or not same_narrative_impact_material(prior, basis, assessment.census)
+                or finding not in prior.findings
+                or not narrative_rule_finding_has_full_reads(finding, basis.narrative_rule_line_counts)
+            ):
+                raise ValueError("retained narrative impact needs its unchanged approved selection and exact prior finding")
+            continue
         for read in finding.reads:
             read_event = lookup(read.source)
-            if read_event is not None and not _read_matches(read, read_event, assessment, candidate, readiness_origins):
+            if read_event is not None and not _read_matches(read, read_event, assessment, candidate, readiness_origins, synthesis):
                 raise ValueError("synchronization physical or candidate READ lacks its exact recorded receipt")
         if finding.review is not None:
+            if basis.narrative_rule_revision is not None and finding.review not in narrative_review_sources:
+                raise ValueError("narrative-rule specialist review does not match the current physical census")
             review = lookup(finding.review)
             if review is not None and not _review_matches(finding, review, synthesis, candidate, events):
                 raise ValueError("synchronization review does not cover its exact reviewed result, assignment, and specialist")
@@ -456,16 +553,14 @@ def project_synchronization_history(
         (event.conversation_id, _candidate_identity(event.payload)): event
         for event in events.values() if type(event.payload) is ArtifactReviewCandidatePayload
     }
-    submitted_syntheses: dict[tuple[str, str], int] = {}
+    submitted_calls: dict[tuple[str, str, CollaborationInvocationKind, str], CollaborationEvent] = {}
     for event in events.values():
         payload = event.payload
-        if (
-            type(payload) is CollaborationProviderCallPayload
-            and payload.invocation_kind is CollaborationInvocationKind.LEAD_SYNTHESIS
-            and payload.role == LEAD_ORCHESTRATOR
-            and payload.state is CollaborationProviderCallState.SUBMITTED
-        ):
-            submitted_syntheses.setdefault((event.conversation_id, payload.invocation_id), event.sequence)
+        if type(payload) is CollaborationProviderCallPayload and payload.state is CollaborationProviderCallState.SUBMITTED:
+            key = event.conversation_id, payload.invocation_id, payload.invocation_kind, payload.role
+            previous = submitted_calls.get(key)
+            if previous is None or event.sequence < previous.sequence:
+                submitted_calls[key] = event
     projected_assessments = {
         entry.payload.assessment: entry.sequence
         for entry in entries if entry.payload.assessment is not None and entry.payload.assessment.basis.projected
@@ -477,12 +572,15 @@ def project_synchronization_history(
         ref = synchronization_event_ref(entry)
         if payload.read_evidence is not None:
             evidence = payload.read_evidence
-            _validate_read_evidence(entry, evidence, source(entry, evidence.synthesis), submitted_syntheses)
+            _validate_read_evidence(entry, evidence, source(entry, evidence.synthesis), submitted_calls)
+            if evidence.narrative_rule_revision is not None:
+                source(entry, evidence.narrative_rule_revision)
         elif payload.assessment is not None:
             assessment = payload.assessment
             _validate_assessment(
                 entry, assessment, lookup=lambda ref: source(entry, ref), events=events,
                 candidates=candidates, projected_assessments=projected_assessments,
+                prior_assessments=assessments,
             )
             assessments[ref] = assessment
         else:
@@ -500,9 +598,11 @@ def project_synchronization_history(
                         continue
                     event = source(entry, evidence)
                     if event is not None and (
-                        type(event.payload) is not SynchronizationPayload or event.payload.assessment is None
+                        type(event.payload) is not SynchronizationPayload
+                        or event.payload.assessment is None
+                        or event.payload.assessment.basis.narrative_rule_revision is not None
                     ):
-                        raise ValueError("synchronization condition must identify recorded evidence")
+                        raise ValueError("synchronization condition must identify recorded obligation evidence")
                     if event is not None and evidence == state.evidence and any(
                         proof.origin.condition_id == state.condition.condition_id
                         and proof.origin.detected_by != state.condition.detected_by

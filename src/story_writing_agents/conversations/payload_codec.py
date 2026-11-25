@@ -44,6 +44,10 @@ from ..lead_premise_decisions import (
     premise_selection_from_dict,
     premise_value_to_dict,
 )
+from ..narrative_rule_revision import (
+    narrative_rule_revision_selection_from_dict,
+    narrative_rule_revision_selection_to_dict,
+)
 from ..synchronization_repair import (
     synchronization_repair_selection_from_dict,
     synchronization_repair_selection_to_dict,
@@ -141,6 +145,8 @@ def lead_task_decision_payload_value(
         value["document_selection"] = document_node_selection_to_dict(payload.document_selection)
     if payload.synchronization_repair is not None:
         value["synchronization_repair"] = synchronization_repair_selection_to_dict(payload.synchronization_repair)
+    if payload.narrative_rule_revision is not None:
+        value["narrative_rule_revision"] = narrative_rule_revision_selection_to_dict(payload.narrative_rule_revision)
     return value
 
 
@@ -378,7 +384,8 @@ def lead_outcome_failure_payload_value(
 def decode_lead_task_decision_payload(
     value: object,
 ) -> CollaborationLeadTaskDecisionPayload:
-    if type(value) is not dict or set(value) - {"document_selection", "synchronization_repair"} != {"payload_type", "decision"}:
+    optional = {"document_selection", "synchronization_repair", "narrative_rule_revision"}
+    if type(value) is not dict or set(value) - optional != {"payload_type", "decision"}:
         raise ValueError("invalid lead_task_decision payload fields")
     return CollaborationLeadTaskDecisionPayload(
         decision=task_value_from_dict(LeadTaskDecision, value["decision"]),
@@ -389,6 +396,10 @@ def decode_lead_task_decision_payload(
         synchronization_repair=(
             synchronization_repair_selection_from_dict(value["synchronization_repair"])
             if "synchronization_repair" in value else None
+        ),
+        narrative_rule_revision=(
+            narrative_rule_revision_selection_from_dict(value["narrative_rule_revision"])
+            if "narrative_rule_revision" in value else None
         ),
     )
 

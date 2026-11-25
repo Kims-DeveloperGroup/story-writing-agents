@@ -495,15 +495,27 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
         self.assertTrue(plans_before)
         self.assertEqual(plans_before[-1].plan, self.objective(conversation_id).document_plan)
         from story_writing_agents.interactive_terminal._collaboration_view import project_lead_confirmation
-        from tests.known_result_finalization_fixture import seed_reviewed_artifact
+        from tests.known_result_finalization_fixture import seed_narrative_rule_impact, seed_reviewed_artifact
 
         rules_path = artifact.ARTIFACT_FIXTURE_RULES_PATH
         self.workspace.path(rules_path).write_text("Use omniscient narration.\n", encoding="utf-8")
+        distant_path = "manuscript/part-09/epilogue.md"
+        self.workspace.path(distant_path).parent.mkdir(parents=True)
+        self.workspace.path(distant_path).write_text("Mara closes the archive and leaves by the bridge.\n", encoding="utf-8")
         repair_conversation = self.conversation("Retain conditional Apply history")
+        authoring_selection = await seed_narrative_rule_impact(self, "Adopt restrained close-third narration.")
+        impact_ref = authoring_selection.impact
+        self.assertIsNotNone(impact_ref)
+        impact_history = self.history(impact_ref.conversation_id)
+        impact = dict(self.runtime.inspect_narrative_rule_impacts(self.session_id))[impact_ref]
+        self.assertIsNone(impact.basis.candidate)
+        distant, = (finding for finding in impact.findings if finding.pair == (rules_path, distant_path))
+        self.assertEqual({read.document.path for read in distant.reads}, {rules_path, distant_path})
         decision_turn = await seed_reviewed_artifact(
             self, repair_conversation, (("replace", rules_path, "Use close-third narration.\n"),),
             extra_core_evidence=tuple(CORE_ARTIFACT_PATHS),
             discrepancy_pair=(rules_path, OUTLINE),
+            narrative_rule_revision=authoring_selection,
         )
         self.assertIsNotNone(decision_turn.artifact_application_request, decision_turn.message)
         disclosed, = decision_turn.artifact_application_request.conditional.issues
@@ -514,12 +526,14 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
         accepted = await self.apply(decision_turn)
         self.assertIs(accepted.outcome.outcome, c.ArtifactApplicationOutcomeKind.APPLIED)
         self.assertIsNone(accepted.commit_request)
+        self.assertEqual(self.runtime.inspect_narrative_rule_impacts(self.session_id), ())
         repair_events = self.history(repair_conversation)
         expected_work = self.runtime.inspect_synchronization_repair(self.session_id)
         self.assertEqual(len(expected_work), 1)
         archive = archive_from_conversations(
             archive_conversation(session_id=self.session_id, conversation_id=conversation_id, events=before),
             archive_conversation(session_id=self.session_id, conversation_id=repair_conversation, events=repair_events),
+            archive_conversation(session_id=self.session_id, conversation_id=impact_ref.conversation_id, events=impact_history),
         )
         wire = serialize_conversation_archive(archive)
         self.assertEqual(serialize_conversation_archive(deserialize_conversation_archive(wire)), wire)
@@ -540,7 +554,9 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
         self.assertEqual(restored.current_story_commit_result, rejected.outcome)
         after_repair = services.event_store.read(self.session_id, repair_conversation)
         self.assertEqual(after_repair, repair_events)
+        self.assertEqual(services.event_store.read(self.session_id, impact_ref.conversation_id), impact_history)
         restarted = StoryRuntime(self.control_workspace, self.backend, conversation_storage_services=services)
+        self.assertEqual(restarted.inspect_narrative_rule_impacts(self.session_id), ())
         self.assertEqual(restarted.inspect_synchronization_repair(self.session_id), expected_work)
         restored_repair = restarted.inspect_lead_collaboration(self.session_id, repair_conversation)
         self.assertIs(restored_repair.next_safe_action, c.CollaborationNextAction.CONTINUE_SYNCHRONIZATION_REPAIR)

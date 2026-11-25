@@ -116,6 +116,7 @@ def prepare_current_execution_authority(
     inputs: tuple[CollaborationInputRevision, ...],
     projection: CollaborationHistoryProjection,
     specialist_ids: tuple[str, ...],
+    narrative_rule_impact: bool = False,
 ) -> tuple[tuple[int, ...], int, int, tuple[CollaborationAssignment, ...], tuple[str, ...]]:
     call_limits, synthesis_calls, required_calls = (
         authoring_authority.proposal_call_reservations(
@@ -125,6 +126,7 @@ def prepare_current_execution_authority(
             ),
             physical_calls_spent=projection.physical_calls_spent,
             authoring_scope=proposal.authoring_scope,
+            narrative_rule_impact=narrative_rule_impact,
             synthesis_required=(
                 proposal.step_kind
                 is CollaborationStepKind.LEAD_SPECIALIST_CONSULTATION

@@ -7,9 +7,11 @@ from dataclasses import dataclass
 from enum import StrEnum
 from hashlib import sha256
 
-from .specialist_routing import ArtifactReviewDomain
+from .specialist_routing import ArtifactReviewDomain, artifact_domain
 from .writing_artifacts.catalog import CORE_ARTIFACT_PATHS, canonical_artifact_kind
 
+
+NARRATIVE_RULES_PATH = "core_documents/narrative_rules.md"
 
 def require_synchronization_identifier(value: object, *, maximum: int = 64) -> None:
     if (
@@ -99,6 +101,9 @@ class SynchronizationBasis:
     candidate: SynchronizationCandidate | None = None
     application: SynchronizationApplication | None = None
     review_synthesis: SynchronizationEventRef | None = None
+    narrative_rule_revision: SynchronizationEventRef | None = None
+    narrative_rule_line_counts: tuple[tuple[str, int], ...] = ()
+    narrative_rule_retained: tuple[tuple[str, SynchronizationEventRef], ...] = ()
 
     def __post_init__(self) -> None:
         require_synchronization_identifier(self.task_id)
@@ -120,6 +125,37 @@ class SynchronizationBasis:
                 raise ValueError("synchronization synthesis must be an exact review reference")
             if self.candidate is None and self.base_state_digest != self.result_state_digest:
                 raise ValueError("current-state synchronization review cannot change the document state")
+
+        if type(self.narrative_rule_line_counts) is not tuple or type(self.narrative_rule_retained) is not tuple:
+            raise TypeError("narrative-rule impact collections must be exact tuples")
+        if self.narrative_rule_revision is None:
+            if self.narrative_rule_line_counts or self.narrative_rule_retained:
+                raise ValueError("line census and retained findings require a narrative-rule impact basis")
+        elif (
+            self.narrative_rule_revision != self.request or self.candidate is not None
+            or self.review_synthesis is None
+        ):
+            raise ValueError("narrative-rule impact requires the exact current USER request and synthesis")
+        else:
+            paths = set()
+            for entry in self.narrative_rule_line_counts:
+                if type(entry) is not tuple or len(entry) != 2:
+                    raise ValueError("narrative-rule line census needs exact path/count pairs")
+                path, count = entry
+                _artifact_path(path)
+                if type(count) is not int or count < 0 or path in paths:
+                    raise ValueError("narrative-rule line census must contain distinct nonnegative counts")
+                paths.add(path)
+
+            retained_paths = set()
+            for entry in self.narrative_rule_retained:
+                if type(entry) is not tuple or len(entry) != 2:
+                    raise ValueError("retained narrative-rule findings need exact path/event pairs")
+                path, origin = entry
+                _artifact_path(path)
+                if type(origin) is not SynchronizationEventRef or path in retained_paths:
+                    raise ValueError("retained narrative-rule findings need distinct exact origins")
+                retained_paths.add(path)
 
     @property
     def projected(self) -> bool:
@@ -455,3 +491,66 @@ class SynchronizationAssessment:
     @property
     def ready(self) -> bool:
         return not self.blockers
+
+
+def narrative_rule_finding_has_full_reads(
+    finding: SynchronizationFinding,
+    line_counts: tuple[tuple[str, int], ...],
+) -> bool:
+    if (
+        finding.judgment not in _REVIEWED or finding.review is None or finding.domain is None
+        or finding.domain is not artifact_domain(finding.target_path) or finding.resolves or finding.absences
+    ):
+        return False
+    counts = dict(line_counts)
+    for path in finding.pair:
+        count = counts.get(path)
+        reads = tuple(
+            item for item in finding.reads if item.document.path == path
+            and item.selection_digest is not None and item.source_revision is not None
+        )
+        if count is None or len({item.source_revision for item in reads}) != 1:
+            return False
+        if any(item.start_line is None for item in reads):
+            continue
+        covered = 0
+        for start, end in sorted((item.start_line, item.end_line) for item in reads):
+            if start > covered + 1 or end > count:
+                return False
+            covered = max(covered, end)
+        if count == 0 or covered != count:
+            return False
+    return True
+
+
+def narrative_rule_impact_complete(assessment: SynchronizationAssessment) -> bool:
+    """Recognize a full current work census with qualified judgment for every target."""
+    basis = assessment.basis
+    census = assessment.census
+    return (
+        basis.narrative_rule_revision is not None and census.complete
+        and census.changes == (NARRATIVE_RULES_PATH,) and not census.prior_documents
+        and {path for path, _ in basis.narrative_rule_line_counts}
+        == {item.path for item in census.documents if item.digest is not None}
+        and {item.pair for item in assessment.findings} == set(census.required_pairs)
+        and all(
+            narrative_rule_finding_has_full_reads(item, basis.narrative_rule_line_counts)
+            for item in assessment.findings
+        )
+    )
+
+
+def same_narrative_impact_material(
+    prior: SynchronizationAssessment,
+    basis: SynchronizationBasis,
+    census: SynchronizationCensus,
+) -> bool:
+    """Compare the physical and editorial basis while allowing a fresh approved task identity."""
+    return (
+        prior.basis.narrative_rule_revision is not None
+        and prior.basis.result_state_digest == basis.result_state_digest
+        and prior.basis.rules_digest == basis.rules_digest
+        and prior.basis.conditions_digest == basis.conditions_digest
+        and prior.basis.narrative_rule_line_counts == basis.narrative_rule_line_counts
+        and prior.census == census
+    )

@@ -83,6 +83,7 @@ class SynchronizationReadEvidence:
     receipts: tuple[SynchronizationReadReceipt, ...]
     absent_origins: tuple[SynchronizationAbsenceOrigin, ...] = ()
     current_state_digest: str | None = None
+    narrative_rule_revision: SynchronizationEventRef | None = None
 
     def __post_init__(self) -> None:
         require_synchronization_identifier(self.invocation_id)
@@ -100,6 +101,12 @@ class SynchronizationReadEvidence:
             require_synchronization_digest(self.current_state_digest, tagged=False)
         if self.absent_origins and (self.candidate is not None or self.current_state_digest is None):
             raise ValueError("absence metadata requires current physical evidence and no candidate")
+
+        if self.narrative_rule_revision is not None and (
+            type(self.narrative_rule_revision) is not SynchronizationEventRef
+            or self.current_state_digest is None or self.candidate is not None or self.absent_origins
+        ):
+            raise ValueError("narrative-rule READ receipts require current pre-authoring review")
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,7 +129,15 @@ class SynchronizationPayload:
 
 
 def synchronization_payload_value(payload: SynchronizationPayload) -> dict[str, object]:
-    return {"payload_type": "synchronization", **asdict(payload)}
+    value = asdict(payload)
+    if payload.assessment is not None and payload.assessment.basis.narrative_rule_revision is None:
+        basis = value["assessment"]["basis"]
+        basis.pop("narrative_rule_revision")
+        basis.pop("narrative_rule_line_counts")
+        basis.pop("narrative_rule_retained")
+    if payload.read_evidence is not None and payload.read_evidence.narrative_rule_revision is None:
+        value["read_evidence"].pop("narrative_rule_revision")
+    return {"payload_type": "synchronization", **value}
 
 
 _T = TypeVar("_T")
@@ -155,18 +170,38 @@ def _application(value: object) -> SynchronizationApplication:
     return SynchronizationApplication(item["application_id"], _ref(item["result"]))
 
 
-def _basis(value: object) -> SynchronizationBasis:
-    item = _object(
-        value, "task_id task_revision request conditions_digest rules_digest "
-               "base_state_digest result_state_digest candidate application review_synthesis",
-    )
-    return SynchronizationBasis(
-        item["task_id"], item["task_revision"], _ref(item["request"]),
-        item["conditions_digest"], item["rules_digest"], item["base_state_digest"],
-        item["result_state_digest"], _optional(item["candidate"], _candidate),
-        _optional(item["application"], _application), _optional(item["review_synthesis"], _ref),
-    )
+def _line_count(value: object) -> tuple[str, int]:
+    items = require_array_value(value, label="narrative-rule line census pair")
+    if len(items) != 2:
+        raise ValueError("narrative-rule line census pair must contain one path and count")
+    return items[0], items[1]
 
+
+
+def _retained_finding(value: object) -> tuple[str, SynchronizationEventRef]:
+    items = require_array_value(value, label="retained narrative-rule finding pair")
+    if len(items) != 2:
+        raise ValueError("retained narrative-rule finding needs one path and origin")
+    return items[0], _ref(items[1])
+
+def _basis(value: object) -> SynchronizationBasis:
+    fields = (
+        "task_id task_revision request conditions_digest rules_digest "
+        "base_state_digest result_state_digest candidate application review_synthesis"
+    )
+    narrative = type(value) is dict and "narrative_rule_revision" in value
+    if narrative:
+        fields += " narrative_rule_revision narrative_rule_line_counts narrative_rule_retained"
+    item = _object(value, fields)
+    return SynchronizationBasis(
+        item["task_id"], item["task_revision"], _ref(item["request"]), item["conditions_digest"],
+        item["rules_digest"], item["base_state_digest"], item["result_state_digest"],
+        _optional(item["candidate"], _candidate), _optional(item["application"], _application),
+        _optional(item["review_synthesis"], _ref),
+        _ref(item["narrative_rule_revision"]) if narrative else None,
+        _array(item["narrative_rule_line_counts"], _line_count) if narrative else (),
+        _array(item["narrative_rule_retained"], _retained_finding) if narrative else (),
+    )
 
 def _document(value: object) -> SynchronizationDocument:
     item = _object(value, "path digest revision absence")
@@ -201,11 +236,16 @@ def _read_receipt(value: object) -> SynchronizationReadReceipt:
 
 
 def _read_evidence(value: object) -> SynchronizationReadEvidence:
-    item = _object(value, "invocation_id synthesis candidate receipts absent_origins current_state_digest")
+    fields = "invocation_id synthesis candidate receipts absent_origins current_state_digest"
+    narrative = type(value) is dict and "narrative_rule_revision" in value
+    if narrative:
+        fields += " narrative_rule_revision"
+    item = _object(value, fields)
     return SynchronizationReadEvidence(
         item["invocation_id"], _ref(item["synthesis"]), _optional(item["candidate"], _candidate),
         _array(item["receipts"], _read_receipt), _array(item["absent_origins"], _absence_origin),
         item["current_state_digest"],
+        _ref(item["narrative_rule_revision"]) if narrative else None,
     )
 
 

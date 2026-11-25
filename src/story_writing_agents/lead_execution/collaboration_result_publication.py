@@ -151,6 +151,7 @@ class CollaborationResultPublication:
             synthesis_result is not None and synthesis_result.submission_uncertain
         )
         replies: list[CollaborationEventDraft] = []
+        specialist_reads: dict[str, CollaborationInvocationResult] = {}
         assignment_outcomes: list[CollaborationAssignmentOutcome] = []
         terminals: list[CollaborationEventDraft] = []
         for assignment, invocation_result in zip(
@@ -168,6 +169,8 @@ class CollaborationResultPublication:
                 reply_event_id = event_journal.deterministic_id(
                     "e", attempt_id, assignment.assignment_id, "reply"
                 )
+                if invocation_result.synchronization_impact_basis is not None:
+                    specialist_reads[reply_event_id] = invocation_result
                 replies.append(
                     event_journal.draft_with_id(
                         event_id=reply_event_id,
@@ -366,6 +369,7 @@ class CollaborationResultPublication:
                 elif type(value) is LeadSynthesisResult and value.synchronization_material is not None:
                     synchronization_drafts = self._current_synchronization_drafts(
                         current_events, proposal, synthesis_draft, synthesis_result, value, tuple(replies),
+                    specialist_reads,
                     )
             elif isinstance(synthesis_result.failure, asyncio.CancelledError):
                 synthesis_outcome = CollaborationSynthesisOutcomeKind.CANCELLED
@@ -499,6 +503,7 @@ class CollaborationResultPublication:
         result: CollaborationInvocationResult,
         value: LeadSynthesisResult,
         replies: tuple[CollaborationEventDraft, ...],
+        specialist_reads: dict[str, CollaborationInvocationResult],
     ) -> tuple[CollaborationEventDraft, ...]:
         material = value.synchronization_material
         binding = result.artifact_binding
@@ -520,6 +525,7 @@ class CollaborationResultPublication:
             value = replace(value, synchronization_material=replace(material, absence_origins=origins))
             return synchronization_current_drafts(
                 events, proposal, synthesis, value, replies, history.obligations,
+                specialist_reads, history.assessments,
             )
 
     def _terminal_outcome_draft(

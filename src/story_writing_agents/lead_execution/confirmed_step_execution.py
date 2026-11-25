@@ -522,6 +522,7 @@ class ConfirmedStepExecution:
                             ),
                             events=events,
                             action_progress_sink=action_progress_sink,
+                        specialist_results=results,
                         )
                     )
                 except Exception as failure:

@@ -7,6 +7,7 @@ from ..conversations.events import CollaborationExplorationAdoptionPayload
 from ..conversations import CollaborationHistoryProjection
 from ..conversations.events import CollaborationLeadExplorationRequestPayload
 from ..conversations import CollaborationLeadMaterialCapturePayload
+from ..narrative_rule_revision import NarrativeRuleRevisionSelection
 from ..synchronization_repair import SynchronizationRepairSelection
 from ..conversations import CollaborationLeadTaskDecisionPayload
 from ..conversations import CollaborationLeadTaskTransitionPayload
@@ -53,6 +54,7 @@ def prepare_task_transition(
     materials: tuple[str, ...],
     *,
     synchronization_repair: SynchronizationRepairSelection | None = None,
+    narrative_rule_revision: NarrativeRuleRevisionSelection | None = None,
 ) -> tuple[str, str, CollaborationEventDraft, CollaborationEventDraft | None, tuple[CollaborationEventDraft, ...], CollaborationEventDraft]:
     turn_id = event_journal.new_id("t")
     step_id = event_journal.new_id("s")
@@ -74,6 +76,7 @@ def prepare_task_transition(
         sender=event_journal.USER_ACTOR, recipient=event_journal.RUNTIME_ACTOR,
         payload=CollaborationLeadTaskDecisionPayload(
             decision, document_selection=document_selection, synchronization_repair=synchronization_repair,
+            narrative_rule_revision=narrative_rule_revision,
         ),
     ), event_id=decision.request_id)
     message = None if decision.text is None else event_journal.draft(

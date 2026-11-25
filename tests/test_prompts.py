@@ -118,6 +118,8 @@ class PromptAssemblerTests(unittest.TestCase):
             "current source basis and separate Apply/Commit decisions")))
         self.assertNotIn("objective_intent", normalized)
         self.assertNotIn("recommended_action", normalized)
+        self.assertIn("Preserve established narrative rules for dialect, rough tone, sentence length, and point of view.", normalized)
+        self.assertIn("Use the exact user-selected narrative-rule revision", normalized)
 
     def test_all_specialist_prompts_share_the_exact_bounded_assessment_contract(self):
         for agent_id in ROSTER[1:]:
