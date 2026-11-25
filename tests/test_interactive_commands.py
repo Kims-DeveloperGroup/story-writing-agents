@@ -438,23 +438,23 @@ class RetainedParserContractTests(unittest.TestCase):
             "error": "error",
             "suggestion": "/status",
         }
-        all_fields = set(samples)
         for kind, (allowed, required) in rules.items():
+            use_subtest = kind not in {
+                ActionKind.LEAD_EXPLORE, ActionKind.LEAD_ADOPT, ActionKind.PREMISE_DECISION,
+                ActionKind.LEAD_TASK, ActionKind.NARRATIVE_RULE_REVISION,
+            }
             valid = {name: samples[name] for name in required}
-            with (self.subTest(kind=kind, case="valid") if kind not in (ActionKind.LEAD_EXPLORE, ActionKind.LEAD_ADOPT, ActionKind.PREMISE_DECISION, ActionKind.LEAD_TASK) else nullcontext()):
+            with self.subTest(kind=kind, case="valid") if use_subtest else nullcontext():
                 self.assertIs(InteractiveAction(kind, **valid).kind, kind)
             for name in required:
                 missing = dict(valid)
                 del missing[name]
-                with (
-                    (self.subTest(kind=kind, missing=name) if kind not in (ActionKind.LEAD_EXPLORE, ActionKind.LEAD_ADOPT, ActionKind.PREMISE_DECISION, ActionKind.LEAD_TASK) else nullcontext()),
-                    self.assertRaises(ValueError),
-                ):
+                with (self.subTest(kind=kind, missing=name) if use_subtest else nullcontext()), self.assertRaises(ValueError):
                     InteractiveAction(kind, **missing)
-            for name in all_fields.difference(allowed):
+            for name in samples.keys() - allowed:
                 extra = dict(valid)
                 extra[name] = samples[name]
-                with (self.subTest(kind=kind, extra=name) if kind not in (ActionKind.LEAD_EXPLORE, ActionKind.LEAD_ADOPT, ActionKind.PREMISE_DECISION, ActionKind.LEAD_TASK) else nullcontext()), self.assertRaises(ValueError):
+                with (self.subTest(kind=kind, extra=name) if use_subtest else nullcontext()), self.assertRaises(ValueError):
                     InteractiveAction(kind, **extra)
 
     def test_action_specs_and_registry_are_immutable(self) -> None:
