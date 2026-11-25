@@ -487,26 +487,39 @@ class InteractiveLeadAdapter:
             if decision.kind is not ControlOutcomeKind.COMMIT or decision.text in {None, "cancel"}:
                 return False
             if decision.text == "review":
-                selections = (
+                fields = (
                     Prompt("Describe the rule change"),
                     Prompt("Features", instruction="List affected features separated by commas. " + ", ".join(feature.value for feature in NarrativeRuleRevisionFeature)),
-                    Prompt("Rules to preserve", instruction="List one requirement per line. Leave empty when there are none."),
-                    Prompt("Approved exceptions", instruction="List one exception per line. Leave empty when there are none."),
                 )
                 values = []
-                for prompt in selections:
+                for prompt in fields:
                     answer = self._prompt.read_prompt(prompt)
                     if answer.kind is ControlOutcomeKind.EOF:
                         return True
                     if answer.kind is not ControlOutcomeKind.COMMIT or answer.text is None:
                         return False
                     values.append(answer.text)
-                direction, features, preserve, exceptions = values
+                groups = []
+                for name in ("Rule to preserve", "Approved exception"):
+                    conditions = []
+                    prompt = Prompt(name, instruction="Enter one condition. Leave empty when finished.")
+                    while True:
+                        answer = self._prompt.read_prompt(prompt)
+                        if answer.kind is ControlOutcomeKind.EOF:
+                            return True
+                        if answer.kind is not ControlOutcomeKind.COMMIT or answer.text is None:
+                            return False
+                        condition = answer.text.strip()
+                        if not condition:
+                            break
+                        conditions.append(condition)
+                    groups.append(tuple(conditions))
+                direction, features = values
+                preserve, exceptions = groups
                 selection = NarrativeRuleRevisionSelection(
                     rules_digest, direction,
                     tuple(NarrativeRuleRevisionFeature(item.strip()) for item in features.split(",")),
-                    tuple(line.strip() for line in preserve.splitlines() if line.strip()),
-                    tuple(line.strip() for line in exceptions.splitlines() if line.strip()),
+                    preserve, exceptions,
                 )
             elif decision.text == "continue" and retry is not None:
                 selection = retry

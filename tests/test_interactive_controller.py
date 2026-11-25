@@ -6362,6 +6362,32 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
         self.assertIn("Elapsed: 00:00:00", turn_usage.content)
         self.assertNotIn("Elapsed:", output.components[-1].items[0].metadata or "")
 
+
+        from story_writing_agents.narrative_rule_revision import NarrativeRuleRevisionFeature
+
+        digest = "sha256:" + "a" * 64
+        prompt = self._Prompt(*(self._commit(text) for text in (
+            "Use limited viewpoint.", "point_of_view, tone", "Keep dialect", "Keep short sentences", "",
+            "Permit remembered speech", "Permit the interlude", "",
+        )))
+        adapter = self._adapter(session, runner, self._Progress(), self._Picker(self._commit("review")),
+                                prompt, self._Output())
+        with (mock.patch.object(RuntimeSession, "inspect_narrative_rule_revision_choices", return_value=(digest, ())),
+              mock.patch.object(RuntimeSession, "inspect_narrative_rule_impacts", return_value=()),
+              mock.patch.object(RuntimeSession, "decide_lead_task", return_value=SimpleNamespace(turn=None)) as decide):
+            self.assertFalse(adapter.narrative_rule_revision(_UNIQUE_C))
+            adapter._picker = self._Picker(self._commit("review"))
+            adapter._prompt = self._Prompt(self._commit("Keep limited viewpoint."), self._commit("point_of_view"),
+                                           self._commit("Keep dialect"), ControlOutcome(ControlOutcomeKind.CANCEL))
+            self.assertFalse(adapter.narrative_rule_revision(_UNIQUE_C))
+        decide.assert_called_once()
+        selection = decide.call_args.kwargs["narrative_rule_revision"]
+        self.assertEqual(selection.rules_digest, digest)
+        self.assertEqual(selection.features, (NarrativeRuleRevisionFeature.POINT_OF_VIEW, NarrativeRuleRevisionFeature.TONE))
+        self.assertEqual(selection.preserve, ("Keep dialect", "Keep short sentences"))
+        self.assertEqual(selection.exceptions, ("Permit remembered speech", "Permit the interlude"))
+        self.assertEqual(prompt.outcomes, [])
+
     def test_provider_invocation_failure_writes_error_notice_without_crashing(self) -> None:
         import io
         from story_writing_agents.interactive_terminal._input_lifecycle import inspect_live_decoder_spec

@@ -563,7 +563,7 @@ def check_monotonic(current: dict[str, Any], base: dict[str, Any]) -> None:
                 (158623, 159338),
                 (159338, 159552),
                 (159552, 160074),
-                (160074, 160434),
+                (160074, 160457),
             )
             and base["schema_version"] == current["schema_version"] == 1
             and tuple(base[name] for name in time_fields) == tuple(current[name] for name in time_fields) == (18000, 3600)
