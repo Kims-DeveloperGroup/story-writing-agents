@@ -581,6 +581,19 @@ def project_core_document_readiness(readiness: CoreDocumentReadiness | CoreDocum
     return Panel("Whole-book document readiness", tuple(items))
 
 
+def _conditional_application_fields(application: ArtifactApplicationRequestPayload) -> tuple[Field, ...]:
+    if application.conditional is None:
+        return ()
+    return tuple(
+        Field(
+            f"{issue.condition.changed_path} → {issue.condition.target_path}",
+            f"{issue.status.value} · {issue.condition.domain.value} · "
+            f"{issue.condition.discrepancy} Next work: {issue.condition.action}",
+        )
+        for issue in application.conditional.issues
+    )
+
+
 def project_lead_confirmation(
     result: LeadTurnResult, *, commit_request: StoryCommitRequestPayload | None = None,
 ) -> dict:
@@ -613,6 +626,8 @@ def project_lead_confirmation(
                 field.label + "=" + field.value for field in record.fields)
                 for record in operation_facts)),
         )
+        if type(application) is ArtifactApplicationRequestPayload:
+            summary += _conditional_application_fields(application)
         return dict(prompt=Prompt("Apply reviewed changes"), summary=summary, impact=(
             Notice("Artifact application only; Git index remains unstaged.", label="SCOPE"),
             Notice("A local Commit requires a separate decision.", label="SEPARATE APPROVAL", role=SemanticRole.WARNING),
@@ -1021,6 +1036,7 @@ def project_artifact_application_decision_result(
         _message("Lead", result.message),
         *_payload_items(result.outcome, {}, {}, {}),
     ]
+    items.extend(_conditional_application_fields(result.request))
     if result.commit_request is not None:
         items.extend(_payload_items(result.commit_request, {}, {}, {}))
     return Panel("Artifact application", tuple(items), state=_event_state(result.outcome))
@@ -1460,6 +1476,7 @@ def _payload_items(
             Field("Choices", _values(payload.choices)),
             Field("Side effects", _values(payload.side_effects)),
             Field("Prohibited", _values(payload.prohibited_side_effects)),
+            *_conditional_application_fields(payload),
             Field("User impact", payload.reviewed_proposal.user_impact),
             _operation_list(payload.application_request.change_set.operations, "Changes awaiting application"),
             Notice("Confirming applies artifacts only; it does not stage or commit Git changes.", label="impact"),

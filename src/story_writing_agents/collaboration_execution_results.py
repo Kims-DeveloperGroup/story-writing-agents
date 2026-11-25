@@ -172,14 +172,16 @@ def pending_artifact_operation_result(
             None, CollaborationStepState.COMPLETED, None, action,
             story_commit_request=projection.current_story_commit_request,
         )
-    if action is CollaborationNextAction.REPREPARE_COMMIT_REQUEST:
+    if action in {
+        CollaborationNextAction.REPREPARE_COMMIT_REQUEST,
+        CollaborationNextAction.CONTINUE_SYNCHRONIZATION_REPAIR,
+    }:
         result = projection.current_artifact_application_result
         result_events = tuple(
             event
             for event in events
             if event.kind is CollaborationEventKind.ARTIFACT_APPLICATION_RESULT
             and event.payload == result
-            and event.step_id == events[-1].step_id
         )
         if result is None or len(result_events) != 1:
             return blocking_lead_result(
@@ -194,10 +196,13 @@ def pending_artifact_operation_result(
             session_id,
             conversation_id,
             events[-1].turn_id,
-            events[-1].step_id,
+            result_events[0].step_id,
             LeadOutcomeKind.RECOMMENDATION,
-            "The Apply result is known, but there is no current Commit "
-            "request. Reprepare one exact request before Commit.",
+            (
+                "Apply is recorded. Select related synchronization repair or recheck Commit qualification."
+                if action is CollaborationNextAction.CONTINUE_SYNCHRONIZATION_REPAIR
+                else "The Apply result is known. Reprepare one exact request before Commit."
+            ),
             None,
             CollaborationStepState.COMPLETED,
             None,
@@ -205,7 +210,7 @@ def pending_artifact_operation_result(
             story_commit_preparation_request=StoryCommitPreparationRequest(
                 session_id=session_id,
                 conversation_id=conversation_id,
-                step_id=events[-1].step_id,
+                step_id=result_events[0].step_id,
                 application_result_event_id=result_events[0].event_id,
                 application_id=result.application_id,
                 application_request_digest=result.application_request_digest,

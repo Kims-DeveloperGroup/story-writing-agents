@@ -547,6 +547,10 @@ authoring target.
   Commit, and the runtime verifies the resulting tree with excluded paths at their
   recorded revisions. A partial Commit leaves the remaining reviewed changes
   available for a separate Commit request.
+- When review confirms a synchronization problem from current evidence, the Apply
+  request discloses the exact outstanding issue and requires a fresh decision.
+  After Apply, the session offers review or repair for the related document.
+  A separate local Commit requires the verified resolution and actual Git tree.
 - Confirming a consultation starts only the disclosed read-only provider work.
   It never confirms an artifact change or Git commit.
 - Initialization accepts only an absent/empty root or one exact resumable

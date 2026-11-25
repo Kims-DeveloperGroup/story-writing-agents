@@ -48,6 +48,7 @@ class CollaborationNextAction(StrEnum):
     SUBMIT_APPLICATION_DECISION = "submit_application_decision"
     SUBMIT_COMMIT_DECISION = "submit_commit_decision"
     REPREPARE_COMMIT_REQUEST = "reprepare_commit_request"
+    CONTINUE_SYNCHRONIZATION_REPAIR = "continue_synchronization_repair"
     SUBMIT_RECOMMENDATION_DECISION = "submit_recommendation_decision"
     FINALIZE_RECOMMENDATION = "finalize_recommendation"
     CHOOSE_PREMISE = "choose_premise"

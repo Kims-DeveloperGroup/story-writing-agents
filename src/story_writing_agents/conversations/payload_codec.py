@@ -44,6 +44,10 @@ from ..lead_premise_decisions import (
     premise_selection_from_dict,
     premise_value_to_dict,
 )
+from ..synchronization_repair import (
+    synchronization_repair_selection_from_dict,
+    synchronization_repair_selection_to_dict,
+)
 from ..lead_task_transitions import (
     LeadDiscussionReport,
     LeadMaterialCapture,
@@ -132,8 +136,12 @@ from story_writing_agents.conversations.event_value_validation import (
 def lead_task_decision_payload_value(
     payload: CollaborationLeadTaskDecisionPayload,
 ) -> dict[str, object]:
-    return {"payload_type": "lead_task_decision", "decision": task_value_to_dict(payload.decision),
-        **({"document_selection": document_node_selection_to_dict(payload.document_selection)} if payload.document_selection is not None else {})}
+    value = {"payload_type": "lead_task_decision", "decision": task_value_to_dict(payload.decision)}
+    if payload.document_selection is not None:
+        value["document_selection"] = document_node_selection_to_dict(payload.document_selection)
+    if payload.synchronization_repair is not None:
+        value["synchronization_repair"] = synchronization_repair_selection_to_dict(payload.synchronization_repair)
+    return value
 
 
 def lead_task_transition_payload_value(
@@ -370,10 +378,19 @@ def lead_outcome_failure_payload_value(
 def decode_lead_task_decision_payload(
     value: object,
 ) -> CollaborationLeadTaskDecisionPayload:
-    if set(value) - {"document_selection"} != {"payload_type", "decision"}:
+    if type(value) is not dict or set(value) - {"document_selection", "synchronization_repair"} != {"payload_type", "decision"}:
         raise ValueError("invalid lead_task_decision payload fields")
-    return CollaborationLeadTaskDecisionPayload(decision=task_value_from_dict(LeadTaskDecision, value["decision"]),
-        document_selection=(document_node_selection_from_dict(value["document_selection"]) if "document_selection" in value else None))
+    return CollaborationLeadTaskDecisionPayload(
+        decision=task_value_from_dict(LeadTaskDecision, value["decision"]),
+        document_selection=(
+            document_node_selection_from_dict(value["document_selection"])
+            if "document_selection" in value else None
+        ),
+        synchronization_repair=(
+            synchronization_repair_selection_from_dict(value["synchronization_repair"])
+            if "synchronization_repair" in value else None
+        ),
+    )
 
 
 def decode_lead_task_transition_payload(

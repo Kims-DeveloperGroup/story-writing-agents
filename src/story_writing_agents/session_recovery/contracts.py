@@ -79,6 +79,7 @@ class SessionRecoveryNextAction(StrEnum):
     SUBMIT_APPLICATION_DECISION = "submit_application_decision"
     REQUEST_COMMIT_CONFIRMATION = "request_commit_confirmation"
     REPREPARE_COMMIT_REQUEST = "reprepare_commit_request"
+    CONTINUE_SYNCHRONIZATION_REPAIR = "continue_synchronization_repair"
     INSPECT_STORY_COMMIT = "inspect_story_commit"
     INSPECT_OWNER_OUTCOME = "inspect_owner_outcome"
     OPERATOR_RECOVERY = "operator_recovery"
@@ -318,7 +319,10 @@ class SessionRecoveryResult:
             _raise_error(SessionRecoveryFailureCode.UNSUPPORTED_SHAPE)
         if self.next_action is not _NEXT_ACTION[self.state] and not (
             self.state is SessionRecoveryState.APPLIED_NOT_COMMITTED
-            and self.next_action is SessionRecoveryNextAction.REPREPARE_COMMIT_REQUEST
+            and self.next_action in {
+                SessionRecoveryNextAction.REPREPARE_COMMIT_REQUEST,
+                SessionRecoveryNextAction.CONTINUE_SYNCHRONIZATION_REPAIR,
+            }
         ):
             _raise_error(SessionRecoveryFailureCode.INVALID_REQUEST)
         if self.state is SessionRecoveryState.RECOVERY_REQUIRED:
@@ -440,8 +444,10 @@ def reconcile_session_recovery(
         )
     if (
         history.current_artifact_application_result is not None
-        and history.next_safe_action
-        is CollaborationNextAction.REPREPARE_COMMIT_REQUEST
+        and history.next_safe_action in {
+            CollaborationNextAction.REPREPARE_COMMIT_REQUEST,
+            CollaborationNextAction.CONTINUE_SYNCHRONIZATION_REPAIR,
+        }
     ):
         return _result(
             evidence,
@@ -1203,6 +1209,11 @@ def _result(
         )
     ):
         next_action = SessionRecoveryNextAction.REPREPARE_COMMIT_REQUEST
+    if (
+        state is SessionRecoveryState.APPLIED_NOT_COMMITTED
+        and history.next_safe_action is CollaborationNextAction.CONTINUE_SYNCHRONIZATION_REPAIR
+    ):
+        next_action = SessionRecoveryNextAction.CONTINUE_SYNCHRONIZATION_REPAIR
     confirmation_request_id = (
         commit_request.confirmation_request_id
         if state is SessionRecoveryState.APPLIED_NOT_COMMITTED

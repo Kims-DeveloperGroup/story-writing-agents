@@ -210,6 +210,7 @@ class ArtifactApplicationNextAction(StrEnum):
 
     REQUEST_COMMIT_CONFIRMATION = "request_commit_confirmation"
     REPREPARE_COMMIT_REQUEST = "reprepare_commit_request"
+    CONTINUE_SYNCHRONIZATION_REPAIR = "continue_synchronization_repair"
     CONTINUE_WITH_LEAD = "continue_with_lead"
     REGENERATE_AND_REVIEW = "regenerate_and_review"
     INSPECT_AND_RESOLVE_OUTCOME = "inspect_and_resolve_outcome"

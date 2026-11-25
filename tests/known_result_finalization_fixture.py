@@ -14,6 +14,7 @@ from story_writing_agents.conversations import (
     CollaborationLeadSynthesisPayload,
     CollaborationMessagePayload,
     CollaborationProposal,
+    CollaborationSpecialistAssessment,
     CollaborationSpecialistReplyPayload,
     CollaborationStepState,
     CollaborationStepStatePayload,
@@ -58,13 +59,15 @@ def finalize_known_result(runtime, session_id, events, projection):
 
 
 def _synchronization_fixture_assessment(
-    material, proposal, candidate, request, judgment, candidate_draft, synthesis, reviewer,
+    material, proposal, candidate, request, judgment, candidate_draft, synthesis, reviewers,
+    *, discrepancy_pair, unread_pair,
 ):
     """Bind pre-seeded reviewer facts to captured workspace and projected candidate bytes."""
     from hashlib import sha256
 
     from story_writing_agents.conversations import authoring_scope_to_dict, synchronization_event_ref
     from story_writing_agents.conversations.event_value_validation import canonical_json
+    from story_writing_agents.specialist_routing import artifact_domain, specialists_for_domains
     from story_writing_agents.synchronization_assessment import (
         SynchronizationAbsence,
         SynchronizationAssessment,
@@ -94,21 +97,47 @@ def _synchronization_fixture_assessment(
                                    selection_digest=receipt.content_digest,
                                    source_revision=receipt.revision_digest)
 
+    supporting_review = next((item for item in reviewers
+                              if item.payload.assessment is CollaborationSpecialistAssessment.SUPPORTS), synthesis)
     findings = []
     for changed, target in material.census.required_pairs:
-        if documents[target].absence is SynchronizationAbsence.INITIAL:
+        pair = (changed, target)
+        if pair == unread_pair:
+            finding = SynchronizationFinding(
+                changed, target, SynchronizationJudgment.UNREAD,
+                "The review lacks an exact current read for this pair.",
+            )
+        elif documents[target].absence is SynchronizationAbsence.INITIAL:
             finding = SynchronizationFinding(changed, target, SynchronizationJudgment.INITIAL,
                                              "The fixture user leaves later initial construction open.")
         else:
             reads = (read(changed), read(target))
             if any(item is None for item in reads):
                 continue
+            judgment_kind = SynchronizationJudgment.NO_CHANGE
+            reason = "The fixture review found no change needed for the demonstrated material."
+            domain = action = resolution = None
+            reviewer = supporting_review
+            if pair == discrepancy_pair:
+                judgment_kind = SynchronizationJudgment.NEEDS_CHANGE
+                reason = "The outline still uses the previous narrative rule."
+                action = "Revise the affected outline passage."
+                resolution = "Verify the new rule and the revised outline together."
+                domain = artifact_domain(target)
+                assert domain is not None
+            if domain is not None:
+                specialist_ids = specialists_for_domains((domain,))
+                reviewer = next(item for item in reviewers if item.sender.agent_id in specialist_ids)
             finding = SynchronizationFinding(
-                changed, target, SynchronizationJudgment.NO_CHANGE,
-                "The fixture review found no change needed for the demonstrated material.",
-                reads, synchronization_event_ref(reviewer),
+                changed, target, judgment_kind, reason, reads, synchronization_event_ref(reviewer),
+                domain, action, resolution,
             )
         findings.append(finding)
+    if discrepancy_pair is not None:
+        assert any(
+            item.pair == discrepancy_pair and item.judgment is SynchronizationJudgment.NEEDS_CHANGE
+            for item in findings
+        )
     conditions = authoring_scope_to_dict(proposal.authoring_scope)
     conditions["editorial_context"] = proposal.basis.editorial_context_digest
     rules = documents["core_documents/narrative_rules.md"]
@@ -128,7 +157,10 @@ def _synchronization_fixture_assessment(
 async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_core_evidence=(),
                                  editorial_refs=(), editorial_context_digest=None,
                                  review_task: tuple[str, int] | None = None,
-                                 retained_review_paths: tuple[str, ...] = ()):
+                                 retained_review_paths: tuple[str, ...] = (),
+                                 discrepancy_pair: tuple[str, str] | None = None,
+                                 unread_pair: tuple[str, str] | None = None,
+                                 concern_specialist: str | None = None):
     """Publish a real reviewed candidate without unrelated provider authoring."""
     import hashlib
     import json
@@ -136,7 +168,12 @@ async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_cor
 
     from story_writing_agents import artifact_proposals as artifacts
     from story_writing_agents.artifact_transactions.synchronization_material import capture_synchronization_material
-    from story_writing_agents.conversations import SynchronizationPayload
+    from story_writing_agents.conversations import SynchronizationPayload, synchronization_event_ref
+    from story_writing_agents.synchronization_assessment import SynchronizationJudgment
+    from story_writing_agents.synchronization_obligations import (
+        SynchronizationCondition, SynchronizationConditionState, SynchronizationStatus,
+        SynchronizationTransition,
+    )
     from story_writing_agents.runtime_resources import collaboration_event_journal as event_journal
     from tests.recommendation_fixture import task_assessment
     from story_writing_agents.conversations import events as payloads, event_vocabulary as vocabulary
@@ -275,6 +312,10 @@ async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_cor
         for record in records:
             collect(record)
 
+        concern = next((item for item in live_assignments if item.specialist_id == concern_specialist), None)
+        if concern_specialist is not None and concern is None:
+            raise ValueError("The fixture concern needs an exact assigned specialist.")
+
         def remap(value):
             if isinstance(value, str):
                 return identities.get(value, value)
@@ -293,9 +334,17 @@ async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_cor
                     changes = {"authoring_scope": scope}
                     if type(updated) is CollaborationLeadJudgmentPayload:
                         changes["authoring_admission"] = proposal.basis.authoring_admission
+                    elif concern is not None:
+                        changes["unresolved_input_ids"] = concern.input_ids
                     return replace(updated, **changes)
                 if type(updated) is CollaborationSpecialistReplyPayload:
-                    return replace(updated, mode=SpecialistAssignmentMode.REVIEW, input_ids=next(item.input_ids for item in live_assignments if item.assignment_id == updated.assignment_id))
+                    return replace(
+                        updated, mode=SpecialistAssignmentMode.REVIEW,
+                        input_ids=next(item.input_ids for item in live_assignments if item.assignment_id == updated.assignment_id),
+                        assessment=(CollaborationSpecialistAssessment.CONCERN
+                                    if concern is not None and concern.assignment_id == updated.assignment_id
+                                    else updated.assessment),
+                    )
                 return updated
             return value
 
@@ -346,16 +395,35 @@ async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_cor
                     )
                     drafts.append(synthesis_draft)
                     assert judgment_draft is not None and candidate_draft is not None
-                    reviewer = next(item for item in drafts if item.event_id == payload.reply_event_ids[0])
+                    reply_drafts = {item.event_id: item for item in drafts}
                     assessment = _synchronization_fixture_assessment(
                         synchronization_material, proposal, candidate, request_draft, judgment_draft,
-                        candidate_draft, synthesis_draft, reviewer,
+                        candidate_draft, synthesis_draft,
+                        tuple(reply_drafts[reply_id] for reply_id in payload.reply_event_ids),
+                        discrepancy_pair=discrepancy_pair, unread_pair=unread_pair,
                     )
-                    drafts.append(event_journal.draft(
+                    report = event_journal.draft(
                         session_id=session_id, conversation_id=conversation_id, turn_id=turn_id,
-                        step_id=proposal.step_id, kind=CollaborationEventKind.SYNCHRONIZATION,
+                        step_id=proposal.step_id, kind=vocabulary.CollaborationEventKind.SYNCHRONIZATION,
                         sender=RUNTIME, recipient=USER, payload=SynchronizationPayload(assessment=assessment),
-                    ))
+                    )
+                    drafts.append(report)
+                    if discrepancy_pair is not None:
+                        finding = next(item for item in assessment.findings if item.pair == discrepancy_pair)
+                        assert finding.judgment is SynchronizationJudgment.NEEDS_CHANGE
+                        condition = SynchronizationCondition.from_finding(
+                            prefix + "_condition", synchronization_event_ref(report), finding,
+                        )
+                        transition = SynchronizationTransition(
+                            prefix + "_obligation", 1, (),
+                            (SynchronizationConditionState(condition, SynchronizationStatus.OPEN, finding.reason),),
+                            "The exact review found a synchronization issue.",
+                        )
+                        drafts.append(event_journal.draft(
+                            session_id=session_id, conversation_id=conversation_id, turn_id=turn_id,
+                            step_id=proposal.step_id, kind=vocabulary.CollaborationEventKind.SYNCHRONIZATION,
+                            sender=RUNTIME, recipient=USER, payload=SynchronizationPayload(transition=transition),
+                        ))
                 if type(payload) is CollaborationLeadJudgmentPayload:
                     judgment_draft = drafts[-1]
                     candidate_draft = event_journal.draft(

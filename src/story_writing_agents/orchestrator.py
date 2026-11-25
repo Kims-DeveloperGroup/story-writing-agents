@@ -38,7 +38,7 @@ from .artifact_transactions.synchronization_control import (
 )
 from .artifact_transactions.synchronization_review import retain_current_review_reads
 from .conversations.reducers.synchronization_history import SynchronizationHistory, derive_absence_origins
-from .synchronization_assessment import SynchronizationAbsence, SynchronizationDocument, SynchronizationEventRef
+from .synchronization_assessment import SynchronizationEventRef
 from .conversations.event_contracts.synchronization import SynchronizationPayload
 
 from .agent_context.actions import ContextCallReadFact, ContextSourceStatusReceipt
@@ -395,6 +395,7 @@ from .conversations import (
     ArtifactApplicationDecision,
     ArtifactApplicationDecisionKind,
     ArtifactApplicationDecisionPayload,
+    synchronization_event_ref,
     ArtifactApplicationDecisionResult,
     ArtifactApplicationNextAction,
     ArtifactApplicationOutcomeKind,
@@ -541,6 +542,16 @@ from .collaboration_execution_results import (
     CollaborationInvocationResult,
     LeadSynthesisResult,
 )
+from .conversations.reducers.synchronization_repair_history import (
+    SynchronizationRepairWork,
+    has_blocking_applied_synchronization,
+    has_competing_artifact_offer,
+    has_unsettled_synchronization_write,
+    project_synchronization_repair_work,
+    require_synchronization_repair_scope,
+)
+from .lead_preparation import synchronization_repair_control
+from .synchronization_repair import SynchronizationRepairSelection
 from .lead_control_events import (
     effective_lead_control_events,
 )
@@ -1943,7 +1954,13 @@ class StoryRuntime:
             request = prepared_decision.request
             turn_id = prepared_decision.turn_id
             decision_draft = prepared_decision.decision_draft
+            if decision.kind is not CollaborationConfirmationDecision.REJECT:
+                self._validate_synchronization_work_scope(session_id, events, request.authoring_scope)
             if type(prepared_decision) is recommendation_decisions.PreparedRecommendationRevision:
+                if request.authoring_scope is not None and synchronization_repair_control.repair_for_scope(
+                    events, request.authoring_scope,
+                ) is not None:
+                    raise ValueError("Select the current synchronization repair before preparing a revised task.")
                 source = prepared_decision.source
                 planning_step = prepared_decision.planning_step
                 user_message = prepared_decision.user_message
@@ -2206,6 +2223,7 @@ class StoryRuntime:
             histories.setdefault(event.conversation_id, []).append(event)
         blocked = {CollaborationNextAction.SUBMIT_APPLICATION_DECISION, CollaborationNextAction.SUBMIT_COMMIT_DECISION,
                    CollaborationNextAction.REPREPARE_COMMIT_REQUEST, CollaborationNextAction.START_OR_RECONFIRM,
+            CollaborationNextAction.CONTINUE_SYNCHRONIZATION_REPAIR,
                    CollaborationNextAction.FINALIZE_RESULT, CollaborationNextAction.FINALIZE_RECOMMENDATION,
                    CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME, CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY,
                    CollaborationNextAction.RETRY_LEAD_TURN}
@@ -2229,21 +2247,34 @@ class StoryRuntime:
 
     def inspect_semantic_synchronization(self, session_id: str) -> SynchronizationHistory:
         """Inspect session synchronization history against current physical documents."""
-        history = self.capture_editorial_snapshot(session_id).synchronization()
+        return self._synchronization_at(self.capture_editorial_snapshot(session_id))
+
+    def _synchronization_at(self, snapshot: SessionHistorySnapshot) -> SynchronizationHistory:
+        history = snapshot.synchronization()
         if not history.assessments:
             return history
-        binding = self.bind_session_artifacts(session_id)
+        binding = self.bind_session_artifacts(snapshot.session_id)
         with binding.open_ready_resources() as access:
             current = {item.path: item.source.source_sha256 for item in access.repository.capture_complete_state()}
-        paths = set(current)
-        paths.update(item.path for _, assessment in history.assessments for item in assessment.census.documents)
-        documents = tuple(
-            SynchronizationDocument(path, current[path]) if path in current
-            else SynchronizationDocument(path, None, absence=SynchronizationAbsence.ABSENT)
-            for path in sorted(paths)
+        return history.with_current_artifact_digests(current)
+
+    def inspect_synchronization_repair(self, session_id: str) -> tuple[SynchronizationRepairWork, ...]:
+        """Return eligible repair paths from observed Apply facts and live conditions."""
+        snapshot = self.capture_editorial_snapshot(session_id)
+        return project_synchronization_repair_work(
+            snapshot.events(), self._synchronization_at(snapshot),
         )
-        rules_digest = f"sha256:{hashlib.sha256(json.dumps(current.get(AuthoringTarget.NARRATIVE_RULES.value)).encode()).hexdigest()}"
-        return history.with_current_documents(documents, rules_digest=rules_digest)
+
+    def _applied_synchronization_at(
+        self, snapshot: SessionHistorySnapshot, events: tuple[CollaborationEvent, ...],
+    ) -> SynchronizationHistory:
+        if any(
+            type(event.payload) is ArtifactApplicationResultPayload
+            and event.payload.next_action is ArtifactApplicationNextAction.CONTINUE_SYNCHRONIZATION_REPAIR
+            for event in events
+        ):
+            return self._synchronization_at(snapshot)
+        return snapshot.synchronization()
 
     async def control_semantic_synchronization(
         self, session_id: str, conversation_id: str, *, action: SynchronizationControlAction,
@@ -2485,9 +2516,16 @@ class StoryRuntime:
         self, decision: LeadTaskDecision, *,
         action_progress_sink: ContextActionProgressSink | None = None,
     document_selection: DocumentNodeSelection | None = None,
+        synchronization_repair: SynchronizationRepairSelection | None = None,
     ) -> LeadTaskDecisionResult:
         if type(decision) is not LeadTaskDecision:
             raise TypeError("task control requires an exact LeadTaskDecision")
+        if synchronization_repair is not None and (
+            type(synchronization_repair) is not SynchronizationRepairSelection
+            or decision.action is not LeadTaskAction.NEW_TASK
+            or document_selection is not None
+        ):
+            raise ValueError("synchronization repair requires one explicit new scoped task")
         session_id, conversation_id = decision.session_id, decision.conversation_id
         await run_blocking(self.validate_lead_identity, session_id, conversation_id)
         validate_context_event_sink(action_progress_sink)
@@ -2502,7 +2540,9 @@ class StoryRuntime:
             prior_origin = next((event for event in events if event.event_id == decision.request_id), None)
             if prior_origin is not None:
                 if type(prior_origin.payload) is not CollaborationLeadTaskDecisionPayload or (
-                    (prior_origin.payload.decision != decision or prior_origin.payload.document_selection != document_selection)
+                    prior_origin.payload.decision != decision
+                    or prior_origin.payload.document_selection != document_selection
+                    or prior_origin.payload.synchronization_repair != synchronization_repair
                 ):
                     raise ValueError("same task request ID cannot change its arguments")
                 transition = next((event for event in events
@@ -2556,9 +2596,23 @@ class StoryRuntime:
                 CollaborationNextAction.SUBMIT_APPLICATION_DECISION,
                 CollaborationNextAction.SUBMIT_COMMIT_DECISION,
                 CollaborationNextAction.REPREPARE_COMMIT_REQUEST,
+                CollaborationNextAction.CONTINUE_SYNCHRONIZATION_REPAIR,
             }
-            if pending_operation and decision.action is not LeadTaskAction.DISCUSS:
-                raise ValueError("resolve the exact pending Apply/Commit control before changing tasks")
+            if decision.action is not LeadTaskAction.DISCUSS:
+                session_snapshot = self.capture_editorial_snapshot(session_id)
+                session_events = session_snapshot.events()
+                if has_unsettled_synchronization_write(session_events):
+                    raise ValueError("Inspect unresolved Apply or Commit activity before starting new work.")
+                current_synchronization = await run_blocking(
+                    self._applied_synchronization_at, session_snapshot, session_events,
+                )
+                if synchronization_repair is not None:
+                    if has_competing_artifact_offer(session_events):
+                        raise ValueError("Resolve the outstanding Apply or Commit request before repair.")
+                    work = project_synchronization_repair_work(session_events, current_synchronization)
+                    require_synchronization_repair_scope(synchronization_repair, work)
+                elif pending_operation or has_blocking_applied_synchronization(session_events, current_synchronization):
+                    raise ValueError("Resolve the pending operation or select its exact synchronization repair.")
             selected_task = None
             if decision.task_ref is not None:
                 selected_task = next((item for item in projection.available_tasks
@@ -2584,7 +2638,9 @@ class StoryRuntime:
                     events,
                     projection,
                     materials,
+                    synchronization_repair=synchronization_repair,
                 )
+
             )
             superseding = ()
             if decision.action is not LeadTaskAction.DISCUSS and projection.current_state in {CollaborationStepState.AWAITING_CONFIRMATION, CollaborationStepState.RECONFIRMATION_REQUIRED}:
@@ -2645,6 +2701,7 @@ class StoryRuntime:
             CollaborationNextAction.SUBMIT_APPLICATION_DECISION,
             CollaborationNextAction.SUBMIT_COMMIT_DECISION,
             CollaborationNextAction.REPREPARE_COMMIT_REQUEST,
+            CollaborationNextAction.CONTINUE_SYNCHRONIZATION_REPAIR,
         }:
             pending = (CollaborationNextAction.REPLY_TO_LEAD if report.response_kind == "question"
                        else CollaborationNextAction.CONTINUE_WITH_LEAD)
@@ -2682,10 +2739,12 @@ class StoryRuntime:
         self, decision: LeadTaskDecision, *,
         action_progress_sink: ContextActionProgressSink | None = None,
     document_selection: DocumentNodeSelection | None = None,
+        synchronization_repair: SynchronizationRepairSelection | None = None,
     ) -> LeadTaskDecisionResult:
         """Apply an exact USER control returned by the current task choices."""
         return await self._decide_lead_task_impl(
             decision, document_selection=document_selection, action_progress_sink=action_progress_sink,
+            synchronization_repair=synchronization_repair,
         )
 
     def lead_group_reports(self, session_id: str, conversation_id: str) -> tuple[dict[str, object], ...]:
@@ -2928,9 +2987,33 @@ class StoryRuntime:
                 return remaining_recovery
 
             task_context = projection.discussion_context
-            if (interaction_mode is LeadInteractionMode.ORCHESTRATION and adoption is None
+            continues_task = (interaction_mode is LeadInteractionMode.ORCHESTRATION and adoption is None
                     and premise_selection is None and task_context is not None
-                    and task_context.action in {LeadTaskAction.RESUME, LeadTaskAction.NEW_TASK}):
+                    and task_context.action in {LeadTaskAction.RESUME, LeadTaskAction.NEW_TASK})
+            repair_selection = synchronization_repair_control.selected_synchronization_repair(
+                events, task_context if continues_task else None,
+            )
+            session_snapshot = await run_blocking(self.capture_editorial_snapshot, session_id)
+            session_events = session_snapshot.events()
+            if has_unsettled_synchronization_write(session_events):
+                return blocking_lead_result(
+                    session_id, conversation_id, CollaborationStepState.OUTCOME_UNKNOWN,
+                    "Inspect unresolved Apply or Commit activity before starting new work.",
+                )
+            synchronization = await run_blocking(self._applied_synchronization_at, session_snapshot, session_events)
+            if repair_selection is not None:
+                work = project_synchronization_repair_work(session_events, synchronization)
+                require_synchronization_repair_scope(repair_selection, work)
+            elif has_blocking_applied_synchronization(session_events, synchronization):
+                return LeadTurnResult(
+                    session_id, conversation_id, projection.current_turn_id or event_journal.new_id("t"),
+                    projection.current_step_id or event_journal.new_id("s"), LeadOutcomeKind.RECOMMENDATION,
+                    "An applied change still needs synchronization repair. Select an exact related document before new work.",
+                    None, CollaborationStepState.COMPLETED, None,
+                    CollaborationNextAction.CONTINUE_SYNCHRONIZATION_REPAIR,
+                )
+            if continues_task:
+                assert task_context is not None
                 control = next(event for event in events
                                if type(event.payload) is CollaborationLeadTaskTransitionPayload
                                and event.payload.receipt == task_context)
@@ -3183,6 +3266,7 @@ class StoryRuntime:
             )
             if normalized is not None:
                 return normalized
+            self._validate_synchronization_work_scope(session_id, events, authoring_scope)
             turn_id = event_journal.new_id("t")
             step_id = event_journal.new_id("s")
             inputs = current_lead_inputs.provider_free_lead_inputs(session_id, turn_id, text, bind_session_artifacts=self.bind_session_artifacts)
@@ -4524,6 +4608,7 @@ class StoryRuntime:
         try:
             session_history = (await run_blocking(self.capture_editorial_snapshot, session_id))
             task_transition = None
+            task_events = ()
             task_receipt = None
             discussion_constraints = None
             if task_transition_event_id is not None:
@@ -4535,6 +4620,42 @@ class StoryRuntime:
                     raise BackendProtocolError("task planning requires its exact durable USER transition")
                 task_receipt = task_transition.payload.receipt
                 discussion_constraints = collaboration_response_contracts.task_discussion_constraints(task_transition, task_receipt, discussion_only)
+            repair_selection = synchronization_repair_control.selected_synchronization_repair(
+                task_events, task_receipt,
+            )
+            if preparation is not None and repair_selection is None:
+                request = cast(LeadRecommendationRequestPayload, preparation.request_event.payload)
+                if request.authoring_scope is not None:
+                    preparation_events = self.conversation_storage_services.event_store.read(session_id, conversation_id)
+                    repair_selection = synchronization_repair_control.repair_for_scope(
+                        preparation_events, request.authoring_scope,
+                    )
+            session_events = session_history.events()
+            if has_unsettled_synchronization_write(session_events) and not discussion_only:
+                return blocking_lead_result(
+                    session_id, conversation_id, CollaborationStepState.OUTCOME_UNKNOWN,
+                    "Inspect unresolved Apply or Commit activity before starting new work.",
+                )
+            selected_repair_work = None
+            if not discussion_only:
+                current_synchronization = await run_blocking(
+                    self._applied_synchronization_at, session_history, session_events,
+                )
+                if repair_selection is not None:
+                    repair_work = project_synchronization_repair_work(session_events, current_synchronization)
+                    selected_repair_work = require_synchronization_repair_scope(repair_selection, repair_work)
+                elif has_blocking_applied_synchronization(session_events, current_synchronization):
+                    return LeadTurnResult(
+                        session_id, conversation_id, turn_id, step_id, LeadOutcomeKind.RECOMMENDATION,
+                        "An applied change still needs synchronization repair. Inspect the current proof and related documents before new work.",
+                        None, CollaborationStepState.COMPLETED, None,
+                        CollaborationNextAction.CONTINUE_SYNCHRONIZATION_REPAIR,
+                    )
+            repair_paths = None
+            if repair_selection is not None and selected_repair_work is not None:
+                condition = selected_repair_work.condition
+                counterpart = condition.changed_path if condition.target_path == repair_selection.repair_path else condition.target_path
+                repair_paths = (repair_selection.repair_path, counterpart)
             if discussion_only and (task_receipt is None or task_receipt.action is not LeadTaskAction.DISCUSS):
                 raise BackendProtocolError("discussion cannot be provider-selected")
             if self.backend is None:
@@ -4891,7 +5012,8 @@ class StoryRuntime:
                 if ordinary_front_cap is not None:
                     physical_call_limit = min(physical_call_limit, ordinary_front_cap)
                 def prepare_lead_rule_seed() -> LeadResultRuleSeed:
-                    return collaboration_response_contracts.prepare_lead_rule_seed(discussion_only=discussion_only, discussion_constraints=discussion_constraints, expected_relation=expected_relation, inputs=inputs, offered_tasks=offered_tasks, constraints=constraints, successor_only=successor_only, task_receipt=task_receipt, revision_source_scope=revision_source_scope, source_artifact_revision=source_artifact_revision, selected_document_review_path=selected_document_review_path, interaction_mode=interaction_mode)
+                    return collaboration_response_contracts.prepare_lead_rule_seed(discussion_only=discussion_only, discussion_constraints=discussion_constraints, expected_relation=expected_relation, inputs=inputs, offered_tasks=offered_tasks, constraints=constraints, successor_only=successor_only, task_receipt=task_receipt, revision_source_scope=revision_source_scope, source_artifact_revision=source_artifact_revision, selected_document_review_path=selected_document_review_path, interaction_mode=interaction_mode,
+                    synchronization_repair_paths=repair_paths if task_receipt is not None else None)
                 lead_rule_seed = await run_blocking(prepare_lead_rule_seed)
                 group_protocol = (preparation is None and not discussion_only
                     and interaction_mode is LeadInteractionMode.ORCHESTRATION
@@ -5126,11 +5248,24 @@ class StoryRuntime:
                     resolved_document_selection = successor_selection or document_selection
                     decoded = replace(decoded, authoring_scope=resolved_scope, proposal=resolved_intent,
                         document_node=None if successor_selection is not None else document_node)
+                    if repair_selection is not None and selected_repair_work is not None and decoded.authoring_scope is not None:
+                        synchronization_repair_control.require_selected_repair_target(
+                            repair_selection, decoded.authoring_scope, selected_repair_work.condition,
+                        )
                     authoring_authority.validate_objective_routing(
                         decoded, objective_projection, objective_events, current_task_events,
                     )
                     if task_receipt is not None and task_receipt.target_task_id is not None:
-                        lead_answer_authority.validate_user_task_selection(decoded, task_receipt, source_review_revision, source_artifact_revision, selected_document_review_path, task_material_events)
+                        selected_review_paths = () if selected_document_review_path is None else (selected_document_review_path,)
+                        if repair_paths is not None and decoded.authoring_scope is not None:
+                            selected_review_paths = (
+                                repair_paths if decoded.authoring_scope.intent is AuthoringIntent.REVIEW_ONLY else repair_paths[:1]
+                            )
+                        lead_answer_authority.validate_user_task_selection(
+                            decoded, task_receipt, source_review_revision, source_artifact_revision,
+                            selected_review_paths,
+                            task_material_events,
+                        )
                     if adoption_capture is not None:
                         self.validate_adoption_source(session_id, adoption_capture)
                         lead_answer_authority.validate_adoption_answer(decoded, authoring_scope, adoption_capture)
@@ -6928,6 +7063,34 @@ class StoryRuntime:
         if not events or any(event.session_id != session_id for event in events):
             raise ValueError("candidate review history has cross-session events")
         scope = proposal.authoring_scope
+        if scope is not None:
+            selected_repair = synchronization_repair_control.repair_for_scope(events, scope)
+            if selected_repair is not None:
+                snapshot = self.capture_editorial_snapshot(session_id)
+                session_events = snapshot.events()
+                active_apply = next((
+                    synchronization_event_ref(event) for event in reversed(session_events)
+                    if event.conversation_id == events[-1].conversation_id
+                    and type(event.payload) is ArtifactApplicationDecisionPayload
+                    and event.payload.decision is ArtifactApplicationDecisionKind.APPLY
+                    and (event.payload.candidate_id, event.payload.candidate_revision, event.payload.candidate_digest)
+                    == (candidate.candidate_id, candidate.candidate_revision, candidate.candidate_digest)
+                ), None)
+                repair = require_synchronization_repair_scope(selected_repair, project_synchronization_repair_work(
+                    session_events, snapshot.synchronization(), active_application_decision=active_apply,
+                ))
+                synchronization_repair_control.require_selected_repair_target(
+                    selected_repair, scope, repair.condition,
+                )
+                changed_paths = {
+                    path for operation in candidate.change_set.operations
+                    for path in (
+                        (operation.source_path, operation.destination_path)
+                        if isinstance(operation, ArtifactRenameOperation) else (operation.path,)
+                    )
+                }
+                if changed_paths != {selected_repair.repair_path}:
+                    raise ValueError("The exact repair candidate changes another document.")
         if proposal.document_node is not None:
             view = lead_document_nodes.validate_document_node(session_id, proposal.document_node, scope=scope, proposed_plan=proposal.document_plan, capture_editorial_snapshot=self.capture_editorial_snapshot, prepare_document_selection=self.prepare_document_selection, read_session_authoring_events=self.read_session_authoring_events, inspect_core_document_readiness=self.inspect_core_document_readiness)
             node = next(item for item in view.plan.nodes if item.node_id == proposal.document_node.node_id)
@@ -7182,6 +7345,22 @@ class StoryRuntime:
         authoring_authority.validate_final_review_handoff(proposal, events, projection)
         return proposal
 
+    def _validate_synchronization_work_scope(
+        self, session_id: str, events: tuple[CollaborationEvent, ...], scope: AuthoringScope | None,
+    ) -> None:
+        snapshot = self.capture_editorial_snapshot(session_id)
+        session_events = snapshot.events()
+        if has_unsettled_synchronization_write(session_events):
+            raise ValueError("Inspect unresolved Apply or Commit activity before starting new work.")
+        selection = None if scope is None else synchronization_repair_control.repair_for_scope(events, scope)
+        current_synchronization = self._applied_synchronization_at(snapshot, session_events)
+        if selection is not None and scope is not None:
+            work = project_synchronization_repair_work(session_events, current_synchronization)
+            repair = require_synchronization_repair_scope(selection, work)
+            synchronization_repair_control.require_selected_repair_target(selection, scope, repair.condition)
+        elif has_blocking_applied_synchronization(session_events, current_synchronization):
+            raise ValueError("Select the exact document and obligation for synchronization repair.")
+
     def _validate_current_proposal_authority(
         self,
         *,
@@ -7192,6 +7371,7 @@ class StoryRuntime:
         artifact_binding: SessionArtifactBinding | None = None,
     ) -> None:
         """Re-derive every mutable runtime fact before minting start authority."""
+        self._validate_synchronization_work_scope(session_id, events, proposal.authoring_scope)
         if proposal.document_node is not None:
             lead_document_nodes.validate_document_node(session_id, proposal.document_node, scope=proposal.authoring_scope, proposed_plan=proposal.document_plan, capture_editorial_snapshot=self.capture_editorial_snapshot, prepare_document_selection=self.prepare_document_selection, read_session_authoring_events=self.read_session_authoring_events, inspect_core_document_readiness=self.inspect_core_document_readiness)
             calls, rounds, _ = document_lineage_cost(self.read_session_authoring_events(session_id),
@@ -7694,6 +7874,9 @@ class RuntimeSession:
     def inspect_semantic_synchronization(self) -> SynchronizationHistory:
         return self.runtime.inspect_semantic_synchronization(self.session_id)
 
+    def inspect_synchronization_repair(self) -> tuple[SynchronizationRepairWork, ...]:
+        return self.runtime.inspect_synchronization_repair(self.session_id)
+
     async def control_semantic_synchronization(
         self, conversation_id: str, *, action: SynchronizationControlAction,
         obligation_id: str, parents: tuple[SynchronizationEventRef, ...], reason: str,
@@ -7886,12 +8069,14 @@ class RuntimeSession:
         self, decision: LeadTaskDecision, *,
         action_progress_sink: ContextActionProgressSink | None = None,
     document_selection: DocumentNodeSelection | None = None,
+        synchronization_repair: SynchronizationRepairSelection | None = None,
     ) -> LeadTaskDecisionResult:
         """Apply an exact USER control returned by the current task choices."""
         if decision.session_id != self.session_id:
             raise ValueError("task decision belongs to a different bound session")
         return await self.runtime.decide_lead_task(
             decision, document_selection=document_selection, action_progress_sink=action_progress_sink,
+            synchronization_repair=synchronization_repair,
         )
 
     async def lead_turn(

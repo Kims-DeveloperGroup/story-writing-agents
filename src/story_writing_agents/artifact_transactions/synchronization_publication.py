@@ -12,6 +12,7 @@ from ..conversations.events import (
     SynchronizationPayload,
     synchronization_event_ref,
 )
+from ..conversations.event_vocabulary import ArtifactApplicationOutcomeKind
 from ..runtime_resources import collaboration_event_journal as journal
 from ..synchronization_assessment import (
     SynchronizationApplication,
@@ -128,12 +129,15 @@ def synchronization_apply_drafts(
     assessment: SynchronizationAssessment,
     obligations: SynchronizationObligations,
     result: CollaborationEventDraft,
+    *, resolve_conditions: bool = True,
 ) -> tuple[CollaborationEventDraft, ...]:
     """Bind currently verified resolution to the successful physical application."""
     application = SynchronizationApplication(result.payload.application_id, synchronization_event_ref(result))
     actual = replace(assessment, basis=replace(assessment.basis, application=application))
 
     report = _draft(result, "synchronization_applied", SynchronizationPayload(assessment=actual))
+    if not resolve_conditions or result.payload.outcome is ArtifactApplicationOutcomeKind.UNCHANGED:
+        return (report,)
     return (report, *_resolution_drafts(
         actual, obligations, report, "The exact candidate was applied and the resulting documents verified.",
     ))

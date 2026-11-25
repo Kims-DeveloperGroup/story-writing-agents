@@ -95,6 +95,7 @@ def lead_revision_result_contract(
     fresh_revision_only: bool = False, source_scope: AuthoringScope | None = None,
     artifact_revision_only: bool = False,
     selected_document_review_path: str | None = None,
+    synchronization_repair_paths: tuple[str, str] | None = None,
 ) -> LeadResultRuleSeed:
     if selected_document_review_path is not None and (
         not fresh_revision_only
@@ -102,6 +103,13 @@ def lead_revision_result_contract(
         or constraints.document_target_paths != (selected_document_review_path,)
     ):
         raise ValueError("selected document review requires its frozen exact node policy")
+    if synchronization_repair_paths is not None and (
+        not fresh_revision_only or selected_document_review_path is not None
+    ):
+        raise ValueError("synchronization repair requires its own exact fresh task scope")
+    selected_review_path = (
+        selected_document_review_path if synchronization_repair_paths is None else synchronization_repair_paths[0]
+    )
     authoring = lead_front_result_contract(
         expected_relation, input_ids, task_revisions, constraints,
         fresh_revision_only=False,
@@ -146,7 +154,7 @@ def lead_revision_result_contract(
         variants = artifact_variants
     elif fresh_revision_only or (source_scope is not None and source_scope.intent is AuthoringIntent.AUTHORING):
         selected_reviews = []
-        if selected_document_review_path is not None:
+        if selected_review_path is not None:
             for variant in variants:
                 properties = variant.get("properties", {})
                 scope = properties.get("writing_task_scope", {})
@@ -162,9 +170,14 @@ def lead_revision_result_contract(
                 ):
                     scope_properties = scope["properties"]
                     scope_properties["activity_type"]["enum"] = ["review_writing"]
+                    target_paths = (
+                        synchronization_repair_paths
+                        if synchronization_repair_paths is not None and intent == [AuthoringIntent.REVIEW_ONLY.value]
+                        else (selected_review_path,)
+                    )
                     scope_properties["target_artifact_paths"] = {
                         **scope_properties["target_artifact_paths"],
-                        **string_array((selected_document_review_path,), minimum=1, maximum=1),
+                        **string_array(target_paths, minimum=len(target_paths), maximum=len(target_paths)),
                     }
                     selected_reviews.append(variant)
         variants = [variant for variant in variants

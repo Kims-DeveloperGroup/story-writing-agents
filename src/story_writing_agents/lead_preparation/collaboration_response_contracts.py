@@ -240,6 +240,7 @@ def prepare_lead_rule_seed(
     source_artifact_revision: bool,
     selected_document_review_path: str | None,
     interaction_mode: LeadInteractionMode,
+    synchronization_repair_paths: tuple[str, str] | None = None,
 ) -> LeadResultRuleSeed:
     return reply_contract_values.lead_discussion_result_contract(discussion_constraints) if discussion_only else response_rules.lead_revision_result_contract(
         expected_relation,
@@ -251,6 +252,7 @@ def prepare_lead_rule_seed(
         source_scope=revision_source_scope,
         artifact_revision_only=source_artifact_revision,
         selected_document_review_path=selected_document_review_path,
+        synchronization_repair_paths=synchronization_repair_paths,
     ) if discussion_constraints is not None else reply_contract_values.lead_result_rule_seed("lead-exploration-response-v1", constraints.schema()) if interaction_mode is LeadInteractionMode.EXPLORATION else response_rules.lead_front_result_contract(
             expected_relation,
             tuple(item.input_id for item in inputs),

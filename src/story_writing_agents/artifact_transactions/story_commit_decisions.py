@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Callable
+from ..conversations.reducers.synchronization_repair_history import has_verified_synchronization_review_after
 from ..conversations.session_context import SessionHistorySnapshot
 from ..conversation_storage.contracts import ConversationStorageServices
 from ..conversations.events import CollaborationExplorationAdoptionPayload
@@ -90,9 +91,16 @@ class StoryCommitDecisions:
             if (
                 not events
                 or control_events[-1].event_id != request.tail_event_id
-                or control_events[-1].step_id != request.step_id
-                or projection.next_safe_action
-                is not CollaborationNextAction.REPREPARE_COMMIT_REQUEST
+                or (
+                    control_events[-1].step_id != request.step_id
+                    and not has_verified_synchronization_review_after(
+                        events, application_result, control_tail=control_events[-1],
+                    )
+                )
+                or projection.next_safe_action not in {
+                    CollaborationNextAction.REPREPARE_COMMIT_REQUEST,
+                    CollaborationNextAction.CONTINUE_SYNCHRONIZATION_REPAIR,
+                }
                 or application_request is None
                 or application_result is None
                 or application_result.result is None

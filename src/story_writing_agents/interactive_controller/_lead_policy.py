@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ..synchronization_repair import SynchronizationRepairSelection
 from ..lead_task_transitions import LeadTaskAction, LeadTaskDecision
 from ..document_plan import DocumentNodeSelection, DocumentCandidateSelection
 from ..conversations import LeadTaskDecisionResult, LeadMaterialChoice
@@ -24,6 +25,7 @@ from ..conversations import (
     ArtifactApplicationDecision,
     ArtifactApplicationDecisionKind,
     ArtifactApplicationDecisionResult,
+    ArtifactApplicationNextAction,
     CollaborationConfirmationDecision,
     CollaborationEvent,
     CollaborationNextAction,
@@ -674,6 +676,8 @@ class InteractiveLeadAdapter:
                 return self._decide_artifact_application(turn)
             if turn.story_commit_request is not None:
                 return self._decide_story_commit(turn, turn.story_commit_request)
+            if turn.next_action is CollaborationNextAction.CONTINUE_SYNCHRONIZATION_REPAIR:
+                return self._select_synchronization_repair(turn)
             if turn.story_commit_preparation_request is not None:
                 return self._reprepare_story_commit(
                     turn, turn.story_commit_preparation_request
@@ -794,9 +798,68 @@ class InteractiveLeadAdapter:
         self._semantic_output.write_component(
             project_artifact_application_decision_result(result)
         )
+        if result.outcome.next_action is ArtifactApplicationNextAction.CONTINUE_SYNCHRONIZATION_REPAIR:
+            return self._select_synchronization_repair(turn)
         if result.commit_request is None:
             return False
         return self._decide_story_commit(turn, result.commit_request)
+
+    def _select_synchronization_repair(self, turn: LeadTurnResult) -> bool:
+        work = self._session.inspect_synchronization_repair()
+        selections = tuple(
+            (item, path)
+            for item in work
+            for path in dict.fromkeys((item.condition.target_path, item.condition.changed_path))
+        )
+        choices = tuple(
+            Choice(
+                f"repair_{index}", path,
+                description=f"{item.condition.domain.value} · {item.condition.action}",
+            )
+            for index, (item, path) in enumerate(selections)
+        )
+        if turn.story_commit_preparation_request is not None:
+            choices += (Choice("verify_commit", "Recheck Commit qualification"),)
+        if not choices:
+            return False
+        selected = self._picker.read_picker(
+            Prompt("Continue synchronization", instruction="Select the exact document to review or repair."),
+            (*choices, Choice("later", "Later")),
+        )
+        if selected.kind is ControlOutcomeKind.EOF:
+            return True
+        if selected.kind is not ControlOutcomeKind.COMMIT or selected.text in {None, "later"}:
+            return False
+        if selected.text == "verify_commit":
+            preparation = turn.story_commit_preparation_request
+            assert preparation is not None
+            return self._reprepare_story_commit(turn, preparation)
+        item, path = selections[int(selected.text.removeprefix("repair_"))]
+        entered = self._prompt.read_prompt(Prompt(
+            f"Work on {path}", instruction="Describe the exact review or repair for this document.",
+        ))
+        if entered.kind is ControlOutcomeKind.EOF:
+            return True
+        if entered.kind is not ControlOutcomeKind.COMMIT or not entered.text:
+            return False
+        selection = SynchronizationRepairSelection(
+            item.application, item.condition.condition_id, item.head, path,
+        )
+        decision = LeadTaskDecision.for_conversation(
+            self._session.session_id, turn.conversation_id,
+            LeadTaskAction.NEW_TASK, text=entered.text,
+        )
+        self._progress.begin()
+        try:
+            result = self._run_operation(self._session.decide_lead_task(
+                decision, synchronization_repair=selection, action_progress_sink=self._progress.observe,
+            ))
+        except (ValueError, TypeError, BackendProtocolError) as error:
+            self._semantic_output.write_component(Notice(str(error), role=SemanticRole.ERROR))
+            return False
+        finally:
+            self._pending_elapsed = self._progress.finish()
+        return result.turn is not None and self._present_and_decide(result.turn)
 
     def _reprepare_story_commit(
         self,

@@ -409,6 +409,7 @@ class SessionRecoverySurfaceTests(unittest.TestCase):
             "continue_with_lead", "request_application_confirmation",
             "submit_application_decision", "request_commit_confirmation",
             "reprepare_commit_request",
+            "continue_synchronization_repair",
             "inspect_story_commit", "inspect_owner_outcome", "operator_recovery",
         ))
         self.assertEqual(tuple(item.value for item in SessionRecoveryOwner), (
@@ -691,6 +692,19 @@ class SessionRecoveryProjectionTests(unittest.TestCase):
         )
         self.assertIs(reprepare.owner, SessionRecoveryOwner.STORY_COMMIT)
         self.assertIsNone(reprepare.confirmation_request_id)
+        repair = reconcile_session_recovery(replace(
+            result_only,
+            collaboration_history=replace(
+                result_only.collaboration_history,
+                current_artifact_application_result=replace(
+                    result_payload, next_action=ArtifactApplicationNextAction.CONTINUE_SYNCHRONIZATION_REPAIR,
+                ),
+                next_safe_action=CollaborationNextAction.CONTINUE_SYNCHRONIZATION_REPAIR,
+            ),
+        ))
+        self.assertIs(repair.state, SessionRecoveryState.APPLIED_NOT_COMMITTED)
+        self.assertIs(repair.next_action, SessionRecoveryNextAction.CONTINUE_SYNCHRONIZATION_REPAIR)
+        self.assertIsNone(repair.confirmation_request_id)
 
     def test_missing_foreign_mismatched_and_contradictory_owner_states_never_project_ready(self) -> None:
         staged = _commit_evidence(GitSessionHistoryState.STAGED)
@@ -898,7 +912,7 @@ class SessionRecoveryBoundaryTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         modules, edges = _module_graph()
-        self.assertEqual((len(modules), len(edges)), (441, 2721))
+        self.assertEqual((len(modules), len(edges)), (445, 2773))
         self.assertFalse(_has_cycle(modules, edges))
 
 
