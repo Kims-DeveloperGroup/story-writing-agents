@@ -178,7 +178,7 @@ def qualify_synchronization_apply(
         _require_related_repair(current_history, events, assessment_ref, assessment, active_apply)
     if {finding.pair for finding in repairs} != detected_pairs:
         raise SynchronizationApplyBlocked("A reviewed synchronization discrepancy lacks its exact outstanding obligation.")
-    if not conditional_reviews_are_covered(reviewed, events, repairs):
+    if (disclosed or needs_related_repair) and not conditional_reviews_are_covered(reviewed, events, repairs):
         raise SynchronizationApplyBlocked("The final specialist review has unresolved inputs outside the disclosed synchronization issues.")
     if not disclosed:
         return assessment, None

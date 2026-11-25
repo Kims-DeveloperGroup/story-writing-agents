@@ -2753,7 +2753,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             (premise_preparation, premise_preparation.prepare_premise_admission,
              ('session_id', 'conversation_id', 'turn_id', 'step_id', 'invocation_id', 'question_id', 'offered_tasks', 'events', 'projection', 'premise_capture', 'read_session_authoring_events'), ('premise_capture', 'read_session_authoring_events')),
             (lead_task_control, lead_task_control.prepare_task_transition,
-             ('session_id', 'conversation_id', 'decision', 'document_selection', 'events', 'projection', 'materials'), ()),
+             ('session_id', 'conversation_id', 'decision', 'document_selection', 'events', 'projection', 'materials', 'synchronization_repair'), ('synchronization_repair',)),
             (lead_task_control, lead_task_control.prepare_lead_turn_origin,
              ('session_id', 'conversation_id', 'text', 'projection'), ()),
             (lead_task_control, lead_task_control.prepare_premise_selection,
@@ -2780,8 +2780,12 @@ class RagModuleBoundaryTests(unittest.TestCase):
             parameters = signature(function).parameters
             self.assertEqual(tuple(parameters), parameter_names)
             self.assertEqual(tuple(name for name, value in parameters.items() if value.kind is Parameter.KEYWORD_ONLY), keyword_only)
+            expected_defaults = {
+                premise_preparation.prepare_premise_admission: {"premise_capture": None},
+                lead_task_control.prepare_task_transition: {"synchronization_repair": None},
+            }
             self.assertEqual({name: value.default for name, value in parameters.items() if value.default is not Parameter.empty},
-                             {"premise_capture": None} if function is premise_preparation.prepare_premise_admission else {})
+                             expected_defaults.get(function, {}))
             self.assertEqual(set(function.__annotations__), {*parameter_names, "return"})
             self.assertFalse(any(isinstance(value, str) for value in function.__annotations__.values()))
             self.assertEqual(get_type_hints(function), {
@@ -2940,7 +2944,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             (lead_answer_authority, 'validate_nonworkflow_answer', ('decoded', 'scope', 'evidence'), (), {}, False),
             (lead_answer_authority, 'resolved_proposal_intent', ('intent', 'declared_scope', 'resolved_scope'), (), {}, False),
             (lead_document_nodes, 'validate_document_target', ('scope', 'target_path'), (), {}, True),
-            (lead_answer_authority, 'validate_user_task_selection', ('decoded', 'receipt', 'source_review_revision', 'source_artifact_revision', 'selected_document_review_path', 'task_material_events'), (), {}, False),
+            (lead_answer_authority, 'validate_user_task_selection', ('decoded', 'receipt', 'source_review_revision', 'source_artifact_revision', 'selected_review_paths', 'task_material_events'), (), {}, False),
             (lead_answer_authority, 'validate_adoption_answer', ('decoded', 'scope', 'capture'), (), {}, False),
             (lead_answer_authority, 'adoption_review_assignments', ('intent', 'inputs'), (), {}, False),
             (lead_answer_authority, 'validate_premise_answer', ('decoded', 'scope', 'capture'), (), {}, False),
@@ -2949,7 +2953,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             (lead_answer_authority, 'validate_artifact_request', ('decoded', 'scope', 'expected_relation'), (), {}, False),
             (lead_evidence_receipts, 'read_reviewer_inputs', ('receipts',), (), {}, True),
             (lead_answer_authority, 'validate_premise_question', ('intent', 'premise_question_id'), (), {}, False),
-            (collaboration_response_contracts, 'prepare_lead_rule_seed', ('discussion_only', 'discussion_constraints', 'expected_relation', 'inputs', 'offered_tasks', 'constraints', 'successor_only', 'task_receipt', 'revision_source_scope', 'source_artifact_revision', 'selected_document_review_path', 'interaction_mode'), ('discussion_only', 'discussion_constraints', 'expected_relation', 'inputs', 'offered_tasks', 'constraints', 'successor_only', 'task_receipt', 'revision_source_scope', 'source_artifact_revision', 'selected_document_review_path', 'interaction_mode'), {}, False),
+            (collaboration_response_contracts, 'prepare_lead_rule_seed', ('discussion_only', 'discussion_constraints', 'expected_relation', 'inputs', 'offered_tasks', 'constraints', 'successor_only', 'task_receipt', 'revision_source_scope', 'source_artifact_revision', 'selected_document_review_path', 'interaction_mode', 'synchronization_repair_paths'), ('discussion_only', 'discussion_constraints', 'expected_relation', 'inputs', 'offered_tasks', 'constraints', 'successor_only', 'task_receipt', 'revision_source_scope', 'source_artifact_revision', 'selected_document_review_path', 'interaction_mode', 'synchronization_repair_paths'), {'synchronization_repair_paths': None}, False),
             (outcome_decoding, 'diagnose_lead_answer', ('answer', 'discussion_constraints', 'discussion_only', 'constraints', 'read_ids', 'read_reviewers', 'interaction_mode'), ('discussion_constraints', 'discussion_only', 'constraints', 'read_ids', 'read_reviewers', 'interaction_mode'), {}, True),
             (call_rule_factory, 'front_constraints', ('inputs', 'task_material_events', 'historical_user_sources', 'readiness_pin', 'offered_tasks', 'successor_only', 'objective_projection', 'conversation_id', 'preparation_request', 'is_revision', 'preparation_present', 'premise_question_id', 'adoption_capture', 'document_selection', 'document_node', 'selected_path'), ('inputs', 'task_material_events', 'historical_user_sources', 'readiness_pin', 'offered_tasks', 'successor_only', 'objective_projection', 'conversation_id', 'preparation_request', 'is_revision', 'preparation_present', 'premise_question_id', 'adoption_capture', 'document_selection', 'document_node', 'selected_path'), {}, True),
             (lead_front_values, 'lead_front_material_prefix', ('document_selection', 'document_node', 'candidate_material', 'conversation_id', 'constraints', 'historical_user_sources', 'objective_projection'), (), {}, False),

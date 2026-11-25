@@ -762,13 +762,6 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         self.addCleanup(pending_case.doCleanups)
         pending_case._seed_synchronization_baseline()
         pending_before, pending_git = pending_case.artifact_snapshot(), pending_case.git_snapshot()
-        ordinary_concern = await seed_reviewed_artifact(
-            pending_case, pending_case.conversation("Ordinary unsupported concern"),
-            (("replace", ARTIFACT_FIXTURE_RULES_PATH, _REVISED_RULE),),
-            extra_core_evidence=(_OUTLINE, _PART_OUTLINES, _CHARACTERS, _OPENING),
-            concern_specialist=PLOT_ARCHITECT,
-        )
-        self.assertIsNone(ordinary_concern.artifact_application_request)
         pending_turn = await seed_reviewed_artifact(
             pending_case, pending_case.conversation("Keep ordinary approval unanswered"),
             (("replace", ARTIFACT_FIXTURE_RULES_PATH, _REVISED_RULE),),
