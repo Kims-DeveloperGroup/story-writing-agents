@@ -19,6 +19,7 @@ from ...lead_premise_decisions import (
     PremiseFreshWorkAdmission,
     PremiseSelectionCapture,
 )
+from ...narrative_rule_revision import NarrativeRuleRevisionSelection
 from ...synchronization_repair import SynchronizationRepairSelection
 from ...lead_task_transitions import (
     LeadDiscussionReport,
@@ -39,6 +40,7 @@ class CollaborationLeadTaskDecisionPayload:
     decision: LeadTaskDecision
     document_selection: DocumentNodeSelection | None = field(default=None, kw_only=True)
     synchronization_repair: SynchronizationRepairSelection | None = field(default=None, kw_only=True)
+    narrative_rule_revision: NarrativeRuleRevisionSelection | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         if self.document_selection is not None and (type(self.document_selection) is not DocumentNodeSelection
@@ -52,6 +54,14 @@ class CollaborationLeadTaskDecisionPayload:
             or self.document_selection is not None
         ):
             raise ValueError("synchronization repair requires one explicit new scoped task")
+        revision = self.narrative_rule_revision
+        if revision is not None:
+            if type(revision) is not NarrativeRuleRevisionSelection:
+                raise TypeError("narrative-rule revision requires an exact user selection")
+            if self.decision.action is not LeadTaskAction.NEW_TASK or self.synchronization_repair is not None:
+                raise ValueError("narrative-rule revision requires one explicit new task")
+            if revision.impact is None and self.document_selection is not None:
+                raise ValueError("work-wide narrative-rule impact review cannot select a single document")
 
 
 @dataclass(frozen=True, slots=True)

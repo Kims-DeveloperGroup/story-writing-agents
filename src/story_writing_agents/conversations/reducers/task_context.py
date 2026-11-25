@@ -77,6 +77,7 @@ from ..views.collaboration_history_values import (
     LeadPublicResponseView,
     LeadTaskView,
 )
+from ...core_document_readiness import AuthoringTarget
 from ...lead_task_transitions import (
     LeadMaterialKind,
     LeadMaterialRef,
@@ -467,10 +468,26 @@ def project_task_context(
                     and ((selection.node_id is not None and selection.node_id == selected_node.node_id)
                         or (selection.target_path is not None and scope.target_paths == (selection.target_path,))))
                 selected_repair = repair is not None and planning.action is LeadTaskAction.NEW_TASK
+                narrative_revision = decision.narrative_rule_revision if decision is not None else None
+                if narrative_revision is not None:
+                    if narrative_revision.impact is None:
+                        valid_narrative_scope = (
+                            scope.intent is AuthoringIntent.REVIEW_ONLY
+                            and scope.activity is AuthoringActivity.REVIEW
+                        )
+                    else:
+                        valid_narrative_scope = (
+                            scope.intent is AuthoringIntent.AUTHORING
+                            and scope.target_paths == (AuthoringTarget.NARRATIVE_RULES.value,)
+                            and (selection is None or selected_document)
+                        )
+                    if scope.schema_version != 3 or not valid_narrative_scope:
+                        raise ValueError("task proposal exceeds exact narrative-rule revision scope")
                 selected_review = bool(scope.schema_version == 3 and scope.activity is AuthoringActivity.REVIEW
                     and planning.origin_kind == "task_decision" and planning.action in {LeadTaskAction.NEW_TASK, LeadTaskAction.RESUME}
                     and (scope.task_id, scope.task_revision) == (planning.target_task_id, planning.target_task_revision)
-                    and (selected_repair or (selected_document and len(scope.target_paths) == 1)))
+                    and (narrative_revision is not None or selected_repair
+                         or (selected_document and len(scope.target_paths) == 1)))
                 if selected_review and scope.intent is AuthoringIntent.AUTHORING:
                     message = prior.get(planning.origin_message_event_id)
                     # Existing admission validation qualifies actual USER bytes. A real
@@ -490,7 +507,7 @@ def project_task_context(
                             for item in events))
                 elif selected_review:
                     selected_review = scope.intent is AuthoringIntent.REVIEW_ONLY and (
-                        not selected_repair or not any(
+                        not (selected_repair or narrative_revision is not None) or not any(
                             type(item.payload) is ArtifactReviewCandidatePayload
                             and item.batch_id == event.batch_id and item.step_id == event.step_id
                             for item in events

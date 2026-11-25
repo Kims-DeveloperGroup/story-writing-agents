@@ -2,7 +2,7 @@
 
 from dataclasses import replace
 
-from ..collaboration_execution_results import ArtifactSynthesisResult, LeadSynthesisResult
+from ..collaboration_execution_results import ArtifactSynthesisResult, CollaborationInvocationResult, LeadSynthesisResult
 from ..conversations.events import (
     ArtifactReviewCandidatePayload,
     CollaborationEvent,
@@ -18,6 +18,7 @@ from ..synchronization_assessment import (
     SynchronizationApplication,
     SynchronizationAssessment,
     SynchronizationCandidate,
+    SynchronizationEventRef,
     SynchronizationJudgment,
 )
 from ..synchronization_obligations import (
@@ -100,6 +101,8 @@ def synchronization_current_drafts(
     value: LeadSynthesisResult,
     replies: tuple[CollaborationEventDraft, ...],
     obligations: SynchronizationObligations,
+    specialist_reads: dict[str, CollaborationInvocationResult] | None = None,
+    prior_assessments: tuple[tuple[SynchronizationEventRef, SynchronizationAssessment], ...] = (),
 ) -> tuple[CollaborationEventDraft, ...]:
     """Journal evidence of a directly reviewed physical repair with no Apply receipt."""
     material = value.synchronization_material
@@ -109,17 +112,45 @@ def synchronization_current_drafts(
     receipt = synchronization_review.capture_synchronization_read_evidence(
         invocation_id, synchronization_event_ref(synthesis), None, value.synchronization_reads,
         absent_origins=material.absence_origins, current_state_digest=material.current_state_digest,
+        narrative_rule_revision=material.narrative_impact_request,
     )
     evidence = _draft(synthesis, "synchronization_read", SynchronizationPayload(read_evidence=receipt))
+    specialist_drafts = []
+    specialist_evidence = []
+    verified_replies = replies
+    if material.narrative_impact_request is not None:
+        accepted = []
+        exact_basis = material.narrative_impact_request, material.current_state_digest
+        for reply in replies:
+            result = (specialist_reads or {}).get(reply.event_id)
+            if (
+                result is None or result.provider_invocation_id is None
+                or result.synchronization_impact_basis != exact_basis
+            ):
+                continue
+            accepted.append(reply)
+            specialist_receipt = synchronization_review.capture_synchronization_read_evidence(
+                result.provider_invocation_id, synchronization_event_ref(reply), None, result.synchronization_reads,
+                current_state_digest=material.current_state_digest,
+                narrative_rule_revision=material.narrative_impact_request,
+            )
+            draft = _draft(reply, "synchronization_read", SynchronizationPayload(read_evidence=specialist_receipt))
+            specialist_drafts.append(draft)
+            specialist_evidence.append((reply.sender.agent_id, specialist_receipt, synchronization_event_ref(draft)))
+        verified_replies = tuple(accepted)
     assessment = synchronization_review.qualify_current_synchronization(
         events=events, proposal=proposal, synthesis=synchronization_event_ref(synthesis),
-        replies=replies, material=material,
+        replies=verified_replies, material=material,
         findings=value.synchronization_findings, read_evidence=receipt,
         read_source=synchronization_event_ref(evidence),
+        specialist_evidence=tuple(specialist_evidence),
+        prior_assessments=prior_assessments,
     )
     if assessment is None:
         return ()
     report = _draft(synthesis, "synchronization_current", SynchronizationPayload(assessment=assessment))
+    if material.narrative_impact_request is not None:
+        return (*specialist_drafts, evidence, report)
     return (evidence, report, *_resolution_drafts(
         assessment, obligations, report, "A current specialist review verified the physical repair.",
     ))

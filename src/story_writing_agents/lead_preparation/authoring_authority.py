@@ -724,6 +724,7 @@ def proposal_call_reservations(
     physical_calls_spent: int,
     synthesis_required: bool = True,
     authoring_scope: AuthoringScope | None = None,
+    narrative_rule_impact: bool = False,
 ) -> tuple[tuple[int, ...], int, int]:
     reference_input_ids = {
         item.input_id
@@ -755,11 +756,13 @@ def proposal_call_reservations(
     synchronization_review = any(item.kind is CollaborationInputKind.ARTIFACT_CANDIDATE for item in inputs)
     if authoring_scope is not None and authoring_scope.intent is AuthoringIntent.REVIEW_ONLY:
         synchronization_review |= len(authoring_scope.target_paths) > 1
-    if synthesis_required and synchronization_review:
+    if synthesis_required and synchronization_review and not narrative_rule_impact:
         # Reserve room for a bounded impact SEARCH and READ before optional reviewer retries.
         synchronization_calls = min(unallocated, max(0, 3 - synthesis_minimum))
         synthesis_minimum += synchronization_calls
         unallocated -= synchronization_calls
+    # Narrative impact synthesis can cite the reviewers' exact READs. Give those
+    # reviewers the remaining calls within the existing task limit.
     while unallocated and any(
         limit < reply_contract_values.CONTEXT_INVOCATION_CALL_LIMIT for limit in allocated_limits
     ):

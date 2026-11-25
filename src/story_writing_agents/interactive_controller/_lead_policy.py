@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ..synchronization_repair import SynchronizationRepairSelection
+from ..narrative_rule_revision import NarrativeRuleRevisionFeature, NarrativeRuleRevisionSelection
 from ..lead_task_transitions import LeadTaskAction, LeadTaskDecision
 from ..document_plan import DocumentNodeSelection, DocumentCandidateSelection
 from ..conversations import LeadTaskDecisionResult, LeadMaterialChoice
@@ -28,6 +29,7 @@ from ..conversations import (
     ArtifactApplicationNextAction,
     CollaborationConfirmationDecision,
     CollaborationEvent,
+    CollaborationLeadTaskDecisionPayload,
     CollaborationNextAction,
     CollaborationStepState,
     LeadDecisionResult,
@@ -447,6 +449,99 @@ class InteractiveLeadAdapter:
         except ValueError as failure:
             self._semantic_output.write_component(Notice(str(failure), label="Adoption refused", role=SemanticRole.ERROR))
             return False
+
+    def narrative_rule_revision(self, conversation_id: str) -> bool:
+        try:
+            rules_digest, reviewed = self._session.inspect_narrative_rule_revision_choices()
+            if rules_digest is None:
+                self._semantic_output.write_component(Notice("The work has no established narrative rules. Use ordinary document planning to build them."))
+                return False
+            ready_refs = {item.impact for item in reviewed}
+            local_impacts = tuple((ref, assessment) for ref, assessment in self._session.inspect_narrative_rule_impacts()
+                                  if ref.conversation_id == conversation_id)
+            retry = None
+            if local_impacts and local_impacts[-1][0] not in ready_refs:
+                _, latest = local_impacts[-1]
+                outstanding = tuple(Field(finding.target_path, finding.judgment.value)
+                                    for finding in latest.findings
+                                    if finding.judgment.value in {"unread", "missing", "undecided"})
+                if outstanding:
+                    self._semantic_output.write_component(Panel("Outstanding impact review", outstanding))
+                    events = () if self._read_events is None else self._read_events(conversation_id)
+                    retry = next((event.payload.narrative_rule_revision for event in events
+                                  if event.event_id == latest.basis.request.event_id
+                                  and type(event.payload) is CollaborationLeadTaskDecisionPayload), None)
+            decision = self._picker.read_picker(
+                Prompt("Narrative rules"),
+                (Choice("review", "Review a new direction", description="Inspect the whole work before drafting."),
+                 *((Choice("continue", "Continue the impact review", description=retry.direction),) if retry else ()),
+                 *(Choice(str(index), "Draft this reviewed rule revision", description="\n".join((
+                       item.direction, ", ".join(feature.value for feature in item.features),
+                       *(f"Preserve {text}" for text in item.preserve),
+                       *(f"Exception {text}" for text in item.exceptions),
+                   ))) for index, item in enumerate(reviewed)),
+                 Choice("cancel", "Cancel")),
+            )
+            if decision.kind is ControlOutcomeKind.EOF:
+                return True
+            if decision.kind is not ControlOutcomeKind.COMMIT or decision.text in {None, "cancel"}:
+                return False
+            if decision.text == "review":
+                fields = (
+                    Prompt("Describe the rule change"),
+                    Prompt("Features", instruction="List affected features separated by commas. " + ", ".join(feature.value for feature in NarrativeRuleRevisionFeature)),
+                )
+                values = []
+                for prompt in fields:
+                    answer = self._prompt.read_prompt(prompt)
+                    if answer.kind is ControlOutcomeKind.EOF:
+                        return True
+                    if answer.kind is not ControlOutcomeKind.COMMIT or answer.text is None:
+                        return False
+                    values.append(answer.text)
+                groups = []
+                for name in ("Rule to preserve", "Approved exception"):
+                    conditions = []
+                    prompt = Prompt(name, instruction="Enter one condition. Leave empty when finished.")
+                    while True:
+                        answer = self._prompt.read_prompt(prompt)
+                        if answer.kind is ControlOutcomeKind.EOF:
+                            return True
+                        if answer.kind is not ControlOutcomeKind.COMMIT or answer.text is None:
+                            return False
+                        condition = answer.text.strip()
+                        if not condition:
+                            break
+                        conditions.append(condition)
+                    groups.append(tuple(conditions))
+                direction, features = values
+                preserve, exceptions = groups
+                selection = NarrativeRuleRevisionSelection(
+                    rules_digest, direction,
+                    tuple(NarrativeRuleRevisionFeature(item.strip()) for item in features.split(",")),
+                    preserve, exceptions,
+                )
+            elif decision.text == "continue" and retry is not None:
+                selection = retry
+            else:
+                selection = reviewed[int(decision.text)]
+            instruction = (f"Review the whole-work impact of this rule change: {selection.direction}"
+                           if selection.impact is None else
+                           f"Draft the reviewed narrative rule revision: {selection.direction}")
+            task = LeadTaskDecision.for_conversation(
+                self._session.session_id, conversation_id, LeadTaskAction.NEW_TASK, text=instruction,
+            )
+            self._progress.begin()
+            try:
+                result = self._run_operation(self._session.decide_lead_task(
+                    task, narrative_rule_revision=selection, action_progress_sink=self._progress.observe,
+                ))
+            finally:
+                self._pending_elapsed = self._progress.finish()
+        except (ValueError, TypeError, BackendProtocolError) as failure:
+            self._semantic_output.write_component(Notice(str(failure), label="Narrative rule revision", role=SemanticRole.ERROR))
+            return False
+        return result.turn is not None and self._present_and_decide(result.turn)
 
     def premise(self, conversation_id: str) -> bool:
         """Bind an explicit USER control to one current whole reported option."""

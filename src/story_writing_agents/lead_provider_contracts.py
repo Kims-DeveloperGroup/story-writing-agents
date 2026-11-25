@@ -1242,11 +1242,21 @@ class LeadProviderConstraints:
     preliminary_targets: tuple[ReviewTarget, ...] = field(default=(), kw_only=True)
     document_node_digest: str | None = field(default=None, kw_only=True)
     document_target_paths: tuple[str, ...] | None = field(default=None, kw_only=True)
+    narrative_rule_target_paths: tuple[str, ...] | None = field(default=None, kw_only=True)
     def __post_init__(self) -> None:
         if self.document_target_paths is not None and (type(self.document_target_paths) is not tuple
                 or len(self.document_target_paths) != 1 or any(type(path) is not str or not path for path in self.document_target_paths)
                 or self.scope is not None and self.scope.target_paths != self.document_target_paths):
             raise ValueError("document execution selects one exact current-task target")
+        if self.narrative_rule_target_paths is not None and (
+            type(self.narrative_rule_target_paths) is not tuple or not self.narrative_rule_target_paths
+            or any(type(path) is not str or not path for path in self.narrative_rule_target_paths)
+            or len(set(self.narrative_rule_target_paths)) != len(self.narrative_rule_target_paths)
+            or self.document_target_paths is not None and self.document_target_paths != self.narrative_rule_target_paths
+            or self.scope is not None and self.scope.target_paths != self.narrative_rule_target_paths
+            or self.adoption_intent is not None
+        ):
+            raise ValueError("narrative-rule work requires its exact approved artifact paths")
         if self.document_node_digest is not None and (type(self.document_node_digest) is not str
                 or not self.document_node_digest.startswith("sha256:") or len(self.document_node_digest) != 71):
             raise ValueError("document node requires a frozen context digest")
@@ -1331,6 +1341,8 @@ class LeadProviderConstraints:
         return (
             *(((("document_node", (self.document_node_digest,)),)) if self.document_node_digest is not None else ()),
             *(((("document_target_paths", self.document_target_paths),)) if self.document_target_paths is not None else ()),
+            *(((("narrative_rule_target_paths", self.narrative_rule_target_paths),))
+              if self.narrative_rule_target_paths is not None else ()),
             ("preliminary_targets", tuple(json.dumps(review_target_to_dict(item), ensure_ascii=False, sort_keys=True, separators=(",", ":")) for item in self.preliminary_targets)),
             ("input_ids", self.input_ids),
             ("historical_user_source_ids", self.historical_user_source_ids),
@@ -1550,7 +1562,11 @@ class LeadProviderConstraints:
                         scope_kinds = ()
                         break
                     scope_kinds += ((native_kind, LeadOutcomeKind(domain_kind)),)
-            targets = (self.document_target_paths if self.document_target_paths is not None else self.scope.target_paths if self.scope is not None else self.adoption_targets if self.adoption_intent is not None else None)
+            targets = self.narrative_rule_target_paths or self.document_target_paths
+            if targets is None:
+                targets = self.scope.target_paths if self.scope is not None else (
+                    self.adoption_targets if self.adoption_intent is not None else None
+                )
             if scoped:
                 rules = ((authoring_scope_rules(self.scope.activity, self.scope.intent, self.scope.domains, self.scope.contributions,
                            target_paths=self.scope.target_paths, dependency_slots=self.scope.dependency_slots,

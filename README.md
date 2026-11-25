@@ -551,6 +551,14 @@ authoring target.
   request discloses the exact outstanding issue and requires a fresh decision.
   After Apply, the session offers review or repair for the related document.
   A separate local Commit requires the verified resolution and actual Git tree.
+- Use `/revise-rules` to select a change to established narrative rules. The
+  session first reviews the current rules and the whole work. Once the evidence
+  is complete, use the command again to select the reviewed direction for
+  drafting. If some targets remain unread, use the command in that conversation
+  to continue the review. Apply and Git Commit each
+  require their own decision. Python callers use `NarrativeRuleRevisionSelection`
+  with `decide_lead_task` and inspect current findings, including unread or
+  missing targets, through `inspect_narrative_rule_impacts`.
 - Confirming a consultation starts only the disclosed read-only provider work.
   It never confirms an artifact change or Git commit.
 - Initialization accepts only an absent/empty root or one exact resumable

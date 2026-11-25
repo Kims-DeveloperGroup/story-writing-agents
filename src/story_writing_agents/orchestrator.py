@@ -29,6 +29,7 @@ from .review_contracts import FinalReviewQualification
 from .artifact_transactions.synchronization_material import (
     SynchronizationMaterial,
     capture_current_synchronization_material,
+    capture_narrative_rule_impact_material,
     capture_synchronization_material,
     current_review_conditions,
 )
@@ -36,9 +37,13 @@ from .artifact_transactions.synchronization_control import (
     SynchronizationControlAction,
     prepare_synchronization_control,
 )
-from .artifact_transactions.synchronization_review import retain_current_review_reads
+from .artifact_transactions.synchronization_review import (
+    retain_current_review_reads, retained_narrative_impact_findings,
+)
 from .conversations.reducers.synchronization_history import SynchronizationHistory, derive_absence_origins
-from .synchronization_assessment import SynchronizationEventRef
+from .synchronization_assessment import SynchronizationAssessment, SynchronizationEventRef
+from .narrative_rule_revision import NarrativeRuleRevisionSelection, narrative_rule_revision_selection_to_dict
+from .conversations.reducers.narrative_rule_revision_history import NarrativeRuleRevisionTask, narrative_rule_revision_task
 from .conversations.event_contracts.synchronization import SynchronizationPayload
 
 from .agent_context.actions import ContextCallReadFact, ContextSourceStatusReceipt
@@ -551,6 +556,7 @@ from .conversations.reducers.synchronization_repair_history import (
     require_synchronization_repair_scope,
 )
 from .lead_preparation import synchronization_repair_control
+from .artifact_transactions import narrative_rule_revision_control
 from .synchronization_repair import SynchronizationRepairSelection
 from .lead_control_events import (
     effective_lead_control_events,
@@ -2265,6 +2271,30 @@ class StoryRuntime:
             snapshot.events(), self._synchronization_at(snapshot),
         )
 
+    def _current_artifact_content(self, session_id: str) -> dict[str, bytes]:
+        binding = self.bind_session_artifacts(session_id)
+        with binding.open_ready_resources() as access:
+            return {item.path: item.content for item in access.repository.capture_complete_state()}
+
+    def inspect_narrative_rule_impacts(
+        self, session_id: str,
+    ) -> tuple[tuple[SynchronizationEventRef, SynchronizationAssessment], ...]:
+        """List current whole-work impact reviews, including unread or missing targets."""
+        return narrative_rule_revision_control.current_narrative_impacts(
+            self.capture_editorial_snapshot(session_id), self._current_artifact_content(session_id),
+        )
+
+    def inspect_narrative_rule_revision_choices(
+        self, session_id: str,
+    ) -> tuple[str | None, tuple[NarrativeRuleRevisionSelection, ...]]:
+        """Expose the current rule digest and ready reviewed directions for explicit selection."""
+        snapshot = self.capture_editorial_snapshot(session_id)
+        current = self._current_artifact_content(session_id)
+        return (
+            narrative_rule_revision_control.established_rules_digest(current),
+            narrative_rule_revision_control.narrative_rule_revision_choices(snapshot, current),
+        )
+
     def _applied_synchronization_at(
         self, snapshot: SessionHistorySnapshot, events: tuple[CollaborationEvent, ...],
     ) -> SynchronizationHistory:
@@ -2517,6 +2547,7 @@ class StoryRuntime:
         action_progress_sink: ContextActionProgressSink | None = None,
     document_selection: DocumentNodeSelection | None = None,
         synchronization_repair: SynchronizationRepairSelection | None = None,
+        narrative_rule_revision: NarrativeRuleRevisionSelection | None = None,
     ) -> LeadTaskDecisionResult:
         if type(decision) is not LeadTaskDecision:
             raise TypeError("task control requires an exact LeadTaskDecision")
@@ -2526,6 +2557,12 @@ class StoryRuntime:
             or document_selection is not None
         ):
             raise ValueError("synchronization repair requires one explicit new scoped task")
+        if narrative_rule_revision is not None and (
+            type(narrative_rule_revision) is not NarrativeRuleRevisionSelection
+            or decision.action is not LeadTaskAction.NEW_TASK or synchronization_repair is not None
+            or (narrative_rule_revision.impact is None and document_selection is not None)
+        ):
+            raise ValueError("A narrative-rule revision requires an explicit new impact or rule-authoring task.")
         session_id, conversation_id = decision.session_id, decision.conversation_id
         await run_blocking(self.validate_lead_identity, session_id, conversation_id)
         validate_context_event_sink(action_progress_sink)
@@ -2543,6 +2580,7 @@ class StoryRuntime:
                     prior_origin.payload.decision != decision
                     or prior_origin.payload.document_selection != document_selection
                     or prior_origin.payload.synchronization_repair != synchronization_repair
+                    or prior_origin.payload.narrative_rule_revision != narrative_rule_revision
                 ):
                     raise ValueError("same task request ID cannot change its arguments")
                 transition = next((event for event in events
@@ -2626,8 +2664,13 @@ class StoryRuntime:
             if document_selection is not None:
                 if decision.action not in {LeadTaskAction.NEW_TASK, LeadTaskAction.RESUME}:
                     raise ValueError("document selection belongs only to explicit work preparation")
-                await run_blocking(self.prepare_document_selection, session_id, document_selection)
+                _, selected_node = await run_blocking(self.prepare_document_selection, session_id, document_selection)
+                if narrative_rule_revision is not None and selected_node.target_path != narrative_rule_revision_control.RULES_PATH:
+                    raise ValueError("A narrative-rule revision must select its exact rules document node.")
             snapshot = (await run_blocking(self.capture_editorial_snapshot, session_id))
+            if narrative_rule_revision is not None:
+                current = await run_blocking(self._current_artifact_content, session_id)
+                narrative_rule_revision_control.validate_narrative_rule_selection(snapshot, current, narrative_rule_revision)
             materials = tuple(lead_material_inputs.selected_task_material(snapshot, ref) for ref in decision.material_refs)
             turn_id, step_id, origin, message, captures, transition = (
                 lead_task_control.prepare_task_transition(
@@ -2639,6 +2682,7 @@ class StoryRuntime:
                     projection,
                     materials,
                     synchronization_repair=synchronization_repair,
+                    narrative_rule_revision=narrative_rule_revision,
                 )
 
             )
@@ -2740,11 +2784,13 @@ class StoryRuntime:
         action_progress_sink: ContextActionProgressSink | None = None,
     document_selection: DocumentNodeSelection | None = None,
         synchronization_repair: SynchronizationRepairSelection | None = None,
+        narrative_rule_revision: NarrativeRuleRevisionSelection | None = None,
     ) -> LeadTaskDecisionResult:
         """Apply an exact USER control returned by the current task choices."""
         return await self._decide_lead_task_impl(
             decision, document_selection=document_selection, action_progress_sink=action_progress_sink,
             synchronization_repair=synchronization_repair,
+            narrative_rule_revision=narrative_rule_revision,
         )
 
     def lead_group_reports(self, session_id: str, conversation_id: str) -> tuple[dict[str, object], ...]:
@@ -2821,6 +2867,12 @@ class StoryRuntime:
                     or {path for op in candidate.change_set.operations for path in
                         ((op.source_path, op.destination_path) if type(op) is ArtifactRenameOperation else (op.path,))} != {predecessor.target_path}):
                 raise ValueError("candidate selection is not exact same-plan predecessor material within its permitted scope")
+            if predecessor.target_path == narrative_rule_revision_control.RULES_PATH:
+                assert event is not None
+                narrative_rule_revision_control.validate_provisional_rule_use(
+                    snapshot, self._current_artifact_content(session_id), event.conversation_id,
+                    producer.authoring_scope, candidate.change_set, node.target_path,
+                )
         return plan, node
 
     def inspect_document_plans(self, session_id: str) -> tuple[DocumentPlanView, ...]:
@@ -3492,8 +3544,40 @@ class StoryRuntime:
             append_collaboration_event_batch=self.append_collaboration_event_batch,
         )
 
+    def _narrative_impact_material(
+        self, session_id: str, proposal: CollaborationProposal, work: NarrativeRuleRevisionTask,
+        events: tuple[CollaborationEvent, ...],
+    ) -> SynchronizationMaterial | None:
+        if work.selection.impact is not None:
+            return None
+        current = self._current_artifact_content(session_id)
+        material = capture_narrative_rule_impact_material(current, work.selection, synchronization_event_ref(work.origin))
+        scope = proposal.authoring_scope
+        assert scope is not None
+        narrative_rule_revision_control.validate_narrative_rule_scope(
+            work.selection, scope, tuple(item.path for item in material.census.documents),
+        )
+        prior = self.capture_editorial_snapshot(session_id).synchronization().assessments
+        retained = retained_narrative_impact_findings(events, proposal, material, prior)
+        return replace(material, narrative_impact_retained_targets=tuple(sorted(target for _, target in retained)))
 
+    @staticmethod
+    def _narrative_work_for_scope(
+        events: tuple[CollaborationEvent, ...], conversation_id: str, scope: AuthoringScope | None,
+    ) -> NarrativeRuleRevisionTask | None:
+        if scope is None:
+            return None
+        return narrative_rule_revision_task(events, conversation_id, scope.task_id, task_revision=scope.task_revision)
 
+    def _narrative_rule_repair_direction(
+        self, session_id: str, events: tuple[CollaborationEvent, ...], scope: AuthoringScope | None,
+    ) -> NarrativeRuleRevisionSelection | None:
+        repair = None if scope is None else synchronization_repair_control.repair_for_scope(events, scope)
+        if repair is None or repair.repair_path != narrative_rule_revision_control.RULES_PATH:
+            return None
+        return narrative_rule_revision_control.retained_narrative_rule_repair_direction(
+            self.capture_editorial_snapshot(session_id), self._current_artifact_content(session_id), repair,
+        )
 
     async def _run_specialist_assignment(
         self,
@@ -3525,9 +3609,19 @@ class StoryRuntime:
         selected, value, dependencies = lead_material_inputs.specialist_assignment_material(
             proposal, assignment, input_events, events,
         )
-        synchronization = None
         scope = proposal.authoring_scope
-        if (scope is not None and scope.intent is AuthoringIntent.REVIEW_ONLY
+        work = self._narrative_work_for_scope(events, conversation_id, scope)
+        synchronization = None
+        if work is not None and scope is not None:
+            value = {**value, "narrative_rule_revision": narrative_rule_revision_selection_to_dict(work.selection)}
+            synchronization = await run_blocking(self._narrative_impact_material, session_id, proposal, work, events)
+        elif scope is not None and narrative_rule_revision_control.RULES_PATH in scope.target_paths:
+            repair_direction = await run_blocking(self._narrative_rule_repair_direction, session_id, events, scope)
+            if repair_direction is not None:
+                value = {**value, "narrative_rule_revision": narrative_rule_revision_selection_to_dict(repair_direction)}
+        if synchronization is not None:
+            value = {**value, "synchronization": synchronization.provider_input(self.inspect_semantic_synchronization(session_id).obligations)}
+        elif (scope is not None and scope.intent is AuthoringIntent.REVIEW_ONLY
                 and assignment.mode is SpecialistAssignmentMode.REVIEW):
             history = self.inspect_semantic_synchronization(session_id)
             conditions = tuple(
@@ -3611,6 +3705,7 @@ class StoryRuntime:
         replies: tuple[CollaborationSpecialistReplyPayload, ...],
         events: tuple[CollaborationEvent, ...],
         action_progress_sink: ContextActionProgressSink | None,
+        specialist_results: tuple[CollaborationInvocationResult, ...] = (),
     ) -> CollaborationInvocationResult:
         if proposal.premise_decision is not None:
             return await self._run_premise_synthesis(
@@ -3632,14 +3727,39 @@ class StoryRuntime:
             proposal, replies, events, input_events, conversation_id,
             reply_event_ids, constraints, artifact_candidate,
         )
-        synchronization = None
         scope = proposal.authoring_scope
+        work = self._narrative_work_for_scope(events, conversation_id, scope)
+        synchronization = None
+        if work is not None and scope is not None:
+            value = {**value, "narrative_rule_revision": narrative_rule_revision_selection_to_dict(work.selection)}
+            synchronization = await run_blocking(self._narrative_impact_material, session_id, proposal, work, events)
+        elif scope is not None and narrative_rule_revision_control.RULES_PATH in scope.target_paths:
+            repair_direction = await run_blocking(self._narrative_rule_repair_direction, session_id, events, scope)
+            if repair_direction is not None:
+                value = {**value, "narrative_rule_revision": narrative_rule_revision_selection_to_dict(repair_direction)}
         if scope is not None and (artifact_candidate is not None or scope.intent is AuthoringIntent.REVIEW_ONLY):
             obligations = self.inspect_semantic_synchronization(session_id).obligations
             selected_conditions = current_review_conditions(obligations, scope.target_paths) if artifact_candidate is None else ()
         else:
             selected_conditions = ()
-        if scope is not None and (artifact_candidate is not None or selected_conditions):
+        if synchronization is not None:
+            specialist_sources = []
+            for assignment, result in zip(proposal.assignments, specialist_results, strict=True):
+                if result.synchronization_impact_basis != (
+                    synchronization.narrative_impact_request, synchronization.current_state_digest,
+                ):
+                    continue
+                for receipt in result.synchronization_reads:
+                    specialist_sources.append({
+                        "id": f"{assignment.specialist_id}_{receipt.evidence_id}",
+                        "path": receipt.provenance.locator,
+                        "start_line": receipt.boundary.start,
+                        "end_line": receipt.boundary.end,
+                    })
+            value = {**value, "synchronization": {
+                **synchronization.provider_input(obligations), "specialist_reads": specialist_sources,
+            }}
+        elif scope is not None and (artifact_candidate is not None or selected_conditions):
             binding = self.bind_session_artifacts(session_id)
             with binding.open_ready_resources() as access:
                 base_state = {item.path: item.content for item in access.repository.capture_complete_state()}
@@ -4088,6 +4208,24 @@ class StoryRuntime:
                 reference_failure: BaseException | None = None,
             ) -> CollaborationInvocationResult:
                 nonlocal bound_agent, generation_pin
+                specialist_impact_basis = None
+                specialist_impact_reads = ()
+                if (
+                    result is not None and synchronization is not None
+                    and synchronization.narrative_impact_request is not None
+                    and synchronization.current_state_digest is not None
+                    and type(value) is CollaborationSpecialistReplyPayload
+                ):
+                    observed = tuple(
+                        receipt for receipt in result.authorization.completed_evidence
+                        if receipt.source_kind is ContextSourceKind.WRITING_ARTIFACT
+                    )
+                    if all(
+                        receipt.source_digest == f"sha256:{synchronization.current_digests.get(receipt.provenance.locator)}"
+                        for receipt in observed
+                    ):
+                        specialist_impact_basis = (synchronization.narrative_impact_request, synchronization.current_state_digest)
+                        specialist_impact_reads = tuple(receipt for receipt in result.authorization.used_evidence if receipt in observed)
                 if type(value) in {ArtifactSynthesisResult, LeadSynthesisResult} and result is not None and synchronization is not None:
                     value = replace(value, synchronization_material=synchronization,
                                     synchronization_reads=result.authorization.used_evidence)
@@ -4137,6 +4275,8 @@ class StoryRuntime:
                     ),
                     pending_validation=pending_validation,
                     provider_invocation_id=provider.invocation_id,
+                    synchronization_reads=specialist_impact_reads,
+                    synchronization_impact_basis=specialist_impact_basis,
                 )
 
             def neutral_fallback_answer():
@@ -4631,6 +4771,29 @@ class StoryRuntime:
                         preparation_events, request.authoring_scope,
                     )
             session_events = session_history.events()
+            narrative_scope = None if task_receipt is None else (
+                task_receipt.target_task_id, task_receipt.target_task_revision,
+            )
+            if narrative_scope is None and preparation is not None:
+                request = cast(LeadRecommendationRequestPayload, preparation.request_event.payload)
+                if request.authoring_scope is not None:
+                    narrative_scope = (request.authoring_scope.task_id, request.authoring_scope.task_revision)
+            narrative_work = None
+            narrative_paths = None
+            if narrative_scope is not None and narrative_scope[0] is not None and narrative_scope[1] is not None:
+                narrative_work = narrative_rule_revision_task(
+                    session_events, conversation_id, narrative_scope[0], task_revision=narrative_scope[1],
+                )
+                if narrative_work is not None:
+                    current = await run_blocking(self._current_artifact_content, session_id)
+                    narrative_rule_revision_control.validate_narrative_rule_selection(session_history, current, narrative_work.selection)
+                    if narrative_work.selection.impact is None:
+                        material = capture_narrative_rule_impact_material(
+                            current, narrative_work.selection, synchronization_event_ref(narrative_work.origin),
+                        )
+                        narrative_paths = tuple(item.path for item in material.census.documents)
+                    else:
+                        narrative_paths = (narrative_rule_revision_control.RULES_PATH,)
             if has_unsettled_synchronization_write(session_events) and not discussion_only:
                 return blocking_lead_result(
                     session_id, conversation_id, CollaborationStepState.OUTCOME_UNKNOWN,
@@ -4652,10 +4815,16 @@ class StoryRuntime:
                         CollaborationNextAction.CONTINUE_SYNCHRONIZATION_REPAIR,
                     )
             repair_paths = None
+            repair_direction = None
             if repair_selection is not None and selected_repair_work is not None:
                 condition = selected_repair_work.condition
                 counterpart = condition.changed_path if condition.target_path == repair_selection.repair_path else condition.target_path
                 repair_paths = (repair_selection.repair_path, counterpart)
+                if repair_selection.repair_path == narrative_rule_revision_control.RULES_PATH:
+                    current = await run_blocking(self._current_artifact_content, session_id)
+                    repair_direction = narrative_rule_revision_control.retained_narrative_rule_repair_direction(
+                        session_history, current, repair_selection,
+                    )
             if discussion_only and (task_receipt is None or task_receipt.action is not LeadTaskAction.DISCUSS):
                 raise BackendProtocolError("discussion cannot be provider-selected")
             if self.backend is None:
@@ -4848,6 +5017,8 @@ class StoryRuntime:
                 if item.kind is CollaborationInputKind.USER_INPUT)
             readiness_pin = readiness_source_basis_ref(readiness_offered_sources, readiness_request_digest)
             constraints = call_rule_factory.front_constraints(inputs=inputs, task_material_events=task_material_events, historical_user_sources=historical_user_sources, readiness_pin=readiness_pin, offered_tasks=offered_tasks, successor_only=successor_only, objective_projection=objective_projection, conversation_id=conversation_id, preparation_request=preparation_request, is_revision=is_revision, preparation_present=preparation is not None, premise_question_id=premise_question_id, adoption_capture=adoption_capture, document_selection=document_selection, document_node=document_node, selected_path=selected_path)
+            if narrative_paths is not None:
+                constraints = replace(constraints, narrative_rule_target_paths=narrative_paths)
             if interaction_mode is LeadInteractionMode.EXPLORATION:
                 constraints = LeadExplorationConstraints(tuple(item.input_id for item in inputs))
             definition = self.build_guarded_contextual_definition(
@@ -4980,6 +5151,11 @@ class StoryRuntime:
                     )
                 if discussion_constraints is not None:
                     current_value["discussion_constraints"] = discussion_constraints.prompt_facts()
+                if narrative_work is not None:
+                    current_value["narrative_rule_revision"] = narrative_rule_revision_selection_to_dict(narrative_work.selection)
+                    current_value["narrative_rule_paths"] = narrative_paths
+                elif repair_direction is not None:
+                    current_value["narrative_rule_revision"] = narrative_rule_revision_selection_to_dict(repair_direction)
                 current_value = proposal_basis_values.compact_document_plan_input(current_value)
                 current = lead_material_inputs.context_material(
                     source_id="runtime_input:current",
@@ -5013,7 +5189,9 @@ class StoryRuntime:
                     physical_call_limit = min(physical_call_limit, ordinary_front_cap)
                 def prepare_lead_rule_seed() -> LeadResultRuleSeed:
                     return collaboration_response_contracts.prepare_lead_rule_seed(discussion_only=discussion_only, discussion_constraints=discussion_constraints, expected_relation=expected_relation, inputs=inputs, offered_tasks=offered_tasks, constraints=constraints, successor_only=successor_only, task_receipt=task_receipt, revision_source_scope=revision_source_scope, source_artifact_revision=source_artifact_revision, selected_document_review_path=selected_document_review_path, interaction_mode=interaction_mode,
-                    synchronization_repair_paths=repair_paths if task_receipt is not None else None)
+                    synchronization_repair_paths=repair_paths if task_receipt is not None else None,
+                    narrative_rule_paths=narrative_paths if task_receipt is not None else None,
+                    narrative_rule_impact=narrative_work is not None and narrative_work.selection.impact is None)
                 lead_rule_seed = await run_blocking(prepare_lead_rule_seed)
                 group_protocol = (preparation is None and not discussion_only
                     and interaction_mode is LeadInteractionMode.ORCHESTRATION
@@ -5252,6 +5430,12 @@ class StoryRuntime:
                         synchronization_repair_control.require_selected_repair_target(
                             repair_selection, decoded.authoring_scope, selected_repair_work.condition,
                         )
+                    if narrative_work is not None:
+                        if decoded.authoring_scope is None or narrative_paths is None:
+                            raise ValueError("Narrative-rule work requires its exact active review or authoring scope.")
+                        narrative_rule_revision_control.validate_narrative_rule_scope(
+                            narrative_work.selection, decoded.authoring_scope, narrative_paths,
+                        )
                     authoring_authority.validate_objective_routing(
                         decoded, objective_projection, objective_events, current_task_events,
                     )
@@ -5261,6 +5445,8 @@ class StoryRuntime:
                             selected_review_paths = (
                                 repair_paths if decoded.authoring_scope.intent is AuthoringIntent.REVIEW_ONLY else repair_paths[:1]
                             )
+                        if narrative_paths is not None:
+                            selected_review_paths = narrative_paths
                         lead_answer_authority.validate_user_task_selection(
                             decoded, task_receipt, source_review_revision, source_artifact_revision,
                             selected_review_paths,
@@ -6469,7 +6655,7 @@ class StoryRuntime:
                 key=lambda path: path.encode("utf-8"),
             )
         )
-        return validation_call(
+        candidate = validation_call(
             '$.artifact_intent',
             build_artifact_review_candidate,
             candidate_id=event_journal.deterministic_id('ac', turn_id, step_id),
@@ -6480,6 +6666,11 @@ class StoryRuntime:
             base_state=base_state,
             attached_core_paths=attached_core_paths,
         )
+        if narrative_rule_revision_control.RULES_PATH in narrative_rule_revision_control.changed_artifact_paths(candidate.change_set):
+            narrative_rule_revision_control.require_narrative_rule_candidate_authority(
+                self.capture_editorial_snapshot(session_id), base_state, conversation_id, authoring_scope, candidate.change_set,
+            )
+        return candidate
 
 
     def _recovered_lead_reference_failure(
@@ -7273,12 +7464,18 @@ class StoryRuntime:
             intent, inputs, projection, evidence,
         )
         captured = () if intent.premise_decision is not None else premise_preparation.capture_shared_premises(session_id, intent, inputs, read_session_authoring_events=self.read_session_authoring_events)
+        narrative = None
+        if intent.authoring_scope is not None and intent.authoring_scope.intent is AuthoringIntent.REVIEW_ONLY:
+            narrative_events = (session_history.events() if session_history is not None else
+                                self.read_collaboration_events(session_id, projection.conversation_id))
+            narrative = self._narrative_work_for_scope(narrative_events, projection.conversation_id, intent.authoring_scope)
         allocated_limits, synthesis_calls, required_calls = (
             authoring_authority.proposal_call_reservations(
                 inputs=inputs,
                 assignment_input_ids=tuple(item.input_ids for item in assignments),
                 physical_calls_spent=projection.physical_calls_spent,
                 authoring_scope=intent.authoring_scope,
+                narrative_rule_impact=narrative is not None and narrative.selection.impact is None,
             )
         )
         proposal_revision, proposal_id, runtime_assignments = lead_consultation_planning.prepare_consultation_assignments(
@@ -7352,6 +7549,18 @@ class StoryRuntime:
         session_events = snapshot.events()
         if has_unsettled_synchronization_write(session_events):
             raise ValueError("Inspect unresolved Apply or Commit activity before starting new work.")
+        if events and scope is not None:
+            narrative = self._narrative_work_for_scope(events, events[-1].conversation_id, scope)
+            if narrative is not None:
+                current = self._current_artifact_content(session_id)
+                narrative_rule_revision_control.validate_narrative_rule_selection(snapshot, current, narrative.selection)
+                paths = (narrative_rule_revision_control.RULES_PATH,)
+                if narrative.selection.impact is None:
+                    material = capture_narrative_rule_impact_material(
+                        current, narrative.selection, synchronization_event_ref(narrative.origin),
+                    )
+                    paths = tuple(item.path for item in material.census.documents)
+                narrative_rule_revision_control.validate_narrative_rule_scope(narrative.selection, scope, paths)
         selection = None if scope is None else synchronization_repair_control.repair_for_scope(events, scope)
         current_synchronization = self._applied_synchronization_at(snapshot, session_events)
         if selection is not None and scope is not None:
@@ -7394,7 +7603,11 @@ class StoryRuntime:
             evidence_inputs = current_lead_evidence.validate_current_lead_evidence(session_id=session_id, events=events, proposal=proposal, artifact_binding=artifact_binding, context_service=self.agent_context_service, conversation_storage_services=self.conversation_storage_services, bind_session_artifacts=self.bind_session_artifacts, current_lead_read_input=self.current_lead_read_input)
             inputs = current_lead_inputs.current_lead_inputs(session_id, events, proposal, evidence_inputs=evidence_inputs, artifact_binding=artifact_binding, bind_session_artifacts=self.bind_session_artifacts, capture_editorial_snapshot=self.capture_editorial_snapshot, validate_adoption_source=self.validate_adoption_source)
             specialist_ids = current_proposal_authority.qualify_current_dispatch_authority(session_id=session_id, events=events, projection=projection, proposal=proposal, inputs=inputs, artifact_binding=artifact_binding, qualify_authoring_inputs=self.qualify_authoring_inputs, qualify_readiness_targets=self.qualify_readiness_targets, validate_review_material=self.validate_review_material, read_session_authoring_events=self.read_session_authoring_events)
-            call_limits, synthesis_calls, required_calls, runtime_assignments, participant_sequence = current_proposal_authority.prepare_current_execution_authority(proposal=proposal, inputs=inputs, projection=projection, specialist_ids=specialist_ids)
+            narrative = self._narrative_work_for_scope(events, projection.conversation_id, proposal.authoring_scope)
+            call_limits, synthesis_calls, required_calls, runtime_assignments, participant_sequence = current_proposal_authority.prepare_current_execution_authority(
+                proposal=proposal, inputs=inputs, projection=projection, specialist_ids=specialist_ids,
+                narrative_rule_impact=narrative is not None and narrative.selection.impact is None,
+            )
             definitions = {
                 agent_id: self.build_guarded_contextual_definition(
                     artifact_binding=artifact_binding,
@@ -7877,6 +8090,12 @@ class RuntimeSession:
     def inspect_synchronization_repair(self) -> tuple[SynchronizationRepairWork, ...]:
         return self.runtime.inspect_synchronization_repair(self.session_id)
 
+    def inspect_narrative_rule_impacts(self) -> tuple[tuple[SynchronizationEventRef, SynchronizationAssessment], ...]:
+        return self.runtime.inspect_narrative_rule_impacts(self.session_id)
+
+    def inspect_narrative_rule_revision_choices(self) -> tuple[str | None, tuple[NarrativeRuleRevisionSelection, ...]]:
+        return self.runtime.inspect_narrative_rule_revision_choices(self.session_id)
+
     async def control_semantic_synchronization(
         self, conversation_id: str, *, action: SynchronizationControlAction,
         obligation_id: str, parents: tuple[SynchronizationEventRef, ...], reason: str,
@@ -8070,6 +8289,7 @@ class RuntimeSession:
         action_progress_sink: ContextActionProgressSink | None = None,
     document_selection: DocumentNodeSelection | None = None,
         synchronization_repair: SynchronizationRepairSelection | None = None,
+        narrative_rule_revision: NarrativeRuleRevisionSelection | None = None,
     ) -> LeadTaskDecisionResult:
         """Apply an exact USER control returned by the current task choices."""
         if decision.session_id != self.session_id:
@@ -8077,6 +8297,7 @@ class RuntimeSession:
         return await self.runtime.decide_lead_task(
             decision, document_selection=document_selection, action_progress_sink=action_progress_sink,
             synchronization_repair=synchronization_repair,
+            narrative_rule_revision=narrative_rule_revision,
         )
 
     async def lead_turn(

@@ -20,6 +20,9 @@ from ..conversations.events import (
     CollaborationSpecialistReplyPayload,
     synchronization_event_ref,
 )
+from ..conversations.reducers.narrative_rule_revision_history import (
+    narrative_rule_revision_task, narrative_rule_revision_task_for_origin,
+)
 from ..conversations.event_vocabulary import (
     CollaborationActorKind,
     CollaborationEvidenceAcquisition,
@@ -41,6 +44,7 @@ from ..synchronization_assessment import (
     SynchronizationFinding,
     SynchronizationJudgment,
     SynchronizationRead,
+    narrative_rule_finding_has_full_reads,
 )
 from ..writing_artifacts.catalog import canonical_artifact_kind
 from .synchronization_material import SynchronizationMaterial, earlier_read_id
@@ -103,6 +107,7 @@ def capture_synchronization_read_evidence(
     *,
     absent_origins: tuple[SynchronizationAbsenceOrigin, ...] = (),
     current_state_digest: str | None = None,
+    narrative_rule_revision: SynchronizationEventRef | None = None,
 ) -> SynchronizationReadEvidence:
     """Retain only the exact physical artifact READs authorized for this synthesis."""
     receipts = tuple(
@@ -117,7 +122,7 @@ def capture_synchronization_read_evidence(
         and item.boundary.kind in {ContextSourceBoundaryKind.ARTIFACT_LINES, ContextSourceBoundaryKind.WHOLE}
     )
     return SynchronizationReadEvidence(
-        invocation_id, synthesis, candidate, receipts, absent_origins, current_state_digest,
+        invocation_id, synthesis, candidate, receipts, absent_origins, current_state_digest, narrative_rule_revision,
     )
 
 
@@ -246,8 +251,15 @@ def _material_reads(
 def _conditions_and_rules(
     proposal: CollaborationProposal,
     documents: dict[str, SynchronizationDocument],
+    *,
+    narrative_impact: bool = False,
 ) -> tuple[str, str]:
     conditions = authoring_scope_to_dict(proposal.authoring_scope)
+    if narrative_impact:
+        conditions.pop("task_id")
+        conditions.pop("task_revision")
+        # Typed USER direction binds the impact task. Lead wording can vary across passes.
+        conditions.pop("interpretation")
     conditions.update(editorial_context=proposal.basis.editorial_context_digest)
     rules = documents["core_documents/narrative_rules.md"]
     return (
@@ -327,12 +339,16 @@ def qualify_current_synchronization(
     findings: tuple[SynchronizationReviewFinding, ...],
     read_evidence: SynchronizationReadEvidence,
     read_source: SynchronizationEventRef,
+    specialist_evidence: tuple[tuple[str, SynchronizationReadEvidence, SynchronizationEventRef], ...] = (),
+    prior_assessments: tuple[tuple[SynchronizationEventRef, SynchronizationAssessment], ...] = (),
+
 ) -> SynchronizationAssessment | None:
     """Qualify a review of current physical bytes against selected obligations."""
     if (
         read_evidence.synthesis != synthesis or read_evidence.candidate is not None
         or read_evidence.current_state_digest != material.current_state_digest
         or read_evidence.absent_origins != material.absence_origins
+        or read_evidence.narrative_rule_revision != material.narrative_impact_request
     ):
         raise ValueError("current synchronization was given uncorrelated physical evidence")
     scope = proposal.authoring_scope
@@ -344,12 +360,36 @@ def qualify_current_synchronization(
         return None
     documents = {document.path: document for document in material.census.documents}
     reads = _material_reads(material, read_evidence, read_source)
-    conditions, rules = _conditions_and_rules(proposal, documents)
+    revision = material.narrative_impact
+    conditions, rules = _conditions_and_rules(proposal, documents, narrative_impact=revision is not None)
+    origin = material.narrative_impact_request
+    if revision is not None:
+        task = narrative_rule_revision_task(
+            events, request.conversation_id, scope.task_id, task_revision=scope.task_revision,
+        )
+        if (
+            task is None or task.origin != request or origin != synchronization_event_ref(request)
+            or task.selection != revision or not material.census.coverage_paths.issubset(scope.target_paths)
+        ):
+            return None
     basis = SynchronizationBasis(
         scope.task_id, scope.task_revision, synchronization_event_ref(request),
         conditions, rules, material.current_state_digest, material.current_state_digest,
         review_synthesis=synthesis,
+        narrative_rule_revision=origin,
+        narrative_rule_line_counts=material.narrative_impact_line_counts,
     )
+    if revision is not None:
+        for specialist_id, receipt, source in specialist_evidence:
+            if receipt.narrative_rule_revision != origin or receipt.current_state_digest != material.current_state_digest:
+                raise ValueError("narrative-rule impact has an uncorrelated specialist READ")
+            reads.update(
+                (f"{specialist_id}_{key}", item)
+                for key, item in _material_reads(material, receipt, source).items()
+            )
+        retained = retained_narrative_impact_findings(events, proposal, material, prior_assessments)
+        return _qualify_narrative_rule_impact(basis, material, findings, reads, synthesis, replies, documents, retained)
+
     selected = {item.condition_id: item for item in material.selected_conditions}
     reviews = _specialist_replies(replies)
     qualified = []
@@ -386,4 +426,83 @@ def qualify_current_synchronization(
             documents_changed=frozenset(), supplied=finding, reads=reads, lead_source=synthesis,
             candidate_source=None, replies=reviews, absences=absences,
         ))
+    return SynchronizationAssessment(basis, material.census, tuple(qualified))
+
+
+def retained_narrative_impact_findings(
+    events: tuple[CollaborationEvent, ...],
+    proposal: CollaborationProposal,
+    material: SynchronizationMaterial,
+    prior_assessments: tuple[tuple[SynchronizationEventRef, SynchronizationAssessment], ...],
+) -> dict[tuple[str, str], tuple[SynchronizationEventRef, SynchronizationFinding]]:
+    """Find exact prior complete pairs for the same user direction and current work."""
+    origin, selection = material.narrative_impact_request, material.narrative_impact
+    if origin is None or selection is None:
+        return {}
+    documents = {document.path: document for document in material.census.documents}
+    conditions, rules = _conditions_and_rules(proposal, documents, narrative_impact=True)
+    retained = {}
+    for ref, assessment in prior_assessments:
+        basis = assessment.basis
+        if (
+            ref.conversation_id != origin.conversation_id
+            or basis.narrative_rule_revision is None
+            or basis.narrative_rule_revision == origin
+            or basis.result_state_digest != material.current_state_digest
+            or basis.narrative_rule_line_counts != material.narrative_impact_line_counts
+            or (basis.conditions_digest, basis.rules_digest) != (conditions, rules)
+            or assessment.census != material.census
+        ):
+            continue
+        prior_origin = narrative_rule_revision_task_for_origin(events, basis.narrative_rule_revision)
+        if prior_origin is None or prior_origin.selection != selection:
+            continue
+        for finding in assessment.findings:
+            if narrative_rule_finding_has_full_reads(finding, material.narrative_impact_line_counts):
+                retained[finding.pair] = (ref, finding)
+    return retained
+
+
+def _qualify_narrative_rule_impact(
+    basis: SynchronizationBasis,
+    material: SynchronizationMaterial,
+    findings: tuple[SynchronizationReviewFinding, ...],
+    reads: dict[str, SynchronizationRead],
+    synthesis: SynchronizationEventRef,
+    replies: tuple[CollaborationEventDraft, ...],
+    documents: dict[str, SynchronizationDocument],
+    retained: dict[tuple[str, str], tuple[SynchronizationEventRef, SynchronizationFinding]],
+) -> SynchronizationAssessment:
+    reviews = _specialist_replies(replies)
+    supplied = {(item.changed_path, item.target_path): item for item in findings if not item.resolves}
+    qualified = []
+    retained_paths = []
+    for pair in material.census.required_pairs:
+        changed, target = pair
+        judgment = supplied.get(pair)
+        if (judgment is None or judgment.judgment.value == "unknown") and pair in retained:
+            origin, previous = retained[pair]
+            qualified.append(previous)
+            retained_paths.append((target, origin))
+            continue
+        finding = _qualified_finding(
+            changed=documents[changed], target=documents[target], documents_changed=frozenset(),
+            supplied=judgment, reads=reads, lead_source=synthesis,
+            candidate_source=None, replies=reviews,
+        )
+        if finding.judgment in {
+            SynchronizationJudgment.NEEDS_CHANGE, SynchronizationJudgment.NO_CHANGE,
+            SynchronizationJudgment.NOT_APPLICABLE,
+        } and (
+            finding.review == synthesis
+            or not narrative_rule_finding_has_full_reads(finding, basis.narrative_rule_line_counts)
+        ):
+            finding = SynchronizationFinding(
+                *pair, SynchronizationJudgment.UNREAD,
+                "This target needs complete current READ coverage and the responsible specialist review.",
+            )
+        elif finding.judgment is SynchronizationJudgment.UNDECIDED:
+            finding = replace(finding, judgment=SynchronizationJudgment.UNREAD)
+        qualified.append(finding)
+    basis = replace(basis, narrative_rule_retained=tuple(retained_paths))
     return SynchronizationAssessment(basis, material.census, tuple(qualified))

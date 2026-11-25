@@ -96,6 +96,8 @@ def lead_revision_result_contract(
     artifact_revision_only: bool = False,
     selected_document_review_path: str | None = None,
     synchronization_repair_paths: tuple[str, str] | None = None,
+    narrative_rule_paths: tuple[str, ...] | None = None,
+    narrative_rule_impact: bool = False,
 ) -> LeadResultRuleSeed:
     if selected_document_review_path is not None and (
         not fresh_revision_only
@@ -107,6 +109,10 @@ def lead_revision_result_contract(
         not fresh_revision_only or selected_document_review_path is not None
     ):
         raise ValueError("synchronization repair requires its own exact fresh task scope")
+    if narrative_rule_paths is not None and (
+        not fresh_revision_only or not narrative_rule_paths or synchronization_repair_paths is not None
+    ):
+        raise ValueError("narrative rule work requires an exact fresh task scope")
     selected_review_path = (
         selected_document_review_path if synchronization_repair_paths is None else synchronization_repair_paths[0]
     )
@@ -154,12 +160,17 @@ def lead_revision_result_contract(
         variants = artifact_variants
     elif fresh_revision_only or (source_scope is not None and source_scope.intent is AuthoringIntent.AUTHORING):
         selected_reviews = []
-        if selected_review_path is not None:
+        if selected_review_path is not None or narrative_rule_paths is not None:
             for variant in variants:
                 properties = variant.get("properties", {})
                 scope = properties.get("writing_task_scope", {})
                 intent = scope.get("properties", {}).get("writing_intent", {}).get("enum", [])
                 response = properties.get("response_type", {}).get("enum", [])
+                if narrative_rule_paths is not None:
+                    required_intent = AuthoringIntent.REVIEW_ONLY if narrative_rule_impact else AuthoringIntent.AUTHORING
+                    required_response = "specialist_consultation_proposal" if narrative_rule_impact else "artifact_change_proposal"
+                    if intent != [required_intent.value] or response != [required_response]:
+                        continue
                 if (
                     response == ["artifact_change_proposal"]
                     and intent == [AuthoringIntent.AUTHORING.value]
@@ -171,7 +182,7 @@ def lead_revision_result_contract(
                     scope_properties = scope["properties"]
                     scope_properties["activity_type"]["enum"] = ["review_writing"]
                     target_paths = (
-                        synchronization_repair_paths
+                        narrative_rule_paths if narrative_rule_paths is not None else synchronization_repair_paths
                         if synchronization_repair_paths is not None and intent == [AuthoringIntent.REVIEW_ONLY.value]
                         else (selected_review_path,)
                     )
@@ -215,6 +226,13 @@ def lead_revision_result_contract(
             ):
                 scope["activity_type"]["enum"].insert(0, "review_writing")
             scope["writing_intent"]["enum"] = ["authoring"]
+            if narrative_rule_paths is not None:
+                scope["target_artifact_paths"] = {
+                    **scope["target_artifact_paths"],
+                    **string_array(narrative_rule_paths, minimum=len(narrative_rule_paths), maximum=len(narrative_rule_paths)),
+                }
+        if narrative_rule_impact:
+            variants = []
         variants.extend(selected_reviews)
     return LeadResultRuleSeed.declare(
         "lead-response-v9",

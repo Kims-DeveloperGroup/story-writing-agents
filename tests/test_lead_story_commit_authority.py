@@ -52,7 +52,7 @@ from story_writing_agents.git.story_commit_contracts import (
 from story_writing_agents.workspace.session_resources import provision_session_resources
 
 from tests import test_lead_artifact_application_authority as lead_artifact_application_tests
-from tests.known_result_finalization_fixture import seed_reviewed_artifact
+from tests.known_result_finalization_fixture import seed_narrative_rule_impact, seed_reviewed_artifact
 from tests.helpers import pristine_initialized_workspace
 from tests.provider_wire_fixture import selection_plan, lead_fixture_result, lead_fixture_response
 from tests.lead_fixtures.artifact_review import (
@@ -158,22 +158,30 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
         if readiness:
             await self.record_book_readiness(seed_before_capture=True)
         conversation_id = self.conversation(subject)
-        self.backend.enqueue(
-            artifact_review_outcome(
-                operations=lambda _call, material, *, input_payload: [
-                    {"evidence_id": _reference_ids(material)[0], "kind": "replace", "new_text": new_text}
-                ],
-                evidence_status="empty",
-                authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
-                authoring_scope=lambda call: lead_fixture_authoring_scope(call, activity='review', domains=('tone_execution',), paths=(ARTIFACT_FIXTURE_RULES_PATH,)),
-            ),
-                             control_plan=selection_plan("artifact.changes"))
-        user_material = "\nSupplied replacement:\n" + new_text if user_brief is None else "\nSupplied narrative-style brief:\n" + user_brief
-        proposed = await self.runtime.lead_turn(
-            self.session_id,
-            conversation_id,
-            ((f"Update ${{{ARTIFACT_FIXTURE_RULES_PATH}}} with an exact narrative rule." + user_material + '\nYou may give bounded artifact review judgments and prepare a separate exact replacement proposal; preserve supplied facts and require separate execution confirmation.')),
+        current_rules = self.workspace.path(ARTIFACT_FIXTURE_RULES_PATH).read_bytes()
+        revision = await seed_narrative_rule_impact(self, new_text.strip()) if current_rules.strip() else None
+        response = artifact_review_outcome(
+            operations=lambda _call, material, *, input_payload: [
+                {"evidence_id": _reference_ids(material)[0], "kind": "replace", "new_text": new_text}
+            ],
+            evidence_status="empty",
+            authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
+            authoring_scope=lambda call: lead_fixture_authoring_scope(call, activity='review', domains=('tone_execution',), paths=(ARTIFACT_FIXTURE_RULES_PATH,)),
         )
+        user_material = "\nSupplied replacement:\n" + new_text if user_brief is None else "\nSupplied narrative-style brief:\n" + user_brief
+        request_text = (
+            f"Update ${{{ARTIFACT_FIXTURE_RULES_PATH}}} with an exact narrative rule." + user_material
+            + "\nYou may give bounded artifact review judgments and prepare a separate exact replacement proposal; "
+              "preserve supplied facts and require separate execution confirmation."
+        )
+        if revision is None:
+            self.backend.enqueue(response, control_plan=selection_plan("artifact.changes"))
+            proposed = await self.runtime.lead_turn(self.session_id, conversation_id, request_text)
+        else:
+            self.backend.enqueue(response)
+            proposed = (await self.runtime.decide_lead_task(task.LeadTaskDecision.for_conversation(
+                self.session_id, conversation_id, task.LeadTaskAction.NEW_TASK, text=request_text,
+            ), narrative_rule_revision=revision)).turn
         self.assertIsNotNone(proposed.proposal, (
             proposed.kind, proposed.next_action, proposed.state, proposed.validation_details,
             proposed.artifact_proposal is not None,
@@ -199,7 +207,8 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
         )
         if readiness:
             history = self.runtime.inspect_semantic_synchronization(self.session_id)
-            assessment = history.assessments[-1][1]
+            assessment = history.assessment_for_review(reviewed.turn.artifact_proposal.reviewed_proposal)
+            self.assertIsNotNone(assessment)
             self.assertTrue(assessment.basis.projected)
             self.assertTrue(assessment.ready, assessment.blockers)
             self.assertEqual({finding.target_path for finding in assessment.findings},
@@ -228,9 +237,12 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
         self, subject: str = "Prepared local commit", *, seeded=False, readiness=False,
         new_text: str = "Use restrained close-third narration.\n",
     ):
+        current_rules = self.workspace.path(ARTIFACT_FIXTURE_RULES_PATH).read_bytes()
         turn = (
             await seed_reviewed_artifact(
                 self, self.conversation(subject), (("replace", ARTIFACT_FIXTURE_RULES_PATH, new_text),),
+                narrative_rule_revision=(await seed_narrative_rule_impact(self, new_text.strip())
+                                         if current_rules.strip() else None),
             ) if seeded else await self.reviewed_create(subject, new_text=new_text, readiness=readiness)
         )
         applied = await self.runtime.decide_artifact_application(
@@ -465,13 +477,14 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
             self.assertIs(rejected.outcome.outcome, StoryCommitOutcomeKind.REJECTED)
             self.assertEqual(self.session_git_snapshot()[:2], (first_head, first_index))
             opening = "manuscript/part-01/opening.md"
-            rules_text = "Use restrained close-third narration throughout the scene.\n"
+            rules_bytes = self.workspace.path(ARTIFACT_FIXTURE_RULES_PATH).read_bytes()
             opening_text = "Opening revised with the reviewed narrative voice.\n"
             first_review = first.request.reviewed_proposal.final_review_evidence
             turn = await seed_reviewed_artifact(
                 self, self.conversation("Second reviewed change"),
-                (("replace", ARTIFACT_FIXTURE_RULES_PATH, rules_text), ("replace", opening, opening_text)),
+                (("replace", opening, opening_text),),
                 review_task=(first_review.task_id, first_review.task_revision + 1),
+            retained_review_paths=(ARTIFACT_FIXTURE_RULES_PATH,),
             )
             applied = await self.runtime.decide_artifact_application(
                 lead_artifact_application_tests._application_decision(turn, ArtifactApplicationDecisionKind.APPLY)
@@ -517,7 +530,7 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
             [ARTIFACT_FIXTURE_RULES_PATH.encode(), opening.encode()],
         )
         self.assertEqual(self.git("rev-parse", "HEAD^{tree}").strip().decode(), request.candidate.expected_tree)
-        self.assertEqual(self.git("show", f"HEAD:{ARTIFACT_FIXTURE_RULES_PATH}"), rules_text.encode())
+        self.assertEqual(self.git("show", f"HEAD:{ARTIFACT_FIXTURE_RULES_PATH}"), rules_bytes)
         self.assertEqual(self.git("show", f"HEAD:{opening}"), opening_text.encode())
         self.assertEqual(self.git("diff", "--cached", "--binary"), b"")
         identity = (

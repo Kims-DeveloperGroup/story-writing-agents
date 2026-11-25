@@ -2,6 +2,7 @@
 from __future__ import annotations
 from dataclasses import replace
 from story_writing_agents.agents import LEAD_ORCHESTRATOR
+from story_writing_agents.narrative_rule_revision import NarrativeRuleRevisionSelection
 from story_writing_agents.conversations import (
     CollaborationAssignment,
     CollaborationEventDraft,
@@ -9,11 +10,13 @@ from story_writing_agents.conversations import (
     CollaborationExecutionResult,
     CollaborationInputKind,
     CollaborationInputState,
+    CollaborationInvocationKind,
     CollaborationLeadEvidence,
     CollaborationLeadJudgmentPayload,
     CollaborationLeadSynthesisPayload,
     CollaborationMessagePayload,
     CollaborationProposal,
+    CollaborationProviderCallPayload,
     CollaborationSpecialistAssessment,
     CollaborationSpecialistReplyPayload,
     CollaborationStepState,
@@ -35,6 +38,171 @@ from tests.collaboration_contract_fixture import (
     result_batch,
     running_history,
 )
+
+
+async def seed_narrative_rule_impact(case, direction: str) -> NarrativeRuleRevisionSelection:
+    """Record the older authority scenarios' whole-work impact on actual fixture bytes."""
+    from dataclasses import fields, is_dataclass
+    from hashlib import sha256
+
+    from story_writing_agents.artifact_transactions.synchronization_material import capture_narrative_rule_impact_material
+    from story_writing_agents.artifact_transactions.synchronization_review import _conditions_and_rules
+    from story_writing_agents.conversations import SynchronizationPayload, synchronization_event_ref
+    from story_writing_agents.conversations.event_contracts.synchronization import (
+        SynchronizationReadEvidence, SynchronizationReadReceipt,
+    )
+    from story_writing_agents.lead_preparation.lead_task_control import prepare_task_transition
+    from story_writing_agents.lead_task_transitions import LeadTaskAction, LeadTaskDecision
+    from story_writing_agents.narrative_rule_revision import NarrativeRuleRevisionFeature
+    from story_writing_agents.runtime_resources import collaboration_event_journal as journal
+    from story_writing_agents.specialist_routing import (
+        ArtifactReviewDomain, AuthoringActivity, AuthoringContribution, AuthoringContributionRole,
+        AuthoringIntent, AuthoringScope, ReviewBasis, SpecialistAssignmentMode, artifact_domain, specialists_for_domains,
+    )
+    from story_writing_agents.synchronization_assessment import (
+        SynchronizationAssessment, SynchronizationBasis, SynchronizationFinding,
+        SynchronizationJudgment, SynchronizationRead,
+    )
+
+    runtime, session = case.runtime, case.session_id
+    conversation = case.conversation("Review rule direction across the current work")
+    with runtime.bind_session_artifacts(session).open_ready_resources() as access:
+        physical = {item.path: item.content for item in access.repository.capture_complete_state()}
+    rules = "core_documents/narrative_rules.md"
+    tag = lambda value: "sha256:" + sha256(value).hexdigest()
+    selection = NarrativeRuleRevisionSelection(
+        tag(physical[rules]), direction, (NarrativeRuleRevisionFeature.NARRATION,),
+        preserve=("Keep established plot facts and character voices.",),
+    )
+    decision = LeadTaskDecision.for_conversation(session, conversation, LeadTaskAction.NEW_TASK, text=direction)
+    empty = runtime.inspect_lead_collaboration(session, conversation)
+    turn, step, origin, message, _, transition = prepare_task_transition(
+        session, conversation, decision, None, (), empty, (), narrative_rule_revision=selection,
+    )
+    authorization = synchronization_event_ref(origin)
+    material = capture_narrative_rule_impact_material(physical, selection, authorization)
+    paths = tuple(item.path for item in material.census.documents)
+    domains = tuple(domain for domain in ArtifactReviewDomain if domain in {artifact_domain(path) for path in paths})
+    assignments = tuple(make_assignment(f"impact_{index}", specialist_id=agent, input_ids=("user_input",),
+                                        max_physical_calls=1)
+                        for index, agent in enumerate(specialists_for_domains(domains)))
+    user_input = make_input("user_input", kind=CollaborationInputKind.USER_INPUT,
+                            locator=f"conversation/{turn}/user_input", revision_digest=tag(direction.encode()),
+                            start_line=None, end_line=None)
+    prototype = make_lead_evidence()
+    lines = dict(material.narrative_impact_line_counts)[rules]
+    front_read = replace(prototype.receipts[0], operation_id=f"lead_{turn}", result_correlation_id=f"outcome_{turn}",
+                         locator="${" + rules + "}", revision_digest=selection.rules_digest,
+                         content_digest=selection.rules_digest, utf8_bytes=len(physical[rules]),
+                         boundary_start=1, boundary_end=lines, start_line=1, end_line=lines)
+    original = make_proposal(assignments=assignments, inputs=(user_input,), evidence=prototype)
+    live_evidence = replace(prototype, receipts=(front_read,))
+    review_scope = AuthoringScope(
+        AuthoringActivity.REVIEW, paths, domains, direction, transition.payload.receipt.target_task_id, 1,
+        schema_version=3, intent=AuthoringIntent.REVIEW_ONLY,
+        contributions=tuple(AuthoringContribution(domain, AuthoringContributionRole.CONSTRAINT_ASSESSOR)
+                            for domain in domains),
+    )
+    reviewed = replace_proposal(original, step_id=step, authoring_scope=review_scope,
+        basis=replace(original.basis, schema_version=2, evidence=live_evidence), assignments=tuple(
+            replace(assignment, mode=SpecialistAssignmentMode.REVIEW,
+                    review_basis=ReviewBasis(("user_input",), direction, 1)) for assignment in assignments))
+    history, _ = running_history(original)
+    result, _ = result_batch(history, original)
+
+    def rebind(payload):
+        if type(payload) is CollaborationProposal:
+            return reviewed
+        if type(payload) is CollaborationLeadEvidence:
+            return live_evidence
+        if type(payload) is CollaborationAssignment:
+            return next(assignment for assignment in reviewed.assignments if assignment.assignment_id == payload.assignment_id)
+        if isinstance(payload, str):
+            return reviewed.proposal_digest if payload == original.proposal_digest else payload
+        if isinstance(payload, tuple):
+            return tuple(rebind(item) for item in payload)
+        if is_dataclass(payload):
+            return replace(payload, **{field.name: rebind(getattr(payload, field.name)) for field in fields(payload)})
+        return payload
+
+    journal.append_drafts(0, (origin, message, transition), append_batch=runtime.append_collaboration_event_batch)
+    sequence = 3
+    synthesis_invocation = next(item.payload.invocation_id for item in history
+                                if type(item.payload) is CollaborationProviderCallPayload
+                                and item.payload.invocation_kind is CollaborationInvocationKind.LEAD_SYNTHESIS)
+    by_batch = {}
+    for event in history:
+        by_batch.setdefault(event.batch_id, []).append(event.to_draft())
+    by_batch[result.batch_id] = list(result.events)
+    for batch_id, records in by_batch.items():
+        drafts = []
+        for event in records:
+            payload = rebind(event.payload)
+            if isinstance(payload, CollaborationLeadJudgmentPayload):
+                payload = replace(payload, authoring_scope=review_scope)
+            elif isinstance(payload, CollaborationSpecialistReplyPayload):
+                payload = replace(payload, mode=SpecialistAssignmentMode.REVIEW,
+                                  provider_invocation_id=f"invocation_{payload.assignment_id}")
+            elif isinstance(payload, CollaborationLeadSynthesisPayload):
+                payload = replace(payload, authoring_scope=review_scope, provider_invocation_id=synthesis_invocation)
+            drafts.append(replace(event, session_id=session, conversation_id=conversation, turn_id=turn,
+                                  step_id=step, payload=payload))
+        if batch_id == result.batch_id:
+            synthesis = synchronization_event_ref(next(item for item in drafts
+                                                       if type(item.payload) is CollaborationLeadSynthesisPayload))
+            proof = journal.draft(session_id=session, conversation_id=conversation, turn_id=turn, step_id=step,
+                kind=CollaborationEventKind.SYNCHRONIZATION, sender=RUNTIME, recipient=USER,
+                payload=SynchronizationPayload(read_evidence=SynchronizationReadEvidence(
+                    synthesis_invocation, synthesis, None, (), current_state_digest=material.current_state_digest,
+                    narrative_rule_revision=authorization)))
+            documents = {item.path: item for item in material.census.documents}
+            reviewer_refs = {}
+            reads = {}
+            proofs = [proof]
+            for reply in (item for item in drafts if type(item.payload) is CollaborationSpecialistReplyPayload):
+                specialist = reply.sender.agent_id
+                reviewer_refs[specialist] = synchronization_event_ref(reply)
+                relevant = tuple(path for path in sorted(physical) if path == rules
+                                 or specialist in specialists_for_domains((artifact_domain(path),)))
+                receipts = tuple(SynchronizationReadReceipt(f"read_2_{index}", path, tag(physical[path]),
+                                 tag(physical[path]), tag(physical[path]), None, None, 1, 2)
+                                 for index, path in enumerate(relevant, 1))
+                specialist_proof = replace(proof, event_id=journal.new_id("reads"), payload=SynchronizationPayload(
+                    read_evidence=replace(proof.payload.read_evidence, invocation_id=reply.payload.provider_invocation_id,
+                                          synthesis=reviewer_refs[specialist], receipts=receipts)))
+                proofs.append(specialist_proof)
+                for receipt in receipts:
+                    reads[specialist, receipt.path] = SynchronizationRead(
+                        documents[receipt.path], synchronization_event_ref(specialist_proof), receipt.receipt_id,
+                        selection_digest=receipt.selection_digest, source_revision=receipt.source_revision,
+                    )
+            conditions_digest, rules_digest = _conditions_and_rules(reviewed, documents)
+            basis = SynchronizationBasis(
+                review_scope.task_id, 1, authorization, conditions_digest, rules_digest,
+                material.current_state_digest, material.current_state_digest, review_synthesis=synthesis,
+                narrative_rule_revision=authorization, narrative_rule_line_counts=material.narrative_impact_line_counts,
+            )
+            findings = []
+            for changed, target in material.census.required_pairs:
+                domain = artifact_domain(target)
+                specialist, = specialists_for_domains((domain,))
+                findings.append(SynchronizationFinding(
+                    changed, target, SynchronizationJudgment.NO_CHANGE, "This fixture target preserves the selected rule.",
+                    (reads[specialist, changed], reads[specialist, target]), reviewer_refs[specialist], domain,
+                ))
+            report = replace(proof, event_id=journal.new_id("impact"), payload=SynchronizationPayload(
+                assessment=SynchronizationAssessment(basis, material.census, tuple(findings))))
+            drafts[-1:-1] = [*proofs, report]
+            drafts[-1] = replace(drafts[-1], payload=replace(
+                drafts[-1].payload, visible_exchange_event_ids=tuple(item.event_id for item in drafts[:-1]),
+            ))
+        appended = journal.append_drafts(sequence, tuple(drafts), append_batch=runtime.append_collaboration_event_batch)
+        sequence = appended.last_sequence
+    reference = synchronization_event_ref(report)
+    events = runtime.read_collaboration_events(session, conversation)
+    finalize_known_result(runtime, session, events, runtime.inspect_lead_collaboration(session, conversation))
+    case.assertIn(reference, dict(runtime.inspect_narrative_rule_impacts(session)))
+    return replace(selection, impact=reference)
 
 
 def finalize_known_result(runtime, session_id, events, projection):
@@ -120,9 +288,9 @@ def _synchronization_fixture_assessment(
             reviewer = supporting_review
             if pair == discrepancy_pair:
                 judgment_kind = SynchronizationJudgment.NEEDS_CHANGE
-                reason = "The outline still uses the previous narrative rule."
-                action = "Revise the affected outline passage."
-                resolution = "Verify the new rule and the revised outline together."
+                reason = f"{target} still reflects the previous revision of {changed}."
+                action = "Revise the affected passage."
+                resolution = "Verify the exact revisions of both documents together."
                 domain = artifact_domain(target)
                 assert domain is not None
             if domain is not None:
@@ -160,7 +328,8 @@ async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_cor
                                  retained_review_paths: tuple[str, ...] = (),
                                  discrepancy_pair: tuple[str, str] | None = None,
                                  unread_pair: tuple[str, str] | None = None,
-                                 concern_specialist: str | None = None):
+                                 concern_specialist: str | None = None,
+                                 narrative_rule_revision: NarrativeRuleRevisionSelection | None = None):
     """Publish a real reviewed candidate without unrelated provider authoring."""
     import hashlib
     import json
@@ -178,6 +347,8 @@ async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_cor
     from tests.recommendation_fixture import task_assessment
     from story_writing_agents.conversations import events as payloads, event_vocabulary as vocabulary
     from story_writing_agents.conversations.context import project_collaboration_history
+    from story_writing_agents.lead_preparation.lead_task_control import prepare_task_transition
+    from story_writing_agents.lead_task_transitions import LeadTaskAction, LeadTaskDecision
     from story_writing_agents.specialist_routing import (
         AuthoringActivity, AuthoringScope, ReviewBasis, SpecialistAssignmentMode,
         AuthoringContribution, AuthoringContributionRole,
@@ -189,6 +360,22 @@ async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_cor
     prefix = event_journal.new_id("fixture")
     input_id = prefix + "_candidate_input"
     turn_id = prefix + "_turn"
+    step_id = prefix + "_step"
+    initial_construction = all(kind == "create" and path in CORE_ARTIFACT_PATHS for kind, path, _ in operations)
+    user_text = ("Review exact supplied operations. You may give bounded artifact review judgments; preserve supplied "
+                 "facts and paths. Execution requires separate confirmation.\nOperations: " + json.dumps(operations))
+    if initial_construction:
+        user_text += "\nTreat remaining unbuilt core documents as unfinished initial construction."
+    task_origin = ()
+    if narrative_rule_revision is not None:
+        decision = LeadTaskDecision.for_conversation(session_id, conversation_id, LeadTaskAction.NEW_TASK, text=user_text)
+        turn_id, step_id, origin, message, _, transition = prepare_task_transition(
+            session_id, conversation_id, decision, None, (), project_collaboration_history(()), (),
+            narrative_rule_revision=narrative_rule_revision,
+        )
+        task_origin = (origin, message, transition)
+        receipt = transition.payload.receipt
+        review_task = receipt.target_task_id, receipt.target_task_revision
     digest = lambda content: "sha256:" + hashlib.sha256(content).hexdigest()
     async with runtime.lead_conversation_scope(session_id, conversation_id):
         binding = runtime.bind_session_artifacts(session_id)
@@ -260,31 +447,27 @@ async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_cor
         renamed_paths = tuple(value for kind, _, value in operations if kind == "rename")
         scope_paths = tuple(dict.fromkeys((*paths, *renamed_paths, *retained_review_paths)))
         task_id, task_revision = review_task or (prefix + "_task", 1)
+        scoped_review = bool(editorial_refs or task_origin)
         scope = AuthoringScope(
             AuthoringActivity.REVIEW, scope_paths, candidate.disclosed_review_domains,
-            "Review the exact fixture candidate.", task_id, task_revision, schema_version=3 if editorial_refs else 2,
+            "Review the exact fixture candidate.", task_id, task_revision, schema_version=3 if scoped_review else 2,
             contributions=tuple(AuthoringContribution(domain, AuthoringContributionRole.DRAFT_OWNER)
-                                for domain in candidate.disclosed_review_domains) if editorial_refs else (),
+                                for domain in candidate.disclosed_review_domains) if scoped_review else (),
         )
         live_assignments = tuple(replace(
             item, input_ids=(*item.input_ids, 'user_input'), mode=SpecialistAssignmentMode.REVIEW,
             review_basis=ReviewBasis((input_id,), "Review the exact candidate.", 1),
         ) for item in assignments)
-        user_text = ("Review exact supplied operations. You may give bounded artifact review judgments; preserve supplied " "facts and paths. Execution requires separate confirmation.\nOperations: " + json.dumps(operations))
-        initial_construction = all(kind == "create" and path in CORE_ARTIFACT_PATHS
-                                   for kind, path, _ in operations)
-        if initial_construction:
-            user_text += "\nTreat remaining unbuilt core documents as unfinished initial construction."
         synchronization_material = capture_synchronization_material(
             base, candidate.change_set, requested_paths=scope.target_paths, initial_construction=initial_construction,
         )
         proposal = replace_proposal(
-            generic, step_id=prefix + "_step", assignments=live_assignments,
+            generic, step_id=step_id, assignments=live_assignments,
             basis=qualify_fixture_basis(replace(generic.basis, inputs=(make_input(
                 input_id, kind=CollaborationInputKind.ARTIFACT_CANDIDATE,
                 locator=f"artifact-candidate/{candidate.candidate_id}",
                 revision_digest=candidate.candidate_digest, start_line=None, end_line=None,
-            ),), evidence=live_evidence, schema_version=2 if editorial_refs else 1,
+            ),), evidence=live_evidence, schema_version=2 if scoped_review else 1,
                 editorial_refs=editorial_refs, editorial_context_digest=editorial_context_digest), scope,
                 user_text=user_text, assessment=task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments',)),
                 user_locator=f"conversation/{turn_id}/user_input"), authoring_scope=scope,
@@ -360,8 +543,10 @@ async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_cor
                 batches.append((record.batch_id, []))
             batches[-1][1].append(record)
         batches.append((result.batch_id, list(result.events)))
-        sequence = 0
-        request_draft = event_journal.draft(
+        sequence = len(task_origin)
+        if task_origin:
+            event_journal.append_drafts(0, task_origin, append_batch=runtime.append_collaboration_event_batch)
+        request_draft = task_origin[1] if task_origin else event_journal.draft(
             session_id=session_id, conversation_id=conversation_id, turn_id=turn_id,
             step_id=proposal.step_id, kind=CollaborationEventKind.MESSAGE,
             sender=USER, recipient=LEAD, payload=CollaborationMessagePayload(user_text),

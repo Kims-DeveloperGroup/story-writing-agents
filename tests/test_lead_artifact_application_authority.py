@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from hashlib import sha256
 import json
 
 from story_writing_agents.errors import BackendProtocolError
@@ -16,7 +17,7 @@ from dataclasses import asdict, replace
 from unittest import mock
 
 from story_writing_agents import StoryRuntime
-from story_writing_agents.agents import EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR, PLOT_ARCHITECT
+from story_writing_agents.agents import CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR, PLOT_ARCHITECT
 from story_writing_agents.conversations import (
     CollaborationSpecialistAssessment,
     ArtifactApplicationDecision, ArtifactApplicationDecisionKind,
@@ -29,7 +30,11 @@ from story_writing_agents.conversations import (
 )
 from story_writing_agents.artifact_transactions.synchronization_control import SynchronizationControlAction
 from story_writing_agents.conversations.event_contracts.artifact_apply import artifact_application_request_digest
+from story_writing_agents.lead_provider_contracts import LeadResultContractOwner
 from story_writing_agents.lead_task_transitions import LeadTaskAction, LeadTaskDecision
+from story_writing_agents.narrative_rule_revision import NarrativeRuleRevisionFeature, NarrativeRuleRevisionSelection
+from story_writing_agents.specialist_routing import artifact_domain, specialists_for_domains
+from story_writing_agents.synchronization_assessment import SynchronizationJudgment, narrative_rule_impact_complete
 from story_writing_agents.synchronization_obligations import SynchronizationStatus
 from story_writing_agents.synchronization_repair import SynchronizationRepairSelection
 from story_writing_agents.git.story_commit_contracts import (
@@ -53,11 +58,14 @@ from tests.lead_fixtures.artifact_review import (
     artifact_synthesis_with_current_reads,
 )
 from tests.lead_fixtures.preparation_data import (
-    lead_confirmation_decision, lead_fixture_authoring_scope, lead_specialist_outcome, live_material,
+    lead_confirmation_decision, lead_fixture_authoring_scope, lead_specialist_outcome, live_material, scoped_proposal,
 )
-from tests.known_result_finalization_fixture import seed_reviewed_artifact
+from tests.known_result_finalization_fixture import seed_narrative_rule_impact, seed_reviewed_artifact
 from tests.lead_fixtures.runtime_setup import LeadOrchestrationTestCase
 from tests.lead_fixtures.provider_responses import LeadBackend as _LeadBackend
+from tests.provider_wire_fixture import (
+    finite_fixture_read_selection, fixture_schema_node, indexed_response, offered_fixture_bindings,
+)
 
 
 _OUTLINE = "core_documents/global_outline.md"
@@ -93,6 +101,43 @@ def _application_decision(
         kind=kind,
         revision_request=revision_request,
     )
+
+
+def _scoped_current_review(roles, paths, domains):
+    def reply(call, provider):
+        members = {member.schema_id: member for member in call.contract.semantic_index.contracts}
+        bindings = dict(call.contract.outer_inner_schema_ids)
+        families = {}
+        for outer in call.contract.action_index.contracts:
+            member = members.get(bindings[outer.schema_id])
+            if member is None or type(member.owner) is not LeadResultContractOwner:
+                continue
+            graph = member.rule_graph.schema_value()
+            root = fixture_schema_node(graph, graph)["properties"]
+            response_type = fixture_schema_node(graph, root["response_type"])
+            if response_type["enum"] != ["specialist_consultation_proposal"]:
+                continue
+            branch = member.owner.variant.branch_key.partition(":partition:")[0]
+            families.setdefault(branch, False)
+            details = fixture_schema_node(graph, root["response_details"])
+            for arm in details.get("anyOf", [details]):
+                properties = fixture_schema_node(graph, arm)["properties"]
+                scope = fixture_schema_node(graph, properties["task_scope"])["properties"]
+                intent = fixture_schema_node(graph, scope["intent"])["enum"]
+                if intent == ["review_only"] and "preliminary_review" not in properties:
+                    families[branch] = True
+        family = next(index for index, offered in enumerate(families.values()) if offered)
+        choices = dict(call.contract.semantic_index.policy.choices)
+        return scoped_proposal(
+            *roles, activity="review", intent="review_only", paths=paths, domains=domains,
+            native_inputs={
+                "family": family, "input_choices": choices["input_ids"],
+                "source_choices": choices["input_ids"] + choices["historical_user_source_ids"],
+                "anchors": {agent: "user_input" for agent in roles},
+                "recipients": {},
+            },
+        )(call, provider)
+    return reply
 
 
 class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
@@ -132,12 +177,12 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
     async def reviewed_create(self, subject: str = "Reviewed application", *, kind="create",
                               new_text="Use restrained close-third narration.\n",
                               editorial_refs=(), editorial_context_digest=None, review_task=None,
-                              extra_core_evidence=()):
+                              extra_core_evidence=(), artifact_path=ARTIFACT_FIXTURE_RULES_PATH):
         conversation_id = self.conversation(subject)
         if kind == "create":
-            self.workspace.path(ARTIFACT_FIXTURE_RULES_PATH).unlink(missing_ok=True)
+            self.workspace.path(artifact_path).unlink(missing_ok=True)
         return await seed_reviewed_artifact(self, conversation_id, (
-            (kind, ARTIFACT_FIXTURE_RULES_PATH, new_text),
+            (kind, artifact_path, new_text),
         ),
             editorial_refs=editorial_refs, editorial_context_digest=editorial_context_digest,
             review_task=review_task, extra_core_evidence=extra_core_evidence,
@@ -169,30 +214,32 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         self.workspace.path(ARTIFACT_FIXTURE_RULES_PATH).write_text("Use omniscient narration.\n", encoding="utf-8")
         self._commit_fixture_baseline("Seed exact synchronization baseline")
 
-    async def _reviewed_discrepancy(self, subject: str, *, unread=False, concern=False):
+    async def _reviewed_discrepancy(self, subject: str, *, unread=False, concern=False,
+                                    changes_rules=True):
+        changed, target, content = ((ARTIFACT_FIXTURE_RULES_PATH, _OUTLINE, _REVISED_RULE) if changes_rules
+                                    else (_OUTLINE, _PART_OUTLINES, "The first confrontation moves into the archive.\n"))
+        rule_revision = await seed_narrative_rule_impact(self, _REVISED_RULE.strip()) if changes_rules else None
         return await seed_reviewed_artifact(
-            self, self.conversation(subject), (("replace", ARTIFACT_FIXTURE_RULES_PATH, _REVISED_RULE),),
-            extra_core_evidence=(_OUTLINE, _PART_OUTLINES, _CHARACTERS, _OPENING),
-            discrepancy_pair=(ARTIFACT_FIXTURE_RULES_PATH, _OUTLINE),
-            unread_pair=(ARTIFACT_FIXTURE_RULES_PATH, _CHARACTERS) if unread else None,
+            self, self.conversation(subject), (("replace", changed, content),),
+            extra_core_evidence=(ARTIFACT_FIXTURE_RULES_PATH, _OUTLINE, _PART_OUTLINES, _CHARACTERS, _OPENING),
+            discrepancy_pair=(changed, target),
+            unread_pair=(changed, _CHARACTERS) if unread else None,
             concern_specialist=PLOT_ARCHITECT if concern else None,
+            narrative_rule_revision=rule_revision,
         )
 
     async def _assert_read_only_repair_can_reprepare(self) -> None:
-        from story_writing_agents.lead_provider_contracts import LeadResultContractOwner
-        from tests.lead_fixtures.preparation_data import scoped_proposal
-        from tests.provider_wire_fixture import (
-            finite_fixture_read_selection, fixture_schema_node, indexed_response, offered_fixture_bindings,
-        )
 
         runtime, backend = self.runtime, self.backend
         self._seed_synchronization_baseline(outline="Mara studies the empty bridge, unaware of her opponent's plan.\n")
         revised_rules = _REVISED_RULE + "Reveal private plans only when Mara learns them.\n"
+        rule_revision = await seed_narrative_rule_impact(self, revised_rules.strip())
         turn = await seed_reviewed_artifact(
             self, self.conversation("Verify that no physical repair is required"),
             (("replace", ARTIFACT_FIXTURE_RULES_PATH, revised_rules),),
             extra_core_evidence=(_OUTLINE, _PART_OUTLINES, _CHARACTERS, _OPENING),
             discrepancy_pair=(ARTIFACT_FIXTURE_RULES_PATH, _OUTLINE),
+            narrative_rule_revision=rule_revision,
         )
         self.assertIsNotNone(turn.artifact_application_request, (turn.message, turn.validation_details))
         applied = await runtime.decide_artifact_application(_application_decision(turn, ArtifactApplicationDecisionKind.APPLY))
@@ -201,42 +248,10 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         work, = runtime.inspect_synchronization_repair(self.session_id)
         selection = SynchronizationRepairSelection(work.application, work.condition.condition_id, work.head, _OUTLINE)
         before, git_before = self.artifact_snapshot(), self.git_snapshot()
-        def review_only(call, provider):
-            members = {member.schema_id: member for member in call.contract.semantic_index.contracts}
-            bindings = dict(call.contract.outer_inner_schema_ids)
-            families = {}
-            for outer in call.contract.action_index.contracts:
-                member = members.get(bindings[outer.schema_id])
-                if member is None or type(member.owner) is not LeadResultContractOwner:
-                    continue
-                graph = member.rule_graph.schema_value()
-                root = fixture_schema_node(graph, graph)["properties"]
-                response_type = fixture_schema_node(graph, root["response_type"])
-                if response_type["enum"] != ["specialist_consultation_proposal"]:
-                    continue
-                branch = member.owner.variant.branch_key.partition(":partition:")[0]
-                families.setdefault(branch, False)
-                details = fixture_schema_node(graph, root["response_details"])
-                for arm in details.get("anyOf", [details]):
-                    properties = fixture_schema_node(graph, arm)["properties"]
-                    scope = fixture_schema_node(graph, properties["task_scope"])["properties"]
-                    intent = fixture_schema_node(graph, scope["intent"])["enum"]
-                    if intent == ["review_only"] and "preliminary_review" not in properties:
-                        families[branch] = True
-            family = next(index for index, review_only in enumerate(families.values()) if review_only)
-            choices = dict(call.contract.semantic_index.policy.choices)
-            return scoped_proposal(
-                PLOT_ARCHITECT, EXECUTION_SPECIALIST, activity="review", intent="review_only",
-                paths=(work.condition.changed_path, work.condition.target_path),
-                domains=(work.condition.domain.value, "tone_execution"), native_inputs={
-                    "family": family, "input_choices": choices["input_ids"],
-                    "source_choices": choices["input_ids"] + choices["historical_user_source_ids"],
-                    "anchors": {agent: "user_input" for agent in (PLOT_ARCHITECT, EXECUTION_SPECIALIST)},
-                    "recipients": {},
-                },
-            )(call, provider)
-
-        backend.enqueue(review_only)
+        backend.enqueue(_scoped_current_review(
+            (PLOT_ARCHITECT, EXECUTION_SPECIALIST), (work.condition.changed_path, work.condition.target_path),
+            (work.condition.domain.value, "tone_execution"),
+        ))
         repair = await runtime.decide_lead_task(LeadTaskDecision.for_conversation(
             self.session_id, turn.conversation_id, LeadTaskAction.NEW_TASK,
             text="Review whether the global outline already follows the new rule. Inspect without changing it.",
@@ -724,7 +739,27 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         conditional_case._seed_synchronization_baseline()
         conditional_before = conditional_case.artifact_snapshot()
         conditional_git = conditional_case.git_snapshot()
-        reviewed = await conditional_case._reviewed_discrepancy("Known issue with a changed obligation head")
+        stale_rules_conversation = conditional_case.conversation("Reject a stale rule direction")
+        stale_rules = NarrativeRuleRevisionSelection(
+            "sha256:" + "f" * 64, "Adopt restrained close-third narration.",
+            (NarrativeRuleRevisionFeature.POINT_OF_VIEW,),
+        )
+        with self.assertRaisesRegex(ValueError, "narrative rules changed"):
+            await conditional_case.runtime.decide_lead_task(LeadTaskDecision.for_conversation(
+                conditional_case.session_id, stale_rules_conversation, LeadTaskAction.NEW_TASK,
+                text="Inspect the effect of the selected viewpoint change.",
+            ), narrative_rule_revision=stale_rules)
+        self.assertEqual(conditional_case.history(stale_rules_conversation), ())
+        self.assertFalse(conditional_case.backend.calls)
+        unapproved = await seed_reviewed_artifact(
+            conditional_case, conditional_case.conversation("Ordinary reply tries to replace current rules"),
+            (("replace", ARTIFACT_FIXTURE_RULES_PATH, _REVISED_RULE),),
+            extra_core_evidence=(_OUTLINE, _PART_OUTLINES, _CHARACTERS, _OPENING),
+        )
+        self.assertIsNone(unapproved.artifact_application_request)
+        self.assertEqual(conditional_case.artifact_snapshot(), conditional_before)
+        self.assertEqual(conditional_case.git_snapshot(), conditional_git)
+        reviewed = await conditional_case._reviewed_discrepancy("Known issue with a changed obligation head", changes_rules=False)
         request = reviewed.artifact_application_request
         self.assertIsNotNone(request, reviewed.message)
         self.assertIsNotNone(request.conditional)
@@ -752,7 +787,9 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         unread_case._seed_synchronization_baseline()
         unread_before = unread_case.artifact_snapshot()
         unread_git = unread_case.git_snapshot()
-        incomplete = await unread_case._reviewed_discrepancy("Known issue plus unread document", unread=True)
+        incomplete = await unread_case._reviewed_discrepancy(
+            "Known issue plus unread document", unread=True, changes_rules=False,
+        )
         self.assertIsNone(incomplete.artifact_application_request)
         self.assertEqual(unread_case.artifact_snapshot(), unread_before)
         self.assertEqual(unread_case.git_snapshot(), unread_git)
@@ -764,21 +801,125 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         pending_before, pending_git = pending_case.artifact_snapshot(), pending_case.git_snapshot()
         pending_turn = await seed_reviewed_artifact(
             pending_case, pending_case.conversation("Keep ordinary approval unanswered"),
-            (("replace", ARTIFACT_FIXTURE_RULES_PATH, _REVISED_RULE),),
-            extra_core_evidence=(_OUTLINE, _PART_OUTLINES, _CHARACTERS, _OPENING),
+            (("replace", _OUTLINE, "The protagonist crosses the bridge.\n"),),
+            extra_core_evidence=(ARTIFACT_FIXTURE_RULES_PATH, _PART_OUTLINES, _CHARACTERS, _OPENING),
         )
         self.assertIsNotNone(pending_turn.artifact_application_request, pending_turn.message)
         self.assertIsNone(pending_turn.artifact_application_request.conditional)
         pending_history = pending_case.history(pending_turn.conversation_id)
-        blocked = await pending_case._reviewed_discrepancy("Attempt conditional approval in another conversation")
+        blocked = await pending_case._reviewed_discrepancy(
+            "Attempt conditional approval in another conversation", changes_rules=False,
+        )
         self.assertIsNone(blocked.artifact_application_request)
         self.assertIn("outstanding", blocked.message.lower())
         self.assertEqual(pending_case.history(pending_turn.conversation_id), pending_history)
         self.assertEqual(pending_case.artifact_snapshot(), pending_before)
         self.assertEqual(pending_case.git_snapshot(), pending_git)
 
+        native_case = LeadArtifactApplicationTests()
+        native_case.setUp()
+        self.addCleanup(native_case.doCleanups)
+        await native_case._assert_native_narrative_impact()
+
+    async def _assert_native_narrative_impact(self) -> None:
+        self._seed_synchronization_baseline()
+        distant = "manuscript/part-13/far-shore.md"
+        far = self.workspace.path(distant)
+        far.parent.mkdir(parents=True, exist_ok=True)
+        far.write_text("Mara glimpses a lantern on the far shore.\n", encoding="utf-8")
+        self._commit_fixture_baseline("Seed a distant scene")
+        before = self.artifact_snapshot()
+        git_before = self.git_snapshot()
+        current = dict(before)
+        roles = (PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST)
+        selection = NarrativeRuleRevisionSelection(
+            "sha256:" + sha256(current[ARTIFACT_FIXTURE_RULES_PATH]).hexdigest(),
+            "Use limited viewpoint and preserve existing dialect.",
+            (NarrativeRuleRevisionFeature.POINT_OF_VIEW,),
+            ("Keep dialect.",),
+        )
+        self.backend.enqueue(_scoped_current_review(
+            roles, tuple(sorted(current)), ("plot_structure", "character_world", "tone_execution"),
+        ))
+        decision = LeadTaskDecision.for_conversation(
+            self.session_id, self.conversation("Narrative rule review"), LeadTaskAction.NEW_TASK,
+            text="Review current manuscript and rule scope first.",
+        )
+        result = await self.runtime.decide_lead_task(decision, narrative_rule_revision=selection)
+        self.assertIsNotNone(result.turn.proposal, (result.turn.message, result.turn.validation_details))
+        self.assertEqual(set(result.turn.proposal.participants), set(roles))
+        proposal = result.turn.proposal
+        self.assertEqual(set(proposal.authoring_scope.target_paths), set(current))
+        self.assertGreaterEqual(min(row.max_physical_calls for row in proposal.assignments), 3)
+        def search_paths(paths):
+            def search(_call, _provider):
+                queries = [{"text": current[path].decode().strip().splitlines()[0],
+                            "source_kinds": ["writing_artifact"]}
+                           for path in paths]
+                return json.dumps({"action": {"kind": "search", "queries": queries}})
+            return search
+        def read_paths(paths):
+            def read(call, provider):
+                handles = {}
+                for row in provider.callback_payload(call)["context_observation"]["search_results"]:
+                    path = row["provenance"]["source_locator"]
+                    if path not in paths and f"manuscript/{path}" in paths:
+                        path = f"manuscript/{path}"
+                    if path in paths:
+                        handles.setdefault(path, row["read_handle"])
+                self.assertEqual(handles.keys(), set(paths))
+                return json.dumps({"action": {"kind": "read", "handles": list(handles.values())}})
+            return read
+        def responsible(path):
+            return specialists_for_domains((artifact_domain(path),))[0]
+        for assignment in proposal.assignments:
+            agent = assignment.specialist_id
+            paths = tuple(path for path in current if path == ARTIFACT_FIXTURE_RULES_PATH or responsible(path) == agent)
+            self.backend.enqueue_for(agent, search_paths(paths), read_paths(paths), lead_specialist_outcome())
+        def synthesize(call, _provider):
+            material = live_material(call)
+            sources = material["synchronization"]["specialist_reads"]
+            reviews = {row["assignment_id"]: row["reply_event_id"] for row in material["replies"]}
+            assignments = {row.specialist_id: row.assignment_id for row in proposal.assignments}
+            findings = []
+            for path in current:
+                if path == ARTIFACT_FIXTURE_RULES_PATH:
+                    continue
+                agent = responsible(path)
+                evidence = [row["id"] for row in sources if row["id"].startswith(agent + "_")
+                            and row["path"] in (ARTIFACT_FIXTURE_RULES_PATH, path)]
+                self.assertEqual(len(evidence), 2, (path, sources))
+                needs_change = path == distant
+                findings.append({
+                    "changed_path": ARTIFACT_FIXTURE_RULES_PATH, "target_path": path,
+                    "judgment": "needs_change" if needs_change else "no_change",
+                    "reason": "Reviewed the current rule and document for limited viewpoint.",
+                    "evidence_ids": evidence, "review_event_ids": [reviews[assignments[agent]]],
+                    "domain": artifact_domain(path).value, "action": "Check the far scene's viewpoint." if needs_change else None,
+                    "resolution": "Use what Mara can perceive." if needs_change else None, "abstraction": None, "resolves": [],
+                })
+            return json.dumps({"action": {"kind": "answer", "used_handles": [], "result": {
+                "message": "The far-shore scene needs the limited viewpoint revision.", "synchronization_findings": findings,
+            }}})
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, synthesize)
+        reviewed = (await self.runtime.decide_lead_step(lead_confirmation_decision(
+            result.turn, CollaborationConfirmationDecision.CONFIRM,
+        ))).turn
+        self.assertIsNone(reviewed.artifact_application_request)
+        self.assertEqual(self.runtime.inspect_semantic_synchronization(self.session_id).obligations.heads, ())
+        impacts = self.runtime.inspect_narrative_rule_impacts(self.session_id)
+        self.assertEqual(len(impacts), 1, (reviewed.message, reviewed.validation_details, impacts))
+        ref, impact = impacts[0]
+        self.assertTrue(narrative_rule_impact_complete(impact), impact)
+        distant_finding, = (finding for finding in impact.findings if finding.target_path == distant)
+        self.assertIs(distant_finding.judgment, SynchronizationJudgment.NEEDS_CHANGE)
+        _, choices = self.runtime.inspect_narrative_rule_revision_choices(self.session_id)
+        self.assertEqual(tuple(choice.impact for choice in choices), (ref,))
+        self.assertEqual(self.artifact_snapshot(), before)
+        self.assertEqual(self.git_snapshot(), git_before)
+
     async def test_application_and_result_persistence_failures_map_safely(self) -> None:
-        self.workspace.path(ARTIFACT_FIXTURE_RULES_PATH).unlink(missing_ok=True)
+        self.workspace.path(_PART_OUTLINES).unlink(missing_ok=True)
         self._commit_fixture_baseline("Seed Apply failure baseline")
 
         draft = replace(
@@ -855,9 +996,11 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         self.assertEqual(fault_case.git_snapshot(), blocked_git)
 
         memory = await self.runtime.record_editorial_decision(
-            self.session_id, self.conversation("Scoped publication failure"), direction,
+            self.session_id, self.conversation("Scoped publication failure"),
+            replace(direction, draft=replace(draft, scope=scopes.EditorialScope.whole(_PART_OUTLINES))),
         )
-        turn = await self.reviewed_create("Commit preparation failure")
+        turn = await self.reviewed_create("Commit preparation failure", artifact_path=_PART_OUTLINES,
+                                          new_text="Mara crosses the bridge to reach the archive.\n")
         git_before = self.git_snapshot()
         with mock.patch(
             "story_writing_agents.artifact_transactions.story_commit_qualification.compose_story_commit_service",
@@ -919,8 +1062,8 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         known_review = prepared.request.reviewed_proposal.final_review_evidence
         continued_core_evidence = ("core_documents/global_outline.md",)
         turn = await self.reviewed_create(
-            "Published pair readback", kind="replace",
-            new_text="Use a consistent close-third narrative voice.\n",
+            "Published pair readback", kind="replace", artifact_path=_PART_OUTLINES,
+            new_text="Mara waits for dusk before crossing the bridge.\n",
             review_task=(known_review.task_id, known_review.task_revision + 1),
             extra_core_evidence=continued_core_evidence,
         )
@@ -957,8 +1100,8 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         self.assertEqual(self.git_snapshot(), git_before)
 
         turn = await self.reviewed_create(
-            "Commit request publication fails, known apply survives", kind="replace",
-            new_text="Maintain close third person through the scene.\n",
+            "Commit request publication fails, known apply survives", kind="replace", artifact_path=_PART_OUTLINES,
+            new_text="Mara leaves the archive before the keeper arrives.\n",
             review_task=(known_review.task_id, known_review.task_revision + 2),
             extra_core_evidence=continued_core_evidence,
         )
@@ -991,7 +1134,8 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         )
 
         turn = await self.reviewed_create(
-            "Result persistence failure", kind="replace", new_text="Keep viewpoint with one character.\n",
+            "Result persistence failure", kind="replace", artifact_path=_PART_OUTLINES,
+            new_text="Mara returns to the bridge before the keeper notices.\n",
             review_task=(known_review.task_id, known_review.task_revision + 3), editorial_refs=(memory.record_ref,),
             extra_core_evidence=continued_core_evidence,
             editorial_context_digest=self.runtime.inspect_editorial_state(self.session_id)
@@ -1028,7 +1172,7 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
             ArtifactApplicationNextAction.INSPECT_AND_RESOLVE_OUTCOME,
         )
         self.assertIsNone(uncertain.outcome.result)
-        self.assertTrue(self.workspace.path(ARTIFACT_FIXTURE_RULES_PATH).exists())
+        self.assertTrue(self.workspace.path(_PART_OUTLINES).exists())
         self.assertEqual(self.git_snapshot(), git_before)
         observed = self.runtime.inspect_editorial_state(self.session_id)
         request = turn.artifact_application_request

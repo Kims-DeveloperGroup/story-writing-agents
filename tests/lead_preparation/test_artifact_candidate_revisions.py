@@ -5,6 +5,7 @@ from dataclasses import asdict
 from story_writing_agents.agents import (
     EXECUTION_SPECIALIST,
     LEAD_ORCHESTRATOR,
+    PLOT_ARCHITECT,
 )
 from story_writing_agents.conversations import (
     ArtifactProposalState,
@@ -40,37 +41,37 @@ class ArtifactCandidateRevisionDefinitions:
     ) -> None:
         from tests.recommendation_fixture import task_assessment
         await self.record_book_readiness()
-        rules = self.workspace.path(ARTIFACT_FIXTURE_RULES_PATH)
-        rules.write_text("Always use past tense.\n", encoding="utf-8")
+        part_path = "core_documents/part_outlines.md"
+        self.workspace.path(part_path).write_text("The first act finishes on the bridge.\n", encoding="utf-8")
         conflict_id = self.conversation("Conflicting core edit")
         before = self.artifact_snapshot()
         self.backend.enqueue(
             artifact_review_outcome(
                 operations=lambda _call,
-                material, *, input_payload: [{"evidence_id": material['qualified_read_ids'][ARTIFACT_FIXTURE_RULES_PATH],
-                    "kind": "replace", "new_text": "Use present tense in dream passages.\n",
+                material, *, input_payload: [{"evidence_id": material['qualified_read_ids'][part_path],
+                    "kind": "replace", "new_text": "The first act finishes inside the archive.\n",
                 }],
                 evidence_status="verified",
                 authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
                 authoring_scope=lambda call: lead_fixture_authoring_scope(
-                    call, activity='review', domains=('tone_execution',),
-                    paths=(ARTIFACT_FIXTURE_RULES_PATH,), contributions=[
+                    call, activity='review', domains=('plot_structure',),
+                    paths=(part_path,), contributions=[
                         {'domain': domain, 'role': 'constraint_assessor'}
-                        for domain in ('tone_execution',)]),
+                        for domain in ('plot_structure',)]),
 
-            read_queries=((ARTIFACT_FIXTURE_RULES_PATH, 'Always'),), read_prefix='core_documents/',)
+            read_queries=((part_path, 'finishes on the bridge'),), read_prefix='core_documents/',)
         , control_plan=selection_plan('artifact.changes', before_script_response=2))
         physical_before = len(self.backend.calls)
         proposed = await self.runtime.lead_turn(
             self.session_id,
             conflict_id,
-            (f"Edit ${{{ARTIFACT_FIXTURE_RULES_PATH}}} even though the existing rule conflicts." + '\nSupplied requested candidate content:\n' + json.dumps(['Use present tense in dream passages.\n'])
+            (f"Edit ${{{part_path}}} even though the current plot conflicts." + '\nSupplied requested candidate content:\n' + json.dumps(['The first act finishes inside the archive.\n'])
              + '\nYou may give bounded artifact review judgments and prepare separate proposals; preserve supplied facts. Revision and execution require separate exact confirmation.'),
         )
         physical = self.backend.calls[physical_before:]
         self.assertEqual(len(physical), 4)
         reads = self.backend.callback_payload(physical[-1])['context_observation']['read_results']
-        expected_links = ((ARTIFACT_FIXTURE_RULES_PATH, 'replace'),)
+        expected_links = ((part_path, 'replace'),)
         self.assertEqual(tuple((path, kind) for path, kind, _identity
                                in self.backend.artifact_read_links), expected_links)
         by_path = {row['provenance']['source_locator']: row['evidence_id'] for row in reads}
@@ -86,7 +87,7 @@ class ArtifactCandidateRevisionDefinitions:
             proposed.kind, proposed.next_action, proposed.state, proposed.validation_details,
             proposed.artifact_proposal is not None,
         ))
-        self.backend.enqueue_for(EXECUTION_SPECIALIST, lead_specialist_outcome("conflict"))
+        self.backend.enqueue_for(PLOT_ARCHITECT, lead_specialist_outcome("conflict"))
         self.backend.enqueue_for(
             LEAD_ORCHESTRATOR,
             _artifact_synthesis_outcome("revise"), )

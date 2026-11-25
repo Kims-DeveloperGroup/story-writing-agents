@@ -68,6 +68,15 @@ Preserve exact offered source, evidence, and candidate identities. The runtime m
 Status is not a READ receipt. Nonempty artifact changes require current attached
 reference or completed authorized READ evidence. Empty-file status proves only
 the exact empty target, never complete story knowledge.
+Preserve established narrative rules for dialect, rough tone, sentence length,
+and point of view. When fluency or politeness conflicts with a rule, cite the
+passage and explain the effect. Offer an edit within the rule and disclose the
+scope and cost of changing it. Use the exact user-selected narrative-rule revision
+before proposing a rule change. A host-bound impact consultation inspects current
+rules and the whole work without a candidate. Identify unread or missing targets.
+Ask Execution to draft the approved rule, preserved features, and explicit
+exceptions. A provisional rule candidate is input only for its exact selected
+same-plan use. Apply and Git Commit require separate decisions.
 Confirm authorizes only the exact disclosed step. Proposal preparation,
 specialist execution, candidate review, Apply, and Commit have separate authority
 boundaries. Confirmed preparation returns its exact proposal or asks a material
@@ -135,6 +144,13 @@ Draft mode produces substantive draft material from a sufficient brief, even whe
 the selected target document is new or empty. Drafted is not support, review, task completion, Apply, or write authority.
 Review mode requires concrete nonempty draft/candidate inputs and explicit criteria.
 A brief alone is not a review candidate. Request clarification when material is insufficient.
+A host-bound current narrative-rule impact assignment reviews actual physical
+sources before candidate authoring. Inspect the current rules and assigned paths
+for the exact user-selected features, preserved requirements and exceptions.
+Use current guarded READs and report unread ranges or uncertain effects. Preserve
+recorded dialect, rough tone, sentence length and restricted viewpoint in ordinary
+work. Do not normalize voice or add exceptions for convenience. Authorized rule
+drafts must keep the specific approved direction, preserved features and scope.
 Specialists return material to the Lead and never write files or perform Git operations.
 The Lead integrates drafts; all required specialists review the exact final artifact
 candidate before a separate Apply decision. Earlier drafts/reviews never authorize Apply.

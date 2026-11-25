@@ -415,8 +415,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         invocation_owner_modules = {
             "story_writing_agents.agent_context.invocation.context_execution",
             "story_writing_agents.agent_context.invocation.invocation_session"}
-        self.assertEqual(len(modules), 445)
-        self.assertEqual(len(edges), 2831)
+        self.assertEqual(len(modules), 448)
+        self.assertEqual(len(edges), 2862)
         assessment_owner = "story_writing_agents.synchronization_assessment"
         obligations_owner = "story_writing_agents.synchronization_obligations"
         semantic_dependencies = {
@@ -2070,6 +2070,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
         lead_task_control_owner = 'story_writing_agents.lead_preparation.lead_task_control'
         self.assertEqual({target for source, target in edges if source == lead_task_control_owner}, {
             'story_writing_agents.synchronization_repair',
+            'story_writing_agents.narrative_rule_revision',
             'story_writing_agents.conversations',
             'story_writing_agents.conversations.events',
             'story_writing_agents.document_plan',
@@ -2753,7 +2754,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             (premise_preparation, premise_preparation.prepare_premise_admission,
              ('session_id', 'conversation_id', 'turn_id', 'step_id', 'invocation_id', 'question_id', 'offered_tasks', 'events', 'projection', 'premise_capture', 'read_session_authoring_events'), ('premise_capture', 'read_session_authoring_events')),
             (lead_task_control, lead_task_control.prepare_task_transition,
-             ('session_id', 'conversation_id', 'decision', 'document_selection', 'events', 'projection', 'materials', 'synchronization_repair'), ('synchronization_repair',)),
+             ('session_id', 'conversation_id', 'decision', 'document_selection', 'events', 'projection', 'materials', 'synchronization_repair', 'narrative_rule_revision'), ('synchronization_repair', 'narrative_rule_revision')),
             (lead_task_control, lead_task_control.prepare_lead_turn_origin,
              ('session_id', 'conversation_id', 'text', 'projection'), ()),
             (lead_task_control, lead_task_control.prepare_premise_selection,
@@ -2782,7 +2783,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             self.assertEqual(tuple(name for name, value in parameters.items() if value.kind is Parameter.KEYWORD_ONLY), keyword_only)
             expected_defaults = {
                 premise_preparation.prepare_premise_admission: {"premise_capture": None},
-                lead_task_control.prepare_task_transition: {"synchronization_repair": None},
+                lead_task_control.prepare_task_transition: {"synchronization_repair": None, "narrative_rule_revision": None},
             }
             self.assertEqual({name: value.default for name, value in parameters.items() if value.default is not Parameter.empty},
                              expected_defaults.get(function, {}))
@@ -2953,7 +2954,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             (lead_answer_authority, 'validate_artifact_request', ('decoded', 'scope', 'expected_relation'), (), {}, False),
             (lead_evidence_receipts, 'read_reviewer_inputs', ('receipts',), (), {}, True),
             (lead_answer_authority, 'validate_premise_question', ('intent', 'premise_question_id'), (), {}, False),
-            (collaboration_response_contracts, 'prepare_lead_rule_seed', ('discussion_only', 'discussion_constraints', 'expected_relation', 'inputs', 'offered_tasks', 'constraints', 'successor_only', 'task_receipt', 'revision_source_scope', 'source_artifact_revision', 'selected_document_review_path', 'interaction_mode', 'synchronization_repair_paths'), ('discussion_only', 'discussion_constraints', 'expected_relation', 'inputs', 'offered_tasks', 'constraints', 'successor_only', 'task_receipt', 'revision_source_scope', 'source_artifact_revision', 'selected_document_review_path', 'interaction_mode', 'synchronization_repair_paths'), {'synchronization_repair_paths': None}, False),
+            (collaboration_response_contracts, 'prepare_lead_rule_seed', ('discussion_only', 'discussion_constraints', 'expected_relation', 'inputs', 'offered_tasks', 'constraints', 'successor_only', 'task_receipt', 'revision_source_scope', 'source_artifact_revision', 'selected_document_review_path', 'interaction_mode', 'synchronization_repair_paths', 'narrative_rule_paths', 'narrative_rule_impact'), ('discussion_only', 'discussion_constraints', 'expected_relation', 'inputs', 'offered_tasks', 'constraints', 'successor_only', 'task_receipt', 'revision_source_scope', 'source_artifact_revision', 'selected_document_review_path', 'interaction_mode', 'synchronization_repair_paths', 'narrative_rule_paths', 'narrative_rule_impact'), {'synchronization_repair_paths': None, 'narrative_rule_paths': None, 'narrative_rule_impact': False}, False),
             (outcome_decoding, 'diagnose_lead_answer', ('answer', 'discussion_constraints', 'discussion_only', 'constraints', 'read_ids', 'read_reviewers', 'interaction_mode'), ('discussion_constraints', 'discussion_only', 'constraints', 'read_ids', 'read_reviewers', 'interaction_mode'), {}, True),
             (call_rule_factory, 'front_constraints', ('inputs', 'task_material_events', 'historical_user_sources', 'readiness_pin', 'offered_tasks', 'successor_only', 'objective_projection', 'conversation_id', 'preparation_request', 'is_revision', 'preparation_present', 'premise_question_id', 'adoption_capture', 'document_selection', 'document_node', 'selected_path'), ('inputs', 'task_material_events', 'historical_user_sources', 'readiness_pin', 'offered_tasks', 'successor_only', 'objective_projection', 'conversation_id', 'preparation_request', 'is_revision', 'preparation_present', 'premise_question_id', 'adoption_capture', 'document_selection', 'document_node', 'selected_path'), {}, True),
             (lead_front_values, 'lead_front_material_prefix', ('document_selection', 'document_node', 'candidate_material', 'conversation_id', 'constraints', 'historical_user_sources', 'objective_projection'), (), {}, False),
@@ -3753,6 +3754,9 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 "story_writing_agents/synchronization_assessment.py",
                 "story_writing_agents/synchronization_obligations.py",
                 "story_writing_agents/synchronization_repair.py",
+                "story_writing_agents/narrative_rule_revision.py",
+                "story_writing_agents/conversations/reducers/narrative_rule_revision_history.py",
+                "story_writing_agents/artifact_transactions/narrative_rule_revision_control.py",
             "story_writing_agents/collaboration_execution_results.py",
             "story_writing_agents/lead_control_events.py",
             "story_writing_agents/runtime_resources/generation_pin_cleanup.py",
