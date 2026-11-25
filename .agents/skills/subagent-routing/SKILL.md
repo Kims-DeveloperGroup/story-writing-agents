@@ -63,24 +63,29 @@ writes and resume the same thread after a safe interruption.
 
 ## Test impact handoff
 
-For the [#969 pilot](../../../GITHUB_WORKFLOW.md#test-impact-pilot-for-969), the
-root uses the existing packets for planning and implementation review:
+For work covered by the [test impact review](../../../GITHUB_WORKFLOW.md#test-impact-review),
+the root uses the existing packets with `mode = analysis`:
 
-- Before implementation, put the accepted base and planned behavior, ownership and
-  fixture changes in `identity` and `upstream_decisions`. Ask `test_engineer` to
-  record the exact existing IDs to update or retain and run, the evidence for each
-  disposition, the first normal selection, and any unresolved coverage in
-  `findings` and `risks`.
-- For the first runnable candidate, give `test_engineer` the diff from the accepted
-  base. For later checks, batch changes since the last reviewed state. In `identity`,
-  include HEAD and a reproducible reference to any in-scope uncommitted content.
-  Capture the staged and unstaged diff and the contents of in-scope untracked files.
-  In `upstream_decisions`, identify the previous review whose findings can be reused.
-  Report the actual reviewed state and relevant changes in `changed_inputs`.
-- Ask `test_engineer` to compare the actual changes with the planned coverage,
-  including small unplanned edits. In `findings`, record added or revised test
-  dispositions and exact IDs for the next run. Return unresolved scope or coverage in
-  `risks`. The root routes required edits to the assigned file owners and confirms
-  the resulting candidate and test selection. Reuse earlier findings for inputs whose
-  identity is still the same. If relevant inputs change during review or while applying
-  fixes, review that delta before the next related normal run.
+- Before the first code edit, put the accepted base in `identity` and the
+  planned symbol, contract, and fixture changes in `upstream_decisions`.
+  In `findings`, map each relevant change through its actual consumers to the
+  exact existing test IDs to update or retain and run. Record the reason for
+  each disposition and the first normal selection. Put unresolved coverage in
+  `risks`.
+- For the first runnable candidate, provide the actual diff from the accepted
+  base. For later checks, batch changes since the last reviewed state, including
+  review fixes. Include HEAD and a reproducible reference to the staged and
+  unstaged diff and in-scope untracked contents in `identity`. Identify the
+  previous analysis in `upstream_decisions`. Report the reviewed state in
+  `changed_inputs`, revised test dispositions and exact IDs in `findings`,
+  and unresolved inputs or coverage in `risks`.
+- When shared fixture or test import dependencies change, use the read-only
+  `PYTHONPATH=src python -m tests.runner.owner_map` check. When imports, module
+  ownership, or exports change, compare the affected graph and public-surface
+  assertions. The root routes fixes to the assigned owners, compares the
+  resulting usage map with the existing `tests.runner list` output, and confirms
+  the smallest valid normal selection with exact IDs before execution.
+- Reuse prior findings for identical verification inputs. When relevant
+  inputs change, reconcile the delta before the next related normal run,
+  including after code review fixes. Keep the existing verification commands,
+  report paths, budgets, and assignment boundaries in `verification`.
