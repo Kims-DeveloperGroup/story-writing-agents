@@ -8,7 +8,6 @@ from concurrent.futures import ThreadPoolExecutor
 from unittest import mock
 
 from story_writing_agents.agent_exchanges import AgentExchangeRequestType
-from story_writing_agents.agent_exchanges import capture as capture_module
 from story_writing_agents.agent_exchanges.capture import AgentExchangeTerminalCode
 from story_writing_agents.provider_adapter import ProviderInvocationError, ProviderResponseDiagnostic, ProviderResult
 from tests.agent_exchange_capture_fixture import _RecordingStore, _begin, _decoded, _result, _started_capture
@@ -177,3 +176,4 @@ class ProviderDiagnosticCaptureTests(unittest.TestCase):
         capture_cancelled_without_replacing(capture, failure=cancelled)
         self.assertEqual(_decoded(store.records)[1]["response_diagnostic"]["exit_code"], 9)
         self.assertEqual(_decoded(store.records)[2]["outcome"], "cancelled")
+        self.assertEqual(len({record.exchange_id for record in store.records}), 1)
