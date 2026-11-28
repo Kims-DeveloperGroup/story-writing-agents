@@ -8,8 +8,9 @@ import stat
 from collections.abc import Callable
 from pathlib import Path
 
-from .agent_context import ProviderJsonEncodingError, canonical_provider_json
+from .agent_context import canonical_provider_json
 from .provider_adapter import ProviderInvocation, ProviderInvocationError
+from .structured_output_validation import codex_native_schema
 
 __all__ = [
     "create_invocation_files",
@@ -37,8 +38,8 @@ def create_invocation_files(
 def write_schema(schema_path: Path, invocation: ProviderInvocation) -> None:
     """Encode and write the schema accepted by this Codex invocation."""
     try:
-        schema_json = canonical_provider_json(invocation.schema)
-    except ProviderJsonEncodingError:
+        schema_json = canonical_provider_json(codex_native_schema(invocation.schema))
+    except ValueError:
         raise ProviderInvocationError(
             "Codex request could not be encoded",
             taint_existing_thread=False,

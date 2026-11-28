@@ -4,7 +4,7 @@ import copy
 from story_writing_agents.provider_schema_projection import factor_rule_schema
 from story_writing_agents.provider_schema_projection import hoist_schema_definitions, require_schema_projection
 from story_writing_agents.provider_message_catalog import WireShapeError
-from story_writing_agents.structured_output_validation import SchemaRules
+from story_writing_agents.structured_output_validation import SchemaRules, codex_native_schema
 from story_writing_agents.provider_schema_projection import rebase_schema_definitions
 
 
@@ -38,6 +38,33 @@ class ProviderSchemaProjectionTests(unittest.TestCase):
                     {**inline, 'minLength': 3}, {**inline, 'enum': ['ab']}, {**inline, 'enum': ['ac']})
         identities = {SchemaRules.declare(rule).node_fingerprint() for rule in distinct}
         self.assertEqual(len({inline_fingerprint, *identities}), 5); self.assertTrue(SchemaRules.declare({**inline, 'minLength': 3}).findings('ab'))
+        logical = copy.deepcopy(graph)
+        value_ref = logical['properties']['left']
+        alias_ref = logical['properties']['right']
+        logical['properties']['left'] = {'type': 'array', 'items': {'anyOf': [
+            {**alias_ref, 'description': 'Array alternative.'}, value_ref]}}
+        logical['properties']['right'] = {**alias_ref, 'description': 'Property guidance.'}
+        logical['$defs']['alias'] = {**value_ref, 'description': 'Definition guidance.'}
+        native = codex_native_schema(logical)
+        self.assertEqual(native['properties']['left']['items']['anyOf'], [
+            {'anyOf': [alias_ref], 'description': 'Array alternative.'}, value_ref])
+        self.assertEqual(native['properties']['right'],
+                         {'anyOf': [alias_ref], 'description': 'Property guidance.'})
+        self.assertEqual(native['$defs']['alias'],
+                         {'anyOf': [value_ref], 'description': 'Definition guidance.'})
+        self.assertEqual(logical['$defs']['alias'], {**value_ref, 'description': 'Definition guidance.'})
+        self.assertEqual(codex_native_schema(native), native)
+        require_schema_projection(logical, native, declared_lowering='codex_ref_descriptions')
+        bad_native = copy.deepcopy(native)
+        del bad_native['properties']['right']['description']
+        with self.assertRaises(WireShapeError):
+            require_schema_projection(logical, bad_native, declared_lowering='codex_ref_descriptions')
+        logical_rules = SchemaRules.declare(logical)
+        native_rules = logical_rules.provider_projection(native, declared_lowering='codex_ref_descriptions')
+        for supplied, valid in (({'left': [1], 'right': 1}, True), ({'left': [2], 'right': 1}, False),
+                                ({'left': [1], 'right': True}, False)):
+            self.assertEqual(not logical_rules.findings(supplied), valid)
+            self.assertEqual(not native_rules.findings(supplied), valid)
         twice = {**overlay, '$defs': {'text': dict(inline)}}; twice_rules = SchemaRules.declare(twice)
         self.assertNotEqual(inline_fingerprint, twice_rules.node_fingerprint())
         nested = copy.deepcopy(twice); nested['$defs']['text']['description'] = 'Changed inner annotation.'

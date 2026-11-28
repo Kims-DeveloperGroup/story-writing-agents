@@ -22,6 +22,7 @@ from .structured_output_validation import carry_validation
 from .validation_findings import failure_issues
 from .structured_output_validation import (
     SchemaRules,
+    codex_native_schema,
     diagnose_json_text,
     strict_json_value,
 )
@@ -514,14 +515,19 @@ async def invoke_provider_structured(
         payload,
         call_kind=call_kind,
     )
-    bound_native_schema = (AntigravityAdapter.native_output_schema(schema)
-                           if bound_agent.vendor == "antigravity" else schema)
+    if bound_agent.vendor == "codex":
+        bound_native_schema = codex_native_schema(schema)
+        declared_lowering = "codex_ref_descriptions"
+    elif bound_agent.vendor == "antigravity":
+        bound_native_schema = AntigravityAdapter.native_output_schema(schema)
+        declared_lowering = "integer_singleton_bounds"
+    else:
+        bound_native_schema = schema
+        declared_lowering = "identity"
     if (bound_agent.definition.agent_id == LEAD_ORCHESTRATOR
             and "agent_action" in schema.get("properties", {})):
         require_schema_projection(
-            schema, bound_native_schema, declared_lowering=(
-                "integer_singleton_bounds" if bound_agent.vendor == "antigravity" else "identity"
-            ),
+            schema, bound_native_schema, declared_lowering=declared_lowering,
         )
     invocation = ProviderInvocation(
         session_id=session,
