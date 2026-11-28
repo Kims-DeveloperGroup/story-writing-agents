@@ -500,7 +500,7 @@ The request shape has exactly `call_kind`, `payload`, `prior_thread_id`, and
 `response_text`, `thread_id`, and `usage`; non-null usage has exactly
 `input_tokens`, `output_tokens`, and `cached_input_tokens`. A narrowly recovered
 Antigravity result also has `response_diagnostic`. A provider failure response
-has `provider_failure: true` and an optional `response_diagnostic`. That
+has `provider_failure: true` and may include `response_text` or `response_diagnostic`. The
 diagnostic contains nullable `error` and `status`, integer `exit_code`, and a
 `stderr` object whose exact completed bytes use `utf-8` or `base64` encoding.
 The outcome contains `code` and `outcome`; a rejected provider reply can also

@@ -158,12 +158,19 @@ def capture_provider_failure_without_replacing(
 
 def capture_cancelled_without_replacing(
     lifecycle: AgentExchangeCaptureLifecycle | None,
+    *,
+    failure: BaseException | None = None,
 ) -> None:
     """Best-effort record cancellation without changing propagation."""
 
     try:
         if lifecycle is not None:
-            lifecycle.cancelled()
+            cause = failure.__cause__ if failure is not None else None
+            diagnostic = cause.response_diagnostic if isinstance(cause, ProviderInvocationError) else None
+            if diagnostic is None:
+                lifecycle.cancelled()
+            else:
+                lifecycle.cancelled(response_diagnostic=diagnostic)
     except BaseException:
         pass
 

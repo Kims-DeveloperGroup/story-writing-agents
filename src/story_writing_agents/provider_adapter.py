@@ -453,8 +453,14 @@ class ProviderResponseDiagnostic:
     stdout: bytes = field(repr=False)
     stderr: bytes = field(repr=False)
     exit_code: int
+    response_text: str | None = field(default=None, kw_only=True, repr=False)
+    native_error_message: str | None = field(default=None, kw_only=True, repr=False)
 
     def __post_init__(self) -> None:
+        if self.response_text is not None and type(self.response_text) is not str:
+            raise TypeError("provider diagnostic response text must be a string")
+        if self.native_error_message is not None and type(self.native_error_message) is not str:
+            raise TypeError("provider diagnostic native error message must be a string")
         if type(self.stdout) is not bytes or type(self.stderr) is not bytes:
             raise TypeError("provider response diagnostic streams must be bytes")
         if type(self.exit_code) is not int:

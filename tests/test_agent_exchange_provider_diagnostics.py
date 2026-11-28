@@ -1,13 +1,13 @@
 """Provider exchange diagnostic capture tests."""
 from __future__ import annotations
 
+import asyncio
 import json
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from unittest import mock
 
 from story_writing_agents.agent_exchanges import AgentExchangeRequestType
-from story_writing_agents.agent_exchanges import capture as capture_module
 from story_writing_agents.agent_exchanges.capture import AgentExchangeTerminalCode
 from story_writing_agents.provider_adapter import ProviderInvocationError, ProviderResponseDiagnostic, ProviderResult
 from tests.agent_exchange_capture_fixture import _RecordingStore, _begin, _decoded, _result, _started_capture
@@ -80,14 +80,31 @@ class ProviderDiagnosticCaptureTests(unittest.TestCase):
     def test_failure_response_handles_nonfinite_json_and_codex_jsonl(self):
         # Non-finite JSON values fall back to None without failing serialization
         store, lifecycle = _started_capture()
-        diagnostic = ProviderResponseDiagnostic(b'{"status": NaN, "error": Infinity}', b"err", 1)
+        diagnostic = ProviderResponseDiagnostic(
+            b'{"status": NaN, "error": Infinity}', b"err", 1, native_error_message="Verified native failure",
+        )
         lifecycle.provider_failure(AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED, response_diagnostic=diagnostic)
         response = _decoded(store.records)[1]
         self.assertEqual(response['response_diagnostic'], {
-            "error": None,
+            "error": "Verified native failure",
             "exit_code": 1,
             "status": None,
             "stderr": {"data": "err", "encoding": "utf-8"},})
+
+        # Native message-only errors survive the stream's later status-only event.
+        store, lifecycle = _started_capture()
+        refusal = ProviderResponseDiagnostic(
+            b'{"type":"error","message":"Provider refused","private":"omit"}\n'
+            b'{"type":"turn.failed","status":"failed"}\n',
+            b"", 1, response_text="Cannot complete this request.",
+        )
+        lifecycle.provider_failure(AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED, response_diagnostic=refusal)
+        response = _decoded(store.records)[1]
+        self.assertEqual(response["response_text"], refusal.response_text)
+        self.assertEqual(response["response_diagnostic"]["error"], "Provider refused")
+        self.assertEqual(response["response_diagnostic"]["status"], "failed")
+        self.assertNotIn("omit", store.records[1].content)
+        self.assertEqual(len({record.exchange_id for record in store.records}), 1)
 
         # Codex JSONL multi-line event streams extract terminal error events
         store, lifecycle = _started_capture()
@@ -128,16 +145,17 @@ class ProviderDiagnosticCaptureTests(unittest.TestCase):
                 if failed_attempt == 2:
                     self.assertEqual(store.records[-1].request_type, AgentExchangeRequestType.OUTCOME)
         store, lifecycle = _started_capture()
-        with mock.patch.object(capture_module, '_response_diagnostic', side_effect=ValueError('private serialization')):
-            lifecycle.provider_failure(AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED, response_diagnostic=diagnostic)
-        self.assertEqual([r.request_type for r in store.records], [AgentExchangeRequestType.REQUEST, AgentExchangeRequestType.OUTCOME])
+        failure_with_body = ProviderResponseDiagnostic(b'{"type":"error","message":"\\ud800"}', b"", 1, response_text="Retained refusal")
+        lifecycle.provider_failure(AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED, response_diagnostic=failure_with_body)
+        self.assertEqual([r.request_type for r in store.records], [AgentExchangeRequestType.REQUEST, AgentExchangeRequestType.RESPONSE, AgentExchangeRequestType.OUTCOME])
+        self.assertEqual(_decoded(store.records)[1], {"provider_failure": True, "response_text": "Retained refusal"})
         store, lifecycle = _started_capture()
         with ThreadPoolExecutor(max_workers=4) as pool:
             list(pool.map(lambda _: lifecycle.provider_failure(AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED, response_diagnostic=diagnostic), range(12)))
         self.assertEqual(len(store.records), 3)
 
     def test_backend_forwards_only_typed_diagnostic_without_replacing_failure(self):
-        from story_writing_agents.agent_exchanges.provider_finalization import capture_provider_failure_without_replacing
+        from story_writing_agents.agent_exchanges.provider_finalization import capture_cancelled_without_replacing, capture_provider_failure_without_replacing
         diagnostic = self.diagnostic()
         failure = ProviderInvocationError('fixed', taint_existing_thread=True)
         failure.record_response_diagnostic(diagnostic)
@@ -152,3 +170,10 @@ class ProviderDiagnosticCaptureTests(unittest.TestCase):
         lifecycle = mock.Mock()
         capture_provider_failure_without_replacing(lifecycle, AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED)
         lifecycle.provider_failure.assert_called_once_with(AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED)
+        store, capture = _started_capture()
+        cancelled = asyncio.CancelledError()
+        cancelled.__cause__ = failure
+        capture_cancelled_without_replacing(capture, failure=cancelled)
+        self.assertEqual(_decoded(store.records)[1]["response_diagnostic"]["exit_code"], 9)
+        self.assertEqual(_decoded(store.records)[2]["outcome"], "cancelled")
+        self.assertEqual(len({record.exchange_id for record in store.records}), 1)

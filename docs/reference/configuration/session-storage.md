@@ -525,7 +525,11 @@ when the original bytes are not valid UTF-8. The encoding preserves the
 original stream bytes before the storage prefix bound is applied.
 
 A recovered Antigravity native `ERROR` includes that diagnostic alongside its
-returned response fields. A completed Antigravity failure instead uses exactly
+returned response fields. A completed Codex failure can also include
+`response_text` from the final response file or a completed assistant message.
+If the CLI supplies no error, a verified native completion can supply its error message.
+A completed Antigravity failure can include the terminal result's text or structured
+output as `response_text`. When the body is absent, the response may contain only
 `provider_failure: true` and `response_diagnostic`, as in this synthetic example:
 
 ```json
