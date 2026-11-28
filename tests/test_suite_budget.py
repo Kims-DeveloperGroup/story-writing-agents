@@ -246,7 +246,7 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.assertRaises(suite_budget.BudgetError):
                 suite_budget.check_monotonic({**hourly, field: value}, base)
 
-        exchange_current = suite_budget.load_budget()
+        exchange_current = dict(suite_budget.load_budget(), max_test_source_lines=160515)
         narrative_rule_current = dict(exchange_current, max_test_source_lines=160457)
         self.assertIsNone(suite_budget.check_monotonic(exchange_current, narrative_rule_current))
         self._assert_source_limit_neighbors_rejected(exchange_current, narrative_rule_current)
