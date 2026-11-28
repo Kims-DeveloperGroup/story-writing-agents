@@ -707,47 +707,67 @@ class SchemaNodeFingerprintProof:
         raise TypeError("schema node fingerprint proofs cannot be overridden")
 
 
-def require_native_schema_projection(
-    bound_schema: Mapping, actual_native_schema: Mapping, *,
-    declared_lowering: str = "identity",
-) -> None:
-    """Reject native transport restriction loss before provider submission.
-
-    This pure comparison certifies equivalence to the bound declaration, not
-    opaque native-model keyword support. Only the adapter's proven numeric
-    singleton lowering and an intrinsically-null redundant enum are allowed.
-    """
-    if declared_lowering not in {"identity", "integer_singleton_bounds"}:
-        raise ValueError("undeclared schema lowering")
-    expected = deepcopy(dict(bound_schema))
-
-    def lower(node: object) -> None:
-        if type(node) is not dict:
-            return
-        enum = node.get("enum")
-        if enum == [None] and node.get("type") == "null":
-            node.pop("enum")
-        elif (node.get("type") == "integer"
-              and type(enum) is list and len(enum) == 1 and type(enum[0]) is int
-              and abs(enum[0]) <= (1 << 53) - 1
-              and "minimum" not in node and "maximum" not in node):
-            node.pop("enum")
-            node["minimum"] = node["maximum"] = enum[0]
+def _native_schema_nodes(root: dict) -> Iterator[dict]:
+    """Visit schema nodes without treating names or instance data as schemas."""
+    pending = [root]
+    seen: set[int] = set()
+    while pending:
+        node = pending.pop()
+        if type(node) is not dict or id(node) in seen:
+            continue
+        seen.add(id(node))
+        yield node
         for key in ("properties", "patternProperties", "$defs", "definitions", "dependentSchemas", "dependencies"):
             children = node.get(key)
             if type(children) is dict:
-                for child in children.values():
-                    lower(child)
+                pending.extend(children.values())
         for key in ("anyOf", "allOf", "oneOf", "prefixItems"):
             children = node.get(key)
             if type(children) is list:
-                for child in children:
-                    lower(child)
+                pending.extend(children)
         for key in ("items", "additionalProperties", "additionalItems", "unevaluatedProperties", "contains", "propertyNames", "not", "if", "then", "else", "contentSchema"):
-            lower(node.get(key))
+            pending.append(node.get(key))
+
+
+def codex_native_schema(schema: Mapping) -> dict:
+    """Keep descriptions and referenced rules in strict Codex syntax."""
+    rendered = deepcopy(dict(schema))
+    for node in _native_schema_nodes(rendered):
+        if "$ref" not in node or "description" not in node:
+            continue
+        if node is rendered or node.keys() - {"$ref", "description", "$defs"}:
+            raise ValueError("cannot project an annotated Codex reference at this schema node")
+        # Strict Codex permits the description on the enclosing, single-choice
+        # union. The reference still applies the same constraints.
+        node["anyOf"] = [{"$ref": node.pop("$ref")}]
+    return rendered
+
+
+def require_native_schema_projection(
+    bound_schema: Mapping, actual_native_schema: Mapping, *, declared_lowering: str = "identity",
+) -> None:
+    """Verify that the native schema applies only the declared equivalent rewrite."""
+    if declared_lowering == "codex_ref_descriptions":
+        expected = codex_native_schema(bound_schema)
+    elif declared_lowering in {"identity", "integer_singleton_bounds"}:
+        expected = deepcopy(dict(bound_schema))
+    else:
+        raise ValueError("undeclared schema lowering")
 
     if declared_lowering == "integer_singleton_bounds":
-        lower(expected)
+        for node in _native_schema_nodes(expected):
+            enum = node.get("enum")
+            if enum == [None] and node.get("type") == "null":
+                node.pop("enum")
+            elif (
+                node.get("type") == "integer" and type(enum) is list
+                and len(enum) == 1 and type(enum[0]) is int
+                and abs(enum[0]) <= (1 << 53) - 1
+                and "minimum" not in node and "maximum" not in node
+            ):
+                node.pop("enum")
+                node["minimum"] = node["maximum"] = enum[0]
+
     try:
         original = json.dumps(expected, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
         native = json.dumps(dict(actual_native_schema), sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False)

@@ -52,6 +52,7 @@ from .provider_auth_recovery import validate_provider_replay
 from .provider_execution_workspace import ProviderExecutionWorkspace
 from .provider_message_catalog import WIRE_VERSION
 from .provider_schema_projection import require_schema_projection
+from .structured_output_validation import codex_native_schema
 from .workspace import Workspace
 
 
@@ -325,23 +326,24 @@ async def invoke_context_physical(
         if generation is None
         else generation.adapters[bound_agent.vendor]
     )
-    bound_native_schema = (AntigravityAdapter.native_output_schema(schema)
-                           if bound_agent.vendor == "antigravity" else schema)
+    if bound_agent.vendor == "codex":
+        bound_native_schema = codex_native_schema(schema)
+        declared_lowering = "codex_ref_descriptions"
+    elif bound_agent.vendor == "antigravity":
+        bound_native_schema = AntigravityAdapter.native_output_schema(schema)
+        declared_lowering = "integer_singleton_bounds"
+    else:
+        bound_native_schema = schema
+        declared_lowering = "identity"
     if (bound_agent.definition.agent_id == LEAD_ORCHESTRATOR
             and "agent_action" in schema.get("properties", {})):
         require_schema_projection(
-            schema, bound_native_schema, declared_lowering=(
-                "integer_singleton_bounds" if bound_agent.vendor == "antigravity" else "identity"
-            ),
+            schema, bound_native_schema, declared_lowering=declared_lowering,
         )
     if type(request) is BoundContextProviderCallRequest:
         request.contract.require_projection(
             bound_native_schema,
-            declared_lowering=(
-                "integer_singleton_bounds"
-                if bound_agent.vendor == "antigravity"
-                else "identity"
-            ),
+            declared_lowering=declared_lowering,
         )
     invocation = ProviderInvocation(
         session_id=session,
@@ -392,11 +394,7 @@ async def invoke_context_physical(
                 request.contract.require_submission(
                     invocation.payload,
                     invocation.schema,
-                    declared_lowering=(
-                        "integer_singleton_bounds"
-                        if bound_agent.vendor == "antigravity"
-                        else "identity"
-                    ),
+                    declared_lowering=declared_lowering,
                 )
             result = await provider_invocation_accounting.timed_provider_invoke(
                 adapter, bound_agent.context_provider_binding, invocation,

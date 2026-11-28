@@ -2630,9 +2630,11 @@ class CodexBackendTestCase(CodexNativeProcessFixture, unittest.IsolatedAsyncioTe
             ("task_input",): ContextComponentKind.CURRENT_INPUT,
             ("session_history",): ContextComponentKind.CONVERSATION_CONTEXT, })
         payload.update({"request_correlation_token": "A" * 43, "response_contract": {"workflow_phase": "conversation", "result_contract_id": "text"}})
+        ref = {"$ref": "#/$defs/answer"}
         schema = {"type": "object", "properties": {"action": {"anyOf": [
-            {"type": "string", "enum": ["answer"]}, {"type": "string", "enum": ["clarify"]}]}},
-            "required": ["action"], "additionalProperties": False}
+            {**ref, "description": "Send the answer."}, {"type": "string", "enum": ["clarify"]}]}},
+            "required": ["action"], "additionalProperties": False,
+            "$defs": {"answer": {"type": "string", "enum": ["answer"]}}}
         captured = []
         async def invoke(_binding, invocation):
             captured.append(invocation)
@@ -2665,7 +2667,12 @@ class CodexBackendTestCase(CodexNativeProcessFixture, unittest.IsolatedAsyncioTe
         schemas = [json.loads(record["content"])["schema"] for record in exchanges
                    if record["request_type"] == "request"]
         self.assertEqual(schemas, [invocation.schema for invocation in captured])
-        self.assertEqual(schemas, [schema, schema])
+        choices = schema["properties"]["action"]["anyOf"]
+        native = {**schema, "properties": {"action": {"anyOf": [
+            {"anyOf": [ref], "description": "Send the answer."}, choices[1]]}}}
+        self.assertEqual(schemas, [native, native])
+        self.assertEqual(choices[0], {**ref, "description": "Send the answer."})
+        self.assertEqual(first.accounting.payload.schema_utf8_bytes, len(canonical_provider_json(schemas[0])))
         self.assertEqual(diagnose_json_text('{"action":"answer"}', schemas[0]), ())
         for invalid in ('{}', '{"action":"unknown"}', '{"action":"answer","extra":null}'):
             self.assertTrue(diagnose_json_text(invalid, schemas[0]))
