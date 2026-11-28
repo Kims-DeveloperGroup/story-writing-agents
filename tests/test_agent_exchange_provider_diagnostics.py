@@ -1,6 +1,7 @@
 """Provider exchange diagnostic capture tests."""
 from __future__ import annotations
 
+import asyncio
 import json
 import unittest
 from concurrent.futures import ThreadPoolExecutor
@@ -145,17 +146,17 @@ class ProviderDiagnosticCaptureTests(unittest.TestCase):
                 if failed_attempt == 2:
                     self.assertEqual(store.records[-1].request_type, AgentExchangeRequestType.OUTCOME)
         store, lifecycle = _started_capture()
-        with mock.patch.object(capture_module, '_response_diagnostic', side_effect=ValueError('private serialization')):
-            lifecycle.provider_failure(AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED, response_diagnostic=diagnostic)
+        failure_with_body = ProviderResponseDiagnostic(b'{"type":"error","message":"\\ud800"}', b"", 1, response_text="Retained refusal")
+        lifecycle.provider_failure(AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED, response_diagnostic=failure_with_body)
         self.assertEqual([r.request_type for r in store.records], [AgentExchangeRequestType.REQUEST, AgentExchangeRequestType.RESPONSE, AgentExchangeRequestType.OUTCOME])
-        self.assertEqual(_decoded(store.records)[1], {"provider_failure": True})
+        self.assertEqual(_decoded(store.records)[1], {"provider_failure": True, "response_text": "Retained refusal"})
         store, lifecycle = _started_capture()
         with ThreadPoolExecutor(max_workers=4) as pool:
             list(pool.map(lambda _: lifecycle.provider_failure(AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED, response_diagnostic=diagnostic), range(12)))
         self.assertEqual(len(store.records), 3)
 
     def test_backend_forwards_only_typed_diagnostic_without_replacing_failure(self):
-        from story_writing_agents.agent_exchanges.provider_finalization import capture_provider_failure_without_replacing
+        from story_writing_agents.agent_exchanges.provider_finalization import capture_cancelled_without_replacing, capture_provider_failure_without_replacing
         diagnostic = self.diagnostic()
         failure = ProviderInvocationError('fixed', taint_existing_thread=True)
         failure.record_response_diagnostic(diagnostic)
@@ -170,3 +171,9 @@ class ProviderDiagnosticCaptureTests(unittest.TestCase):
         lifecycle = mock.Mock()
         capture_provider_failure_without_replacing(lifecycle, AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED)
         lifecycle.provider_failure.assert_called_once_with(AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED)
+        store, capture = _started_capture()
+        cancelled = asyncio.CancelledError()
+        cancelled.__cause__ = failure
+        capture_cancelled_without_replacing(capture, failure=cancelled)
+        self.assertEqual(_decoded(store.records)[1]["response_diagnostic"]["exit_code"], 9)
+        self.assertEqual(_decoded(store.records)[2]["outcome"], "cancelled")

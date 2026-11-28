@@ -132,11 +132,7 @@ def _response_content(result: ProviderResult) -> str:
         content["usage_observation"] = asdict(result.usage_observation)
     if result.elapsed_ns is not None:
         content["elapsed_ns"] = result.elapsed_ns
-    if result.response_diagnostic is not None:
-        content["response_diagnostic"] = _response_diagnostic(
-            result.response_diagnostic
-        )
-    return _canonical_json(content)
+    return _response_with_diagnostic(content, result.response_diagnostic)
 
 
 def _response_diagnostic(
@@ -206,6 +202,24 @@ def _response_diagnostic(
         "status": status,
         "stderr": stream(diagnostic.stderr),
     }
+
+
+def _response_with_diagnostic(
+    content: dict[str, object],
+    diagnostic: ProviderResponseDiagnostic | None,
+) -> str:
+    """Keep the original response when optional diagnostics cannot be encoded."""
+
+    if diagnostic is not None:
+        try:
+            response = _canonical_json({
+                **content, "response_diagnostic": _response_diagnostic(diagnostic),
+            })
+            response.encode("utf-8")
+            return response
+        except BaseException:
+            pass
+    return _canonical_json(content)
 
 
 def _terminal_content(
@@ -412,22 +426,7 @@ class AgentExchangeCaptureLifecycle:
                     return
                 # Failure bytes never authorize a normal response transition.
                 self._state = _CaptureState.TERMINAL_ATTEMPTED
-                content: dict[str, object] = {"provider_failure": True}
-                response = _canonical_json(content)
-                if response_diagnostic is not None:
-                    try:
-                        content["response_diagnostic"] = _response_diagnostic(response_diagnostic)
-                        if response_diagnostic.response_text is not None:
-                            content["response_text"] = response_diagnostic.response_text
-                        body = _canonical_json(content)
-                        body.encode("utf-8")
-                        response = body
-                    except BaseException:
-                        pass
-                try:
-                    self._record(AgentExchangeRequestType.RESPONSE, response)
-                except BaseException:
-                    pass
+                self._record_failure_response(response_diagnostic)
                 self._record(
                     AgentExchangeRequestType.OUTCOME,
                     _terminal_content(AgentExchangeOutcome.PROVIDER_FAILURE, code, diagnostic_call_id=self._diagnostic_call_id),
@@ -435,17 +434,40 @@ class AgentExchangeCaptureLifecycle:
         except BaseException:
             pass
 
-    def cancelled(self) -> None:
-        """Attempt one cancellation terminal before or after a response."""
+    def _record_failure_response(self, diagnostic: ProviderResponseDiagnostic | None) -> None:
+        content: dict[str, object] = {"provider_failure": True}
+        try:
+            if diagnostic is not None and diagnostic.response_text is not None:
+                text = diagnostic.response_text
+                try:
+                    text.encode("utf-8")
+                except UnicodeError:
+                    pass
+                else:
+                    content["response_text"] = text
+            self._record(
+                AgentExchangeRequestType.RESPONSE,
+                _response_with_diagnostic(content, diagnostic),
+            )
+        except BaseException:
+            pass
+
+    def cancelled(
+        self, *, response_diagnostic: ProviderResponseDiagnostic | None = None,
+    ) -> None:
+        """Attempt one cancellation terminal and retain any already completed failure."""
 
         try:
             with self._lock:
-                if self._state not in {
+                state = self._state
+                if state not in {
                     _CaptureState.REQUEST_RECORDED,
                     _CaptureState.RESPONSE_ATTEMPTED,
                 }:
                     return
                 self._state = _CaptureState.TERMINAL_ATTEMPTED
+                if state is _CaptureState.REQUEST_RECORDED and response_diagnostic is not None:
+                    self._record_failure_response(response_diagnostic)
                 self._record(
                     AgentExchangeRequestType.OUTCOME,
                     _terminal_content(

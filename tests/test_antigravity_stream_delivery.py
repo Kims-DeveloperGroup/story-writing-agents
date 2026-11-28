@@ -411,6 +411,8 @@ class AntigravityStreamDeliveryTests(
         diagnostic = cm.exception.response_diagnostic
         self.assertIsNotNone(diagnostic)
         self.assertEqual(diagnostic.response_text, "Native refusal")
+        from story_writing_agents.antigravity_response_decoding import completed_failure_response_text
+        self.assertIsNone(completed_failure_response_text(b'{"type":"thought","status":"ERROR","response":"private"}'))
         # Verify status event was emitted to stream sink
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].kind, ProviderStreamEventKind.STATUS)

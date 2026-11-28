@@ -11,6 +11,7 @@ import os
 import shutil
 import tempfile
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -351,18 +352,25 @@ class CodexAdapter:
                         )
                         if exc.authentication_failure is None else None
                     )
-                    native_error_message = (
-                        await _completed_failure_message(
-                            result.stdout, invocation, native_state,
-                            rollout_path=native_pre_source_path,
-                            allow_discovery=not native_pre_rediscovered,
-                        )
-                        if result.returncode != 0 and exc.authentication_failure is None else None
+                    diagnostic = ProviderResponseDiagnostic(
+                        result.stdout, result.stderr, result.returncode, response_text=response_text,
                     )
-                    exc.record_response_diagnostic(ProviderResponseDiagnostic(
-                        result.stdout, result.stderr, result.returncode,
-                        response_text=response_text, native_error_message=native_error_message,
-                    ))
+                    exc.record_response_diagnostic(diagnostic)
+                    if result.returncode != 0 and exc.authentication_failure is None:
+                        try:
+                            message = await _completed_failure_message(
+                                result.stdout, invocation, native_state,
+                                rollout_path=native_pre_source_path,
+                                allow_discovery=not native_pre_rediscovered,
+                            )
+                        except asyncio.CancelledError as cancellation:
+                            record_provider_failure_accounting(
+                                cancellation, state=ProviderCallState.SUBMITTED,
+                                actual_transport_utf8_bytes=len(stdin),
+                            )
+                            raise cancellation from exc
+                        if message is not None:
+                            exc.record_response_diagnostic(replace(diagnostic, native_error_message=message))
                 record_provider_failure_accounting(
                     exc,
                     state=ProviderCallState.SUBMITTED,

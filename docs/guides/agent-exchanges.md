@@ -332,7 +332,9 @@ call. A completed Antigravity failure can retain the text or structured
 output from its terminal result. Use the Response scope to find the available body or diagnostic.
 When only the failure marker is recorded, the same scope includes the marker.
 These fields are diagnostic and grant no authority to use the result. Cancellation uses its
-separate `cancelled` terminal and receives no provider-failure response marker.
+separate `cancelled` terminal. If cancellation interrupts diagnostic lookup
+after a failed process has already completed, its available failure response
+is recorded before the cancellation outcome.
 A cancellation or fail-open append failure can produce a shorter sequence.
 
 The exchange channel can capture completed provider stderr and error details only
