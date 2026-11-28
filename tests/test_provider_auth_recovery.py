@@ -5,7 +5,7 @@ from story_writing_agents.agent_context.accounting import ProviderCallKind
 from story_writing_agents.agent_context.invocation import context_execution as owner_context_execution
 from tests.agent_context.invocation import execution_fixture as fixture_execution_fixture
 from story_writing_agents.agent_context.contracts import call_offers as owner_call_offers
-from tests.provider_wire_fixture import selection_plan, assert_phase_guide
+from tests.provider_wire_fixture import OwnedNativeHistory, selection_plan, assert_phase_guide
 from story_writing_agents.lead_schema_groups import LeadGroupPhase
 import asyncio
 import json
@@ -252,14 +252,40 @@ class AuthClassificationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_codex_completed_failures_keep_diagnostics_and_accounting(self):
         adapter, binding, invocation = self.codex()
-        for stdout, code in ((b'{"type":"error","status":401}\n', 1), (b'\xff', 0), (b'{}', 7)):
+        history = OwnedNativeHistory(self)
+        self.enterContext(mock.patch.dict(os.environ, {"CODEX_HOME": str(history.root)}))
+        def native_payload(call_id):
+            return {"response_contract": {"schema_selection": {"issued_contract": {"call_id": call_id}}}}
+        initial = replace(invocation, context_call_id="native-failure-initial", payload=native_payload("native-failure-initial"))
+        history.complete(initial)
+        previous = history.witnesses[-1]
+        continued = replace(
+            invocation, thread_id=history.thread_id, payload=native_payload("native-failure-continued"),
+            context_call_id="native-failure-continued", context_witness=previous, context_anchor=previous,
+        )
+        completed = b'{"type":"item.completed","item":{"type":"agent_message","text":"stream refusal"}}'
+        for stdout, code in ((b'{"type":"error","status":401}\n', 1), (b'\xff\n' + completed, 0), (b'{}', 7)):
             with self.subTest(code=code, stdout=stdout):
                 result = ProcessResult(stdout=stdout, stderr=b"synthetic private diagnostic", returncode=code)
-                with mock.patch("story_writing_agents.codex_adapter.run_process", new=mock.AsyncMock(return_value=result)):
+                active = continued if code == 7 else invocation
+                native_error = "Current native completion failed." if code == 7 else None
+
+                async def run_process(request, **_kwargs):
+                    if code:
+                        output = request.command[request.command.index("--output-last-message") + 1]
+                        Path(output).write_text("file refusal", encoding="utf-8")
+                    if native_error is not None:
+                        history.complete(active, failure_message=native_error)
+                    return result
+
+                with mock.patch("story_writing_agents.codex_adapter.run_process", side_effect=run_process):
                     with self.assertRaises(ProviderInvocationError) as caught:
-                        await adapter.invoke(binding, invocation)
-                self.assertEqual(caught.exception.response_diagnostic, ProviderResponseDiagnostic(stdout, result.stderr, code))
-                self.assertEqual(provider_failure_accounting(caught.exception).actual_transport_utf8_bytes, len(invocation.payload_json))
+                        await adapter.invoke(binding, active)
+                response_text = {0: "stream refusal", 7: "file refusal"}.get(code)
+                self.assertEqual(caught.exception.response_diagnostic, ProviderResponseDiagnostic(
+                    stdout, result.stderr, code, response_text=response_text, native_error_message=native_error,
+                ))
+                self.assertEqual(provider_failure_accounting(caught.exception).actual_transport_utf8_bytes, len(active.payload_json))
                 self.assertNotIn("private", str(caught.exception))
 
     async def test_typed_auth_error_validator_is_single_use_and_fail_closed(self):

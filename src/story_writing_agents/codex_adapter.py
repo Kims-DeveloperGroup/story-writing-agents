@@ -11,6 +11,7 @@ import os
 import shutil
 import tempfile
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +49,8 @@ import story_writing_agents.codex_native_context as codex_native_context
 import story_writing_agents.codex_stream_observation as codex_stream_observation
 from .codex_native_outcome import (
     classify_native_authentication_failure as _classify_native_authentication_failure,
+    completed_failure_message as _completed_failure_message,
+    completed_failure_response_text as _completed_failure_response_text,
     interpret_completed_native_outcome as _interpret_completed_native_outcome,
 )
 from .codex_event_decoding import (
@@ -324,10 +327,6 @@ class CodexAdapter:
                 raise
 
             submitted = True
-            response_diagnostic = ProviderResponseDiagnostic(
-                result.stdout, result.stderr, result.returncode,
-            )
-
             try:
                 return await _interpret_completed_native_outcome(
                     result,
@@ -347,7 +346,31 @@ class CodexAdapter:
                 )
             except BaseException as exc:
                 if isinstance(exc, ProviderInvocationError):
-                    exc.record_response_diagnostic(response_diagnostic)
+                    response_text = (
+                        _completed_failure_response_text(
+                            result.stdout, execution_workspace, output_path,
+                        )
+                        if exc.authentication_failure is None else None
+                    )
+                    diagnostic = ProviderResponseDiagnostic(
+                        result.stdout, result.stderr, result.returncode, response_text=response_text,
+                    )
+                    exc.record_response_diagnostic(diagnostic)
+                    if result.returncode != 0 and exc.authentication_failure is None:
+                        try:
+                            message = await _completed_failure_message(
+                                result.stdout, invocation, native_state,
+                                rollout_path=native_pre_source_path,
+                                allow_discovery=not native_pre_rediscovered,
+                            )
+                        except asyncio.CancelledError as cancellation:
+                            record_provider_failure_accounting(
+                                cancellation, state=ProviderCallState.SUBMITTED,
+                                actual_transport_utf8_bytes=len(stdin),
+                            )
+                            raise cancellation from exc
+                        if message is not None:
+                            exc.record_response_diagnostic(replace(diagnostic, native_error_message=message))
                 record_provider_failure_accounting(
                     exc,
                     state=ProviderCallState.SUBMITTED,

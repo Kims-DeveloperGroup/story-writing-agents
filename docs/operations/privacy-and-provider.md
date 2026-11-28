@@ -881,7 +881,8 @@ validated usage. A recovered Antigravity native `ERROR`, or a timeout/truncation
 warning accepted with exact current-call completion proof, adds
 `response_diagnostic`, preserving its error, status, exit code, and stderr stream.
 A completed provider failure instead uses a response object containing
-`provider_failure: true` and, when available, `response_diagnostic`, followed by a fixed
+`provider_failure: true` and any available `response_text` or
+`response_diagnostic`, followed by a fixed
 `provider_failure` outcome. Inside `response_diagnostic`, `exit_code` is the
 native integer status; nullable `error` and `status` preserve the diagnostic
 failure details; and `stderr` contains `encoding` and `data`.

@@ -132,11 +132,7 @@ def _response_content(result: ProviderResult) -> str:
         content["usage_observation"] = asdict(result.usage_observation)
     if result.elapsed_ns is not None:
         content["elapsed_ns"] = result.elapsed_ns
-    if result.response_diagnostic is not None:
-        content["response_diagnostic"] = _response_diagnostic(
-            result.response_diagnostic
-        )
-    return _canonical_json(content)
+    return _response_with_diagnostic(content, result.response_diagnostic)
 
 
 def _response_diagnostic(
@@ -178,41 +174,52 @@ def _response_diagnostic(
 
     error: object = None
     status: object = None
-    if diagnostic.stdout:
-        decoded_text = diagnostic.stdout.decode("utf-8", "replace")
-        parsed = parse_dict(decoded_text)
-        if parsed is None:
-            # Check JSONL event streams (e.g. Codex) for terminal error events
-            for line in decoded_text.splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                event = parse_dict(line)
-                if event and event.get("type") in {"error", "turn.failed"}:
-                    parsed = event
-                    break
-
-        if isinstance(parsed, dict):
-            target = (
-                parsed.get("result")
-                if isinstance(parsed.get("result"), dict)
-                else parsed
-            )
-            if "error" in target:
-                error = target["error"]
-            elif "error" in parsed:
-                error = parsed["error"]
-            if "status" in target:
-                status = target["status"]
-            elif "status" in parsed:
-                status = parsed["status"]
+    decoded_text = diagnostic.stdout.decode("utf-8", "replace")
+    parsed = parse_dict(decoded_text)
+    error_event_types = ("error", "turn.failed")
+    candidates = (parsed,) if parsed is not None else (
+        event for line in decoded_text.splitlines()
+        if (event := parse_dict(line)) is not None
+        and event.get("type") in error_event_types
+    )
+    for candidate in candidates:
+        result = candidate.get("result")
+        target = result if isinstance(result, dict) else candidate
+        candidate_error = target.get("error", candidate.get("error"))
+        if candidate_error is None and candidate.get("type") in error_event_types:
+            message = candidate.get("message")
+            if type(message) is str and message:
+                candidate_error = message
+        if candidate_error is not None:
+            error = candidate_error
+        candidate_status = target.get("status", candidate.get("status"))
+        if candidate_status is not None:
+            status = candidate_status
 
     return {
-        "error": error,
+        "error": diagnostic.native_error_message if error is None else error,
         "exit_code": diagnostic.exit_code,
         "status": status,
         "stderr": stream(diagnostic.stderr),
     }
+
+
+def _response_with_diagnostic(
+    content: dict[str, object],
+    diagnostic: ProviderResponseDiagnostic | None,
+) -> str:
+    """Keep the original response when optional diagnostics cannot be encoded."""
+
+    if diagnostic is not None:
+        try:
+            response = _canonical_json({
+                **content, "response_diagnostic": _response_diagnostic(diagnostic),
+            })
+            response.encode("utf-8")
+            return response
+        except BaseException:
+            pass
+    return _canonical_json(content)
 
 
 def _terminal_content(
@@ -419,18 +426,7 @@ class AgentExchangeCaptureLifecycle:
                     return
                 # Failure bytes never authorize a normal response transition.
                 self._state = _CaptureState.TERMINAL_ATTEMPTED
-                try:
-                    content: dict[str, object] = {"provider_failure": True}
-                    if response_diagnostic is not None:
-                        content["response_diagnostic"] = _response_diagnostic(
-                            response_diagnostic
-                        )
-                    self._record(
-                        AgentExchangeRequestType.RESPONSE,
-                        _canonical_json(content),
-                    )
-                except BaseException:
-                    pass
+                self._record_failure_response(response_diagnostic)
                 self._record(
                     AgentExchangeRequestType.OUTCOME,
                     _terminal_content(AgentExchangeOutcome.PROVIDER_FAILURE, code, diagnostic_call_id=self._diagnostic_call_id),
@@ -438,17 +434,40 @@ class AgentExchangeCaptureLifecycle:
         except BaseException:
             pass
 
-    def cancelled(self) -> None:
-        """Attempt one cancellation terminal before or after a response."""
+    def _record_failure_response(self, diagnostic: ProviderResponseDiagnostic | None) -> None:
+        content: dict[str, object] = {"provider_failure": True}
+        try:
+            if diagnostic is not None and diagnostic.response_text is not None:
+                text = diagnostic.response_text
+                try:
+                    text.encode("utf-8")
+                except UnicodeError:
+                    pass
+                else:
+                    content["response_text"] = text
+            self._record(
+                AgentExchangeRequestType.RESPONSE,
+                _response_with_diagnostic(content, diagnostic),
+            )
+        except BaseException:
+            pass
+
+    def cancelled(
+        self, *, response_diagnostic: ProviderResponseDiagnostic | None = None,
+    ) -> None:
+        """Attempt one cancellation terminal and retain any already completed failure."""
 
         try:
             with self._lock:
-                if self._state not in {
+                state = self._state
+                if state not in {
                     _CaptureState.REQUEST_RECORDED,
                     _CaptureState.RESPONSE_ATTEMPTED,
                 }:
                     return
                 self._state = _CaptureState.TERMINAL_ATTEMPTED
+                if state is _CaptureState.REQUEST_RECORDED and response_diagnostic is not None:
+                    self._record_failure_response(response_diagnostic)
                 self._record(
                     AgentExchangeRequestType.OUTCOME,
                     _terminal_content(

@@ -599,7 +599,7 @@ async def invoke_provider_structured(
             if stored is not None:
                 taint_thread()
         finally:
-            provider_finalization.capture_cancelled_without_replacing(exchange)
+            provider_finalization.capture_cancelled_without_replacing(exchange, failure=exc)
         raise
     except BaseException as exc:
         try:

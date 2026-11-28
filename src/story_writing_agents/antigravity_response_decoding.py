@@ -121,27 +121,40 @@ class _ProviderResultDecoder(Protocol[_ReceiverContra]):
     ) -> ProviderResult: ...
 
 
-def unwrap_result_envelope(cls, terminal: dict[str, Any]) -> dict[str, Any]:
-    """Extract inner result payload if terminal is a result/event envelope."""
-    has_type = "type" in terminal
-    has_event = "event" in terminal
-    if not (has_type or has_event):
-        return terminal
-    types_to_check: list[str] = []
-    for key in ("type", "event"):
-        if key in terminal:
-            val = terminal.get(key)
-            if not isinstance(val, str):
-                return terminal
-            norm_val = val.strip().lower()
-            if not norm_val:
-                return terminal
-            types_to_check.append(norm_val)
-    if len(types_to_check) == 2 and types_to_check[0] != types_to_check[1]:
-        return terminal
-    if types_to_check and types_to_check[0] == "result" and isinstance(terminal.get("result"), dict):
+def _is_result_event(event: dict[str, Any]) -> bool:
+    values = [event[key] for key in ("type", "event") if key in event]
+    return bool(values) and all(
+        isinstance(value, str) and value.strip().lower() == "result" for value in values
+    )
+
+
+def unwrap_result_envelope(terminal: dict[str, Any]) -> dict[str, Any]:
+    """Extract the inner result payload if this is a terminal result/event envelope."""
+    if _is_result_event(terminal) and isinstance(terminal.get("result"), dict):
         return terminal["result"]
     return terminal
+
+
+def completed_failure_response_text(stdout: bytes) -> str | None:
+    """Extract response text from the one completed Antigravity result."""
+
+    try:
+        outer = parse_result(stdout)
+        if ("type" in outer or "event" in outer) and not _is_result_event(outer):
+            return None
+        terminal = unwrap_result_envelope(outer)
+        if terminal.get("status") not in ("ERROR", "SUCCESS"):
+            return None
+        if "structured_output" in terminal and terminal["structured_output"] is not None:
+            path = ("structured_output",) if terminal is outer else ("result", "structured_output")
+            return strict_json_member_text(stdout.decode("utf-8", "strict"), path)
+        response = terminal.get("response")
+        if type(response) is str and response:
+            response.encode("utf-8")
+            return response
+    except (ProviderInvocationError, ValueError, UnicodeError, RecursionError):
+        pass
+    return None
 
 
 def provider_usage(value: object) -> ProviderUsage | None:

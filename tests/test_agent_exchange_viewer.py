@@ -551,7 +551,7 @@ class LazyViewerAdapterTests(unittest.TestCase):
         historical = (("request", "{}"), ("no_response", "historical_no_reply"), ("outcome", '{"outcome":"provider_failure"}'))
         for present in (False, True):
             retained = b"".join((json.dumps({**json.loads(source), "request_type": kind, "content": body}) + "\n").encode()
-                                for kind, body in historical + (("response", '{"response_text":"captured"}'),) * present)
+                                for kind, body in historical + (("response", '{"provider_failure":true}'),) * present)
             with mock.patch.object(viewer_module.importlib, "import_module", side_effect=_viewer_import(module)):
                 _prepare_view(retained, scope_kind=AgentExchangeScopeKind.DEBATE, scope_id="debate_full_id", agent_id=ROSTER[2])(host)
             group = calls[-1][1].inspection.groups[0]
@@ -559,8 +559,11 @@ class LazyViewerAdapterTests(unittest.TestCase):
             self.assertEqual(dict(group.values)["completeness"], "complete" if present else "incomplete")
             self.assertIn(2, group.sections[1].records)
             catalog = bind_catalog(parse_jsonl(retained), calls[-1][1].inspection)
-            found = evaluate(parse_jsonl(retained), catalog, tuple(frozenset() for _ in catalog.facets), "historical_no_reply", 1)
+            filters = tuple(frozenset() for _ in catalog.facets)
+            found = evaluate(parse_jsonl(retained), catalog, filters, "historical_no_reply", 1)
             self.assertEqual(tuple(hit.record_index for hit in found.search.occurrences), (1,))
+            marker = evaluate(parse_jsonl(retained), catalog, filters, "true", 1)
+            self.assertEqual(tuple(hit.record_index for hit in marker.search.occurrences), (3,) if present else ())
 
     def test_missing_nested_import_and_bad_public_surface_are_fixed_preterminal_failures(
         self,

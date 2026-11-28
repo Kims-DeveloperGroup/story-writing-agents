@@ -494,7 +494,7 @@ async def invoke_context_physical(
                 taint_existing_thread=submitted,
             ),
         )
-        provider_finalization.capture_cancelled_without_replacing(exchange)
+        provider_finalization.capture_cancelled_without_replacing(exchange, failure=failure)
         raise
     except BaseException as failure:
         accounting = provider_invocation_accounting.complete_failure_accounting(

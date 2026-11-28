@@ -1082,7 +1082,7 @@ class OwnedNativeHistory:
         self.records = []
         self.witnesses = []
 
-    def complete(self, invocation, *, token_usage=None, after_write=None, expect_unavailable=False):
+    def complete(self, invocation, *, token_usage=None, after_write=None, expect_unavailable=False, failure_message=None):
         from story_writing_agents.codex_native_context import inspect_codex_context_witness
         if self.records:
             self.case.assertEqual(invocation.thread_id, self.thread_id)
@@ -1102,6 +1102,8 @@ class OwnedNativeHistory:
             {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [
                 {"type": "input_text", "text": invocation.payload_json.decode("utf-8")}]}},
             {"type": "event_msg", "payload": {"type": "task_complete", "turn_id": turn}}])
+        if failure_message is not None:
+            self.records[-1]["payload"]["error"] = {"message": failure_message}
         if token_usage is not None:
             self.records.insert(len(self.records) - 1, {
                 "type": "event_msg", "payload": {"type": "token_count", "info": token_usage}})
