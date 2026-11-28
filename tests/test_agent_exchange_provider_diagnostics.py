@@ -80,11 +80,13 @@ class ProviderDiagnosticCaptureTests(unittest.TestCase):
     def test_failure_response_handles_nonfinite_json_and_codex_jsonl(self):
         # Non-finite JSON values fall back to None without failing serialization
         store, lifecycle = _started_capture()
-        diagnostic = ProviderResponseDiagnostic(b'{"status": NaN, "error": Infinity}', b"err", 1)
+        diagnostic = ProviderResponseDiagnostic(
+            b'{"status": NaN, "error": Infinity}', b"err", 1, native_error_message="Verified native failure",
+        )
         lifecycle.provider_failure(AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED, response_diagnostic=diagnostic)
         response = _decoded(store.records)[1]
         self.assertEqual(response['response_diagnostic'], {
-            "error": None,
+            "error": "Verified native failure",
             "exit_code": 1,
             "status": None,
             "stderr": {"data": "err", "encoding": "utf-8"},})

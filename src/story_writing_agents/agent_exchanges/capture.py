@@ -201,7 +201,7 @@ def _response_diagnostic(
             status = candidate_status
 
     return {
-        "error": error,
+        "error": diagnostic.native_error_message if error is None else error,
         "exit_code": diagnostic.exit_code,
         "status": status,
         "stderr": stream(diagnostic.stderr),

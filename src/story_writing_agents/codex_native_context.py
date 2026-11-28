@@ -56,6 +56,7 @@ class _CodexNativeObservation:
     source_path: Path | None = field(default=None, repr=False)
     rediscovered: bool = False
     last_token_usage: ProviderUsage | None = None
+    failure_message: str | None = field(default=None, repr=False)
 
 
 def _native_observation_success(invocation, previous, before, witness,
@@ -317,6 +318,7 @@ def read_codex_native_observation(
         completed, inputs, settings, usage_records, history_effects = set(), [], {}, [], []
         last_usage_by_turn: dict[str | None, ProviderUsage | None] = {}
         environment_inputs = []
+        terminal_errors: dict[str, tuple[int, str]] = {}
         for position, line in enumerate(lines):
             record = json.loads(line)
             if type(record) is not dict:
@@ -349,7 +351,15 @@ def read_codex_native_observation(
                     if type(active_turn) is not str or not active_turn or active_turn in completed:
                         raise _NativeContextUnavailable(NativeContextCheckReason.TURN_ORDER_MISMATCH)
                 elif event == "task_complete":
-                    completed.add(value.get("turn_id"))
+                    terminal_turn = value.get("turn_id")
+                    if not before and type(terminal_turn) is str and terminal_turn == active_turn:
+                        error = value.get("error")
+                        message = error.get("message") if type(error) is dict else None
+                        if terminal_turn in completed:
+                            terminal_errors.pop(terminal_turn, None)
+                        elif type(message) is str and message:
+                            terminal_errors[terminal_turn] = (position, message)
+                    completed.add(terminal_turn)
                 elif event == "token_count":
                     info = value.get("info")
                     total = _native_usage(info.get("total_token_usage")) if type(info) is dict else None
@@ -445,9 +455,11 @@ def read_codex_native_observation(
             input_lineage_sha256=digest, input_lineage_count=len(lineage))
         current = [row for row in usage_records if row[0] == target[0]]
         prior_usage = [row for row in usage_records if previous is not None and row[0] == previous.turn_id]
+        terminal_error = terminal_errors.get(target[0])
         return replace(_native_observation_success(facts, previous, before, witness,
             current[-1][1:] if current else None, prior_usage[-1][1] if prior_usage else None, len(completed) == 1,
-            last_token_usage=last_usage_by_turn.get(target[0])), source_path=path, rediscovered=rediscovered)
+            last_token_usage=last_usage_by_turn.get(target[0])), source_path=path, rediscovered=rediscovered,
+            failure_message=terminal_error[1] if terminal_error is not None and terminal_error[0] > target[2] else None)
     except _NativeContextUnavailable as failure:
         return replace(_native_observation_failure(facts, previous, before, point, failure.reason, failure), source_path=path, rediscovered=rediscovered)
     except (OSError, ValueError, TypeError, KeyError, RecursionError) as failure:

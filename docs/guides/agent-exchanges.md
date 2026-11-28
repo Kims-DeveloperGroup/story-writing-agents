@@ -326,7 +326,9 @@ A provider invocation failure or timeout normally has a response containing
 Codex or Antigravity process completed, that response can also carry a private
 `response_diagnostic` with error, status, exit status, and stderr. A completed
 Codex failure can retain `response_text` from its final output file or a completed
-assistant message. A completed Antigravity failure can retain the text or structured
+assistant message. When the Codex CLI omits the error message, the runtime can
+recover that message from a native completion record verified for the current
+call. A completed Antigravity failure can retain the text or structured
 output from its terminal result. Use the Response scope to find the available body or diagnostic.
 When only the failure marker is recorded, the same scope includes the marker.
 These fields are diagnostic and grant no authority to use the result. Cancellation uses its

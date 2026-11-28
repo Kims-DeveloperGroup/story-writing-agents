@@ -48,6 +48,7 @@ import story_writing_agents.codex_native_context as codex_native_context
 import story_writing_agents.codex_stream_observation as codex_stream_observation
 from .codex_native_outcome import (
     classify_native_authentication_failure as _classify_native_authentication_failure,
+    completed_failure_message as _completed_failure_message,
     completed_failure_response_text as _completed_failure_response_text,
     interpret_completed_native_outcome as _interpret_completed_native_outcome,
 )
@@ -350,9 +351,17 @@ class CodexAdapter:
                         )
                         if exc.authentication_failure is None else None
                     )
+                    native_error_message = (
+                        await _completed_failure_message(
+                            result.stdout, invocation, native_state,
+                            rollout_path=native_pre_source_path,
+                            allow_discovery=not native_pre_rediscovered,
+                        )
+                        if result.returncode != 0 and exc.authentication_failure is None else None
+                    )
                     exc.record_response_diagnostic(ProviderResponseDiagnostic(
                         result.stdout, result.stderr, result.returncode,
-                        response_text=response_text,
+                        response_text=response_text, native_error_message=native_error_message,
                     ))
                 record_provider_failure_accounting(
                     exc,
