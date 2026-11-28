@@ -8,7 +8,6 @@ import re
 from typing import Any
 
 from .agent_context import ProviderCallState
-from .antigravity_response_decoding import completed_failure_response_text
 from .errors import ProviderAuthenticationRequiredError
 from .provider_adapter import (
     ProviderInvocation,
@@ -41,6 +40,7 @@ def complete_native_outcome(
         [], Callable[[bytes, int], ProviderAuthenticationRequiredError | None]
     ],
     decode_result: Callable[[bytes, ProviderResponseDiagnostic, bool], ProviderResult],
+    decode_failure_response: Callable[[bytes], str | None],
 ) -> ProviderResult:
     replay_stream = invocation.stream_sink is not None
     (
@@ -121,7 +121,7 @@ def complete_native_outcome(
             if exc.authentication_failure is None and not incomplete_output:
                 response_diagnostic = replace(
                     response_diagnostic,
-                    response_text=completed_failure_response_text(diagnostic_stdout),
+                    response_text=decode_failure_response(diagnostic_stdout),
                 )
             exc.record_response_diagnostic(response_diagnostic)
         record_provider_failure_accounting(

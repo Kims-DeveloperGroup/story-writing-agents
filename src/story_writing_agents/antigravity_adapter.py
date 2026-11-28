@@ -57,6 +57,7 @@ from .antigravity_native_output_schema import render_native_output_schema as _re
 from .antigravity_response_decoding import (
     ProviderResultHooks as _ProviderResultHooks,
     bind_provider_result as _bind_provider_result,
+    completed_failure_response_text as _decode_antigravity_failure_response,
     parse_result as _decode_antigravity_response,
     malformed_output as _raise_antigravity_malformed_output,
     provider_usage as _antigravity_provider_usage,
@@ -457,6 +458,7 @@ class AntigravityAdapter:
             invocation,
             finalize_stream_observation=finalize_stream_observation,
             transport_utf8_bytes=transport_utf8_bytes,
+            decode_failure_response=_decode_antigravity_failure_response,
             get_authentication_failure=lambda: self._authentication_failure,
             decode_result=lambda effective_stdout, response_diagnostic, incomplete_output: self._provider_result(
                     effective_stdout,
