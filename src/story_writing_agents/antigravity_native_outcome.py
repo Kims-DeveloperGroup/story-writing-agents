@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 import re
 from typing import Any
 
 from .agent_context import ProviderCallState
+from .antigravity_response_decoding import completed_failure_response_text
 from .errors import ProviderAuthenticationRequiredError
 from .provider_adapter import (
     ProviderInvocation,
@@ -116,6 +118,11 @@ def complete_native_outcome(
         if isinstance(exc, ProviderInvocationError):
             if partial_timeout:
                 exc.timed_out = True
+            if exc.authentication_failure is None and not incomplete_output:
+                response_diagnostic = replace(
+                    response_diagnostic,
+                    response_text=completed_failure_response_text(diagnostic_stdout),
+                )
             exc.record_response_diagnostic(response_diagnostic)
         record_provider_failure_accounting(
             exc,

@@ -390,7 +390,7 @@ class AntigravityStreamDeliveryTests(
             "result": {
                 "conversation_id": "conv_err_1",
                 "status": "ERROR",
-                "response": "",
+                "response": "Native refusal",
                 "error": "No capacity available for model gpt-oss-120b-medium on the server",},
         }).encode("utf-8") + b"\n"
 
@@ -408,6 +408,9 @@ class AntigravityStreamDeliveryTests(
                 await self._invoke_antigravity(adapter, binding, invocation)
 
         self.assertEqual(str(cm.exception), "Antigravity CLI exited with status 1")
+        diagnostic = cm.exception.response_diagnostic
+        self.assertIsNotNone(diagnostic)
+        self.assertEqual(diagnostic.response_text, "Native refusal")
         # Verify status event was emitted to stream sink
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].kind, ProviderStreamEventKind.STATUS)

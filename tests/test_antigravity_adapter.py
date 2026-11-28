@@ -846,7 +846,7 @@ class AntigravityAdapterTests(AntigravityAdapterFixture, unittest.IsolatedAsynci
                     with self.assertRaises(ProviderInvocationError) as caught:
                         await adapter.invoke(binding, invocation)
                 self.assertEqual(caught.exception.response_diagnostic,
-                                 ProviderResponseDiagnostic(stdout, b"retained", 0))
+                                 ProviderResponseDiagnostic(stdout, b"retained", 0, response_text="{}"))
 
     async def test_direct_invocation_preserves_prepared_payload_and_failure_facts(self):
         adapter = self.adapter("direct-schema")
@@ -883,7 +883,7 @@ class AntigravityAdapterTests(AntigravityAdapterFixture, unittest.IsolatedAsynci
             with self.subTest(label=label), mock.patch('story_writing_agents.antigravity_adapter.run_process', new=mock.AsyncMock(return_value=ProcessResult(stdout=stdout, stderr=b'private stderr', returncode=code))), self.assertRaises(ProviderInvocationError) as caught:
                 await adapter.invoke(binding, invocation)
             error = caught.exception
-            self.assertEqual(error.response_diagnostic, ProviderResponseDiagnostic(stdout, b'private stderr', code))
+            self.assertEqual(error.response_diagnostic, ProviderResponseDiagnostic(stdout, b'private stderr', code, response_text='{}' if label in ('schema', 'identity') else None))
             self.assertNotIn('private stderr', str(error))
             self.assertNotIn('private stderr', repr(error.response_diagnostic))
             self.assertTrue(error.taint_existing_thread)

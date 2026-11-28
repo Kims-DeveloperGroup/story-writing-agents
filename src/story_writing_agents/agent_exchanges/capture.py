@@ -178,34 +178,27 @@ def _response_diagnostic(
 
     error: object = None
     status: object = None
-    if diagnostic.stdout:
-        decoded_text = diagnostic.stdout.decode("utf-8", "replace")
-        parsed = parse_dict(decoded_text)
-        if parsed is None:
-            # Check JSONL event streams (e.g. Codex) for terminal error events
-            for line in decoded_text.splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                event = parse_dict(line)
-                if event and event.get("type") in {"error", "turn.failed"}:
-                    parsed = event
-                    break
-
-        if isinstance(parsed, dict):
-            target = (
-                parsed.get("result")
-                if isinstance(parsed.get("result"), dict)
-                else parsed
-            )
-            if "error" in target:
-                error = target["error"]
-            elif "error" in parsed:
-                error = parsed["error"]
-            if "status" in target:
-                status = target["status"]
-            elif "status" in parsed:
-                status = parsed["status"]
+    decoded_text = diagnostic.stdout.decode("utf-8", "replace")
+    parsed = parse_dict(decoded_text)
+    error_event_types = ("error", "turn.failed")
+    candidates = (parsed,) if parsed is not None else (
+        event for line in decoded_text.splitlines()
+        if (event := parse_dict(line)) is not None
+        and event.get("type") in error_event_types
+    )
+    for candidate in candidates:
+        result = candidate.get("result")
+        target = result if isinstance(result, dict) else candidate
+        candidate_error = target.get("error", candidate.get("error"))
+        if candidate_error is None and candidate.get("type") in error_event_types:
+            message = candidate.get("message")
+            if type(message) is str and message:
+                candidate_error = message
+        if candidate_error is not None:
+            error = candidate_error
+        candidate_status = target.get("status", candidate.get("status"))
+        if candidate_status is not None:
+            status = candidate_status
 
     return {
         "error": error,
@@ -419,16 +412,20 @@ class AgentExchangeCaptureLifecycle:
                     return
                 # Failure bytes never authorize a normal response transition.
                 self._state = _CaptureState.TERMINAL_ATTEMPTED
+                content: dict[str, object] = {"provider_failure": True}
+                response = _canonical_json(content)
+                if response_diagnostic is not None:
+                    try:
+                        content["response_diagnostic"] = _response_diagnostic(response_diagnostic)
+                        if response_diagnostic.response_text is not None:
+                            content["response_text"] = response_diagnostic.response_text
+                        body = _canonical_json(content)
+                        body.encode("utf-8")
+                        response = body
+                    except BaseException:
+                        pass
                 try:
-                    content: dict[str, object] = {"provider_failure": True}
-                    if response_diagnostic is not None:
-                        content["response_diagnostic"] = _response_diagnostic(
-                            response_diagnostic
-                        )
-                    self._record(
-                        AgentExchangeRequestType.RESPONSE,
-                        _canonical_json(content),
-                    )
+                    self._record(AgentExchangeRequestType.RESPONSE, response)
                 except BaseException:
                     pass
                 self._record(

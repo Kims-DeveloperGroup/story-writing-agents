@@ -370,7 +370,9 @@ def project_agent_exchanges(source: bytes, selection: AgentExchangeSelection,
                     if key in decoded:
                         targets.append(ExchangeTarget(scope, line, (key,)))
                         found = True
-                if not found:
+                if not found and kind == "response" and decoded.get("provider_failure") is True:
+                    targets.append(ExchangeTarget(scope, line, ("provider_failure",)))
+                elif not found:
                     unavailable.append(ExchangeUnavailable(scope, line, "The selected content field was not recorded."))
     except (UnicodeError, ValueError, TypeError, RecursionError):
         return ExchangeProjection(notice="Story inspection unavailable for this source; showing unchanged original records.")

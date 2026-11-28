@@ -476,7 +476,7 @@ class AntigravityAdapter:
                 ),
         )
 
-    _unwrap_result_envelope = classmethod(_unwrap_antigravity_result_envelope)
+    _unwrap_result_envelope = staticmethod(_unwrap_antigravity_result_envelope)
 
     @classmethod
     def _authentication_failure(

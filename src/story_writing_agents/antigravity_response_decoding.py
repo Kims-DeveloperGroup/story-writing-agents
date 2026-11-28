@@ -121,7 +121,7 @@ class _ProviderResultDecoder(Protocol[_ReceiverContra]):
     ) -> ProviderResult: ...
 
 
-def unwrap_result_envelope(cls, terminal: dict[str, Any]) -> dict[str, Any]:
+def unwrap_result_envelope(terminal: dict[str, Any]) -> dict[str, Any]:
     """Extract inner result payload if terminal is a result/event envelope."""
     has_type = "type" in terminal
     has_event = "event" in terminal
@@ -142,6 +142,26 @@ def unwrap_result_envelope(cls, terminal: dict[str, Any]) -> dict[str, Any]:
     if types_to_check and types_to_check[0] == "result" and isinstance(terminal.get("result"), dict):
         return terminal["result"]
     return terminal
+
+
+def completed_failure_response_text(stdout: bytes) -> str | None:
+    """Extract response text from the one completed Antigravity result."""
+
+    try:
+        outer = parse_result(stdout)
+        terminal = unwrap_result_envelope(outer)
+        if terminal.get("status") not in ("ERROR", "SUCCESS"):
+            return None
+        if "structured_output" in terminal and terminal["structured_output"] is not None:
+            path = ("structured_output",) if terminal is outer else ("result", "structured_output")
+            return strict_json_member_text(stdout.decode("utf-8", "strict"), path)
+        response = terminal.get("response")
+        if type(response) is str and response:
+            response.encode("utf-8")
+            return response
+    except (ProviderInvocationError, ValueError, UnicodeError, RecursionError):
+        pass
+    return None
 
 
 def provider_usage(value: object) -> ProviderUsage | None:

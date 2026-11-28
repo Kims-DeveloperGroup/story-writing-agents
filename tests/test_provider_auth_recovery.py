@@ -252,13 +252,23 @@ class AuthClassificationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_codex_completed_failures_keep_diagnostics_and_accounting(self):
         adapter, binding, invocation = self.codex()
-        for stdout, code in ((b'{"type":"error","status":401}\n', 1), (b'\xff', 0), (b'{}', 7)):
+        completed = b'{"type":"item.completed","item":{"type":"agent_message","text":"stream refusal"}}'
+        for stdout, code in ((b'{"type":"error","status":401}\n', 1), (b'\xff\n' + completed, 0), (b'{}', 7)):
             with self.subTest(code=code, stdout=stdout):
                 result = ProcessResult(stdout=stdout, stderr=b"synthetic private diagnostic", returncode=code)
-                with mock.patch("story_writing_agents.codex_adapter.run_process", new=mock.AsyncMock(return_value=result)):
+                async def run_process(request, **_kwargs):
+                    if code:
+                        output = request.command[request.command.index("--output-last-message") + 1]
+                        Path(output).write_text("file refusal", encoding="utf-8")
+                    return result
+
+                with mock.patch("story_writing_agents.codex_adapter.run_process", side_effect=run_process):
                     with self.assertRaises(ProviderInvocationError) as caught:
                         await adapter.invoke(binding, invocation)
-                self.assertEqual(caught.exception.response_diagnostic, ProviderResponseDiagnostic(stdout, result.stderr, code))
+                response_text = {0: "stream refusal", 7: "file refusal"}.get(code)
+                self.assertEqual(caught.exception.response_diagnostic, ProviderResponseDiagnostic(
+                    stdout, result.stderr, code, response_text=response_text,
+                ))
                 self.assertEqual(provider_failure_accounting(caught.exception).actual_transport_utf8_bytes, len(invocation.payload_json))
                 self.assertNotIn("private", str(caught.exception))
 

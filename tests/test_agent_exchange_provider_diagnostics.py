@@ -89,6 +89,21 @@ class ProviderDiagnosticCaptureTests(unittest.TestCase):
             "status": None,
             "stderr": {"data": "err", "encoding": "utf-8"},})
 
+        # Native message-only errors survive the stream's later status-only event.
+        store, lifecycle = _started_capture()
+        refusal = ProviderResponseDiagnostic(
+            b'{"type":"error","message":"Provider refused","private":"omit"}\n'
+            b'{"type":"turn.failed","status":"failed"}\n',
+            b"", 1, response_text="Cannot complete this request.",
+        )
+        lifecycle.provider_failure(AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED, response_diagnostic=refusal)
+        response = _decoded(store.records)[1]
+        self.assertEqual(response["response_text"], refusal.response_text)
+        self.assertEqual(response["response_diagnostic"]["error"], "Provider refused")
+        self.assertEqual(response["response_diagnostic"]["status"], "failed")
+        self.assertNotIn("omit", store.records[1].content)
+        self.assertEqual(len({record.exchange_id for record in store.records}), 1)
+
         # Codex JSONL multi-line event streams extract terminal error events
         store, lifecycle = _started_capture()
         jsonl_stdout = (
@@ -130,7 +145,8 @@ class ProviderDiagnosticCaptureTests(unittest.TestCase):
         store, lifecycle = _started_capture()
         with mock.patch.object(capture_module, '_response_diagnostic', side_effect=ValueError('private serialization')):
             lifecycle.provider_failure(AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED, response_diagnostic=diagnostic)
-        self.assertEqual([r.request_type for r in store.records], [AgentExchangeRequestType.REQUEST, AgentExchangeRequestType.OUTCOME])
+        self.assertEqual([r.request_type for r in store.records], [AgentExchangeRequestType.REQUEST, AgentExchangeRequestType.RESPONSE, AgentExchangeRequestType.OUTCOME])
+        self.assertEqual(_decoded(store.records)[1], {"provider_failure": True})
         store, lifecycle = _started_capture()
         with ThreadPoolExecutor(max_workers=4) as pool:
             list(pool.map(lambda _: lifecycle.provider_failure(AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED, response_diagnostic=diagnostic), range(12)))

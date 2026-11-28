@@ -14,6 +14,7 @@ from .agent_context import ProviderUsage
 from .codex_event_decoding import (
     SAFE_THREAD_ID as _SAFE_THREAD_ID,
     codex_usage_observation as _codex_usage_observation,
+    parse_events,
 )
 from .errors import ProviderAuthenticationRequiredError
 from .provider_adapter import (
@@ -134,6 +135,43 @@ async def interpret_completed_native_outcome(
         native_context_cause=None if native_observation is None else native_observation.cause)
     execution_workspace.require_current()
     return provider_result
+
+
+def completed_failure_response_text(
+    stdout: bytes,
+    execution_workspace: ProviderExecutionWorkspace,
+    output_path: Path,
+) -> str | None:
+    """Read only completed Codex response content before invocation cleanup."""
+
+    try:
+        execution_workspace.require_current()
+    except Exception:
+        return None
+    try:
+        response_text = codex_invocation_files.read_regular_output(output_path)
+    except (OSError, UnicodeError, ProviderInvocationError):
+        response_text = ""
+    if response_text:
+        return response_text
+
+    for line in reversed(stdout.splitlines()):
+        try:
+            events = parse_events(line, strict=True)
+        except ProviderInvocationError:
+            continue
+        if not events or events[0].get("type") != "item.completed":
+            continue
+        item = events[0].get("item")
+        if type(item) is dict and item.get("type") == "agent_message":
+            text = item.get("text")
+            if type(text) is str and text:
+                try:
+                    text.encode("utf-8")
+                except UnicodeError:
+                    continue
+                return text
+    return None
 
 
 def classify_native_authentication_failure(
