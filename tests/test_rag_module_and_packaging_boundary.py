@@ -704,6 +704,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                     "story_writing_agents.provider_message_catalog",
                     "story_writing_agents.provider_schema_projection",
                     "story_writing_agents.provider_thread_records",
+                    "story_writing_agents.structured_output_validation",
                     "story_writing_agents.workspace",
                 },
                 {"story_writing_agents.backend"},
@@ -2483,7 +2484,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
         codex_definition_owner = "story_writing_agents.codex_definition_sources"
         invocation_files_owner = codex_invocation_files.__name__
         self.assertEqual({target for source, target in edges if source == invocation_files_owner},
-                         {"story_writing_agents.agent_context", "story_writing_agents.provider_adapter"})
+                         {"story_writing_agents.agent_context", "story_writing_agents.provider_adapter",
+                          "story_writing_agents.structured_output_validation"})
         self.assertEqual({source for source, target in edges if target == invocation_files_owner},
                          {"story_writing_agents.codex_adapter", "story_writing_agents.codex_native_outcome"})
         self.assertEqual(
