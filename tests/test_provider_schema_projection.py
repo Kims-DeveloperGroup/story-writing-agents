@@ -41,13 +41,15 @@ class ProviderSchemaProjectionTests(unittest.TestCase):
         logical = copy.deepcopy(graph)
         value_ref = logical['properties']['left']
         alias_ref = logical['properties']['right']
+        fallback_ref = {'$ref': '#/$defs/fallback'}
         logical['properties']['left'] = {'type': 'array', 'items': {'anyOf': [
-            {**alias_ref, 'description': 'Array alternative.'}, value_ref]}}
+            {**alias_ref, 'description': 'Array alternative.'}, fallback_ref]}}
         logical['properties']['right'] = {**alias_ref, 'description': 'Property guidance.'}
         logical['$defs']['alias'] = {**value_ref, 'description': 'Definition guidance.'}
+        logical['$defs']['fallback'] = {'type': 'string', 'enum': ['fallback']}
         native = codex_native_schema(logical)
         self.assertEqual(native['properties']['left']['items']['anyOf'], [
-            {'anyOf': [alias_ref], 'description': 'Array alternative.'}, value_ref])
+            {'anyOf': [alias_ref], 'description': 'Array alternative.'}, fallback_ref])
         self.assertEqual(native['properties']['right'],
                          {'anyOf': [alias_ref], 'description': 'Property guidance.'})
         self.assertEqual(native['$defs']['alias'],
@@ -61,7 +63,7 @@ class ProviderSchemaProjectionTests(unittest.TestCase):
             require_schema_projection(logical, bad_native, declared_lowering='codex_ref_descriptions')
         logical_rules = SchemaRules.declare(logical)
         native_rules = logical_rules.provider_projection(native, declared_lowering='codex_ref_descriptions')
-        for supplied, valid in (({'left': [1], 'right': 1}, True), ({'left': [2], 'right': 1}, False),
+        for supplied, valid in (({'left': [1, 'fallback'], 'right': 1}, True), ({'left': [2], 'right': 1}, False),
                                 ({'left': [1], 'right': True}, False)):
             self.assertEqual(not logical_rules.findings(supplied), valid)
             self.assertEqual(not native_rules.findings(supplied), valid)

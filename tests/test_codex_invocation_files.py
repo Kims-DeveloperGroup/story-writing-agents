@@ -21,6 +21,7 @@ from story_writing_agents.workspace.session_resources import provision_session_r
 from story_writing_agents.workspace.session_artifact_binding import SessionArtifactBindingError
 from story_writing_agents.writing_artifacts.repository import WritingArtifactRepository
 from story_writing_agents.provider_adapter import ProviderInvocationError, ProviderResult
+from story_writing_agents.structured_output_validation import codex_native_schema
 
 from tests.test_provider_schema_spec import check_schema
 from tests.lead_fixtures.preparation_data import exploration_native_contract as _exploration_native_contract, exploration_outcome as _exploration_outcome, premise_native_contract as _premise_native_contract
@@ -350,7 +351,9 @@ class CodexInvocationFilesTests(CodexNativeProcessFixture, unittest.IsolatedAsyn
                 returned = await bound_call("native-premise-call-" + str(summary),
                     "premise-decision-summary-v1" if summary else "premise-analysis-response-v1",
                     summary)
-            self.assertEqual((native_calls[0].schema, native_calls[0].payload_json), (schema, canonical_provider_json(payload)))
+            self.assertEqual(native_calls[0].schema, codex_native_schema(schema))
+            self.assertEqual(native_calls[0].schema != schema, summary)
+            self.assertEqual(native_calls[0].payload_json, canonical_provider_json(payload))
             self.assertEqual(check_schema(native_calls[0].schema), ())
             self.assertEqual((returned.response_text, returned.accounting.state), (response, ProviderCallState.SUBMITTED))
 
